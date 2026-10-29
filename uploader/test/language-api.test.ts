@@ -18,6 +18,7 @@ import { createEncodeQueue } from '../src/encode-queue.js';
 import { createWorkLock } from '../src/work-lock.js';
 import type { BuildOutcome } from '../src/build.js';
 import { publishBody } from './publish-tokens.js';
+import { TEST_TRUST } from './trusted-proxy-fixture.js';
 
 const modes: [LanguageConfig, LanguageConfig, LanguageConfig, LanguageConfig] = [
   { primary: 'de', locales: ['de', 'en'] }, { primary: 'en', locales: ['en', 'de'] },
@@ -45,6 +46,7 @@ async function fixture(initial: LanguageConfig = modes[0]!, pool?: DbPool) {
   const build = vi.fn(async () => lock.runExclusive(async () => ({ ...outcome })));
   const unavailable = async (): Promise<never> => { throw new Error('Not part of this fixture'); };
   const app = buildServer({
+    trustProxy: TEST_TRUST,
     storageDir: dir, baseUrl: 'https://images.test', imgHost: 'images.test', siteDir: join(dir, 'site'),
     posts, pages, media, users, sessions, secrets: memorySecretsStore(),
     // Deliberately omit cfg.language: the server must use posts.language.

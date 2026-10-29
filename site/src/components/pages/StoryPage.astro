@@ -10,7 +10,8 @@ import StoryMiniMap from '../StoryMiniMap.astro';
 import GalleryIsland from '../GalleryIsland.astro';
 import CommentsIsland from '../CommentsIsland.astro';
 import { byLocale, localeOf, pathOf, translationOf, type Trip } from '../../lib/trips';
-import { PROD_SITE, blogPostingJsonLd, serializeJsonLd } from '../../lib/seo';
+import { blogPostingJsonLd, serializeJsonLd } from '../../lib/seo';
+import { buildSiteOrigin } from '../../lib/build-identity';
 import { splitOpening } from '../../lib/story-opening';
 
 interface Props {
@@ -42,8 +43,8 @@ const alternates = other
     : { de: pathOf(other), en: pathOf(trip) }
   : undefined;
 
-// Same production fallback as Base.astro's canonical URL.
-const site = Astro.site ?? PROD_SITE;
+// The same identity snapshot drives Astro.site and Base's standalone fallback.
+const site = Astro.site ?? buildSiteOrigin();
 const jsonLd = serializeJsonLd(
   blogPostingJsonLd({
     title: trip.data.title,

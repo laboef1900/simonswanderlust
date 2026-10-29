@@ -232,6 +232,19 @@ window.Auth = (function () {
     if (meta) meta.remove();
 
     const contentArea = shell.querySelector('.cms-content');
+    if (s.isAdmin && here === '/admin/' && !window.SiteIdentity?.canonicalOrigin) {
+      const domainCopy = EditorCopy[document.documentElement?.lang === 'de' ? 'de' : 'en'];
+      const notice = document.createElement('p');
+      notice.id = 'deskDomainNotice';
+      notice.className = 'muted';
+      notice.setAttribute('role', 'status');
+      notice.textContent = domainCopy.identityDomainUnset + ' ';
+      const link = document.createElement('a');
+      link.setAttribute('href', '/admin/settings.html#identity');
+      link.textContent = domainCopy.identityDomainConfigure;
+      notice.appendChild(link);
+      contentArea.appendChild(notice);
+    }
     contentArea.appendChild(main);
     body.appendChild(shell);
 

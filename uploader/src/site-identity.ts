@@ -45,12 +45,11 @@ function fromRow(row: IdentityRow): IdentityRecord {
 function localized(identity: Identity) {
   return Object.fromEntries(IDENTITY_LOCALIZED_FIELDS.map((field) => [field, identity[field]]));
 }
-/** Canonical is reserved for #276. Active edits cannot overwrite retained locale values. */
+/** Active edits cannot overwrite retained locale values. */
 export function mergeIdentityEdit(current: Identity, input: unknown, locales: readonly IdentityLocale[] = ['de', 'en']): Identity {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new IdentityError('identity');
   const value = input as Record<string, unknown>;
-  if ('canonicalOrigin' in value) throw new IdentityError('canonicalOrigin');
-  const merged: Record<string, unknown> = { ...value, canonicalOrigin: current.canonicalOrigin };
+  const merged: Record<string, unknown> = { ...value };
   for (const field of IDENTITY_LOCALIZED_FIELDS) {
     const map = value[field];
     if (!map || typeof map !== 'object' || Array.isArray(map)) throw new IdentityError(field);
@@ -63,7 +62,7 @@ export async function seedSiteIdentity(pool: pg.Pool, options: { legacy?: Identi
   const legacy = normalizeIdentity(options.legacy ?? LEGACY_IDENTITY);
   let bootstrap = options.bootstrapBlogOrigin ?? null;
   if (bootstrap !== null) {
-    try { normalizeIdentity({ ...neutralIdentity(), canonicalOrigin: bootstrap }); }
+    try { bootstrap = normalizeIdentity({ ...neutralIdentity(), canonicalOrigin: bootstrap }).canonicalOrigin; }
     catch (error) {
       if (!(error instanceof IdentityError)) throw error;
       (options.log ?? console.warn)('identity: ignoring invalid bootstrapBlogOrigin.');
@@ -97,8 +96,8 @@ export async function pgSiteIdentityStore(pool: pg.Pool): Promise<SiteIdentitySt
         if (!row || row.revision !== revision) throw new IdentityConflictError();
         const next = mergeIdentityEdit(identityFromRow(row), input, language.locales);
         const result = await client.query<IdentityRow>(`UPDATE site_identity SET site_name=$1, author_name=$2,
-          localized=$3::jsonb, social_links=$4::jsonb, revision=revision+1, saved_at=now(), updated_at=now()
-          WHERE id = true RETURNING *`, [next.siteName, next.authorName, JSON.stringify(localized(next)), JSON.stringify(next.socialLinks)]);
+          localized=$3::jsonb, social_links=$4::jsonb, canonical_origin=$5, revision=revision+1, saved_at=now(), updated_at=now()
+          WHERE id = true RETURNING *`, [next.siteName, next.authorName, JSON.stringify(localized(next)), JSON.stringify(next.socialLinks), next.canonicalOrigin]);
         const saved = fromRow(result.rows[0]!);
         await client.query('COMMIT');
         // Concurrent commits must never let a slower response roll the cache backwards.

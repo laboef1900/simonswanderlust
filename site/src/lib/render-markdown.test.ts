@@ -46,6 +46,18 @@ describe('renderMarkdown', () => {
     expect(html).toContain('<h2 id="anreise--tag-1">');
   });
 
+  it('deduplicates heading anchors within a story without leaking them into another render', async () => {
+    const body = '## Arrival\n\nFirst stop.\n\n## Arrival\n\nSecond stop.';
+    const first = await renderMarkdown(body);
+    await renderMarkdown('## Arrival\n\nAn unrelated story.');
+    const repeated = await renderMarkdown(body);
+    const concurrent = await Promise.all([renderMarkdown(body), renderMarkdown(body)]);
+    for (const html of [first, repeated, ...concurrent]) {
+      expect([...html.matchAll(/<h2 id="([^"]+)"/g)].map((match) => match[1]))
+        .toEqual(['arrival', 'arrival-1']);
+    }
+  });
+
   it('renders ![alt](url) as <img src> — the shape transformBodyImages upgrades', async () => {
     const html = await renderMarkdown('![Old town](https://img.example.com/trips/x/old-town)');
     expect(html).toContain('<img src="https://img.example.com/trips/x/old-town"');

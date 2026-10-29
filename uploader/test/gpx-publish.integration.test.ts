@@ -1,3 +1,4 @@
+import { TEST_TRUST } from './trusted-proxy-fixture.js';
 import { randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -232,6 +233,7 @@ maybe('GPX publish HTTP bulk and failed-build boundary (real PostgreSQL)', () =>
     const keys: string[] = [];
     const builtTracks: unknown[] = [];
     const app = buildServer({
+      trustProxy: TEST_TRUST,
       storageDir: join(root, 'images'), siteDir: join(root, 'site'), backupDir: join(root, 'mdx'),
       baseUrl: 'https://images.test', imgHost: 'images.test', users, sessions, posts,
       language: pgLanguageStore(pool),

@@ -1194,3 +1194,33 @@ and captures are retained in `.issue-runtime/identity-about-home-reflow-proof.js
 development database was unchanged. This supplements, not replaces, the API/Unicode and
 header/footer acceptance evidence for #274.
 
+## 25. #276 canonical-origin qualification (2026-10-29)
+
+`site/scripts/canonical-build-matrix.mjs` passed twelve real Astro builds: legacy,
+changed and unconfigured origins under DE-primary bilingual, EN-primary bilingual,
+DE-only and EN-only fixtures. The matrix checks output filenames and route paths,
+canonical/social/JSON-LD origins, locale alternates, feeds, sitemaps, robots/noindex
+policy and unchanged image origins. Fixtures are synthetic; no database rows are
+mutated by this script. The prerequisite RSS correction derives the endpoint locale
+from Astro's URL-derived `currentLocale`, not cached endpoint props.
+
+Retained evidence is under
+`.local/backlog-execution-2026-10-27/issue-276-runtime/canonical-modes-1793273261849/`,
+with exact source identity, per-mode manifests, private logs and all output artifacts.
+The separate `issue-276-runtime/proof.json` records 132 runtime assertions, including
+the real admin form and split-host comment path. These observations do not authorize
+an owner-domain change, production content mutation, deployment or PR merge; final
+actual-PR review and required CI remain separate gates.
+
+Final integrated source `a614ab5baf94d8e847d959bae4b081414d929371` passed a
+fresh twelve-build matrix under `canonical-modes-1793283746741/` and a separate
+actual-`main.ts` run under `final-head-1793283762700/`: 168 assertions passed,
+including two application-triggered builds, browser domain confirmation/cancel/save,
+revision conflicts, immediate comment-Origin changes and unchanged image URLs.
+The synthetic fixture's existing posts/pages/media/language rows stayed unchanged;
+only the exercised identity save, pending comment and operational state changed.
+Earlier evidence above retains its original source attribution. Production DNS,
+public TLS, deployed ingress, other browser engines and outbound providers were not
+qualified by this loopback run. Both required CI jobs and the independent actual-PR
+review passed at the qualified source; stack retargeting still needs requalification.
+

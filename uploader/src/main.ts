@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolveTrustPolicy, type TrustPolicy } from './trusted-proxy.js';
 import { mkdir } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { buildServer } from './server.js';
@@ -33,6 +35,15 @@ if (!databaseUrl) {
   console.error('DATABASE_URL is required; refusing to start without it.');
   process.exit(1);
 }
+
+let proxyPolicy: TrustPolicy;
+try {
+  proxyPolicy = resolveTrustPolicy(process.env.TRUSTED_PROXY, () => readFileSync('/proc/net/route', 'utf8'));
+} catch (error) {
+  console.error(error instanceof Error ? error.message : 'TRUSTED_PROXY configuration is invalid.');
+  process.exit(1);
+}
+console.info(`trusted proxy peers: ${proxyPolicy.describe}`);
 
 // Validate before connecting/migrating. Absence disables only optional remote AI.
 const encryptionKey = parseEncryptionKey(process.env.ENCRYPTION_KEY);
@@ -93,7 +104,7 @@ const importJobs = createImportRunner({ store: pgImportJobStore(pool, runtime), 
 await importJobs.recover();
 owner.assertWritable();
 
-const baseUrl = process.env.PUBLIC_BASE_URL ?? 'https://img.simonswanderlust.com';
+const baseUrl = process.env.PUBLIC_BASE_URL ?? 'http://localhost:3000';
 let imgHost: string;
 try {
   imgHost = process.env.IMG_HOST ?? new URL(baseUrl).host;
@@ -115,6 +126,7 @@ const builder = createSiteBuilder({
   releasesRoot: siteDir,
   lock: workLock,
   pool,
+  originRoles: { baseUrl, imgHost },
   ...runtime,
   applicationName: owner.applicationName + ':build',
 });
@@ -162,6 +174,7 @@ const housekeepingTimer = setInterval(housekeeping, 3_600_000);
 housekeepingTimer.unref();
 
 const app = buildServer({
+  trustProxy: proxyPolicy.trust,
   storageDir,
   baseUrl,
   imgHost,

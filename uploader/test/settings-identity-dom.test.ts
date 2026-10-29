@@ -19,7 +19,7 @@ const initial = (locales: ('de' | 'en')[] = ['de', 'en']) => ({
 type Request = { url: string; method: string; body: string | undefined };
 async function settle() { for (let index = 0; index < 12; index++) await Promise.resolve(); }
 
-async function page(options: { locales?: ('de' | 'en')[]; route?: (request: Request) => Response | Promise<Response>; confirm?: boolean } = {}) {
+async function page(options: { locales?: ('de' | 'en')[]; canonicalOrigin?: string | null; route?: (request: Request) => Response | Promise<Response>; confirm?: boolean } = {}) {
   const dom = editorDocument(html.slice(0, html.indexOf('<script')));
   const document = Object.assign(dom.document, { documentElement: { lang: 'en' } });
   function el(id: string) {
@@ -32,12 +32,16 @@ async function page(options: { locales?: ('de' | 'en')[]; route?: (request: Requ
   const requests: Request[] = [];
   const confirms: unknown[] = [];
   const context: Record<string, unknown> = {
-    document, EditorCopy: { en: copy }, location: { href: '' },
+    document, EditorCopy: { en: copy }, URL, location: { href: '', origin: 'https://admin.example:8443' },
     AdminConfirm: { ask: async (question: unknown) => { confirms.push(question); return options.confirm ?? true; } },
     fetch: async (url: string, init?: { method?: string; body?: string }) => {
       const request = { url, method: init?.method ?? 'GET', body: init?.body };
       requests.push(request);
-      if (request.method === 'GET') return Response.json(initial(options.locales));
+      if (request.method === 'GET') {
+        const data = initial(options.locales);
+        return Response.json({ ...data, identity: { ...data.identity,
+          canonicalOrigin: options.canonicalOrigin === undefined ? data.identity.canonicalOrigin : options.canonicalOrigin } });
+      }
       return options.route?.(request) ?? Response.json({ revision: 8, takesEffect: 'next_build' });
     },
   };
@@ -63,10 +67,11 @@ describe('Site identity settings form', () => {
     const sent = JSON.parse(h.requests[1]!.body!);
     expect(sent.revision).toBe(7);
     expect(sent.identity.tagline).toEqual({ [active]: '' });
-    expect(sent.identity).not.toHaveProperty('canonicalOrigin');
+    expect(sent.identity.canonicalOrigin).toBe('https://blog.example');
     expect(sent.identity).not.toHaveProperty('assets');
     expect(h.requests.map((request) => request.url)).toEqual(['/settings/identity', '/settings/identity']);
     expect(h.el('identityStatus').textContent).toBe(copy.identitySaved);
+    expect(h.confirms).toHaveLength(0);
   });
 
   it.each([
@@ -148,8 +153,10 @@ describe('Site identity settings form', () => {
   it('retains form state and re-enables controls after a network failure', async () => {
     const h = await page({ route: () => Promise.reject(new TypeError('network down')) });
     h.edit('identitySiteName', 'Retained');
+    h.edit('identityCanonicalOrigin', 'https://BÜCHER.example/');
     await h.submit();
     expect(h.el('identitySiteName').value).toBe('Retained');
+    expect(h.el('identityCanonicalOrigin').value).toBe('https://BÜCHER.example/');
     expect(h.el('identityFields').disabled).toBe(false);
     expect(h.el('identityStatus').textContent).toBe(copy.identityFailed);
   });
@@ -175,5 +182,94 @@ describe('Site identity settings form', () => {
     expect(h.confirms).toHaveLength(1);
     expect(h.el('identitySiteName').value).toBe('Not saved');
     expect(h.el('identityStatus').textContent).toBe(copy.identityRebuilt);
+  });
+
+  it('warns about stored Punycode on load and preserves the exact saved bytes', async () => {
+    const h = await page({ canonicalOrigin: 'https://xn--bcher-kva.example:8443' });
+    expect(h.el('identityCanonicalOrigin').value).toBe('https://xn--bcher-kva.example:8443');
+    expect(h.el('identityCanonicalAscii').hidden).toBe(false);
+    expect(h.el('identityCanonicalAscii').textContent).toBe(copy.identityCanonicalAscii);
+    expect(h.el('identityDomainNotice').hidden).toBe(true);
+  });
+
+  it('confirms the domain scope, submits full input and displays accepted ASCII serialization', async () => {
+    const h = await page();
+    h.edit('identityCanonicalOrigin', 'https://BÜCHER.example:443/');
+    await h.submit();
+    expect(JSON.parse(h.requests[1]!.body!).identity.canonicalOrigin).toBe('https://BÜCHER.example:443/');
+    expect(h.confirms).toHaveLength(1);
+    expect(h.confirms[0]).toHaveProperty('body', expect.stringContaining('https://blog.example'));
+    expect(h.confirms[0]).toHaveProperty('body', expect.stringContaining('https://xn--bcher-kva.example'));
+    expect(h.el('identityCanonicalOrigin').value).toBe('https://xn--bcher-kva.example');
+    expect(h.el('identityCanonicalAscii').hidden).toBe(false);
+    expect(h.el('identityDomainNotice').hidden).toBe(true);
+    await h.submit();
+    expect(h.confirms).toHaveLength(1);
+  });
+
+  it('does not confirm an unchanged serialized origin or a text-only change', async () => {
+    const h = await page();
+    h.edit('identityCanonicalOrigin', 'https://BLOG.example:443/');
+    h.edit('identitySiteName', 'New title');
+    await h.submit();
+    expect(h.confirms).toHaveLength(0);
+    expect(h.el('identityCanonicalOrigin').value).toBe('https://blog.example');
+  });
+
+  it('retains all inputs when the domain confirmation is cancelled', async () => {
+    const h = await page({ confirm: false });
+    h.edit('identityCanonicalOrigin', 'https://new.example');
+    h.edit('identityAuthorName', 'New author');
+    await h.submit();
+    expect(h.requests).toHaveLength(1);
+    expect(h.el('identityCanonicalOrigin').value).toBe('https://new.example');
+    expect(h.el('identityAuthorName').value).toBe('New author');
+    expect(h.el('identityFields').disabled).toBe(false);
+  });
+
+  it('clears the domain to null and shows the neutral linked notice', async () => {
+    const h = await page();
+    h.edit('identityCanonicalOrigin', '  ');
+    await h.submit();
+    expect(JSON.parse(h.requests[1]!.body!).identity.canonicalOrigin).toBeNull();
+    expect(h.el('identityCanonicalOrigin').value).toBe('');
+    expect(h.el('identityDomainNotice').hidden).toBe(false);
+    expect(h.el('identityDomainNoticeText').textContent).toBe(copy.identityDomainUnset);
+    expect(h.el('identityDomainNoticeLink').getAttribute('href')).toBe('/admin/settings.html#identity');
+    expect(h.el('identityCanonicalAscii').hidden).toBe(true);
+  });
+
+  it('prefills the browser origin without saving or changing the saved-domain notice', async () => {
+    const h = await page({ canonicalOrigin: null });
+    expect(h.el('identityDomainNotice').hidden).toBe(false);
+    h.el('identityUseBrowserOrigin').click();
+    expect(h.el('identityCanonicalOrigin').value).toBe('https://admin.example:8443');
+    expect(h.el('identityDomainNotice').hidden).toBe(false);
+    expect(h.requests).toHaveLength(1);
+    expect(h.document.activeElement).toBe(h.el('identityCanonicalOrigin'));
+  });
+
+  it('rejects unparseable input without turning it into an unset domain', async () => {
+    const h = await page();
+    h.edit('identityCanonicalOrigin', 'not a domain');
+    await h.submit();
+    expect(h.requests).toHaveLength(1);
+    expect(h.el('identityCanonicalOrigin').value).toBe('not a domain');
+    expect(h.el('identityStatus').textContent).toContain(copy.identityInvalid);
+    expect(h.document.activeElement).toBe(h.el('identityCanonicalOrigin'));
+  });
+
+  it.each([400, 409, 500])('preserves domain and other edits after HTTP %s', async (status) => {
+    const h = await page({ route: () => Response.json({
+      code: status === 409 ? 'identity_conflict' : 'invalid_identity', field: 'canonicalOrigin',
+    }, { status }) });
+    h.edit('identityCanonicalOrigin', 'https://new.example/blog');
+    h.edit('identitySiteName', 'Keep this name');
+    await h.submit();
+    expect(JSON.parse(h.requests[1]!.body!).identity.canonicalOrigin).toBe('https://new.example/blog');
+    expect(h.el('identityCanonicalOrigin').value).toBe('https://new.example/blog');
+    expect(h.el('identitySiteName').value).toBe('Keep this name');
+    expect(h.el('identityDomainNotice').hidden).toBe(true);
+    expect(h.el('identityFields').disabled).toBe(false);
   });
 });

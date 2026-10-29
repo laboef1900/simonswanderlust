@@ -1,3 +1,4 @@
+import { TEST_TRUST } from './trusted-proxy-fixture.js';
 import { describe, expect, it, beforeEach } from 'vitest';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -49,6 +50,7 @@ function build(extra: Partial<ServerConfig> = {}) {
   const sessions = memorySessionStore();
   const store = memoryCommentAdminStore([], extra.language);
   const app = buildServer({
+    trustProxy: TEST_TRUST,
     storageDir: dir, baseUrl: 'https://img.simonswanderlust.com',
     users, sessions, settings: fakeSettings(), secrets: memorySecretsStore(),
     posts: memoryPostStore(), pages: memoryPageStore(),
@@ -162,7 +164,7 @@ describe('admin comment moderation routes (SPEC-ADM-001)', () => {
     expect(rows).toHaveLength(2);
     expect(rows.filter((r) => r.status === 'pending')).toHaveLength(1); // only the reader's row
     expect(rows.find((r) => r.isAuthor)?.status).toBe('approved');
-    const { canonicalOrigin: _reserved, ...edit } = identityStore.get().identity;
+    const edit = identityStore.get().identity;
     await identityStore.update(1, { ...edit, authorName: 'New author' });
     const next = await b.app.inject({ method: 'POST', url: `/moderation/comments/${c.id}/reply`, cookies: admin, payload: { body: 'Welcome again' } });
     expect(next.json().name).toBe('New author');
@@ -197,13 +199,37 @@ describe('admin comment moderation routes (SPEC-ADM-001)', () => {
 });
 
 describe('site identity administration', () => {
+  it('checks both actual image roles on save, then exposes normalized canonical and clearing immediately', async () => {
+    const identityStore = memorySiteIdentityStore();
+    const b = build({ identityStore, baseUrl: 'https://cdn.example/assets', imgHost: 'IMAGES.example:443' });
+    const cookies = await authed(b, true);
+    try {
+      for (const canonicalOrigin of ['https://cdn.example', 'https://images.example/', 'https://user@blog.example']) {
+        const response = await b.app.inject({ method: 'PUT', url: '/settings/identity', cookies,
+          payload: { revision: 1, identity: { ...neutralIdentity(), canonicalOrigin } } });
+        expect(response.statusCode).toBe(400);
+        expect(response.json()).toMatchObject({ code: 'invalid_identity', field: 'canonicalOrigin' });
+        expect(identityStore.get().revision).toBe(1);
+      }
+      const response = await b.app.inject({ method: 'PUT', url: '/settings/identity', cookies,
+        payload: { revision: 1, identity: { ...neutralIdentity(), canonicalOrigin: 'https://BÜCHER.example:443/' } } });
+      expect(response.statusCode).toBe(200);
+      const current = await b.app.inject({ url: '/settings/identity', cookies });
+      expect(current.json().identity.canonicalOrigin).toBe('https://xn--bcher-kva.example');
+      expect((await b.app.inject({ url: '/admin/editor-image-copy.js' })).body).toContain('"canonicalOrigin":"https://xn--bcher-kva.example"');
+      const cleared = await b.app.inject({ method: 'PUT', url: '/settings/identity', cookies,
+        payload: { revision: 2, identity: neutralIdentity() } });
+      expect(cleared.statusCode).toBe(200);
+      expect(identityStore.get().identity.canonicalOrigin).toBeNull();
+    } finally { await b.app.close(); }
+  });
   it('requires admin authorization, returns no-store even on refusals, and never builds on save', async () => {
     let builds = 0;
     const identityStore = memorySiteIdentityStore({ ...neutralIdentity(), canonicalOrigin: 'https://blog.example' });
     const b = build({ identityStore, builder: { build: async () => { builds++; return { ok: true, release: 'r' }; }, hasRelease: () => true, quiesce: async () => {} } });
     const author = await authed(b, false);
     const admin = await authed(b, true);
-    const { canonicalOrigin: _reserved, ...edit } = identityStore.get().identity;
+    const edit = identityStore.get().identity;
     for (const method of ['GET', 'PUT'] as const) {
       for (const [cookies, status] of [[undefined, 401], [author, 403]] as const) {
         const response = await b.app.inject({ method, url: '/settings/identity', cookies, ...(method === 'PUT' ? { payload: { revision: 1, identity: edit } } : {}) });
@@ -226,14 +252,14 @@ describe('site identity administration', () => {
     await b.app.close();
   });
 
-  it('refuses malformed values and reserved canonical writes without echoing input or changing cache', async () => {
+  it('refuses malformed identity values without echoing input or changing cache', async () => {
     const identityStore = memorySiteIdentityStore();
     const b = build({ identityStore });
     const admin = await authed(b, true);
-    const { canonicalOrigin: _reserved, ...edit } = identityStore.get().identity;
+    const edit = identityStore.get().identity;
     for (const partial of [
       { siteName: 'private-input'.repeat(10) }, { socialLinks: [{ label: 'Profile', url: 'javascript:private-input' }] },
-      { tagline: { 'private-input': 'private-input' } }, { canonicalOrigin: null }, { authorName: null },
+      { tagline: { 'private-input': 'private-input' } }, { canonicalOrigin: 'https://private-input.example/path' }, { authorName: null },
       { siteName: '\tprivate-input' }, { siteName: 'private-input\n' }, { authorName: 'private\u0000-input' },
       { tagline: { en: '\rprivate-input' } }, { aboutRole: { de: 'private-input\u202e' } },
       { aboutGear: { en: 'private-input\u200b' } }, { studioDescriptor: { de: 'private-input\t' } },

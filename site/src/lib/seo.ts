@@ -13,12 +13,6 @@ export function localeAlternates(path: (locale: Locale, language: SiteLanguage) 
 }
 
 /**
- * Production origin — fallback base URL when `Astro.site` is unset.
- * Single source of truth; mirrors `site` in astro.config.mjs.
- */
-export const PROD_SITE = new URL('https://simonswanderlust.com');
-
-/**
  * Formats a Date as a date-only ISO 8601 string (YYYY-MM-DD) from its LOCAL
  * calendar components.
  *

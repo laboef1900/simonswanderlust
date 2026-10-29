@@ -240,8 +240,13 @@ window.LLM = (function () {
     const headers = { 'content-type': 'application/json' };
     if (apiKey) headers.Authorization = 'Bearer ' + apiKey;
     if (endpoint.hostname === 'openrouter.ai') {
-      headers['HTTP-Referer'] = 'https://simonswanderlust.com';
-      headers['X-Title'] = 'SimonsWanderlust';
+      const identity = window.SiteIdentity;
+      if (identity?.canonicalOrigin) headers['HTTP-Referer'] = identity.canonicalOrigin;
+      // `$` alone also matches before a final newline; header values must not.
+      if (typeof identity?.siteName === 'string' && /^[\x20-\x7E\xA0-\xFF]{1,80}$/.test(identity.siteName)
+          && !/[\r\n]/.test(identity.siteName)) {
+        headers['X-Title'] = identity.siteName;
+      }
     }
     const payload = { model, messages, response_format: { type: 'json_object' } };
     const ctrl = new AbortController();
