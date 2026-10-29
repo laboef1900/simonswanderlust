@@ -78,11 +78,42 @@ open http://localhost:3000/login      # macOS (or just browse to the URL)
 ```
 
 On first run, when no users exist, `/login` shows a "Create the first admin"
-form. Fill in a username and password to create the admin account; the form is
-closed once any user exists. Sign in at `/login`, then pick a key
-(e.g. `trips/rhodes-2021/hero`) and alt text, choose a photo, and click
-**Upload** — the page prints the `heroImage:` snippet to paste into the post's
-frontmatter.
+form. Fill in a username and password; the form closes once any user exists. Setup/login
+take you to the existing publishing **Desk**, not a snippet/frontmatter workflow.
+
+On a genuinely fresh installation the admin Desk offers this checklist:
+
+1. **Admin account created** — informational, already done after setup.
+2. **Name your blog — Optional** — opens Settings → Site identity. Only an explicit save
+   completes it; leaving seeded identity untouched never blocks Finish or Publish.
+3. **Upload your first photo** — opens Media. Upload and wait until a photo is ready;
+   processing is not completion, and failed/missing photos link to the existing retry workflow.
+4. **Write your first story** — opens the existing editor (or your newest saved story).
+   Pick the uploaded hero, fill the required locale/story fields and **Save draft**.
+   The checklist creates no post, slug or sample content for you.
+5. **Publish it** — explicitly Publish in the editor after its normal validation and
+   confirmation. This rebuilds the public site; saving a draft never publishes.
+
+Progress counts only the three required photo/story/publish steps and reflects current data.
+Deleting the only ready photo/story or unpublishing the only publication regresses progress.
+**Hide checklist** is install-wide and survives browser changes/restarts; **Show setup checklist**
+appears only in the Desk header. Once the three required steps are done, explicit **Finish**
+permanently retires the checklist after confirmation; Publish alone never finishes it.
+A hidden complete checklist stays hidden until you Show it. Nothing reopens it after Finish.
+
+Authors retain normal upload/draft actions but never receive the checklist or admin setup CTAs.
+Upgrades, restored installations and zero-user installations with existing content/data are
+excluded; absence of a checklist is not an error or a reason to erase data. There is no reset.
+On context/checklist failure use the displayed read-only Retry; uncertainty is not logout or
+an empty checklist. No language placeholder is added by this feature.
+
+Recovery is offline: every JSON/SQL/host/clone restore permanently retires onboarding.
+For a fresh JSON target use `prepare-native-restore [--yes]`, not an HTTP boot for schema;
+SQL/filesystem recovery uses fence-only `onboarding-retire` before replacement and verifies
+the final root again before activation. Keep all writers stopped and auto-start disabled
+between commands—the CLI lease ends on exit. Follow
+[the complete recovery procedure](../ARCHITECTURE.md#database-dumps); never delete retirement
+metadata, old volumes or owner content to make setup look fresh.
 
 Uploaded variants — plus the untouched original as `{key}-orig.<ext>` — are
 written to `./data/images/` on the host (a Docker volume), so they survive
@@ -153,7 +184,8 @@ An empty `SITE_DIR` starts a build from `SITE_APP_DIR`, so check both paths befo
    with `$proxy_host`/the upstream name). If the `Host` header reaching the app isn't exactly
    `img.simonswanderlust.com`, image URLs silently fall through to the blog/admin routing instead
    of serving image variants.
-6. Open `https://simonswanderlust.com/login` to create the first admin account, then upload.
+6. Open `https://simonswanderlust.com/login` to create the first admin account, then follow
+   the Desk checklist above (or use the ordinary Media/editor workflow on an existing install).
 
 The admin panel is reachable directly at `https://simonswanderlust.com/admin/` — the same process
 serves it, so there's nothing to proxy to separately anymore.
@@ -163,6 +195,11 @@ lists published trips with saved changes, reports the photo-processing count, an
 current live site. Those three data sources load independently. If posts, queue status, or health
 is unavailable, only that section shows a retry; unknown queue/release state is never presented as
 an idle queue or as confirmation that no release exists.
+The optional first-run checklist sits above these existing sections; it does not replace them.
+Protected pages share read-only `GET /auth/me`, returning exactly
+`{ authenticated: true, userId, username, isAdmin, needsSetup: false }` with `no-store`.
+Only a 401 redirects to login; other context failures offer retry without logging out.
+`/setup`, `/login` and `/auth/status` keep their existing contracts.
 
 ### Security notes
 
@@ -486,8 +523,9 @@ deploying: rollback is the older image + that dump + the `.pre-ai-registry` copy
 **Recovery:** v6 and later DB dumps include encrypted secrets, not the master key or settings.json.
 Escrow the master key separately offsite and keep historical keys for historical dumps.
 Absent secrets in legacy v1–v5 preserve live rows; an empty v6-or-later array intentionally clears
-them. Restore is still CLI-only, confirmed, with a pre-restore undo dump. Pause AI/settings
-edits during restore and reconcile the providers in settings.json before resuming; a restored
+them. Follow the [offline restore procedure](../ARCHITECTURE.md#database-dumps): stop every app
+and maintenance writer, confirm the CLI's target/counts, and retain its verified undo set.
+Reconcile the providers in settings.json before restarting remote use; a restored
 pre-registry `ai_api_key` row is never read — re-enter keys per provider.
 
 To rotate a provider key, replace it in that provider's form then revoke the old one externally.

@@ -3,7 +3,7 @@ export type Namespace = 'root' | 'de' | 'en';
 export interface Reservation { segment: string; owner: 'app' | 'site' | 'locale' | 'legacy'; pageKind?: 'about' }
 interface Mode { primary: 'de' | 'en'; locales: readonly ('de' | 'en')[] }
 const DEFAULT_MODE: Mode = { primary: 'de', locales: ['de', 'en'] };
-export const APP_SEGMENTS = ['admin', 'map', 'ai-config', 'ai-providers', 'api', 'auth', 'backups', 'comments', 'export', 'geocode', 'gpx', 'health', 'import', 'language', 'login', 'logout', 'media', 'moderation', 'pages', 'posts', 'rebuild', 'settings', 'setup', 'upload', 'users'] as const;
+export const APP_SEGMENTS = ['admin', 'map', 'ai-config', 'ai-providers', 'api', 'auth', 'backups', 'comments', 'export', 'geocode', 'gpx', 'health', 'import', 'language', 'login', 'logout', 'media', 'moderation', 'onboarding', 'pages', 'posts', 'rebuild', 'settings', 'setup', 'upload', 'users'] as const;
 const legacy = ['feed', 'category', 'comments'].map((segment): Reservation => ({ segment, owner: 'legacy' }));
 function siteReservations(locale: 'de' | 'en', primary: 'de' | 'en'): Reservation[] {
   const words = wordsFor(locale, primary);

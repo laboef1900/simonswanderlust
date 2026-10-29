@@ -880,6 +880,41 @@ New post accents. The public blog's expedition identity is unchanged. Self-hoste
 Inter/IBM Plex Mono remain; the shell and login identify the workspace as **Wanderlust
 Studio**, with **Simon's travel journal** as the descriptor.
 
+**First-run checklist (#279).** Preserve the incumbent Desk and its independent draft,
+photo-queue and live-site sections. Only an eligible admin sees the compact checklist above
+them; the shared protected-page context resolves first, and authors retain ordinary
+upload/draft-authoring empty states without identity/settings/Publish affordances.
+Upgraded/restored installations never gain a retroactive setup wizard.
+
+The ordered rows are Account (informational), Name your blog (**Optional**), Photo, Story and
+Publish. Completion is **three required steps**, not five: identity follows an explicit
+Settings save and never gates Finish or Publish. Each row links into the existing Media,
+Settings identity tab or editor; no sample, pre-created draft, automatic upload/publication or
+language placeholder. Current data determines state, with text/icons rather than colour alone:
+photo precedence is ready, processing, failed/missing, then empty. Regressions are truthful
+until explicit permanent Finish; completing a publish does not finish the checklist.
+
+**Hide checklist** applies install-wide across admins, sessions and restarts. The only reopen
+affordance is **Show setup checklist** in the Desk header, not Settings/navigation. Show
+focuses the checklist heading. A hidden complete checklist remains hidden. **Finish** requires
+the three current required predicates, confirms permanent removal, and removes both checklist
+and Show; later content regressions do not reopen it. Ordinary empty states remain useful.
+Loading/unavailable states are explicit, with read-only Retry and visible keyboard focus;
+after an uncertain action acknowledgement reload state instead of replaying the mutation.
+The checklist uses the existing responsive control vocabulary, wrapping at 320px rather than
+creating a second shell. Authentication-context failures are unavailable, not automatic logout.
+
+**Ordinary empty states (#280).** These remain independent of checklist eligibility,
+dismissal and retirement. Desk offers a private draft without assuming two active
+languages; Posts keeps its existing New post action. Media distinguishes an empty
+library from a narrowed view, offers the existing photo picker to authors and admins,
+and lets a narrowed view return to all photos without creating content. Its explanatory
+status and actions sit outside the photo listbox; a populated grid is unchanged.
+Comments retains its announced Pending/Approved empty result and moderation explanation:
+having no comments needs no setup action. Users cannot legitimately have an empty
+authenticated list (first-admin setup precedes access), while Import's idle state is
+the existing export-file chooser, not a second onboarding workflow.
+
 Admin tokens live on `:root` in `uploader/public/admin.css`, so the shell, the login page
 and the `<dialog>`s appended to `<body>` share one set:
 

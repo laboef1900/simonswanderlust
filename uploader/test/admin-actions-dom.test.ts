@@ -147,6 +147,7 @@ function loadPage(file: string, extraGlobals: Record<string, unknown>, scripts: 
     document: Object.assign(element(), {
       referrer: '',
       title: '',
+      documentElement: { lang: 'en' },
       getElementById: (id: string): Element | null => (ids.has(id) ? el(id) : null),
       createElement: () => element(),
     }),
@@ -203,6 +204,18 @@ function loadPosts(extraGlobals: Record<string, unknown> = {}) {
     ...extraGlobals,
   });
 }
+
+describe('ordinary Desk empty states', () => {
+  it.each([true, false])('keeps draft creation available without onboarding (admin: %s)', (isAdmin) => {
+    const { ctx, el } = loadPage('public/index.html', {}, ['public/desk.js']);
+    vm.runInContext(`authenticatedContext = { isAdmin: ${isAdmin} }; renderNext(null); renderRelease(false);`, ctx);
+    const empty = el('deskNext').children[0]!;
+    expect(empty.children[0]!.textContent).toBe(ui.en['editor.chrome.deskNoDrafts']);
+    expect(empty.children[1]!.href).toBe('/admin/editor.html');
+    expect(el('deskRelease').textContent).toBe(ui.en[isAdmin ? 'editor.chrome.deskNoReleaseAdmin' : 'editor.chrome.deskNoReleaseAuthor']);
+    expect(el('deskRelease').children).toHaveLength(0);
+  });
+});
 
 const post = { translationKey: 'tk1', title: 'Bukarest', slugs: { de: 'bukarest', en: 'bucharest' }, status: 'published' };
 
