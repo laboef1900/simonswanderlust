@@ -63,6 +63,7 @@ import { IdentityError, neutralIdentity } from '../../site/src/lib/site-identity
 import type { TrustPolicy } from './trusted-proxy.js';
 import { LanguageError, validateLanguage, type LanguageConfig, type LanguageStore, type LanguageLocale, type LanguageBlocker } from './language.js';
 import { publicPath } from './public-paths.js';
+import { validateCanonicalRoles } from './canonical-origin.js';
 
 export interface ServerConfig {
   trustProxy: TrustPolicy['trust'];
@@ -978,6 +979,8 @@ export function buildServer(cfg: ServerConfig): AppServer {
       const body = req.body as Record<string, unknown>;
       if (Object.keys(body).some((key) => key !== 'revision' && key !== 'identity')) throw new IdentityError('identity');
       if (typeof body.revision !== 'number' || !Number.isInteger(body.revision) || body.revision < 1) throw new IdentityError('revision');
+      if (!body.identity || typeof body.identity !== 'object' || Array.isArray(body.identity)) throw new IdentityError('identity');
+      validateCanonicalRoles((body.identity as Record<string, unknown>).canonicalOrigin, cfg);
       const saved = await cfg.identityStore.update(body.revision, body.identity);
       return { revision: saved.revision, savedAt: saved.savedAt, takesEffect: 'next_build' };
     } catch (error) {
@@ -1397,7 +1400,10 @@ export function buildServer(cfg: ServerConfig): AppServer {
   });
 
   const { posts } = cfg;
-  const geocode = createGeocoder({ endpoint: () => cfg.settings.get().geocodingSearchUrl });
+  const geocode = createGeocoder({
+    endpoint: () => cfg.settings.get().geocodingSearchUrl,
+    canonicalOrigin: () => cfg.identityStore?.get().identity.canonicalOrigin ?? null,
+  });
   app.post('/geocode', { preHandler: requireAuth, bodyLimit: 2048 }, async (req, reply) => {
     reply.header('Cache-Control', 'no-store');
     const query = req.body && typeof req.body === 'object' && 'query' in req.body ? req.body.query : undefined;
@@ -1947,8 +1953,14 @@ export function buildServer(cfg: ServerConfig): AppServer {
       posts: cfg.posts,
       allowedOrigin: (req) => {
         if (cfg.commentsOrigin !== undefined) return commentOrigin(cfg.commentsOrigin);
-        // #276 inserts the CURRENT validated identity.canonicalOrigin here, not
-        // a boot snapshot. Until then, do not infer identity from reader input.
+        const canonical = cfg.identityStore?.get().identity.canonicalOrigin;
+        if (canonical !== undefined && canonical !== null) {
+          try { return validateCanonicalRoles(canonical, cfg); }
+          catch (error) {
+            if (error instanceof IdentityError) return null;
+            throw error;
+          }
+        }
         const origin = commentAuthorityOrigin(req.protocol, req.headers.host);
         if (origin === null) return null;
         if (servingImageAuthorities.some((authority) => authority === null)) return null;

@@ -37,6 +37,7 @@ type Fetch = (url: string, options?: RequestInit) => Promise<Response>;
 
 interface EditorOptions {
   language?: { primary: 'de' | 'en'; locales: ('de' | 'en')[] };
+  canonicalOrigin?: string | null;
   fetch?: Fetch;
   review?: Review;
   isAdmin?: boolean;
@@ -170,6 +171,7 @@ function loadEditor(options: EditorOptions = {}) {
   const editors: EasyMDE[] = [];
   const ctx: Record<string, unknown> = {
     document: dom.document,
+    SiteIdentity: { canonicalOrigin: options.canonicalOrigin ?? null },
     location: { search: options.search ?? '', pathname: '/admin/editor.html', href: 'http://localhost/admin/editor.html' + (options.search ?? ''), origin: 'http://localhost', host: 'localhost' },
     history: { replaceState() {} },
     sessionStorage: storage(),
@@ -307,7 +309,28 @@ describe('editor language modes and translation coverage', () => {
     expect(h.el(primary + 'Included').parentElement!.parentElement!.hidden).toBe(true);
     expect(h.el('publishBtn').disabled).toBe(false);
     expect(h.api.buildPayload()[secondary].omitted).toBe(true);
-    expect(h.el(primary === 'de' ? 'slugBaseDe' : 'slugBaseEn').textContent).toBe('localhost/');
+    expect(h.el(primary === 'de' ? 'slugBaseDe' : 'slugBaseEn').textContent).toBe('/');
+  });
+
+  it.each([
+    { primary: 'de', locales: ['de'] },
+    { primary: 'en', locales: ['en'] },
+    { primary: 'de', locales: ['de', 'en'] },
+    { primary: 'en', locales: ['de', 'en'] },
+  ] as const)('uses the canonical host and port with $primary-primary $locales previews', async (mode) => {
+    for (const canonicalOrigin of ['https://xn--bcher-kva.example:8443', 'http://localhost:3000', null]) {
+      const h = loadEditor({
+        language: { primary: mode.primary, locales: [...mode.locales] }, canonicalOrigin, isAdmin: true,
+        fetch: async () => response({ images: [] }),
+      });
+      await settle();
+      await settle();
+      const host = canonicalOrigin ? new URL(canonicalOrigin).host : '';
+      for (const locale of mode.locales) {
+        expect(h.el(locale === 'de' ? 'slugBaseDe' : 'slugBaseEn').textContent)
+          .toBe(host + (locale === mode.primary ? '/' : '/' + locale + '/'));
+      }
+    }
   });
 
   it.each(['de', 'en'] as const)('lets %s-primary authors omit and retain an unfinished secondary', async (primary) => {

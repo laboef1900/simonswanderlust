@@ -2235,7 +2235,8 @@
           activateLocale(language.primary);
           for (const locale of language.locales) {
             $(locale === 'de' ? 'slugBaseDe' : 'slugBaseEn').textContent =
-              location.host + SiteLanguage.publicPath(language, locale, 'home');
+              (window.SiteIdentity?.canonicalOrigin ? new URL(window.SiteIdentity.canonicalOrigin).host : '')
+              + SiteLanguage.publicPath(language, locale, 'home');
           }
           syncCoverage();
         } catch (error) {

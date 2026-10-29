@@ -6,6 +6,9 @@ import tailwindcss from '@tailwindcss/vite';
 import { SHIKI_THEME, shikiStyleToClass } from './src/lib/shiki-classes.js';
 import { loadEnv } from 'vite';
 import { resolveBuildLanguage } from './src/lib/build-language.js';
+import { parseIdentitySnapshot } from './src/lib/site-identity.js';
+
+const identity = parseIdentitySnapshot(process.env.SITE_IDENTITY_JSON);
 
 const databaseUrl = process.env.DATABASE_URL || loadEnv(process.env.NODE_ENV || 'development', process.cwd(), 'DATABASE_URL').DATABASE_URL;
 const language = await resolveBuildLanguage(databaseUrl);
@@ -13,7 +16,7 @@ process.env.DATABASE_URL = databaseUrl;
 process.env.SITE_LANGUAGE_JSON = JSON.stringify(language);
 
 export default defineConfig({
-  site: 'https://simonswanderlust.com',
+  site: identity.canonicalOrigin ?? 'https://unconfigured.invalid',
   // Explicit, though it is Astro's default: the SEO slug contract and the
   // uploader's release/serve pipeline both assume a fully static dist/.
   output: 'static',

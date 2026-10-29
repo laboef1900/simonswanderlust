@@ -12,6 +12,8 @@ import { identityFromRow, seedSiteIdentity, type IdentityRow } from '../src/site
 import { LEGACY_IDENTITY } from '../src/site-identity-legacy.js';
 import { neutralIdentity } from '../../site/src/lib/site-identity.js';
 import { identityDumpRow } from './site-identity-fixture.js';
+import { readLanguage, type LanguageConfig } from '../src/language.js';
+import { LEGACY_REDIRECTS, legacyRedirect } from '../src/redirects.js';
 
 const url = process.env.TEST_DATABASE_URL;
 const maybe = url ? describe : describe.skip;
@@ -63,6 +65,52 @@ maybe('identity recovery with isolated PostgreSQL state', () => {
       ['logo', createHash('sha256').update(bytes).digest('hex'), 64, 32, bytes]);
   }
 
+  it.each<LanguageConfig>([
+    { primary: 'de', locales: ['de', 'en'] }, { primary: 'en', locales: ['en', 'de'] },
+    { primary: 'de', locales: ['de'] }, { primary: 'en', locales: ['en'] },
+  ])('restores redirect language eligibility independently of identity for $primary / $locales', async mode => {
+    const original = await readLanguage(pool);
+    try {
+      await pool.query('UPDATE site_language SET primary_locale=$1, enabled_locales=$2, locked_at=NULL', [mode.primary, mode.locales]);
+      const dump = readDump(join(dir, await dumpDatabase(pool, dir)));
+      for (const canonicalOrigin of ['https://first.example', 'https://second.example', null]) {
+        dump.tables.site_identity![0]!.canonical_origin = canonicalOrigin;
+        dump.tables.site_identity![0]!.site_name = 'Restored identity';
+        await pool.query("UPDATE site_language SET primary_locale='en', enabled_locales=ARRAY['en'], locked_at=NULL");
+        await restoreDatabase(pool, await save(dump), { originRoles: { baseUrl: 'https://cdn.example', imgHost: 'images.example' } });
+        const restored = await readLanguage(pool);
+        expect(restored).toMatchObject(mode);
+        expect(identityFromRow(await stored()).canonicalOrigin).toBe(canonicalOrigin);
+        for (const [from, target] of LEGACY_REDIRECTS) {
+          const eligible = mode.primary === 'de' && (!from.startsWith('/en/') || mode.locales.includes('en'));
+          expect(legacyRedirect(from, restored)).toBe(eligible ? target : undefined);
+        }
+      }
+    } finally {
+      await pool.query('UPDATE site_language SET primary_locale=$1, enabled_locales=$2, locked_at=$3, updated_at=$4',
+        [original.primary, original.locales, original.lockedAt, original.updatedAt]);
+    }
+  });
+  it.each([
+    { baseUrl: 'https://incoming.example', imgHost: 'images.example' },
+    { baseUrl: 'https://cdn.example', imgHost: 'INCOMING.example:443' },
+    { baseUrl: 'https://cdn.example', imgHost: 'images.example/path' },
+  ])('refuses incoming canonical against actual image roles before changing destination %j', async originRoles => {
+    const dump = readDump(join(dir, await dumpDatabase(pool, dir)));
+    dump.tables.site_identity![0]!.canonical_origin = 'https://incoming.example';
+    const before = await content();
+    await expect(restoreDatabase(pool, await save(dump), { originRoles })).rejects.toThrow(/Invalid identity field/);
+    expect(await content()).toEqual(before);
+  });
+  it('refuses a pre-identity restore when the retained destination canonical now names the image host', async () => {
+    await pool.query("UPDATE site_identity SET canonical_origin='https://images.example'");
+    const before = await content();
+    const legacy: Dump = { version: 10, createdAt: new Date().toISOString(), tables: { users: [], posts: [], post_routes: [] } };
+    await expect(restoreDatabase(pool, await save(legacy), {
+      originRoles: { baseUrl: 'https://cdn.example', imgHost: 'IMAGES.example:443' },
+    })).rejects.toThrow(/Invalid identity field/);
+    expect(await content()).toEqual(before);
+  });
   it('round-trips full retained DE/EN maps, metadata and PNG bytes, replacing destination-only values', async () => {
     const localized = { tagline: { de: 'Deutsch', en: 'Retained English' }, aboutRole: { en: 'Writer' },
       aboutGear: { de: 'Notebook' }, studioDescriptor: { en: 'Private studio descriptor' } };

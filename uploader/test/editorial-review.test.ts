@@ -18,8 +18,9 @@ interface BrowserLlm {
   caption(baseUrl: string, model: string, prompt: string, dataUrl: string, timeoutMs: number, maxTokens: number): Promise<{ altEn: string; altDe: string }>;
   listModels(baseUrl: string): Promise<string[]>;
 }
-function browserClient(fetcher: typeof fetch = vi.fn<typeof fetch>()): BrowserLlm {
-  const window = {} as { LLM: BrowserLlm };
+function browserClient(fetcher: typeof fetch = vi.fn<typeof fetch>(),
+  identity?: { canonicalOrigin: string | null; siteName: string }): BrowserLlm {
+  const window = { SiteIdentity: identity } as { LLM: BrowserLlm; SiteIdentity?: typeof identity };
   runInNewContext(source, { window, URL, AbortController, AbortSignal, setTimeout, clearTimeout, fetch: fetcher });
   return window.LLM;
 }
@@ -226,10 +227,11 @@ describe('browser-direct review transport', () => {
       ['https://notopenrouter.ai/v1', false],
     ] as const) {
       const fetcher = vi.fn<typeof fetch>().mockResolvedValue(completion());
-      await browserClient(fetcher).reviewStory(url, 'm', DEFAULT_REVIEW_PROMPT, { ...story, locale: 'de' }, testKey);
+      await browserClient(fetcher, { canonicalOrigin: 'https://blog.example:8443', siteName: 'Field notes' })
+        .reviewStory(url, 'm', DEFAULT_REVIEW_PROMPT, { ...story, locale: 'de' }, testKey);
       const headers = fetcher.mock.calls[0]![1]!.headers as Record<string, string>;
-      expect(headers['HTTP-Referer']).toBe(attributed ? 'https://simonswanderlust.com' : undefined);
-      expect(headers['X-Title']).toBe(attributed ? 'SimonsWanderlust' : undefined);
+      expect(headers['HTTP-Referer']).toBe(attributed ? 'https://blog.example:8443' : undefined);
+      expect(headers['X-Title']).toBe(attributed ? 'Field notes' : undefined);
       expect(bodyOf(fetcher).messages).toEqual(expect.arrayContaining([
         expect.objectContaining({ role: 'system', content: expect.stringContaining('German.') }),
       ]));

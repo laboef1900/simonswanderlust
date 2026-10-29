@@ -104,7 +104,7 @@ const importJobs = createImportRunner({ store: pgImportJobStore(pool, runtime), 
 await importJobs.recover();
 owner.assertWritable();
 
-const baseUrl = process.env.PUBLIC_BASE_URL ?? 'https://img.simonswanderlust.com';
+const baseUrl = process.env.PUBLIC_BASE_URL ?? 'http://localhost:3000';
 let imgHost: string;
 try {
   imgHost = process.env.IMG_HOST ?? new URL(baseUrl).host;
@@ -126,6 +126,7 @@ const builder = createSiteBuilder({
   releasesRoot: siteDir,
   lock: workLock,
   pool,
+  originRoles: { baseUrl, imgHost },
   ...runtime,
   applicationName: owner.applicationName + ':build',
 });

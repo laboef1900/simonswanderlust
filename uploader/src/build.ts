@@ -8,6 +8,7 @@ import type pg from 'pg';
 import { parseIdentitySnapshot } from '../../site/src/lib/site-identity.js';
 import { withBuildSnapshot, writeBuildAssets, type BuildSnapshot } from './build-snapshot.js';
 import { DEFAULT_LANGUAGE } from './language.js';
+import type { OriginRoles } from './canonical-origin.js';
 
 export interface BuildOutcome { ok: boolean; release?: string; error?: string }
 
@@ -39,6 +40,7 @@ export interface SiteBuilderOptions extends WorkCancellationOptions {
   applicationName?: string;
   /** Required for real builds; test-only runBuild callbacks may omit the DB. */
   pool?: pg.Pool;
+  originRoles?: OriginRoles;
   siteAppDir: string;
   releasesRoot: string;
   keep?: number;
@@ -263,7 +265,7 @@ export function createSiteBuilder(opts: SiteBuilderOptions): SiteBuilder {
           };
           return buildAndDeploy({ siteAppDir: opts.siteAppDir, releasesRoot: opts.releasesRoot, keep, runBuild, ...buildWork });
         };
-        if (opts.pool) return withBuildSnapshot(opts.pool, { timeoutMs, signal: work.signal }, deploy);
+        if (opts.pool) return withBuildSnapshot(opts.pool, { timeoutMs, signal: work.signal, originRoles: opts.originRoles }, deploy);
         if (!opts.runBuild) throw new Error('A database pool is required for site builds');
         return deploy();
       });

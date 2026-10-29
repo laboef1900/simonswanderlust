@@ -95,10 +95,9 @@ export function postgresTripsLoader(): Loader {
       // runs in Node, same as DATABASE_URL above) and passed down explicitly,
       // so transformBodyImages stays pure and env-free for the uploader's
       // draft preview.
-      // @ai-note: with PUBLIC_BASE_URL unset this falls back to the production
-      // origin, so a local/CI build renders localhost gallery URLs as the bare
-      // <pre> instead of a grid. That is the fail-safe direction — set
-      // PUBLIC_BASE_URL (repo-root .env already does) to preview galleries.
+      // Standalone dev / CI builds without PUBLIC_BASE_URL use localhost:3000.
+      // Production supplies its independent image origin; canonical blog-domain
+      // changes never retarget these images.
       const galleryOrigin = imageOrigin(process.env.PUBLIC_BASE_URL);
       const pool = loaderPool(url);
       const language = siteLanguage();
