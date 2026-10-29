@@ -1202,3 +1202,11 @@ served and completeness-tested, not claimed as a separately exercised German adm
 
 Private exact records and runtime artifacts remain outside version control. No owner data
 was used, and the actual deployment-mount gate above remains unchanged.
+
+The first #306 final-head CI attempt exposed a test synchronization defect in inherited
+upload recovery coverage: 300 event-loop turns did not guarantee completion of real
+filesystem reads for the next bounded receipt page. The tests now await actual receipt
+acceptance/finalization signals, retaining the 105-receipt continuation assertion and
+the normal test deadline. No recovery behavior or guard was relaxed. All twelve focused
+upload-service cases passed after this repair; subsequent full-suite and final-head CI
+results are recorded separately in the PR and execution ledger.
