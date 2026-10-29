@@ -371,11 +371,24 @@ body links are not removed or rewritten. Unknown legacy page keys remain readabl
 for recovery and deletable, but cannot be authored as new kinds.
 
 `site/src/lib/navigation.ts` defines the version-1 typed navigation document,
-validation, defaults and exact page-reference removal. `site_nav` is introduced
-for backup/deletion integrity now. Configurable navigation editing, public generic
-page rendering, emitted-path resolution and build collision guards belong to #289;
-this change does not add a second renderer or pretend those surfaces are present.
-The precise #289/#309 hand-off is in the approved #287 spec's implementation appendix.
+validation, defaults and exact page-reference removal. Admin-only
+`GET/PUT /settings/navigation` edit the `site_nav` singleton with its optimistic
+`updatedAt` token, holding the language row before the navigation row. Save commits
+before rebuilding; a failed rebuild acknowledges the saved document/token without
+replacing the last successful release. Settings → Navigation authors the same
+document; social links remain in Site identity.
+
+The Content Layer pages/navigation/trips loaders import the same exported PostgreSQL
+snapshot as identity/language. Published registry pages are Zod-validated and rendered
+through the shared sanitized Markdown and guarded responsive-image pipeline; drafts,
+unknown keys and inactive rows never enter the public collection. `[...path].astro`
+adds generic Contact/Privacy/Legal routes to the existing localized catalogue.
+About remains the incumbent resource and fixed URL, registered once per locale.
+`public-routes.ts` refuses competing page/story/static owners before emission.
+Navigation resolves per enabled locale against that emitted catalogue: unpublished
+page targets disappear and non-emitted relative paths are warned/dropped. Generic
+pages inherit canonical/sitemap/hreflang behavior but do not enter story feeds.
+See the approved #287 spec's implementation and public-output evidence appendices.
 
 ## Image pipeline
 

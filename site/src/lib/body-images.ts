@@ -501,3 +501,16 @@ function imageSources(tree: Root): { sources: string[]; galleryLines: string[] }
   });
   return { sources, galleryLines };
 }
+
+/** Shared publish/build origin gate, before image-map resolution can hide a foreign URL. */
+export function foreignBodyImageSources(html: string, imageOrigin: string): string[] {
+  const allowed = new URL(imageOrigin).origin;
+  const { sources, galleryLines } = bodyImageSources(html);
+  const foreign = new Set<string>();
+  for (const raw of [...sources, ...galleryLines]) {
+    let url: URL;
+    try { url = new URL(raw, allowed); } catch { continue; }
+    if ((url.protocol === 'https:' || url.protocol === 'http:') && url.origin !== allowed) foreign.add(raw);
+  }
+  return [...foreign];
+}

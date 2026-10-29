@@ -26,7 +26,7 @@
  * @ai-context docs/superpowers/specs/2026-10-25-publish-readiness-references-design.md
  */
 import { renderMarkdown } from '../../site/src/lib/render-markdown.js';
-import { bodyImageSources, transformBodyImages, type ImageDims } from '../../site/src/lib/body-images.js';
+import { bodyImageSources, foreignBodyImageSources, transformBodyImages, type ImageDims } from '../../site/src/lib/body-images.js';
 
 /** Foreign references before resolution; actual image loads after resolution (#334). */
 export async function analyzeBodyImages(
@@ -36,25 +36,9 @@ export async function analyzeBodyImages(
 ): Promise<{ foreign: string[]; sources: string[] }> {
   // server.ts validates cfg.baseUrl at boot (previewCsp), so this cannot throw there.
   const allowed = new URL(imageOrigin).origin;
-  const found = new Set<string>();
   const html = await renderMarkdown(body);
-  const { sources, galleryLines } = bodyImageSources(html);
-  for (const raw of [...sources, ...galleryLines]) {
-    let u: URL;
-    // Resolved against the image host — which in this deployment is the origin
-    // that serves the blog too — because that is what the reader's browser
-    // does with a reference that carries no origin of its own. Parsing without
-    // a base disagreed with it in both directions: `//old.example/a.jpg`
-    // (also its `&#47;&#47;` and `\\` spellings, which WHATWG resolves the same
-    // way) failed to parse and was passed as harmless while the page hot-linked
-    // old.example, and `https:old.example/a.jpg` parsed as a foreign origin
-    // while the browser reads it as a path on our own host — a false refusal.
-    try { u = new URL(raw, allowed); } catch { continue; }
-    if (u.protocol !== 'https:' && u.protocol !== 'http:') continue;
-    if (u.origin !== allowed) found.add(raw);
-  }
   return {
-    foreign: [...found],
+    foreign: foreignBodyImageSources(html, allowed),
     sources: bodyImageSources(transformBodyImages(html, images, allowed)).sources,
   };
 }
