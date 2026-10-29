@@ -918,6 +918,31 @@ was replaced by the recorded real-mutation generation experiment. All owned proc
 and tabs were closed, faulted permissions restored exactly, and fixture data retained.
 No owner content, deployment, or physical accessibility audit was involved.
 
+### Independent-review refresh and layout repairs
+
+PR review found three lifecycle defects: BFCache restoration did not restart observation,
+Posts retained stale language/token facts, and an initial language-read failure escaped the
+recoverable unavailable state. Regressions failed before repair. Required posts/language
+reads now settle together; accepted language facts precede rendering and mutation tokens.
+Trusted persisted restoration restarts a previously running observer, but never an explicitly
+stopped or unauthorized one.
+
+Actual browser qualification verified native BFCache document restoration, held-old-response
+rejection, a second-tab language change followed by real bulk Publish using the fresh token,
+network/malformed-language Retry, and bounded reads with zero automatic writes. Visual checks
+then exposed a long status badge crossing desktop cells and a zero-width Languages column
+clipping its chip on phones. Wrapping the badge and reserving the language column corrected
+both; no text or unavailable state was hidden.
+
+At `f5f7bbb`, settled1400/768/390/320px screenshots and geometry showed complete, contained
+labels/chips without overlap or inner horizontal overflow. The320px workspace measured304px
+client and304px scroll width. Native keyboard Enter recovered genuine data from unavailable
+state with zero writes. Expiring only the synthetic server session produced actual401s and
+login navigation; native Back restored the same document with trusted persisted events.
+It stayed visible for31.546seconds with zero requests or writes. Fresh fixture data is retained;
+owned sessions, apps, tabs and fault injection were cleaned up. This is not physical or
+screen-reader qualification.
+
 ## 22. #318 implementation handoff (2026-10-29)
 
 The Media detail GET/PATCH source adds the exact §8 impact union and admin-only nullable
