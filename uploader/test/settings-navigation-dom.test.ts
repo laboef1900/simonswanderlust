@@ -40,6 +40,7 @@ async function page(options: { primary?: 'de' | 'en'; locales?: ('de' | 'en')[];
   vm.runInContext(readFileSync('public/publication-refresh.js', 'utf8'), context);
   vm.runInContext(source, context);
   const el = (id: string) => { const node = document.getElementById(id); if (!node) throw new Error('Missing real element ' + id); return node; };
+  el('panel-navigation').hidden = false;
   // The real browser script installs this controller in the VM's window.
   const reporting = context.BuildReporting as { renderStatus(root: EditorElement, value: unknown): void };
   const refresh = context.PublicationRefresh as {
