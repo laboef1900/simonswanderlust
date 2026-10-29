@@ -591,6 +591,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .posts-page .posts-table .col-languages { width: 6.5rem; }
 .posts-page .posts-table .col-updated { width: 7.5rem; }
 .posts-page .posts-table .col-actions { width: 11rem; }
+.posts-page .posts-table .status-pill { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.posts-page .posts-table .status-pill::before { flex-shrink: 0; }
 .posts-page .media-thumb { width: 3rem; height: 2.25rem; object-fit: cover; border-radius: 0.25rem; }
 .posts-page .posts-table tbody tr:hover { background: #fafbfc; }
 .posts-page .post-trip-meta { display: block; margin-top: 0.125rem; color: var(--muted); font-size: 0.75rem; line-height: 1.5; }
