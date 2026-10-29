@@ -384,6 +384,70 @@ describe('revision restoration with a disabled language', () => {
 });
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
+for (const backend of ['memory', 'postgres'] as const) {
+  const suite = backend === 'postgres' && !databaseUrl ? describe.skip : describe;
+  suite(`${backend} draft consent during language activation`, () => {
+    it.each(['de', 'en'] as const)('refuses a pending restore when %s becomes enabled after consent validation', async (secondary) => {
+      const primary = secondary === 'de' ? 'en' : 'de';
+      let pool: pg.Pool | undefined;
+      if (backend === 'postgres') {
+        const schema = `consent_${randomUUID().replaceAll('-', '')}`;
+        const observer = new pg.Pool({ connectionString: databaseUrl });
+        pool = new pg.Pool({ connectionString: databaseUrl, options: `-c search_path=${schema}` });
+        cleanups.push(async () => {
+          await pool!.end();
+          await observer.query(`DROP SCHEMA ${schema} CASCADE`);
+          await observer.end();
+        });
+        await observer.query(`CREATE SCHEMA ${schema}`);
+        await ensureSchema(pool);
+      }
+      const f = await fixture({ primary, locales: [primary, secondary] }, pool);
+      const original = await f.story();
+      const tk = original.translationKey;
+      const save = (payload: object) => f.app.inject({ method: 'PUT', url: `/posts/${tk}`, cookies: f.cookies, payload });
+      const renamed = await save({ ...original, confirmSlugChange: true,
+        [secondary]: { ...original[secondary], slug: `renamed-${secondary}` } });
+      expect(renamed.statusCode).toBe(200);
+      const revision = await f.posts.getRevision(tk, (await f.posts.listRevisions(tk))[0]!.id);
+      expect((await f.put({ primary, locales: [primary] })).statusCode).toBe(200);
+      const before = (await f.posts.get(tk))!;
+      const payload = { ...revision!.snapshot, updatedAt: before.updatedAt };
+      const history = await f.posts.listRevisions(tk);
+      const entered = Promise.withResolvers<void>();
+      const resume = Promise.withResolvers<void>();
+      const upsert = f.posts.upsertDraft.bind(f.posts);
+      vi.spyOn(f.posts, 'upsertDraft').mockImplementationOnce(async (...args) => {
+        entered.resolve();
+        await resume.promise;
+        return upsert(...args);
+      });
+      const pending = save(payload).then((response) => response);
+      try {
+        await Promise.race([entered.promise, pending.then(() => { throw new Error('save barrier was not reached'); })]);
+        expect((await f.put({ primary, locales: [primary, secondary] })).statusCode).toBe(200);
+        const activated = (await f.posts.get(tk))!;
+        // Mode activation alone need not invalidate the pair's save token.
+        expect(activated.updatedAt).toEqual(before.updatedAt);
+        resume.resolve();
+        const response = await pending;
+        expect(response.statusCode).toBe(409);
+        expect(response.json().code).toBe('conflict');
+        expect(await f.posts.get(tk)).toEqual(activated);
+        expect(await f.posts.listRevisions(tk)).toEqual(history);
+        const unconfirmed = await save(payload);
+        expect(unconfirmed.statusCode).toBe(409);
+        expect(unconfirmed.json().code).toBe('slug_change_unconfirmed');
+        expect((await save({ ...payload, confirmSlugChange: true })).statusCode).toBe(200);
+        expect((await f.posts.get(tk))![secondary].slug).toBe(original[secondary].slug);
+      } finally {
+        resume.resolve();
+        await Promise.allSettled([pending]);
+      }
+    });
+  });
+}
+
 (databaseUrl ? describe : describe.skip)('publication readiness with a saturated PostgreSQL pool', () => {
   it.each(['single', 'bulk', 'about', 'activation'] as const)('%s reuses its locked client while other mutations wait', async (operation) => {
     const schema = `readiness_${randomUUID().replaceAll('-', '')}`;
