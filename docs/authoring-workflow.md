@@ -357,6 +357,8 @@ Folders are **virtual**: moving a photo never changes its URL, so reorganising t
 never break a published post. Renaming a folder moves its whole subtree (`Iceland` moves
 `Iceland/South` but not `Iceland 2024`), and a folder must be empty before it can be deleted.
 Folder rename and delete, and deleting a photo, are admin-only.
+The folder list identifies exactly one current folder to assistive technology as well as
+visually, including **All photos**. Rename and Delete apply to that current folder.
 
 Select photos by clicking, shift-clicking or ctrl/cmd-clicking; the grid is fully keyboard
 operable (arrows move, `Space` toggles, `Shift`+arrow extends, `Ctrl/Cmd`+`A` selects all).

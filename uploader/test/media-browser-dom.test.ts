@@ -112,7 +112,7 @@ interface Page {
   flush(): Promise<void>;
 }
 
-function loadPage(opts: { describe?: Describe } = {}): Page {
+function loadPage(opts: { describe?: Describe; folders?: string[] } = {}): Page {
   const roots = new Map<string, FakeNode>();
   for (const id of pageIds) {
     const n = new FakeNode('div');
@@ -138,7 +138,7 @@ function loadPage(opts: { describe?: Describe } = {}): Page {
   const confirmAnswer = { value: false };
   const ok = (body: unknown) => Promise.resolve({ status: 200, ok: true, json: async () => body });
   const fetch = (url: string, init?: { method?: string; body?: string }): Promise<unknown> => {
-    if (url.startsWith('/media/folders')) return ok([]);
+    if (url.startsWith('/media/folders')) return ok(opts.folders ?? []);
     if (init?.method === 'PATCH') {
       patches.push({ url, body: JSON.parse(init.body ?? '{}') as Record<string, unknown> });
       return ok({});
@@ -203,6 +203,30 @@ function runTimers(timers: { fn: () => void; cleared: boolean }[]): void {
   timers.length = 0;
   for (const t of due) t.fn();
 }
+
+describe('media-browser current folder', () => {
+  it('exposes only the selected folder across nested, sibling and All photos navigation', async () => {
+    const page = loadPage({ folders: ['Trips', 'Trips/North', 'Trips/South'] });
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [], total: 0 });
+    await page.flush();
+    let buttons = page.el('folderTree').querySelectorAll('.folder-btn');
+    expect(buttons.filter((button) => button.getAttribute('aria-current') === 'true')
+      .map((button) => button.textContent)).toEqual(['All photos']);
+
+    for (const [label, folder] of [['North', 'Trips/North'], ['South', 'Trips/South'], ['All photos', '']]) {
+      buttons.find((button) => button.textContent === label)!.dispatch('click');
+      await page.flush();
+      const request = page.listRequests.shift()!;
+      expect(new URL(request.url, 'https://app.example').searchParams.get('folder') ?? '').toBe(folder);
+      request.resolve({ items: [], total: 0 });
+      await page.flush();
+      buttons = page.el('folderTree').querySelectorAll('.folder-btn');
+      expect(buttons.filter((button) => button.getAttribute('aria-current') === 'true')
+        .map((button) => button.textContent)).toEqual([label]);
+    }
+  });
+});
 
 describe('media-browser detail panel', () => {
   it('keeps unsaved edits across a reload and asks before switching photos', async () => {
