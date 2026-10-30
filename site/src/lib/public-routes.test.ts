@@ -17,25 +17,25 @@ const cases: { language: SiteLanguage; paths: string[] }[] = [
 
 describe('public route inventory', () => {
   it.each(cases)('matches the approved literal inventory for $language', ({ language, paths }) => {
-    const actual = publicRoutes(trips, language).map(({ path }) => path);
+    const actual = publicRoutes(trips, language, { pages: [], journeys: [] }).map(({ path }) => path);
     actual.push(...language.locales.map((locale) => rssPath(locale, language)));
     expect(actual.sort()).toEqual([...paths].sort());
     expect(actual).not.toContain('/map/');
   });
   it('does not invent a counterpart or an empty translated region', () => {
-    const paths = publicRoutes([trips[0]!], cases[0]!.language).map(({ path }) => path);
+    const paths = publicRoutes([trips[0]!], cases[0]!.language, { pages: [], journeys: [] }).map(({ path }) => path);
     expect(paths).toContain('/reiseziele/europa/');
     expect(paths).not.toContain('/en/journey/');
     expect(paths).not.toContain('/en/destinations/europe/');
     expect(paths).toContain('/en/destinations/');
   });
   it('fails rather than silently shadowing a fixed page', () => {
-    expect(() => publicRoutes([{ ...trips[0]!, id: 'de/karte' }], cases[0]!.language)).toThrow('Conflicting public routes');
+    expect(() => publicRoutes([{ ...trips[0]!, id: 'de/karte' }], cases[0]!.language, { pages: [], journeys: [] })).toThrow('Conflicting public routes');
   });
   it('adding the secondary is additive for both primary choices', () => {
     for (const primary of ['de', 'en'] as const) {
-      const before = publicRoutes(trips, { primary, locales: [primary] }).map(({ path }) => path);
-      const after = new Set(publicRoutes(trips, { primary, locales: ['de', 'en'] }).map(({ path }) => path));
+      const before = publicRoutes(trips, { primary, locales: [primary] }, { pages: [], journeys: [] }).map(({ path }) => path);
+      const after = new Set(publicRoutes(trips, { primary, locales: ['de', 'en'] }, { pages: [], journeys: [] }).map(({ path }) => path));
       expect(before.every((path) => after.has(path))).toBe(true);
     }
   });

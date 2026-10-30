@@ -1,0 +1,20 @@
+---
+import { useTranslations } from '../i18n/ui';
+import { pathOf } from '../lib/trips';
+import type { JourneyPosition } from '../lib/journeys';
+interface Props { position: JourneyPosition }
+const { journey, index } = Astro.props.position;
+const t = useTranslations(journey.locale);
+const previous = journey.members[index - 1];
+const next = journey.members[index + 1];
+const linkClass = 'inline-flex min-w-0 max-w-full min-h-[44px] items-center py-2 text-navy underline underline-offset-4 [overflow-wrap:anywhere] hover:text-brand-red active:text-brand-red';
+---
+<nav data-journey-strip aria-label={`${t('journey.strip.label')}: ${journey.entry.data.title}`} class="mx-auto mt-10 max-w-story-wide border-y border-dashed border-navy/30 py-5">
+  <p class="font-mono text-xs tracking-log text-navy uppercase">{t('journey.partOf')}</p>
+  <a href={journey.path} class={`${linkClass} text-lg font-semibold break-words`}>{journey.entry.data.title}</a>
+  <p class="text-sm text-ink">{t('journey.position').replace('{number}', String(index + 1)).replace('{count}', String(journey.members.length))}</p>
+  <div class="mt-3 flex flex-wrap justify-between gap-x-8 gap-y-2">
+    {previous && <a data-journey-previous href={pathOf(previous)} class={linkClass}>{t('journey.previous')}: {previous.data.title}</a>}
+    {next && <a data-journey-next href={pathOf(next)} class={linkClass}>{t('journey.next')}: {next.data.title}</a>}
+  </div>
+</nav>

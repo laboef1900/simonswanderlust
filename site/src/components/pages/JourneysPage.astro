@@ -1,0 +1,33 @@
+---
+import { getCollection } from 'astro:content';
+import Base from '../../layouts/Base.astro';
+import RemoteImage from '../RemoteImage.astro';
+import { liveJourneys, type LiveJourney } from '../../lib/journeys';
+import { journeysIndexPath } from '../../lib/paths';
+import { useTranslations, type Locale } from '../../i18n/ui';
+interface Props { locale: Locale; journeys: LiveJourney[] }
+const { locale, journeys } = Astro.props;
+const t = useTranslations(locale);
+const entries = await getCollection('journeys');
+const trips = await getCollection('trips');
+const alternates = liveJourneys(entries, trips, 'de').length && liveJourneys(entries, trips, 'en').length
+  ? { de: journeysIndexPath('de'), en: journeysIndexPath('en') } : undefined;
+---
+<Base title={t('journey.index')} description={t('journey.indexIntro')} locale={locale} alternates={alternates}>
+  <section class="mx-auto max-w-6xl px-5 py-10 sm:py-14">
+    <h1 class="text-3xl font-extrabold text-navy sm:text-4xl">{t('journey.index')}</h1>
+    <p class="mt-4 max-w-prose text-lg leading-relaxed">{t('journey.indexIntro')}</p>
+    <ul class="mt-10 divide-y divide-dashed divide-navy/30">
+      {journeys.map((journey) => <li class="py-8 first:pt-0">
+        <a href={journey.path} class="group grid min-h-[44px] gap-5 text-navy sm:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] sm:items-center sm:gap-8">
+          <RemoteImage image={journey.entry.data.heroImage} sizes="(min-width: 1200px) 464px, (min-width: 640px) 42vw, calc(100vw - 40px)" class="aspect-[3/2] w-full object-cover" />
+          <div class="min-w-0">
+            <h2 class="text-2xl font-extrabold break-words group-hover:underline group-active:underline">{journey.entry.data.title}</h2>
+            <p class="mt-3 font-mono text-xs tracking-log uppercase">{t('journey.count').replace('{count}', String(journey.members.length))}</p>
+            <p class="mt-4 max-w-prose leading-relaxed break-words text-ink">{journey.entry.data.intro}</p>
+          </div>
+        </a>
+      </li>)}
+    </ul>
+  </section>
+</Base>

@@ -12,12 +12,15 @@ import CommentsIsland from '../CommentsIsland.astro';
 import { byLocale, localeOf, pathOf, translationOf, type Trip } from '../../lib/trips';
 import { PROD_SITE, blogPostingJsonLd, serializeJsonLd } from '../../lib/seo';
 import { splitOpening } from '../../lib/story-opening';
+import JourneyStrip from '../JourneyStrip.astro';
+import type { JourneyPosition } from '../../lib/journeys';
 
 interface Props {
   trip: Trip;
+  journeyPosition?: JourneyPosition;
 }
 
-const { trip } = Astro.props;
+const { trip, journeyPosition } = Astro.props;
 const locale = localeOf(trip);
 const { headings } = await render(trip);
 // The body is one rendered HTML string (postgres-loader.ts renders and
@@ -114,7 +117,7 @@ const jsonLd = serializeJsonLd(
           not reach here. */}
       {rest !== '' && <article class:list={[PROSE, 'story-rest mx-auto lg:max-w-story-wide']} set:html={rest} />}
       <GalleryIsland locale={locale} />
-    </div>
+    </div>{journeyPosition && <JourneyStrip position={journeyPosition} />}
 
     {/* Reader comments (#208): after the story and its mini-map, before the
         divider and prev/next nav, outside the prose articles. Trip reports only. */}

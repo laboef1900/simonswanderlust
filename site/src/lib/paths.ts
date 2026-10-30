@@ -2,7 +2,7 @@
 // uploader's tests import `regions` cross-tree to pin db.ts REGIONS to it).
 import type { Locale } from '../i18n/ui.js';
 import { siteLanguage, type SiteLanguage } from './site-language.js';
-import { wordsFor } from './route-words.js';
+import { routeWords, wordsFor } from './route-words.js';
 
 /**
  * The closed region set, in display order (continents, roughly west-east then
@@ -71,4 +71,14 @@ export function rssPath(locale: Locale, language: SiteLanguage = siteLanguage())
 
 export function storyPath(slug: string, locale: Locale, language: SiteLanguage = siteLanguage()): string {
   return `${localePrefix(locale, language)}/${slug}/`;
+}
+
+export const journeyBases: Record<Locale, string> = { de: routeWords.de.journeys, en: routeWords.en.journeys };
+
+export function journeysIndexPath(locale: Locale, language: SiteLanguage = siteLanguage()): string {
+  return `${localePrefix(locale, language)}/${journeyBases[locale]}/`;
+}
+
+export function journeyPath(slug: string, locale: Locale, language: SiteLanguage = siteLanguage()): string {
+  return `${journeysIndexPath(locale, language)}${slug}/`;
 }
