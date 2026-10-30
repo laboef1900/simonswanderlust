@@ -2593,6 +2593,52 @@ describe('posts editor', () => {
     en: { locale: 'en', slug: 'en-s', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
   });
 
+  it.each(['de', 'en'] as const)('rejects excessive %s slugs with a bounded field-specific 400 before create/update', async (locale) => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder });
+    const { cookie } = await authed(b);
+    for (const length of [252, 8192]) {
+      const input = sample();
+      input[locale].slug = 'a'.repeat(length);
+      const created = await b.app.inject({ method: 'POST', url: '/posts', cookies: cookie, payload: input });
+      expect(created.statusCode).toBe(400);
+      expect(created.json().error).toBe(`${locale}.slug must be at most 251 ASCII bytes (received ${length})`);
+      expect(await b.posts.list()).toEqual([]);
+    }
+    const created = await b.app.inject({ method: 'POST', url: '/posts', cookies: cookie, payload: sample() });
+    const tk = created.json().translationKey as string;
+    const before = await b.posts.get(tk);
+    const revisions = await b.posts.listRevisions(tk);
+    for (const length of [252, 8192]) {
+      const input = { ...sample(), translationKey: tk, confirmSlugChange: true };
+      input[locale].slug = 'a'.repeat(length);
+      const updated = await b.app.inject({ method: 'PUT', url: `/posts/${tk}`, cookies: cookie, payload: input });
+      expect(updated.statusCode).toBe(400);
+      expect(updated.json().error).toBe(`${locale}.slug must be at most 251 ASCII bytes (received ${length})`);
+      expect(await b.posts.get(tk)).toEqual(before);
+      expect(await b.posts.listRevisions(tk)).toEqual(revisions);
+    }
+    expect(s.calls).toEqual([]);
+    await b.app.close();
+  });
+
+  it.each([250, 251])('saves and publishes %i-byte DE/EN slugs byte-identically through HTTP', async (length) => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder });
+    const { cookie } = await authed(b);
+    const input = sample();
+    input.de.slug = 'd'.repeat(length);
+    input.en.slug = 'e'.repeat(length);
+    const created = await b.app.inject({ method: 'POST', url: '/posts', cookies: cookie, payload: input });
+    expect(created.statusCode).toBe(200);
+    const tk = created.json().translationKey as string;
+    const published = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
+    expect(published.statusCode).toBe(200);
+    expect(await b.posts.get(tk)).toMatchObject({ status: 'published', de: { slug: input.de.slug }, en: { slug: input.en.slug } });
+    expect(s.calls).toHaveLength(1);
+    await b.app.close();
+  });
+
   it('requires the strict 4KiB explicit publish body without a bodyless compatibility path', async () => {
     const b = build(); const { cookie } = await authed(b);
     const saved = await b.posts.upsertDraft({ ...sample(), status: 'draft', de: { ...sample().de, locale: 'de' }, en: { ...sample().en, locale: 'en' } });

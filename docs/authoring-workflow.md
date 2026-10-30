@@ -147,6 +147,21 @@ can still be running when the upload returns: wait until the photo is ready befo
    The slug and shared fields (date, countryCode, region, coordinates) carry over automatically.
 5. Click **Save draft** — both locale rows are written to Postgres. The post is not yet live.
 
+**Slug length (#353, rollout-gated):** the existing lowercase ASCII slug grammar is limited
+to **251 bytes**, so `<slug>.mdx` fits a 255-byte filename. Only newly auto-derived slugs
+are truncated after normalization (with a cut-off trailing hyphen removed). Typed, pasted,
+loaded, restored, stashed and published slugs are never shortened. An unset locale may stay
+empty in a draft; publishing needs both slugs. Excessive saved/imported inputs are refused
+with the locale field and length rather than renamed. MDX export checks both locales before
+writing either file; database backups preserve legacy records that cannot be exported.
+
+**Before activating the cap on an existing installation**, run the owner-authorized
+read-only working/snapshot inventory described in
+`docs/superpowers/specs/2026-10-27-slug-length-bound-design.md`. Any over-bound result,
+including an imported draft, blocks rollout until an explicit owner decision. Do not shorten
+a live WordPress URL, unpublish a record, or rewrite a backup as a workaround. Implementation
+does not establish that the owner corpus has passed this gate.
+
 ### Fill coordinates from the country
 
 Enter a country in either language's **Country** field, then leave the field. Recognized

@@ -547,6 +547,7 @@
       const galleryEditors = {};
 
       // ---- slugify ----
+      const MAX_SLUG_BYTES = 251; // ASCII only; parity tested against posts.ts.
       function slugify(str) {
         return str
           .toLowerCase()
@@ -556,6 +557,8 @@
           .replace(/[^a-z0-9]+/g, '-')
           .replace(/^-+|-+$/g, '')
           .replace(/-{2,}/g, '-')
+          .slice(0, MAX_SLUG_BYTES)
+          .replace(/-+$/, '')
           || 'untitled';
       }
 

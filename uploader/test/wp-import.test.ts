@@ -107,6 +107,28 @@ const run = (
 });
 
 describe('importWxr', () => {
+  it.each(['de', 'en'] as const)('bounds %s slugs in preflight without changing accepted imported URLs', async (locale) => {
+    for (const length of [250, 251, 252, 8192]) {
+      const store = memoryPostStore();
+      const h = harness();
+      const slug = 'a'.repeat(length);
+      const de = locale === 'de' ? slug : 'short-de';
+      const en = locale === 'en' ? slug : 'short-en';
+      const content = length > 251 ? imgs('https://wp.example/must-not-fetch.jpg') : '<p>Imported story</p>';
+      const summary = await run(pairOf('bounded', de, en, content), h, {}, store);
+      if (length <= 251) {
+        expect(summary).toMatchObject({ imported: 1, rejected: 0, failed: 0 });
+        expect((await store.list())[0]).toMatchObject({ slugDe: de, slugEn: en });
+      } else {
+        expect(summary).toMatchObject({ imported: 0, updated: 0, rejected: 1, failed: 0 });
+        expect(summary.warnings.join(' ')).toContain(`${locale}.slug must be at most 251 ASCII bytes (received ${length})`);
+        expect(summary.warnings.join(' ')).not.toContain(slug);
+        expect(await store.list()).toEqual([]);
+      }
+      expect(h.calls).toEqual([]);
+    }
+  });
+
   it.each([false, true])('does not resurrect a matched draft deleted after preparation (overwrite=%s)', async (overwriteDrafts) => {
     const store = memoryPostStore();
     const body = pairOf('g', 'de-a', 'en-a', '<p>original</p>');
