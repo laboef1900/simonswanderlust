@@ -58,6 +58,8 @@ import type { GpxService } from './gpx-service.js';
 import { renderGpxCopy } from './gpx-copy.js';
 import { ROUTE_ARCHIVE_RE } from './gpx-backup.js';
 import { StorageReadOnlyError } from './storage-owner.js';
+import { IdentityConflictError, type SiteIdentityStore } from './site-identity.js';
+import { IdentityError, neutralIdentity } from '../../site/src/lib/site-identity.js';
 import type { TrustPolicy } from './trusted-proxy.js';
 
 export interface ServerConfig {
@@ -68,6 +70,7 @@ export interface ServerConfig {
   sessions: SessionStore;
   settings: SettingsStore;
   secrets: SecretsStore;
+  identityStore?: SiteIdentityStore;
   posts: PostStore;
   pages: PageStore;
   imgHost: string;   // Host header that serves image variants (img subdomain)
@@ -242,7 +245,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     reply.header('X-Content-Type-Options', 'nosniff');
     const url = req.raw.url ?? '';
     const route = req.routeOptions.url;
-    if (route === '/settings' || route === '/ai-config' || route?.startsWith('/ai-providers')
+    if (route === '/settings' || route?.startsWith('/settings/identity') || route === '/ai-config' || route?.startsWith('/ai-providers')
       || route === '/posts/:tk/publish' || route === '/posts/bulk') reply.header('Cache-Control', 'no-store');
     if (route !== undefined && !PUBLIC_ROUTES[route]) {
       reply.header('X-Frame-Options', 'DENY');
@@ -976,6 +979,26 @@ export function buildServer(cfg: ServerConfig): AppServer {
   const KEY_PARTIAL = 'API key change saved, but settings were not saved. Reload settings before retrying.';
   const PROVIDER_NOT_FOUND = { error: 'AI provider not found.' };
 
+  app.get('/settings/identity', { preHandler: requireAdmin }, async (_req, reply) => {
+    if (!cfg.identityStore) return reply.code(503).send({ error: 'Site identity unavailable.' });
+    return { ...cfg.identityStore.get(), locales: ['de', 'en'] };
+  });
+  app.put('/settings/identity', { preHandler: requireAdmin }, async (req, reply) => {
+    if (!cfg.identityStore) return reply.code(503).send({ error: 'Site identity unavailable.' });
+    try {
+      if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) throw new IdentityError('identity');
+      const body = req.body as Record<string, unknown>;
+      if (Object.keys(body).some((key) => key !== 'revision' && key !== 'identity')) throw new IdentityError('identity');
+      if (typeof body.revision !== 'number' || !Number.isInteger(body.revision) || body.revision < 1) throw new IdentityError('revision');
+      const saved = await cfg.identityStore.update(body.revision, body.identity);
+      return { revision: saved.revision, savedAt: saved.savedAt, takesEffect: 'next_build' };
+    } catch (error) {
+      if (error instanceof IdentityError) return reply.code(400).send({ code: error.code, field: error.field, error: error.message });
+      if (error instanceof IdentityConflictError) return reply.code(409).send({ code: error.code });
+      throw error;
+    }
+  });
+
   app.get('/settings', { preHandler: requireAdmin }, async (_req, reply) => settingsOperation(async () => {
     const s = cfg.settings.get();
     let views: ProviderView[];
@@ -1423,14 +1446,17 @@ export function buildServer(cfg: ServerConfig): AppServer {
         .map(([key, value]) => [key.slice('editor.gallery.'.length), value])),
     ]));
     const editorCopy = Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [
-      locale, Object.fromEntries(Object.entries(strings)
+      locale, { siteTitleFallback: strings['site.titleFallback'], ...Object.fromEntries(Object.entries(strings)
         .filter(([key]) => key.startsWith('editor.chrome.'))
-        .map(([key, value]) => [key.slice('editor.chrome.'.length), value])),
+        .map(([key, value]) => [key.slice('editor.chrome.'.length), value])) },
     ]));
+    const { siteName, studioDescriptor, canonicalOrigin } = cfg.identityStore?.get().identity ?? neutralIdentity();
+    reply.header('Cache-Control', 'no-store');
     return reply.type('application/javascript').send(
       `window.EditorImageCopy = ${JSON.stringify(copy)};\n` +
       `window.EditorGalleryCopy = ${JSON.stringify(galleryCopy)};\n` +
       `window.EditorCopy = ${JSON.stringify(editorCopy)};\n` +
+      `window.SiteIdentity = ${JSON.stringify({ siteName, studioDescriptor, canonicalOrigin })};\n` +
       `window.EditorGalleryImageOrigin = ${JSON.stringify(new URL(cfg.baseUrl).origin)};`,
     );
   });
@@ -1976,7 +2002,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     if (!commentsAdmin) return noStore(reply);
     const body = ((req.body ?? {}) as { body?: unknown }).body;
     try {
-      const created = await commentsAdmin.replyAsAuthor(id, req.authUser?.username ?? 'Author', body);
+      const created = await commentsAdmin.replyAsAuthor(id, cfg.identityStore?.get().identity.authorName || 'Author', body);
       if (!created) return reply.code(404).send({ error: 'comment not found' });
       return reply.code(201).send(created);
     } catch (e) {

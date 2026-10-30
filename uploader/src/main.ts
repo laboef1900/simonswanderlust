@@ -27,6 +27,8 @@ import { createGpxFiles } from './gpx-files.js';
 import { createGpxWorker } from './gpx-worker.js';
 import { createPublicTrackWorker } from './gpx-public-worker.js';
 import { createGpxService } from './gpx-service.js';
+import { pgSiteIdentityStore, seedSiteIdentity } from './site-identity.js';
+import { LEGACY_REVIEW_PROMPT } from './site-identity-legacy.js';
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {
@@ -58,14 +60,17 @@ const pool = createPool(databaseUrl, owner.applicationName);
 pool.on('error', () => console.error('Application database connection unavailable.'));
 await ensureSchema(pool);
 owner.assertWritable();
+await seedSiteIdentity(pool);
+const identityStore = await pgSiteIdentityStore(pool);
 const secrets = pgSecretsStore(pool, encryptionKey);
 // AI provider registry migration (spec §5), before listen(): copy the legacy
 // shared key to every provider that already received it, THEN persist the
 // derived settings. A crash in between reruns to the same ids; a failure here
 // fails boot exactly as an unreachable ensureSchema does.
 const aiMigration = settings.pendingAiMigration();
+if (aiMigration) await secrets.migrateLegacyKey(LEGACY_AI_KEY_SLOT, aiMigration.keyedProviderIds.map(slotFor));
+if (identityStore.get().seedSource === 'legacy') settings.preserveLegacyReviewPrompt(LEGACY_REVIEW_PROMPT);
 if (aiMigration) {
-  await secrets.migrateLegacyKey(LEGACY_AI_KEY_SLOT, aiMigration.keyedProviderIds.map(slotFor));
   settings.completeAiMigration();
   console.log(`settings: migrated AI settings to the provider registry (${settings.get().aiProviders.length} providers)`);
 }
@@ -105,6 +110,7 @@ const builder = createSiteBuilder({
   siteAppDir: process.env.SITE_APP_DIR ?? '/app/site',
   releasesRoot: siteDir,
   lock: workLock,
+  pool,
   ...runtime,
   applicationName: owner.applicationName + ':build',
 });
@@ -161,6 +167,7 @@ const app = buildServer({
   users,
   sessions,
   settings,
+  identityStore,
   secrets,
   posts,
   pages,
