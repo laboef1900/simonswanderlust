@@ -12,6 +12,7 @@ import { pgPostStore } from '../src/posts.js';
 import { pgUserStore } from '../src/users.js';
 import { pgSecretsStore } from '../src/secrets.js';
 
+import type { IdentityRecord } from '../src/site-identity.js';
 const url = process.env.TEST_DATABASE_URL;
 const maybe = url ? describe : describe.skip;
 
@@ -82,7 +83,7 @@ maybe('production boot (src/main.ts, Postgres)', () => {
     }));
     const port = await freePort();
     base = `http://localhost:${port}`;
-    const { ENCRYPTION_KEY: _unused, ...env } = process.env;
+    const { ENCRYPTION_KEY: _unused, TRUSTED_PROXY: _proxyUnused, ...env } = process.env;
     child = spawn(process.execPath, ['--import', 'tsx', 'src/main.ts'], {
       cwd: new URL('..', import.meta.url),
       env: {
@@ -126,6 +127,40 @@ maybe('production boot (src/main.ts, Postgres)', () => {
     if (dir) await rm(dir, { recursive: true, force: true });
   });
 
+  it('refuses an unknown trust policy before acquiring storage ownership', async () => {
+    const refused = spawn(process.execPath, ['--import', 'tsx', 'src/main.ts'], {
+      cwd: new URL('..', import.meta.url),
+      env: { ...process.env, DATABASE_URL: url!, TRUSTED_PROXY: 'bogus' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stderr = '';
+    refused.stderr!.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+    try {
+      const [code, signal] = await once(refused, 'close', { signal: AbortSignal.timeout(10_000) });
+      expect(signal).toBeNull();
+      expect(code).not.toBe(0);
+      expect(stderr.trim()).toBe('TRUSTED_PROXY must be loopback or docker-gateway when set.');
+    } finally {
+      if (refused.exitCode === null && refused.signalCode === null) {
+        const exited = once(refused, 'close');
+        refused.kill('SIGKILL');
+        await exited;
+      }
+    }
+  });
+
+  it('preserves HTTPS from a real TCP loopback proxy when TRUSTED_PROXY is unset', async () => {
+    const endpoint = new URL('/login', base);
+    endpoint.hostname = '127.0.0.1';
+    const login = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-forwarded-proto': 'https' },
+      body: JSON.stringify({ username, password }),
+    });
+    expect(login.status).toBe(200);
+    expect(login.headers.get('set-cookie')).toMatch(/;\s*Secure(?:;|$)/i);
+  });
+
   it('a reader comment lands in the admin moderation queue, and approving it makes it public', async () => {
     const posted = await fetch(`${base}/comments`, {
       method: 'POST',
@@ -163,6 +198,36 @@ maybe('production boot (src/main.ts, Postgres)', () => {
     const after = await fetch(`${base}/comments?tk=${tk}`);
     const listed = commentsOf(await after.json());
     expect(listed.map((c) => [c.authorName, c.body])).toEqual([['Leserin', 'Schöne Reise!']]);
+
+    const identityResponse = await fetch(`${base}/settings/identity`, { headers: { cookie } });
+    expect(identityResponse.status).toBe(200);
+    const original = await identityResponse.json() as IdentityRecord;
+    const { canonicalOrigin: _reserved, ...editable } = original.identity;
+    let revision = original.revision;
+    try {
+      for (const authorName of ['Configured author', 'Renamed author', '']) {
+        const saved = await fetch(`${base}/settings/identity`, {
+          method: 'PUT', headers: { 'content-type': 'application/json', cookie },
+          body: JSON.stringify({ revision, identity: { ...editable, authorName } }),
+        });
+        expect(saved.status).toBe(200);
+        revision = (await saved.json() as { revision: number }).revision;
+        const reply = await fetch(`${base}/moderation/comments/${String(id)}/reply`, {
+          method: 'POST', headers: { 'content-type': 'application/json', cookie },
+          body: JSON.stringify({ body: 'Thank you for reading.' }),
+        });
+        expect(reply.status).toBe(201);
+      }
+      const publicReplies = commentsOf(await (await fetch(`${base}/comments?tk=${tk}`)).json());
+      expect(publicReplies.map((comment) => comment.authorName)).toEqual(['Leserin', 'Configured author', 'Renamed author', 'Author']);
+      expect(JSON.stringify(publicReplies)).not.toContain(username);
+    } finally {
+      const restored = await fetch(`${base}/settings/identity`, {
+        method: 'PUT', headers: { 'content-type': 'application/json', cookie },
+        body: JSON.stringify({ revision, identity: editable }),
+      });
+      expect(restored.status).toBe(200);
+    }
   });
 
   it('migrated a legacy settings file and the shared key to the provider registry before listening', async () => {
