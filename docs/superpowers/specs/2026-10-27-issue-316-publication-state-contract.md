@@ -955,3 +955,24 @@ in the other owned tab removed Unpublish and then the row; the subsequent title 
 fallbacks were focused and visible, while equivalent-control refreshes retained scroll.
 Six screenshots were inspected. Apps, sessions, cookies and tabs were cleaned up; synthetic
 fixtures and both negative and repaired evidence remain retained.
+
+A subsequent full review found the same replacement problem on Desk. Publication repaint
+now restores the focused anchor's destination/control identity, including when its story
+moves between sections. A removed link falls back to visible Refresh; unchanged sections
+retain scroll, cross-section/fallback targets use native focus scrolling, and outside focus
+is untouched. Both consumer regressions failed before repair; all131 admin-action DOM
+cases passed.
+
+Actual `eb41d86` qualification covered13 genuine31.5-second windows and45 scoped GET200
+responses without automatic Desk mutations. Native title/action focus survived Draft,
+newer-published and Attention repaint, plus separately released posts, summary and history
+responses. Real other-tab lifecycle actions moved Review changes to Continue editing and
+then Attention. Empty New trip retained focus; its disappearance and story deletion both
+focused visible Refresh and scrolled to the top. Cross-section destinations were already
+visible, so those transitions did not need a scroll change.
+
+Settled320/390/1400px captures showed visible focus without horizontal overflow. Attention
+was established through an owned PostgreSQL pages lock that made an actual app build fail
+at its normal deadline; the lock was released and a later deletion rebuilt successfully.
+The correct-origin thumbnail and public alias returned200. Sessions, tabs, cookies,
+interceptions, app and fixture rows were cleaned; database/data/evidence remain retained.
