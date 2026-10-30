@@ -47,6 +47,31 @@ describe('read-only publication observation bounds', () => {
     expect(read).toHaveBeenCalledTimes(4);
     s.refresh.stop();
   });
+  it.each([false, true])('discards hidden-page reads without a false failure after returning (settled=%s)', async (settled) => {
+    vi.useFakeTimers();
+    const old = Promise.withResolvers<unknown>();
+    let oldSignal: AbortSignal | undefined;
+    const read = vi.fn().mockImplementationOnce((signal: AbortSignal) => {
+      oldSignal = signal;
+      return old.promise;
+    }).mockResolvedValue('fresh after return');
+    const s = surface(read);
+    s.refresh.start();
+    await vi.advanceTimersByTimeAsync(6000);
+    s.document.hidden = true;
+    s.document.dispatchEvent(new Event('visibilitychange'));
+    expect(oldSignal?.aborted).toBe(true);
+    if (settled) await vi.advanceTimersByTimeAsync(0);
+    s.document.hidden = false;
+    s.document.dispatchEvent(new Event('visibilitychange'));
+    await vi.advanceTimersByTimeAsync(0);
+    old.resolve('stale before hiding');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(s.apply.mock.calls.map(([value]) => value)).toEqual(['fresh after return']);
+    expect(s.unavailable).not.toHaveBeenCalled();
+    expect(read).toHaveBeenCalledTimes(2);
+    s.refresh.stop();
+  });
   it.each([false, true])('resumes fresh observations after cached navigation, discarding pre-navigation reads (settled=%s)', async (settled) => {
     vi.useFakeTimers();
     const old = Promise.withResolvers<unknown>();
