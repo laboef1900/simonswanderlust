@@ -405,6 +405,10 @@ library. Search is scoped to the current folder; changing folders returns to pag
 without dropping gallery selections or their order. Only ready photos are offered.
 On a phone, expand **Folders** above the photos; it collapses after a folder is chosen.
 Create, rename, and delete folders on the Media page, not in the picker.
+The picker's **Previous** and **Next** controls retain keyboard focus while a page loads,
+so Enter can continue through pages without tabbing back. Unavailable directions stay
+focusable and are announced as disabled; repeated activation while loading or at a page
+boundary does not request another page.
 
 ### Galleries
 
