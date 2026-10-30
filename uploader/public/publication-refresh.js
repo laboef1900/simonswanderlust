@@ -93,7 +93,9 @@ window.PublicationRefresh = (function () {
     // Item acknowledgements/recovery reads already carry a fresh projection. Their
     // callers can settle without a duplicate GET; scheduled/manual reads stay enabled.
     function endAction(refreshAfter = true) {
-      invalidate(); actions = Math.max(0, actions - 1);
+      // Starting an action fences old reads; settlement must not invalidate a
+      // newer in-flight action's acknowledgement.
+      actions = Math.max(0, actions - 1);
       actionRefresh = actionRefresh || refreshAfter;
       if (!actions) {
         settledRefresh = actionRefresh && !!active;
