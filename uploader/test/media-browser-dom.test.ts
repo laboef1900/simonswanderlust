@@ -920,6 +920,7 @@ describe('media conditional save recovery in real consumers', () => {
     page.el('folderTree').querySelectorAll('.folder-btn').find(node => node.textContent === 'A')!.click();
     await page.flush();
     page.listRequests.shift()!.resolve({ items: [original], total: 1 }); await page.flush();
+    expect(page.el('aiAll').disabled).toBe(false);
     change(page, 'dTitle', 'Moved');
     change(page, 'dFolder', 'B');
     page.el('dSave').click(); await page.flush();
@@ -929,7 +930,7 @@ describe('media conditional save recovery in real consumers', () => {
     expect(page.el('selCount').textContent).toBe('');
     expect(page.el('bulkTools').hidden).toBe(true);
     expect(page.el('detail').dataset.key).toBeUndefined();
-    expect(page.el('out').textContent).toBe('0 photo(s)');
+    expect(page.el('aiAll').disabled).toBe(true);
   });
 
   it('refreshes saved titles and ordering without replacing edits made during the listing read', async () => {
