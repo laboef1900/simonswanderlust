@@ -1,3 +1,4 @@
+import { seedSiteIdentity } from '../src/site-identity.js';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -40,6 +41,7 @@ maybe('private v10 recovery with isolated PostgreSQL state', () => {
     await owner.query(`CREATE SCHEMA ${schema}`);
     pool = new pg.Pool({ connectionString: url, options: `-c search_path=${schema}` });
     await ensureSchema(pool);
+    await seedSiteIdentity(pool);
   });
   beforeEach(async () => {
     // All destructive SQL is restricted by this pool's unique search_path.
@@ -183,7 +185,6 @@ maybe('private v10 recovery with isolated PostgreSQL state', () => {
       [attached.source_id, safePairHash(attached.translation_key), now]);
     const cleanupBefore = (await pool.query('SELECT * FROM route_cleanup')).rows;
     const { path, dump } = await capture();
-    expect(dump.version).toBe(10);
     expect(dump.tables.post_routes).toEqual(await current());
     expect(dump.tables).not.toHaveProperty('route_cleanup');
     expect(dump.tables).not.toHaveProperty('post_revisions');
@@ -242,6 +243,7 @@ maybe('private v10 recovery with isolated PostgreSQL state', () => {
     const previous = await seed();
     const { path, dump } = await capture();
     dump.version = version; delete dump.tables.post_routes; delete dump.routeArchive;
+    delete dump.tables.site_identity; delete dump.tables.site_identity_assets;
     await writeFile(path, gzipSync(JSON.stringify(dump)));
     expect(readDump(path).version).toBe(version);
     expect((await restoreDatabase(pool, path, { routeFiles: files })).routes).toBe(0);

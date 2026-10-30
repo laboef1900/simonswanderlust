@@ -7,6 +7,7 @@ import RegionFilter from '../RegionFilter.astro';
 import StoryGrid from '../StoryGrid.astro';
 import { useTranslations, type Locale } from '../../i18n/ui';
 import { byLocale, entryNumberOf } from '../../lib/trips';
+import { identityTagline } from '../../lib/build-identity';
 
 interface Props {
   locale: Locale;
@@ -51,7 +52,7 @@ const featured = trips[coverIndex];
 
 <Base
   title={t('home.title')}
-  description={t('site.tagline')}
+  description={identityTagline(locale)}
   locale={locale}
   alternates={{ de: '/', en: '/en/' }}
   image={featured?.data.heroImage}
@@ -69,7 +70,7 @@ const featured = trips[coverIndex];
     ) : (
       <section class="border-b border-navy/10 bg-canvas">
         <div class="mx-auto max-w-6xl px-5 py-16">
-          <h1 class="text-2xl font-extrabold text-navy sm:text-3xl">{t('site.tagline')}</h1>
+          <h1 class="text-2xl font-extrabold text-navy [overflow-wrap:anywhere] sm:text-3xl">{identityTagline(locale)}</h1>
         </div>
       </section>
     )
