@@ -9,6 +9,7 @@ import {
   createDbBackup, archiveImages, sweepTempFiles, ArchiveSpaceError,
   BACKUP_FILE_RE, IMAGES_ARCHIVE_RE, resolveBackupDir, type Connectable,
 } from '../src/backup.js';
+import { identityDumpRow } from './site-identity-fixture.js';
 
 let dir: string;
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'backup-')); });
@@ -30,6 +31,8 @@ const fakeDb = (
       : sql.includes('FROM app_secrets') ? []
       : sql.includes('FROM comments') ? comments
       : sql.includes('FROM post_routes') ? []
+      : sql.includes('FROM site_identity_assets') ? []
+      : sql.includes('FROM site_identity') ? [identityDumpRow()]
       : posts,
   });
   return { query, connect: async () => ({ query, release() {} }) };

@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -198,6 +198,36 @@ describe('renderPostToMdx', () => {
 describe('exportPost', () => {
   const dirs: string[] = [];
   afterAll(async () => { for (const d of dirs) await rm(d, { recursive: true, force: true }); });
+
+  it.each([250, 251])('writes both %i-byte slug filenames unchanged', async (length) => {
+    const dir = await mkdtemp(join(tmpdir(), 'sw-export-'));
+    dirs.push(dir);
+    const input = structuredClone(pair);
+    input.de.slug = 'd'.repeat(length);
+    input.en.slug = 'e'.repeat(length);
+    const written = await exportPost(input, dir);
+    expect(written).toEqual(['de', 'en'].map(locale => join(dir, 'trips', locale, `${input[locale as 'de' | 'en'].slug}.mdx`)));
+    for (const locale of ['de', 'en'] as const) {
+      expect(await readFile(join(dir, 'trips', locale, `${input[locale].slug}.mdx`), 'utf8')).toBe(renderPostToMdx(input, locale));
+    }
+  });
+
+  it.each(['de', 'en'] as const)('refuses a legacy invalid %s filename before any directory or paired file mutation', async (locale) => {
+    for (const slug of ['a'.repeat(252), 'a'.repeat(8192), '../escape']) {
+      const dir = await mkdtemp(join(tmpdir(), 'sw-export-'));
+      dirs.push(dir);
+      const input = structuredClone(pair);
+      input[locale].slug = slug;
+      await expect(exportPost(input, dir)).rejects.toThrow(`${locale}.slug`);
+      expect(await readdir(dir)).toEqual([]);
+      const existing = await exportPost(pair, dir);
+      input.de.bodyMarkdown = 'Must not overwrite the existing DE file';
+      await expect(exportPost(input, dir)).rejects.toThrow(`${locale}.slug`);
+      for (const [index, language] of (['de', 'en'] as const).entries()) {
+        expect(await readFile(existing[index]!, 'utf8')).toBe(renderPostToMdx(pair, language));
+      }
+    }
+  });
 
   // Issue #119: a DE-first draft has en.slug '' — that is "no EN yet", not a
   // file called `.mdx`.
