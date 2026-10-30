@@ -1,10 +1,11 @@
 import { randomBytes } from 'node:crypto';
 import { gzipSync, gunzipSync } from 'node:zlib';
 import {
-  closeSync, constants, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync,
+  closeSync, constants, createWriteStream, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { create as createTar } from 'tar';
+import { pipeline } from 'node:stream/promises';
+import { Pack } from 'tar';
 import type { BackupSchedule } from './settings.js';
 import { POST_SNAPSHOT_SQL, type DbClient, type DbPool } from './db.js';
 import { diskSpace, formatBytes, UPLOAD_HEADROOM_BYTES, type DiskSpace } from './disk.js';
@@ -354,13 +355,34 @@ export async function archiveImages(
   process.on('exit', discard);
   try {
     signal?.throwIfAborted();
-    await createTar({ file: tmp, cwd: storageDir, portable: true, strict: true }, fresh);
+    const pack = new Pack({ cwd: storageDir, portable: true, strict: true });
+    const destination = createWriteStream(tmp);
+    // A tar pack error can precede the destination's asynchronous open. Neither
+    // that error nor finish proves the file descriptor is closed (#430).
+    const closed = Promise.withResolvers<void>();
+    destination.once('close', closed.resolve);
+    const copying = pipeline(pack, destination);
+    try {
+      for (const file of fresh) pack.add(file);
+      pack.end();
+      await copying;
+    } catch (error) {
+      pack.destroy();
+      destination.destroy();
+      await copying.catch(() => {});
+      throw error;
+    } finally {
+      // Node's WriteStream destruction waits for pending open/write callbacks
+      // and close. Cleanup and ownership release must wait for it as well.
+      await closed.promise;
+    }
     // Let an already-running copy settle, but never activate its result after
     // lease loss. quiesce() waits this promise before the app pool closes.
     signal?.throwIfAborted();
     renameSync(tmp, join(dir, name));
   } catch (e) {
-    discard();
+    try { discard(); }
+    catch { console.error('could not remove unfinished images archive; cleanup deferred to the next sweep'); }
     throw e;
   } finally {
     process.off('exit', discard);

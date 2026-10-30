@@ -230,8 +230,9 @@ time are kept — they are useful and carry no location.
 able to run — see `uploader/src/disk.ts`. A full `/data` otherwise fails mid-pipeline and can
 leave a partial variant set with no complete record. The incremental images archive — the
 largest single writer on the volume — applies the same reserve on its way in (#113): it refuses
-when its estimated size would not leave that room, and its temp file never survives a failed or
-interrupted run, so the backup feature cannot fill the disk it shares with the site. Free space
+when its estimated size would not leave that room. Failed output is removed only after its
+writer settles; exit cleanup is best-effort and SIGKILL leftovers are swept on the next run.
+An unlink failure is logged for the next sweep, not reported as a successful archive. Free space
 is also reported on `/health` — **only to an admin session** (#132): the route itself is public
 because the compose healthcheck polls it without a cookie, but `free`/`total` for `/data` would
 let anyone on the internet watch the volume fill up and time a disk-exhaustion attempt against
@@ -248,6 +249,15 @@ clock rollback, foreign nested mounts and arbitrary network filesystems are outs
 timestamp protocol. Legacy, missing or corrupt cutoff provenance forces a full archive with
 the existing reserve, retaining old archives rather than guessing from filenames. Admin-only
 backup access, private original/EXIF handling, storage ownership and key guards are unchanged.
+
+Writer settlement was reconfirmed for #430 (2026-10-28): an owned tar pack and Node destination
+pipeline await destination open/write/close before failure cleanup or successful activation.
+Cancellation cannot activate the archive or advance its cutoff, and backup quiescence waits
+for that settlement before storage ownership is released. Tar may finish admitted **read-only**
+input work after its pack is destroyed; pipeline error listeners remain installed and the closed
+destination cannot receive further bytes. This does not claim every private tar input descriptor
+has closed at rejection. Prior completed archives, originals, dumps and route companions are
+not failure-cleanup targets. Authorization, restore validation and persisted formats are unchanged.
 
 `POST /import` has the same precondition (issue #94), with the same 507 and the same reserve, but
 sized from a **count** rather than a byte total — a WXR declares URLs, not sizes — using the
@@ -923,9 +933,18 @@ deliberate trade-off, not an oversight:
   logical dumps do not capture the settings file. A lost master key requires reissuing
   the provider credential, not bypassing encryption. Removing a row does not revoke the
   key externally or remove copies in old backups.
-- Image archives (`/data/backup/db/images-*.tar`) contain no password hashes — only the already
-  publicly served image files — but their download route stays behind the same admin gate and
-  strict filename validation as the dumps.
+- Image archives (`/data/backup/db/images-*.tar`) contain public variants **and private
+  full-resolution originals**. Originals may retain EXIF/GPS and other source metadata:
+  handle these archives as sensitive recovery material, like database dumps. Downloads remain
+  admin-only with strict filename validation. Image archives are **never pruned** automatically;
+  each may hold a unique part of the recovery chain. Deleting a photo from the media library
+  does **not** purge earlier archives or their offsite copies.
+  The read-only [`audit-exif` command](#published-image-metadata-allow-list) inspects public
+  variants, not private originals or archive history: a clean result does not certify those
+  copies GPS-free and does not erase anything. Private GPX originals belong to **separate
+  companion route archives** referenced by v10 database dump manifests, not image tars.
+  Protect offsite copies and retain separate key escrow as described in
+  [Backups & disaster recovery](ARCHITECTURE.md#backups--disaster-recovery).
 - The download route (`GET /backups/:name`) is **admin-only** and validates the filename against a
   strict pattern (`^db-\d{8}-\d{6}\.json\.gz$` or `^images-\d{8}-\d{6}\.tar$`) before touching the
   filesystem — no path traversal.
