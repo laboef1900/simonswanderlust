@@ -384,11 +384,17 @@ box — 10% wider at the owner's request (2026-10-19). Inside the spread the
 rail is a fixed `18rem`, the gap `3rem`, and the column takes the available
 remainder — up to `45rem` (720px) — so the three always sum to the spread
 (`--container-story-column` / `--container-story-rail`). The rail holds
-the story's furniture — contents, key facts, the route map — open in a stack
-that stays `0.5rem` from the viewport top while the *opening* is in view.
-The stack never scrolls internally: a second scrollbar beside the page's was
-the owner's objection, and a rail taller than the spread simply sets the
-spread's height and stays put.
+the story's furniture — contents, key facts, the route map — open in a stack.
+The rail is static by default and sticks `0.5rem` from the viewport top only
+when its measured height plus that offset fits the viewport. A ResizeObserver
+and viewport resize listener update `data-sticky-fit` as disclosures, fonts,
+lazy map content or the viewport change. An oversized rail scrolls with the
+page, so its lower facts and map controls remain reachable before the opening
+ends, including by keyboard. The stack never scrolls internally: a second
+scrollbar beside the page's was the owner's objection. Without JavaScript or
+ResizeObserver it stays nonsticky; native disclosures remain usable (initially
+collapsed without JavaScript). A rail taller than the opening still sets the
+spread's height.
 The opening is the body's first section — everything before the first
 top-level heading that has content in front of it (`story-opening.ts`), so
 an intro heading, its paragraphs and its first photograph sit beside the
