@@ -91,10 +91,17 @@ const jsonLd = serializeJsonLd(
         </div>
         {/* Inline and synchronous, so the rail is open before first paint on a
             desktop viewport. Without JavaScript the rail is still there, just
-            collapsed — the same disclosures the narrow layout ships. */}
+            collapsed — the same disclosures the narrow layout ships. Only
+            crossing the layout boundary resets a reader's manual toggle. */}
         <script is:inline>
-          if (matchMedia('(width >= 64rem)').matches) {
-            for (const d of document.querySelectorAll('.story-rail__stack > details')) d.open = true;
+          {
+            const rail = matchMedia('(width >= 64rem)');
+            const disclosures = document.querySelectorAll('.story-rail__stack > details');
+            const syncDisclosures = ({ matches }) => {
+              for (const disclosure of disclosures) disclosure.open = matches;
+            };
+            syncDisclosures(rail);
+            rail.addEventListener('change', syncDisclosures);
           }
         </script>
         {/* `opening`/`rest` are the loader's own sanitised render, cut at a
