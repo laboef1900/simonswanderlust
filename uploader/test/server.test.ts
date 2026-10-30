@@ -265,6 +265,23 @@ describe('POST /upload', () => {
     expect(b.enqueued).toEqual([key]);
   });
 
+  it.each([
+    { status: 'failed' as const, storedFolder: 'Iceland/South', dropFolder: '', expected: 'Iceland/South' },
+    { status: 'missing' as const, storedFolder: 'Iceland/South', dropFolder: 'Norway', expected: 'Iceland/South' },
+    { status: 'failed' as const, storedFolder: '', dropFolder: 'Norway', expected: 'Norway' },
+  ])('re-uploading a $status photo keeps its curated folder or fills the root', async ({ status, storedFolder, dropFolder, expected }) => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const img = await jpeg();
+    const first = await upload(b, cookie, { key: 'trips/recover/hero', folder: storedFolder }, img);
+    const key = first.json().key as string;
+    await b.media.setStatus(key, status);
+    const recovered = await upload(b, cookie, { key: 'trips/recover/hero', folder: dropFolder }, img);
+    expect(recovered.statusCode).toBe(200);
+    expect(recovered.json()).toMatchObject({ key, status: 'processing', folder: expected });
+    expect((await b.media.get(key))?.folder).toBe(expected);
+  });
+
   it('a duplicate reports the folder that was PERSISTED, not the one a failed best-effort patch asked for', async () => {
     const media = memoryMediaStore({ baseUrl: 'https://img.simonswanderlust.com' });
     const failing: MediaStore = { ...media, patch: async () => { throw new Error('db down'); } };
@@ -452,17 +469,25 @@ describe('POST /upload', () => {
     const b = await buildFullQueue();
     expect((await upload(b, b.cookie, { key: 'trips/full/hero' }, b.img)).statusCode).toBe(429);
     await b.media.setStatus(b.key, status, error ?? undefined);
+    const curated = {
+      folder: 'Iceland/South', title: 'Glacier',
+      alt: { de: 'Gletscher', en: 'Glacier' },
+      caption: { de: 'Am Morgen', en: 'At dawn' }, tags: ['ice'],
+    };
+    await b.media.patch(b.key, curated);
+    const form = { key: 'trips/full/hero', folder: 'Norway' };
 
-    expect((await upload(b, b.cookie, { key: 'trips/full/hero' }, b.img)).statusCode).toBe(429);
-    expect(await b.media.get(b.key)).toMatchObject({ status, error });
+    expect((await upload(b, b.cookie, form, b.img)).statusCode).toBe(429);
+    expect(await b.media.get(b.key)).toMatchObject({ ...curated, status, error });
     expect(b.queue.isActive(b.key)).toBe(false);
 
     await b.release();
-    const again = await upload(b, b.cookie, { key: 'trips/full/hero' }, b.img);
+    const again = await upload(b, b.cookie, form, b.img);
     expect(again.statusCode).toBe(200);
     expect(again.json().duplicate).toBeUndefined();
+    expect(again.json()).toMatchObject({ key: b.key, status: 'processing', folder: curated.folder });
     await b.queue.idle();
-    expect(await b.media.get(b.key)).toMatchObject({ status: 'ready', error: null });
+    expect(await b.media.get(b.key)).toMatchObject({ ...curated, status: 'ready', error: null });
   });
 
   it('a stranded processing row the queue does not hold is settled on a refused re-send and enqueued on a later one', async () => {
@@ -2765,14 +2790,84 @@ describe('posts editor', () => {
     const { cookie } = await authed(b);
     const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     const tk = created.json().translationKey;
-    await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
+    const published = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     expect(s.calls.length).toBe(1);
     const un = await b.app.inject({ method: 'POST', url: `/posts/${tk}/unpublish`, cookies: cookie });
     expect(un.statusCode).toBe(200);
-    expect(un.json()).toEqual({ unpublished: true, build: { ok: true, release: 'r1' } });
+    expect(un.json()).toEqual({
+      unpublished: true, build: { ok: true, release: 'r1' },
+      previousUpdatedAt: published.json().updatedAt, updatedAt: expect.any(String),
+    });
     expect(s.calls.length).toBe(2);
     const got = await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie });
     expect(got.json().status).toBe('draft');
+    expect(un.json().updatedAt).toBe(got.json().updatedAt);
+    expect(new Date(un.json().updatedAt).getTime()).toBeGreaterThan(new Date(created.json().updatedAt).getTime());
+    const saved = await b.app.inject({
+      method: 'PUT', url: `/posts/${tk}`, cookies: cookie,
+      payload: { ...sample(), updatedAt: un.json().updatedAt },
+    });
+    expect(saved.statusCode).toBe(200);
+  });
+
+  it('unpublish returns its own token when a later writer saves during the rebuild', async () => {
+    const posts = memoryPostStore();
+    let tokenAtBuild: string | undefined;
+    const builder: SiteBuilder = {
+      ...stubBuilder().builder,
+      build: async () => {
+        const [summary] = await posts.list();
+        const pair = (await posts.get(summary!.translationKey))!;
+        tokenAtBuild = pair.updatedAt.toISOString();
+        await posts.upsertDraft({ ...pair, de: { ...pair.de, title: 'Another tab' } }, pair.updatedAt);
+        return { ok: true, release: 'r1' };
+      },
+    };
+    const b = build({ posts, builder });
+    const { cookie } = await authed(b);
+    const created = await b.app.inject({ method: 'POST', url: '/posts', cookies: cookie, payload: sample() });
+    const tk = created.json().translationKey;
+    await posts.publish(tk, await publishTokens(posts, tk));
+    const un = await b.app.inject({ method: 'POST', url: `/posts/${tk}/unpublish`, cookies: cookie });
+    expect(un.statusCode).toBe(200);
+    expect(un.json().updatedAt).toBe(tokenAtBuild);
+    expect(un.json().updatedAt).not.toBe((await posts.get(tk))!.updatedAt.toISOString());
+    const stale = await b.app.inject({
+      method: 'PUT', url: `/posts/${tk}`, cookies: cookie,
+      payload: { ...sample(), updatedAt: un.json().updatedAt },
+    });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json().code).toBe('conflict');
+    expect((await posts.get(tk))!.de.title).toBe('Another tab');
+  });
+
+  it('reports the locked predecessor when another tab saves after the route preflight', async () => {
+    const posts = memoryPostStore();
+    const b = build({ posts, builder: stubBuilder().builder });
+    const { cookie } = await authed(b);
+    const created = await b.app.inject({ method: 'POST', url: '/posts', cookies: cookie, payload: sample() });
+    const tk = created.json().translationKey;
+    const published = await posts.publish(tk, await publishTokens(posts, tk));
+    const get = posts.get.bind(posts);
+    let precedingToken: Date | undefined;
+    vi.spyOn(posts, 'get').mockImplementationOnce(async (key) => {
+      const before = (await get(key))!;
+      const saved = await posts.upsertDraft({
+        ...before, de: { ...before.de, title: 'Saved between preflight and lock' },
+      }, before.updatedAt);
+      precedingToken = saved.updatedAt;
+      return before;
+    });
+    const un = await b.app.inject({ method: 'POST', url: `/posts/${tk}/unpublish`, cookies: cookie });
+    expect(un.statusCode).toBe(200);
+    expect(un.json().previousUpdatedAt).toBe(precedingToken?.toISOString());
+    expect(un.json().previousUpdatedAt).not.toBe(published.updatedAt.toISOString());
+    const stale = await b.app.inject({
+      method: 'PUT', url: `/posts/${tk}`, cookies: cookie,
+      payload: { ...sample(), updatedAt: published.updatedAt.toISOString() },
+    });
+    expect(stale.statusCode).toBe(409);
+    expect((await posts.get(tk))!.de.title).toBe('Saved between preflight and lock');
   });
 
   it('a failed rebuild is surfaced but the store change still lands (unpublish + delete)', async () => {
@@ -2781,10 +2876,14 @@ describe('posts editor', () => {
     const { cookie } = await authed(b);
     const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     const tk = created.json().translationKey;
-    await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
+    const published = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     const un = await b.app.inject({ method: 'POST', url: `/posts/${tk}/unpublish`, cookies: cookie });
     expect(un.statusCode).toBe(200);
-    expect(un.json()).toEqual({ unpublished: true, build: { ok: false, error: 'a build is already running' } });
+    expect(un.json()).toEqual({
+      unpublished: true, build: { ok: false, error: 'a build is already running' },
+      previousUpdatedAt: published.json().updatedAt,
+      updatedAt: (await b.posts.get(tk))!.updatedAt.toISOString(),
+    });
     expect((await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).json().status).toBe('draft');
     // re-publish, then delete while the builder keeps failing: DB delete lands, outcome surfaced
     await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
