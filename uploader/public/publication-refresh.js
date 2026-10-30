@@ -37,7 +37,7 @@ window.PublicationRefresh = (function () {
       Promise.resolve().then(() => options.read(controller.signal, publish)).then(resolve, reject);
       operation.promise = bounded.then((value) => { if (current()) options.apply(value); })
         .catch((error) => {
-          if (!started || generation !== version || key !== resource() || actions) return;
+          if (active !== operation || !started || generation !== version || key !== resource() || actions) return;
           // Fresh post facts do not become unavailable because independent optional
           // build history stalled. Progress already cleared its old qualifiers.
           if (!received || error.status === 401) options.unavailable(error);
@@ -52,8 +52,13 @@ window.PublicationRefresh = (function () {
     function focus() { if (!document.hidden) refresh('focus'); }
     function visibility() {
       schedule();
-      if (document.hidden) invalidate();
-      else focus();
+      if (document.hidden) {
+        // Hiding cancels background observation, not a selected item's pending
+        // acknowledgement. Detach first so its rejection cannot report failure.
+        const hiddenRead = active;
+        active = null;
+        hiddenRead?.controller.abort();
+      } else focus();
     }
     function restore(event) {
       if (!event.persisted) return;
