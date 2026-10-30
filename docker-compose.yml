@@ -11,9 +11,12 @@ services:
     # uploader/src/main.ts) and reaps the spawned `astro build` child process.
     init: true
     ports:
-      # Loopback only: the reverse proxy on the host is the sole ingress, and it is the one hop `trustProxy: 1` trusts (#108).
+      # Host TLS proxy only: the app validates the bridge gateway at hop zero (#108, #369).
       - "127.0.0.1:3000:3000"
     environment:
+      # Only valid for this bridge topology. Changing networks/network_mode or
+      # adding a CDN/proxy hop requires a new trust spec, not a broader allow-list.
+      TRUSTED_PROXY: docker-gateway
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://img.simonswanderlust.com}
       DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-images}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-images}}
       IMG_HOST: ${IMG_HOST:-img.simonswanderlust.com}
