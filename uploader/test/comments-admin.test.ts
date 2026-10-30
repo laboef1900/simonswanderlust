@@ -15,6 +15,8 @@ import type { EncodeQueue } from '../src/encode-queue.js';
 import type { DbBackup } from '../src/backup.js';
 import { memorySecretsStore } from '../src/secrets.js';
 import { memoryCommentAdminStore, type AdminComment } from '../src/comments-admin.js';
+import { memorySiteIdentityStore } from '../src/site-identity.js';
+import { neutralIdentity } from '../../site/src/lib/site-identity.js';
 
 let dir: string;
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'cadm-')); });
@@ -25,6 +27,7 @@ function fakeSettings(): SettingsStore {
 }
 
 const queue: EncodeQueue = {
+  withAdmission: (_key, operation) => operation(),
   enqueue: () => {}, isActive: () => false, recover: async () => 0, drain: async () => {}, idle: async () => {},
   quiesce: async () => {},
   stats: () => ({ pending: 0, running: 0 }),
@@ -148,18 +151,25 @@ describe('admin comment moderation routes (SPEC-ADM-001)', () => {
   });
 
   it('reply is inserted approved + isAuthor as a flat sibling, never pending', async () => {
-    const b = build();
+    const identityStore = memorySiteIdentityStore({ ...neutralIdentity(), authorName: 'Ada' });
+    const b = build({ identityStore });
     const admin = await authed(b, true, 'simon');
     const c = pending({ translationKey: 'trip-x', locale: 'en' });
     b.store.add(c);
     const res = await b.app.inject({ method: 'POST', url: `/moderation/comments/${c.id}/reply`, cookies: admin, payload: { body: 'Thanks for reading!' } });
     expect(res.statusCode).toBe(201);
-    expect(res.json()).toMatchObject({ status: 'approved', isAuthor: true, translationKey: 'trip-x', locale: 'en', name: 'simon', body: 'Thanks for reading!' });
+    expect(res.json()).toMatchObject({ status: 'approved', isAuthor: true, translationKey: 'trip-x', locale: 'en', name: 'Ada', body: 'Thanks for reading!' });
     expect(res.json()).not.toHaveProperty('parentId');
     const rows = b.store.all();
     expect(rows).toHaveLength(2);
     expect(rows.filter((r) => r.status === 'pending')).toHaveLength(1); // only the reader's row
     expect(rows.find((r) => r.isAuthor)?.status).toBe('approved');
+    const { canonicalOrigin: _reserved, ...edit } = identityStore.get().identity;
+    await identityStore.update(1, { ...edit, authorName: 'New author' });
+    const next = await b.app.inject({ method: 'POST', url: `/moderation/comments/${c.id}/reply`, cookies: admin, payload: { body: 'Welcome again' } });
+    expect(next.json().name).toBe('New author');
+    expect(b.store.all().filter((row) => row.isAuthor).map((row) => row.name)).toEqual(['Ada', 'New author']);
+    expect(JSON.stringify(b.store.all())).not.toContain('simon');
     // Parent gone → 404; empty body → 400.
     expect((await b.app.inject({ method: 'POST', url: `/moderation/comments/${ID}/reply`, cookies: admin, payload: { body: 'x' } })).statusCode).toBe(404);
     expect((await b.app.inject({ method: 'POST', url: `/moderation/comments/${c.id}/reply`, cookies: admin, payload: { body: '   ' } })).statusCode).toBe(400);
@@ -170,5 +180,73 @@ describe('admin comment moderation routes (SPEC-ADM-001)', () => {
     expect((await b.app.inject({ method: 'GET', url: '/moderation/comments' })).statusCode).toBe(401);
     const admin = await authed(b, true);
     expect((await b.app.inject({ method: 'GET', url: '/moderation/comments', cookies: admin })).statusCode).toBe(503);
+  });
+});
+
+describe('site identity administration', () => {
+  it('requires admin authorization, returns no-store even on refusals, and never builds on save', async () => {
+    let builds = 0;
+    const identityStore = memorySiteIdentityStore({ ...neutralIdentity(), canonicalOrigin: 'https://blog.example' });
+    const b = build({ identityStore, builder: { build: async () => { builds++; return { ok: true, release: 'r' }; }, hasRelease: () => true, quiesce: async () => {} } });
+    const author = await authed(b, false);
+    const admin = await authed(b, true);
+    const { canonicalOrigin: _reserved, ...edit } = identityStore.get().identity;
+    for (const method of ['GET', 'PUT'] as const) {
+      for (const [cookies, status] of [[undefined, 401], [author, 403]] as const) {
+        const response = await b.app.inject({ method, url: '/settings/identity', cookies, ...(method === 'PUT' ? { payload: { revision: 1, identity: edit } } : {}) });
+        expect(response.statusCode).toBe(status);
+        expect(response.headers['cache-control']).toBe('no-store');
+      }
+    }
+    const before = await b.app.inject({ url: '/settings/identity', cookies: admin });
+    expect(before.json()).toMatchObject({ revision: 1, savedAt: null, seedSource: 'neutral', locales: ['de', 'en'] });
+    const save = await b.app.inject({ method: 'PUT', url: '/settings/identity', cookies: admin, payload: { revision: 1, identity: { ...edit, siteName: ' New journal ', tagline: { en: 'Travels' } } } });
+    expect(save.statusCode).toBe(200);
+    expect(save.headers['cache-control']).toBe('no-store');
+    expect(save.json()).toMatchObject({ revision: 2, savedAt: expect.any(String), takesEffect: 'next_build' });
+    expect(identityStore.get().identity).toMatchObject({ siteName: 'New journal', canonicalOrigin: 'https://blog.example', tagline: { en: 'Travels' } });
+    expect(builds).toBe(0);
+    const stale = await b.app.inject({ method: 'PUT', url: '/settings/identity', cookies: admin, payload: { revision: 1, identity: edit } });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json()).toEqual({ code: 'identity_conflict' });
+    expect(identityStore.get().identity.siteName).toBe('New journal');
+    await b.app.close();
+  });
+
+  it('refuses malformed values and reserved canonical writes without echoing input or changing cache', async () => {
+    const identityStore = memorySiteIdentityStore();
+    const b = build({ identityStore });
+    const admin = await authed(b, true);
+    const { canonicalOrigin: _reserved, ...edit } = identityStore.get().identity;
+    for (const partial of [
+      { siteName: 'private-input'.repeat(10) }, { socialLinks: [{ label: 'Profile', url: 'javascript:private-input' }] },
+      { tagline: { 'private-input': 'private-input' } }, { canonicalOrigin: null }, { authorName: null },
+      { siteName: '\tprivate-input' }, { siteName: 'private-input\n' }, { authorName: 'private\u0000-input' },
+      { tagline: { en: '\rprivate-input' } }, { aboutRole: { de: 'private-input\u202e' } },
+      { aboutGear: { en: 'private-input\u200b' } }, { studioDescriptor: { de: 'private-input\t' } },
+      { socialLinks: [{ label: '\nprivate-input', url: 'https://example.com' }] },
+    ]) {
+      const response = await b.app.inject({ method: 'PUT', url: '/settings/identity', cookies: admin, payload: { revision: 1, identity: { ...edit, ...partial } } });
+      expect(response.statusCode).toBe(400);
+      expect(response.headers['cache-control']).toBe('no-store');
+      expect(response.json()).toMatchObject({ code: 'invalid_identity' });
+      expect(response.body).not.toContain('private-input');
+      expect(identityStore.get().revision).toBe(1);
+    }
+    await b.app.close();
+  });
+
+  it('serves only the public cached chrome subset without authentication or database reads', async () => {
+    const identityStore = memorySiteIdentityStore({ ...neutralIdentity(), siteName: '</script><img onerror=alert(1)>', authorName: 'Not in chrome', studioDescriptor: { en: 'Studio' }, socialLinks: [{ label: 'Private to chrome', url: 'https://example.com' }] });
+    const b = build({ identityStore });
+    const response = await b.app.inject({ url: '/admin/editor-image-copy.js' });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['cache-control']).toBe('no-store');
+    const line = response.body.split('\n').find((entry) => entry.startsWith('window.SiteIdentity = '))!;
+    const exposed = JSON.parse(line.slice('window.SiteIdentity = '.length, -1));
+    expect(exposed).toEqual({ siteName: '</script><img onerror=alert(1)>', studioDescriptor: { en: 'Studio' }, canonicalOrigin: null });
+    expect(exposed).not.toHaveProperty('authorName');
+    expect(exposed).not.toHaveProperty('socialLinks');
+    await b.app.close();
   });
 });
