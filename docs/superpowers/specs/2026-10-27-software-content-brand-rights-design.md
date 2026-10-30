@@ -419,3 +419,12 @@ desktop/mobile and admin-map desktop/mobile captures.
 This smoke establishes neither native binary reproducibility nor complete
 Corresponding Source/relink provision, resolves none of the recorded genuine
 upstream notice gaps, and grants no legal clearance or retroactive compliance.
+
+### Integration preparation — 2026-10-30
+
+Baseline `2a33742d5f9e1236b387e235661324c49c8641fd` supplies configurable identity.
+Public legal links remain outside the configurable social-link loop, so they appear
+once even when no profiles are configured. The admin legal link coexists with the
+stored identity descriptor, not the removed hardcoded owner descriptor. Both locale
+dictionaries retain the identity and licensing keys. This source integration does
+not certify a new image or waive any of the artifact, source or release gates above.

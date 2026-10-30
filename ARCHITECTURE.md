@@ -174,6 +174,49 @@ attempt. `GET /health` reports `release: false` meanwhile (information, not a ve
 `SECURITY.md`). Restarts against an existing `/data` volume skip all of this and serve
 immediately — no rebuild on every boot.
 
+### Site identity (#274)
+
+The [approved identity contract](docs/superpowers/specs/2026-10-27-issue-273-site-identity-design.md)
+puts identity in Postgres, not `settings.json`. `ensureSchema` creates the two tables; the
+one-time seed then uses the presence of a user or post to preserve the existing install's
+legacy brand. A database with neither starts neutral. `ON CONFLICT DO NOTHING` prevents a
+fresh install from acquiring the legacy brand after setup. Seeds leave `saved_at` NULL.
+
+**Settings → Site identity** edits the name, author, DE/EN taglines, About role/gear, studio
+descriptor and ordered social links. `GET`/`PUT /settings/identity` are admin-only and
+`no-store`; the revision guard refuses stale saves. Save persists without rebuilding.
+Public text changes at the next Publish/Rebuild; admin chrome at the next page load; new
+author replies use the configured name immediately (empty becomes `Author`). Existing
+replies retain their stored names. The About body remains separate page content.
+
+Runtime reads use a cache loaded before listening and refreshed after successful writes.
+The public copy script exposes only the name, localized studio descriptor and reserved
+canonical origin. There is no per-request identity query on static serving paths.
+The review-prompt default is neutral; a legacy seed preserves the old prompt only when a
+cleanly loaded settings file lacks that key. Missing/unreadable/invalid files are not overwritten.
+
+Every production build captures one `REPEATABLE READ READ ONLY` database view under the
+exclusive build lock. `uploader/src/build-snapshot.ts` exports its snapshot and captures
+identity/assets; `build.ts` unconditionally supplies the child with `SITE_IDENTITY_JSON`
+and `SITE_DATABASE_SNAPSHOT`. The shared loader-pool helper imports that snapshot before
+trips, pages or gallery-media reads. Saves may commit concurrently without leaking newer
+content into the captured release. The exporter is released on success and failure;
+the build deadline bounds its lifetime. Unexpected exporter connection errors or closure
+abort the child's effective signal. Cancellation settles the child and deployment before
+releasing the exporter or exclusive work lock; intentional release does not signal failure.
+Supplied invalid snapshots fail closed, leaving the previous release live.
+Standalone commands with no snapshot retain ordinary reads.
+
+The shared validator checks all stored DE/EN maps before projection; missing locale values
+use that field's fallback, never another language's text. The v1 build projection excludes
+the admin-only descriptor and reserves `canonicalOrigin` and `assets`.
+**Scope boundary:** #274 does not implement logo/favicon upload or display (#275), canonical
+editing/SEO/robots/noindex, comment-origin switching or outbound headers (#276). Asset rows,
+if recovered, are validated and captured with the release, but no asset API is introduced.
+The present fixed DE/EN projection is extended by #283's language contract, not by identity.
+Remaining branding exceptions are recorded in [the scoped allow-list](docs/site-identity-branding-allowlist.md).
+
+
 ## Image pipeline
 
 By default, the app optimizes each photo into AVIF + WebP at fixed widths (640/1280/1920 plus
@@ -387,6 +430,11 @@ Created idempotently by `uploader/src/db.ts` (`ensureSchema`):
 - **`users`** — `id`, `username` (unique, case-insensitive), `password_hash` (scrypt), `is_admin`, `created_at`.
 - **`sessions`** — `id` (SHA-256 of the random token), `user_id` (FK, cascade), `expires_at`. Expired rows are swept hourly.
 - **`app_secrets`** — `key` primary key, `ciphertext`, `iv`, `tag` (hex-encoded AES-256-GCM envelope), `updated_at`. One row per remote AI provider (`ai_provider_key:<id>`). The master key and plaintext credentials never enter this table.
+- **`site_identity`** — singleton `id = true`, revision, seed provenance, nullable `saved_at`,
+  `updated_at`, site/author names, reserved canonical origin, localized text maps and ordered
+  social links. Only an explicit admin save marks it configured.
+- **`site_identity_assets`** — reserved logo/favicon role rows, SHA-256, dimensions, PNG bytes
+  (≤256 KiB each) and creation time. Included in dumps now; upload/rendering is #275.
 - **`posts`** — one row per (`translation_key`, `locale`); `slug`, `title`, `date`, `country`, `country_code`, `region`, `excerpt`, `hero_image` (jsonb), `coordinates` (jsonb), optional `stops`/`route`/`key_facts`, `body_markdown`, `images` (jsonb), `status` (`draft`/`published`), `featured` (boolean, "use as homepage cover" — a SHARED value written to both locale rows, deliberately not unique: the homepage takes the newest flagged story and falls back to the newest story), `comments_enabled` (boolean, SHARED, default `true` — the per-post switch; the site-wide `settings.commentsEnabled`, default `false`, is the real gate). Unique on (`locale`, `slug`) **where `slug <> ''`** — an empty slug means "not set yet" (a DE-first draft without an EN title), so any number of such drafts may coexist; `validateForPublish` requires a real slug per locale (#119).
   Optional **`title_image`** (nullable jsonb) holds an independent per-locale story banner.
   It uses the hero's image shape, including format and focal point. The story header and
@@ -462,7 +510,7 @@ botched restore, accidental delete), **not** against disk failure or host loss.
 `uploader/src/backup.ts` provides app-native logical dumps (no `pg_dump`, no sidecar container):
 
 - **Dump format** — one file per run, `/data/backup/db/db-<YYYYMMDD-HHmmss>.json.gz`, containing
-  `{ "version": 10, "createdAt": <ISO>, "tables": { "users": […], "posts": […], "pages": […], "media": […], "media_folders": […], "app_secrets": […], "comments": […], "post_routes": […] } }`
+  `{ "version": 11, "createdAt": <ISO>, "tables": { "users": […], "posts": […], "pages": […], "media": […], "media_folders": […], "app_secrets": […], "comments": […], "post_routes": […], "site_identity": […], "site_identity_assets": […] } }`
   with full column fidelity — an integration test diffs the dumped `posts` keys against
   `information_schema.columns`, so a column added in `db.ts` without touching `backup.ts` fails
   the suite instead of silently vanishing from every backup. The table reads run on one
@@ -474,7 +522,7 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   the directory, so the finished temp file is published with `link(2)` (fails with `EEXIST`
   where `rename` would clobber) and a taken name advances to the next free second while
   `createdAt` keeps the real time (#114).
-  `version` lets restore reject incompatible dumps; the guard is an **allow-list** (1 to 10), so
+  `version` lets restore reject incompatible dumps; the guard is an **allow-list** (1 to 11), so
   every bump must widen it or newly written dumps become unrestorable. v1 predates `pages`, v2
   predates the media tables, v3 predates `posts.categories`/`tags`/`scheduled_at`, v4 predates
   `posts.featured` (the homepage-cover flag); all still restore and leave what they never
@@ -500,6 +548,17 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   The manifest binds names, byte counts and SHA-256 digests; degraded source states are explicit.
   The archive is published before its dump. Retention follows manifest references, not matching
   timestamps; unreadable manifests stop orphan reclamation. v1–v9 restore with no private routes.
+  v11 (`IDENTITY_DUMP_VERSION = 11`) introduces both identity tables; asset bytes use canonical
+  base64. Identity-capable formats require one valid singleton and an asset array: omission
+  is corruption, never a legacy fallback. Restore validates full retained locale maps and
+  row metadata with the shared validator, and validates/re-hashes/fully decodes every bounded
+  role-sized PNG before mutation. Both tables replace atomically with content.
+  Supported formats below the introduction version restore the legacy brand with
+  `seed_source = 'restored-legacy'`, `saved_at = NULL` and no assets, retaining the destination's
+  canonical origin if set (otherwise the legacy origin). The CLI announces this and points
+  to Settings → Site identity. The undo set includes the live identity/assets. Older images
+  reject v11 dumps; rolling back code leaves the additive tables intact and returns to that
+  image's compiled-in brand. Restart after restore, then rebuild to change the public release.
   The CLI names replacement versus preservation and its pre-restore undo dump includes
   current encrypted secrets. Pause AI/settings edits during restore and reconcile the
   providers in settings.json before resuming: that file is not part of a logical DB dump.
@@ -517,8 +576,14 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   are recorded and logged, never crash the app.
 - **Images archive safety (#113,
   [spec](docs/superpowers/specs/2026-09-05-images-archive-safety-design.md))** — the incremental
-  `images-*.tar` is streamed to a `.<pid>.tmp` that is unlinked on any failure, including the
-  process exiting mid-stream; stale temps from a SIGKILL are swept at boot and before each run.
+  `images-*.tar` is streamed to a `.<pid>.tmp`. Since [#430](docs/superpowers/specs/2026-10-28-image-archive-stream-settlement-design.md),
+  the owned pack/destination pipeline waits for pending destination open, writes and close before
+  unlinking failed output or atomically activating a successful archive. The original error survives
+  cleanup; an unlink failure is logged for the next sweep. Exit cleanup remains best-effort; stale
+  temps from SIGKILL are swept at boot and before each run. Backup quiescence waits for writer
+  settlement, and cancellation prevents activation/cutoff advancement. Private tar input jobs can
+  still finish read-only work after pack destruction, but cannot write the closed destination.
+  Recovery is a new attempt after settlement, **not deleting prior archives**.
   The archive refuses (recorded as `lastError`, cutoff unchanged) when its estimated size plus the
   same 2 GiB reserve `/upload` keeps would not fit. Since [#335](docs/superpowers/specs/2026-10-25-image-archive-publication-boundary-design.md),
   selection includes content mtime **or publication ctime**, excluding atomic-write `.part-*`
@@ -697,6 +762,8 @@ separate owner action, not part of the dependency PR.
 | `IMG_HOST` | app | Hostname routed to the image-variant static handler (defaults to the host of `PUBLIC_BASE_URL`) |
 | `SITE_APP_DIR` | app | Path to the Astro project the builder spawns (`/app/site`) |
 | `SITE_DIR` | app | Release root for the built blog (`/data/site`) — `current` is served from here |
+| `SITE_IDENTITY_JSON` | build child only | **Internal**, set for every spawn by `build.ts`; not operator-configurable, overrides inherited values |
+| `SITE_DATABASE_SNAPSHOT` | build child only | **Internal**, exported PostgreSQL snapshot identifier; loaders import it before their first read; overrides inherited values |
 | `MAP_DIR` | app | PMTiles/glyph assets root for `/map/` (`/map-assets`) |
 | `STORAGE_DIR` | app | On-disk image originals + variants (`/data/images`) |
 | `SETTINGS_PATH` | app | JSON settings store; defaults to `settings.json` beside `STORAGE_DIR` (`/data/settings.json`) |
@@ -705,6 +772,12 @@ separate owner action, not part of the dependency PR.
 | `PROTOMAPS_BUILD` / `MAP_MAXZOOM` / `PMTILES_VERSION` | Dockerfile (build args) | Pin the map basemap fetched + baked into the image at build (see `docs/map-assets.md`) |
 | `IMAGE_TAG` | compose | Released GHCR image version to run |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | db | Database bootstrap |
+
+Origin roles remain distinct: `PUBLIC_BASE_URL` supplies image URLs and the body/gallery
+allow-list; `IMG_HOST` controls actual image-host routing; the request scheme/forwarded
+`Host` describes the serving/admin origin. The stored canonical blog origin is reserved
+in #274. #276 will connect it to SEO, comments and outbound identification, with the
+topology validation in the approved spec. This table does not introduce an operator env knob.
 
 ## Trust boundaries
 
