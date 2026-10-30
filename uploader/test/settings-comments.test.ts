@@ -1,3 +1,4 @@
+import { TEST_TRUST } from './trusted-proxy-fixture.js';
 import { describe, expect, it, beforeEach } from 'vitest';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -69,6 +70,7 @@ function build(extra: Partial<ServerConfig> = {}) {
   const settings = extra.settings ?? fakeStore();
   const b = stubBuilder();
   const app = buildServer({
+    trustProxy: TEST_TRUST,
     storageDir: dir, baseUrl: 'https://img.simonswanderlust.com',
     users, sessions, settings, secrets: memorySecretsStore(),
     posts, pages: memoryPageStore(),
