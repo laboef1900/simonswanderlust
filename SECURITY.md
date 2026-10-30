@@ -1045,8 +1045,9 @@ deliberate trade-off, not an oversight:
   This guidance reconfirms the unchanged [GPX storage-owner boundary](#gpx-routes--private-source-and-public-snapshot):
   exclusive ownership and absence of app sessions are mandatory, never bypassed by killing
   sessions or disabling fencing.
-  Current v10 recovery replaces `users`, `posts`, `pages`, `media`, `media_folders`,
-  `app_secrets`, `comments` and `post_routes`, with manifest-paired private originals.
+  Current v11 recovery replaces `users`, `posts`, `pages`, `media`, `media_folders`,
+  `app_secrets`, `comments`, `post_routes`, `site_identity` and `site_identity_assets`,
+  with manifest-paired private originals.
   [Database dumps](ARCHITECTURE.md#database-dumps) documents legacy absent-field behavior.
   Sessions are not restored; deleting users invalidates every login. Settings/key escrow
   remain external. The CLI validates the source set, prints a credential-free target and
