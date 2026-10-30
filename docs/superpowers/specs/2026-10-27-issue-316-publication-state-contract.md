@@ -965,6 +965,27 @@ fallbacks were focused and visible, while equivalent-control refreshes retained 
 Six screenshots were inspected. Apps, sessions, cookies and tabs were cleaned up; synthetic
 fixtures and both negative and repaired evidence remain retained.
 
+A subsequent full review found the same replacement problem on Desk. Publication repaint
+now restores the focused anchor's destination/control identity, including when its story
+moves between sections. A removed link falls back to visible Refresh; unchanged sections
+retain scroll, cross-section/fallback targets use native focus scrolling, and outside focus
+is untouched. Both consumer regressions failed before repair; all131 admin-action DOM
+cases passed.
+
+Actual `eb41d86` qualification covered13 genuine31.5-second windows and45 scoped GET200
+responses without automatic Desk mutations. Native title/action focus survived Draft,
+newer-published and Attention repaint, plus separately released posts, summary and history
+responses. Real other-tab lifecycle actions moved Review changes to Continue editing and
+then Attention. Empty New trip retained focus; its disappearance and story deletion both
+focused visible Refresh and scrolled to the top. Cross-section destinations were already
+visible, so those transitions did not need a scroll change.
+
+Settled320/390/1400px captures showed visible focus without horizontal overflow. Attention
+was established through an owned PostgreSQL pages lock that made an actual app build fail
+at its normal deadline; the lock was released and a later deletion rebuilt successfully.
+The correct-origin thumbnail and public alias returned200. Sessions, tabs, cookies,
+interceptions, app and fixture rows were cleaned; database/data/evidence remain retained.
+
 ## 22. #318 implementation handoff (2026-10-29)
 
 The Media detail GET/PATCH source adds the exact §8 impact union and admin-only nullable
@@ -1092,3 +1113,33 @@ pending controls and no horizontal overflow. The retained evidence distinguishes
 response holds and interrupted harness attempts; it does not claim a held GET in the run
 where none arrived. Native logout, zero remaining sessions/cookies, closed tabs, removed
 interceptions and a stopped app complete the isolated run; synthetic fixtures remain.
+
+### Listing reconciliation and detail-resource retirement
+
+Actual `bb1e7f1` qualification combined the restored listing reload with impact observation.
+Clean Save and genuine409 → Use stored reconciled title/folder filters, total and selection.
+A held genuine listing200 retained newer dirty nodes, focus/caret, scroll and original
+comparison bases while the grid updated; subsequent leaf-only Saves preserved title/folder.
+Refresh and32.097seconds of observation made two GETs and no PATCH. Another photo showed its
+own empty impact rather than the first photo's published-story impact.
+
+The same run exposed an old-photo GET after its clean detail panel left the query. Safe
+non-rendering was not enough for §11's selected-detail-only contract. The renderer now
+clears an absent clean detail key before comparing observer resources, invalidating its
+generation; the early dirty guard still preserves a visible edited panel. The consumer
+regression failed before repair; all65 Media DOM cases passed afterward.
+
+Actual `ee8bfac` qualification observed32.051seconds after clean removal with zero new
+old-photo GETs or mutations. The genuine held item200 was canceled with `ERR_ABORTED`;
+this is cancellation/fencing proof, not delivery of an unabortable late response. Selecting
+the same photo again issued a fresh GET and restored its correct bilingual story impact.
+A dirty panel survived query changes and32.123seconds of read-only observation; a genuine
+held query response retained exact nodes, focus/caret and scroll. Its caption-only Save
+kept the original caption expectation and preserved an independently changed title, then
+retired the now-clean absent panel for32.125seconds with zero requests.
+
+Negative node-identity probes mixed browser execution realms and remain in the evidence.
+Same-realm reference checks and an additional same-realm held-query trial established the
+actual invariant without deleting the failed probes. Desktop/320px captures, correct-origin
+thumbnail200s, public DE/EN200s and HTTP/SQL agreement are retained. Logout, zero sessions,
+closed cookies/tabs, removed interception and a stopped app completed both isolated runs.
