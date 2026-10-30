@@ -3,11 +3,19 @@ import type { Loader } from 'astro/loaders';
 import { postgresPagesLoader, rowToPageEntry } from './pages-loader';
 import { renderMarkdown } from './render-markdown';
 
-const db = vi.hoisted(() => ({ rows: [] as Record<string, unknown>[] }));
+const db = vi.hoisted(() => ({ rows: [] as Record<string, unknown>[], statements: [] as string[], released: false }));
 vi.mock('pg', () => ({
   default: {
     Pool: class {
-      async query(): Promise<{ rows: Record<string, unknown>[] }> { return { rows: db.rows }; }
+      async connect() {
+        return {
+          async query(sql: string): Promise<{ rows: Record<string, unknown>[] }> {
+            db.statements.push(sql);
+            return { rows: sql.startsWith('SELECT ') ? db.rows : [] };
+          },
+          release(): void { db.released = true; },
+        };
+      }
       async end(): Promise<void> {}
     },
   },
@@ -48,7 +56,7 @@ describe('rowToPageEntry', () => {
 });
 
 describe('page prose metadata', () => {
-  afterEach(() => { vi.unstubAllEnvs(); db.rows = []; });
+  afterEach(() => { vi.unstubAllEnvs(); db.rows = []; db.statements = []; db.released = false; });
 
   it.each([
     {
@@ -81,5 +89,11 @@ describe('page prose metadata', () => {
     };
     await postgresPagesLoader().load(ctx as unknown as Parameters<Loader['load']>[0]);
     expect(entries.get('about/de')?.data.description).toBe(expected);
+    expect(db.statements).toEqual([
+      'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY',
+      'SELECT key, locale, title, body_markdown, images FROM pages',
+      'COMMIT',
+    ]);
+    expect(db.released).toBe(true);
   });
 });

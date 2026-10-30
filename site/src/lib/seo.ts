@@ -3,9 +3,9 @@ import { unified } from 'unified';
 import rehypeParse from 'rehype-parse';
 import { largestVariant } from './images.js';
 
-import type { Locale } from '../i18n/ui';
+import type { Locale } from '../i18n/ui.js';
 
-import { identity } from './build-identity';
+import { identity } from './build-identity.js';
 
 /**
  * Production origin — fallback base URL when `Astro.site` is unset.

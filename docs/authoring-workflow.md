@@ -583,6 +583,8 @@ spaces. Descriptions stop at a whole-word boundary within 150 characters. An emp
 media-only body uses the localized “Über mich” / “About me” fallback. Use **About → Publish**
 to save both languages and rebuild the public pages; changing this metadata does not remove
 the images, captions, code or formatting from the page itself.
+The loader derives these descriptions from the same snapshot-backed page rows used for
+the rendered content; the identity-configured structured-data author is independent.
 
 ### Comments
 
