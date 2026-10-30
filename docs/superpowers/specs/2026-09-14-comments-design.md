@@ -54,6 +54,12 @@ not re-litigate product behaviour.
    *Rejected:* post-moderation (publish immediately, delete on report) — one admin, no on-call;
    abuse could sit on a public page for days. *Rejected:* no author-reply path — the owner would
    have to comment as an anonymous reader and then approve it, losing the `is_author` marker.
+   **Implementation correction (#349, verified 2026-10-28):** public serialization reads the
+   approved public-store row's own `isAuthor`, without consulting the moderation list.
+   More than 500 older approved comments on another story cannot remove the badge.
+   The explicit six-key public shape, reply-time name, oldest-first order and 500-row
+   per-story response cap remain unchanged; see the approved
+   `2026-10-27-issue-349-public-author-projection-design.md` for runtime evidence and recovery.
 6. **Runtime, never baked.** The static story page hosts a small island that `GET`s JSON from
    Fastify; a comment MUST NOT spawn `astro build`, take `workLock`, or trigger a rebuild.
    *Rejected:* baking approved comments into the release with a debounced rebuild — every
