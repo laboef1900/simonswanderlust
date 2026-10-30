@@ -1,3 +1,4 @@
+import { TEST_TRUST, GATEWAY_TRUST } from './trusted-proxy-fixture.js';
 import { publishTokens } from './publish-tokens.js';
 import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { mkdtemp } from 'node:fs/promises';
@@ -61,6 +62,7 @@ function build(extra: Partial<ServerConfig> = {}) {
   const settings = fakeSettings();
   settings.update({ commentsEnabled: true });
   const app = buildServer({
+    trustProxy: TEST_TRUST,
     storageDir: dir, baseUrl: BASE,
     users, sessions, settings, secrets: memorySecretsStore(),
     posts, pages: memoryPageStore(),
@@ -295,6 +297,21 @@ describe('POST /comments (SPEC-API-001)', () => {
     // Honeypot and Origin are both behind the limiter.
     expect((await post(b, good(tk, { website: 'x' }), {})).statusCode).toBe(429);
     expect(b.comments.all()).toHaveLength(2);
+  });
+
+  it('uses the gateway-appended client for comment buckets and never trusts a co-tenant peer', async () => {
+    const b = build({ trustProxy: GATEWAY_TRUST, commentIpLimiter: fixedWindowLimiter({ max: 1, windowMs: 60_000 }) });
+    const tk = await published(b);
+    const send = (remoteAddress: string, xff: string) => b.app.inject({
+      method: 'POST', url: '/comments', remoteAddress,
+      headers: { origin: BASE, 'x-forwarded-for': xff }, payload: good(tk),
+    });
+    expect((await send('172.18.0.1', '10.0.0.1, 198.51.100.7')).statusCode).toBe(201);
+    expect((await send('172.18.0.1', '10.0.0.2, 198.51.100.7')).statusCode).toBe(429);
+    expect((await send('172.18.0.1', '10.0.0.2, 203.0.113.9')).statusCode).toBe(201);
+    expect((await send('172.18.0.3', '198.51.100.8')).statusCode).toBe(201);
+    expect((await send('172.18.0.3', '198.51.100.9')).statusCode).toBe(429);
+    expect(b.comments.all()).toHaveLength(3);
   });
 
   it('a request carrying a sid cookie never queries the session store (#129), on GET and POST', async () => {

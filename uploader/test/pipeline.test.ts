@@ -82,6 +82,17 @@ describe('processImage', () => {
     expect(new Set(result.variants.map((v) => v.format))).toEqual(new Set(['avif', 'webp']));
   });
 
+  it('decodes AVIF input without relabeling it as JPEG when conversion is disabled', async () => {
+    const avif = await sharp({ create: { width: 32, height: 24, channels: 3, background: '#246' } })
+      .avif().toBuffer();
+    const result = await processImage(avif, { convertJpeg: false });
+    expect({ width: result.width, height: result.height, format: result.format })
+      .toEqual({ width: 32, height: 24, format: undefined });
+    expect(result.original.ext).toBe('avif');
+    expect(result.original.data.equals(avif)).toBe(true);
+    expect(new Set(result.variants.map((variant) => variant.format))).toEqual(new Set(['avif', 'webp']));
+  });
+
   it('applies custom modern qualities without changing the format contract', async () => {
     const input = await fixture(320, 240);
     const low = await processImage(input, { avifQuality: 1, webpQuality: 1 });
@@ -105,6 +116,26 @@ describe('processImage', () => {
       const meta = await sharp(v.data).metadata();
       const tags = meta.exif ? exifReader(meta.exif) : null;
       expect(tags?.GPSInfo ?? null, `${v.format}@${v.width} leaked GPS`).toBeNull();
+    }
+  });
+
+  it('keeps camera metadata but removes GPS from every variant decoded from AVIF', async () => {
+    const avif = await sharp(await fixture(800, 600)).withMetadata().avif().toBuffer();
+    const inputExif = (await sharp(avif).metadata()).exif;
+    expect(inputExif).toBeDefined();
+    expect(exifReader(inputExif!).GPSInfo).toBeDefined();
+    const result = await processImage(avif);
+    expect(result.original.ext).toBe('avif');
+    expect(result.original.data.equals(avif)).toBe(true);
+    expect(result.variants.map(({ width, format }) => `${width}:${format}`).sort())
+      .toEqual(['640:avif', '640:webp', '800:avif', '800:webp']);
+    for (const variant of result.variants) {
+      const meta = await sharp(variant.data).metadata();
+      const tags = meta.exif ? exifReader(meta.exif) : null;
+      expect(tags?.GPSInfo ?? null, `${variant.format}@${variant.width} leaked GPS`).toBeNull();
+      expect(tags?.Image?.Make).toBe('Leica Camera AG');
+      expect(tags?.Image?.Model).toBe('LEICA Q2');
+      expect([meta.width, meta.height]).toEqual([variant.width, variant.width * 3 / 4]);
     }
   });
 
