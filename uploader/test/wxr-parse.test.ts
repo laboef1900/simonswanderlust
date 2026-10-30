@@ -7,7 +7,8 @@ const xml = readFileSync(join(process.cwd(), 'test/fixtures/wxr-sample.xml'), 'u
 
 describe('parseWxr', () => {
   it('extracts only published posts, paired DE/EN, with fields', () => {
-    const { posts, attachments } = parseWxr(xml);
+    const { posts, attachments, untranslated } = parseWxr(xml);
+    expect(untranslated).toEqual([]);
     expect(posts).toHaveLength(2); // the draft is excluded
     const de = posts.find((p) => p.locale === 'de')!;
     expect(de).toMatchObject({ group: 'pll_grp1', slug: 'rhodos-abenteuer', title: 'Rhodos Abenteuer', date: '2021-07-25', excerpt: 'Kurzfassung DE', thumbnailId: '100' });
@@ -16,7 +17,7 @@ describe('parseWxr', () => {
     expect(attachments.get('100')).toBe('https://wp.example/uploads/hero.jpg');
   });
 
-  it('skips (not crashes) a published post that has a language but no post_translations group', () => {
+  it('reports a published known-language post without a translation group separately', () => {
     const noGroupWxr = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:wp="http://wordpress.org/export/1.2/" xmlns:excerpt="http://wordpress.org/export/1.2/excerpt/" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:dc="http://purl.org/dc/elements/1.1/">
   <channel>
@@ -30,8 +31,44 @@ describe('parseWxr', () => {
     </item>
   </channel>
 </rss>`;
-    expect(() => parseWxr(noGroupWxr)).not.toThrow();
-    expect(parseWxr(noGroupWxr).posts).toHaveLength(0);
+    expect(parseWxr(noGroupWxr)).toEqual({
+      posts: [], attachments: new Map(),
+      untranslated: [{ locale: 'de', slug: 'non-bilingual-post' }],
+    });
+  });
+
+  it('reports absent or empty groups individually, preserving decoded slug text without requiring IDs', () => {
+    const slugs = ['g1', 'g1', 'Ä-%2F-<b>{locale}$&</b>'];
+    const items = slugs.map((slug, index) => `<item>
+      <wp:post_type>post</wp:post_type><wp:status>publish</wp:status>
+      <wp:post_name><![CDATA[${slug}]]></wp:post_name>
+      <category domain="language" nicename="${index === 1 ? 'en' : 'de'}"/>
+      ${index ? '<category domain="post_translations" nicename=""/>' : ''}
+    </item>`).join('');
+    expect(parseWxr(`<rss><channel>${items}</channel></rss>`)).toEqual({
+      posts: [], attachments: new Map(),
+      untranslated: slugs.map((slug, index) => ({ locale: index === 1 ? 'en' : 'de', slug })),
+    });
+  });
+
+  it.each([
+    ['post', 'draft', 'de'],
+    ['post', 'private', 'en'],
+    ['page', 'publish', 'de'],
+    ['attachment', 'publish', 'en'],
+    ['post', 'publish', 'fr'],
+    ['post', 'publish', ''],
+  ])('excludes %s / %s / language %s from both post collections', (type, status, locale) => {
+    for (const group of ['', '<category domain="post_translations" nicename="g1"/>']) {
+      const parsed = parseWxr(`<rss><channel><item>
+        <wp:post_type>${type}</wp:post_type><wp:status>${status}</wp:status>
+        <wp:post_name>excluded</wp:post_name>
+        ${locale ? `<category domain="language" nicename="${locale}"/>` : ''}
+        ${group}
+      </item></channel></rss>`);
+      expect(parsed.posts).toEqual([]);
+      expect(parsed.untranslated).toEqual([]);
+    }
   });
 
   // Issue #143: the parser's own throws (a truncated download cuts a CDATA or

@@ -9,6 +9,7 @@ import { createDbBackup, createRouteManifestPinReader, listBackups, listRouteArc
 import { createRouteArchive, routeRecoverySummary, verifyRouteArchive, type RouteArchiveManifest, type RouteDumpRow } from '../src/gpx-backup.js';
 import { createGpxFiles, safePairHash, sourceDigest, type GpxFiles } from '../src/gpx-files.js';
 import { GPX_LIMITS } from '../public/gpx-geometry.js';
+import { identityDumpRow } from './site-identity-fixture.js';
 
 const original = Buffer.from('<gpx><trk><trkseg><trkpt lat="1.123456789" lon="2.987654321"/></trkseg></trk></gpx>');
 const now = new Date('2026-10-24T12:34:56.789Z');
@@ -29,6 +30,7 @@ function dump(rows: RouteDumpRow[], routeArchive?: RouteArchiveManifest): Dump {
 }
 function database(rows: RouteDumpRow[]): Connectable {
   const query = async (sql: string) => ({ rows: sql.includes('FROM post_routes') ? rows.map((row) => ({ ...row }))
+    : sql.includes('FROM site_identity ORDER') ? [identityDumpRow()]
     : sql.includes('FROM posts') ? dump(rows).tables.posts : [] });
   return { query, connect: async () => ({ query, release() {} }) };
 }

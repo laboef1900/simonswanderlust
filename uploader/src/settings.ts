@@ -66,6 +66,8 @@ export interface FileSettingsStore extends SettingsStore {
   pendingAiMigration(): { keyedProviderIds: string[] } | null;
   /** Writes `<path>.pre-ai-registry` once (no clobber), persists the registry shape, clears the pending state. */
   completeAiMigration(): void;
+  /** Preserve an upgrade's old prompt only when the loaded file was valid and lacked the key. */
+  preserveLegacyReviewPrompt(prompt: string): void;
 }
 
 export function defaultSettings(): Settings {
@@ -178,6 +180,7 @@ interface LoadedSettings {
   settings: Settings;
   /** Set only when the registry was derived from a legacy file this load. */
   legacy: { original: Buffer; keyedProviderIds: string[] } | null;
+  reviewPromptState: 'missing' | 'present' | 'unreadable';
 }
 
 /**
@@ -199,7 +202,7 @@ function loadSettings(path: string, defaults: Settings, log: (msg: string) => vo
   } catch (e) {
     // No file yet is the normal first-boot state; anything else is worth a line.
     if ((e as NodeJS.ErrnoException).code !== 'ENOENT') log(`settings: cannot read ${path}, using defaults: ${(e as Error).message}`);
-    return { settings: copySettings(defaults), legacy: null };
+    return { settings: copySettings(defaults), legacy: null, reviewPromptState: 'unreadable' };
   }
   let parsed: unknown;
   try {
@@ -207,20 +210,22 @@ function loadSettings(path: string, defaults: Settings, log: (msg: string) => vo
   } catch {
     // JSON parser messages can quote a pasted credential from the invalid file.
     log(`settings: ${path} is not valid JSON, using defaults`);
-    return { settings: copySettings(defaults), legacy: null };
+    return { settings: copySettings(defaults), legacy: null, reviewPromptState: 'unreadable' };
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
     log(`settings: ${path} is not a JSON object, using defaults`);
-    return { settings: copySettings(defaults), legacy: null };
+    return { settings: copySettings(defaults), legacy: null, reviewPromptState: 'unreadable' };
   }
   const fromFile = parsed as Record<string, unknown>;
   const loaded: Settings = copySettings(defaults);
   const fields: Record<keyof Settings, unknown> = loaded;
+  let clean = true;
   for (const key of SETTINGS_KEYS) {
     const value = fromFile[key];
     if (value === undefined) continue;
     const reason = FIELD_CHECKS[key](value);
     if (reason) {
+      clean = false;
       log(`settings: ignoring invalid "${key}" in ${path} (${reason}); using default ${JSON.stringify(defaults[key])}`);
       continue;
     }
@@ -250,7 +255,7 @@ function loadSettings(path: string, defaults: Settings, log: (msg: string) => vo
       loaded[key] = null;
     }
   }
-  return { settings: loaded, legacy };
+  return { settings: loaded, legacy, reviewPromptState: !clean ? 'unreadable' : Object.hasOwn(fromFile, 'reviewPrompt') ? 'present' : 'missing' };
 }
 
 export function createSettingsStore({
@@ -265,6 +270,7 @@ export function createSettingsStore({
   const loaded = loadSettings(path, defaults, log);
   let current = loaded.settings;
   let pending = loaded.legacy;
+  let reviewPromptState = loaded.reviewPromptState;
 
   function persist(next: Settings): void {
     mkdirSync(dirname(path), { recursive: true });
@@ -281,7 +287,21 @@ export function createSettingsStore({
       const merged = copySettings(validate({ ...current, ...partial }));
       persist(merged);
       current = merged;
+      if (Object.hasOwn(partial, 'reviewPrompt')) reviewPromptState = 'present';
       return copySettings(current);
+    },
+    preserveLegacyReviewPrompt: (prompt) => {
+      if (reviewPromptState === 'present') return;
+      if (reviewPromptState === 'unreadable') {
+        log('settings: reviewPrompt not migrated because the settings file was unavailable or invalid; using the default.');
+        return;
+      }
+      const next = copySettings(validate({ ...current, reviewPrompt: prompt }));
+      // A pending registry migration must publish the preserved prompt and registry
+      // together, only after its encrypted-key migration and rollback copy.
+      if (!pending) persist(next);
+      current = next;
+      reviewPromptState = 'present';
     },
     pendingAiMigration: () => (pending ? { keyedProviderIds: [...pending.keyedProviderIds] } : null),
     completeAiMigration: () => {

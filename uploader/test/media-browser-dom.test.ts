@@ -38,13 +38,20 @@ class FakeNode {
   attrs: Record<string, string> = {};
   children: FakeNode[] = [];
   listeners: Record<string, Listener[]> = {};
-  constructor(public tagName: string) {}
+  constructor(public tagName: string, private focusState?: { activeElement: FakeNode | null }) {}
   get innerHTML(): string { return ''; }
-  set innerHTML(v: string) { if (v === '') this.children = []; }
+  set innerHTML(v: string) {
+    if (v !== '') return;
+    if (this.focusState && this.children.some((child) => child.contains(this.focusState!.activeElement))) {
+      this.focusState.activeElement = null;
+    }
+    this.children = [];
+  }
   get firstElementChild(): FakeNode | null { return this.children[0] ?? null; }
   appendChild(c: FakeNode): FakeNode { this.children.push(c); return c; }
   remove(): void {}
-  focus(): void {}
+  focus(): void { if (this.focusState) this.focusState.activeElement = this; }
+  contains(node: FakeNode | null): boolean { return this === node || this.children.some((child) => child.contains(node)); }
   showModal(): void { this.open = true; }
   close(): void { this.open = false; this.dispatch('close'); }
   setAttribute(k: string, v: string): void { this.attrs[k] = v; }
@@ -94,16 +101,23 @@ const DETAILS: Details = {
 };
 
 interface Deferred { url: string; resolve(body: unknown): void; fail(status: number, error: string): void }
+interface PendingUpload {
+  fields: Map<string, unknown>;
+  resolve(body: unknown): void;
+  progress(loaded: number, total: number): void;
+}
 /** The model seam: receives the thumbnail URL the page chose and the request's signal. */
 type Describe = (url: string, signal: AbortSignal) => Promise<Details>;
 
 /** The loaded page: the DOM stub plus everything the page sent over the wire. */
 interface Page {
   el(id: string): FakeNode;
+  activeElement(): FakeNode | null;
   /** The page's global object, for replacing a module's function after load. */
   win: Record<string, unknown>;
   timers: { fn: () => void; cleared: boolean }[];
   listRequests: Deferred[];
+  uploadRequests: PendingUpload[];
   patches: { url: string; body: Record<string, unknown> }[];
   deletions: string[];
   rows: Map<string, Item>;
@@ -113,10 +127,11 @@ interface Page {
   flush(): Promise<void>;
 }
 
-function loadPage(opts: { describe?: Describe } = {}): Page {
+function loadPage(opts: { describe?: Describe; folders?: string[] } = {}): Page {
+  const focusState = { activeElement: null as FakeNode | null };
   const roots = new Map<string, FakeNode>();
   for (const id of pageIds) {
-    const n = new FakeNode('div');
+    const n = new FakeNode('div', focusState);
     n.id = id;
     n.checked = checkedIds.has(id);
     roots.set(id, n);
@@ -132,6 +147,7 @@ function loadPage(opts: { describe?: Describe } = {}): Page {
   };
   const timers: { fn: () => void; cleared: boolean }[] = [];
   const listRequests: Deferred[] = [];
+  const uploadRequests: PendingUpload[] = [];
   const patches: { url: string; body: Record<string, unknown> }[] = [];
   const deletions: string[] = [];
   const rows = new Map<string, Item>();
@@ -140,7 +156,7 @@ function loadPage(opts: { describe?: Describe } = {}): Page {
   const confirmAnswer = { value: false };
   const ok = (body: unknown) => Promise.resolve({ status: 200, ok: true, json: async () => body });
   const fetch = (url: string, init?: { method?: string; body?: string }): Promise<unknown> => {
-    if (url.startsWith('/media/folders')) return ok([]);
+    if (url.startsWith('/media/folders')) return ok(opts.folders ?? []);
     if (init?.method === 'DELETE' && url.startsWith('/media/items/')) {
       const key = url.slice('/media/items/'.length);
       deletions.push(key);
@@ -164,8 +180,9 @@ function loadPage(opts: { describe?: Describe } = {}): Page {
   const ctx: Record<string, unknown> = {
     document: {
       getElementById,
-      createElement: (tag: string) => new FakeNode(tag),
-      createTextNode: (text: string) => Object.assign(new FakeNode('#text'), { textContent: text }),
+      get activeElement() { return focusState.activeElement; },
+      createElement: (tag: string) => new FakeNode(tag, focusState),
+      createTextNode: (text: string) => Object.assign(new FakeNode('#text', focusState), { textContent: text }),
     },
     location: { href: '', origin: 'https://app.example', protocol: 'https:' },
     fetch,
@@ -178,8 +195,28 @@ function loadPage(opts: { describe?: Describe } = {}): Page {
     },
     prompt: () => null,
     console,
-    FormData: class { append() {} },
-    XMLHttpRequest: class {},
+    FormData: class {
+      fields = new Map<string, unknown>();
+      append(key: string, value: unknown): void { this.fields.set(key, value); }
+    },
+    XMLHttpRequest: class {
+      status = 0;
+      responseText = '';
+      onload = (): void => {};
+      upload = { onprogress: (_event: { lengthComputable: boolean; loaded: number; total: number }): void => {} };
+      open(): void {}
+      send(data: { fields: Map<string, unknown> }): void {
+        uploadRequests.push({
+          fields: data.fields,
+          resolve: (body) => {
+            this.status = 202;
+            this.responseText = JSON.stringify(body);
+            this.onload();
+          },
+          progress: (loaded, total) => this.upload.onprogress({ lengthComputable: true, loaded, total }),
+        });
+      }
+    },
     Auth: { ensureAuthed: async () => ({ id: 'u1', username: 'simon', isAdmin: true }), renderHeader() {} },
     EditorGalleryImageOrigin: 'https://img.example',
     AltSuggest: {
@@ -206,7 +243,7 @@ function loadPage(opts: { describe?: Describe } = {}): Page {
   vm.runInContext(dialogSrc, ctx);
   vm.runInContext(browserSrc, ctx);
   const flush = async (): Promise<void> => { for (let i = 0; i < 20; i++) await setImmediate(); };
-  return { el, win: ctx, timers, listRequests, patches, deletions, rows, described, confirms, confirmAnswer, flush };
+  return { el, activeElement: () => focusState.activeElement, win: ctx, timers, listRequests, uploadRequests, patches, deletions, rows, described, confirms, confirmAnswer, flush };
 }
 
 function runTimers(timers: { fn: () => void; cleared: boolean }[]): void {
@@ -214,6 +251,255 @@ function runTimers(timers: { fn: () => void; cleared: boolean }[]): void {
   timers.length = 0;
   for (const t of due) t.fn();
 }
+
+describe('media-browser upload completion', () => {
+  it('keeps keyboard navigation on the same photo when completion changes its grid index', async () => {
+    const page = loadPage();
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [item('first'), item('focused')], total: 2 });
+    await page.flush();
+    page.el('grid').querySelectorAll('.media-cell')[1]!.focus();
+    page.el('dropZone').dispatch('drop', { dataTransfer: { files: [{ name: 'new.jpg' }] } });
+    page.uploadRequests[0]!.resolve({ key: 'new', status: 'ready' });
+    await page.flush();
+    runTimers(page.timers);
+    page.listRequests.shift()!.resolve({ items: [item('first'), item('new'), item('focused')], total: 3 });
+    await page.flush();
+    expect(page.activeElement()).toBe(page.el('grid').querySelectorAll('.media-cell')[2]);
+    page.activeElement()!.dispatch('keydown', { key: 'ArrowLeft' });
+    expect(page.activeElement()?.dataset.key).toBe('new');
+    expect(page.el('grid').querySelectorAll('.is-selected').map((node) => node.dataset.key)).toEqual(['new']);
+  });
+
+  it('does not reclaim grid focus after the author moves elsewhere during the refresh', async () => {
+    const page = loadPage();
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [item('existing')], total: 1 });
+    await page.flush();
+    page.el('grid').querySelectorAll('.media-cell')[0]!.focus();
+    page.el('dropZone').dispatch('drop', { dataTransfer: { files: [{ name: 'new.jpg' }] } });
+    page.uploadRequests[0]!.resolve({ key: 'new', status: 'ready' });
+    await page.flush();
+    runTimers(page.timers);
+    page.el('dropZone').focus();
+    page.listRequests.shift()!.resolve({ items: [item('existing'), item('new')], total: 2 });
+    await page.flush();
+    expect(page.activeElement()).toBe(page.el('dropZone'));
+  });
+
+  it('keeps a clean focused detail input until typing, but refreshes it after an explicit save', async () => {
+    const page = loadPage();
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [item('existing')], total: 1 });
+    await page.flush();
+    page.el('grid').querySelectorAll('.media-cell')[0]!.dispatch('click');
+    const input = page.el('dTitle');
+    input.focus();
+    expect(page.el('dUnsaved').hidden).toBe(true);
+    page.el('dropZone').dispatch('drop', { dataTransfer: { files: [{ name: 'new.jpg' }] } });
+    page.uploadRequests[0]!.resolve({ key: 'new', status: 'ready' });
+    await page.flush();
+    runTimers(page.timers);
+    page.listRequests.shift()!.resolve({ items: [item('existing'), item('new')], total: 2 });
+    await page.flush();
+    expect(page.activeElement()).toBe(input);
+    expect(page.el('dTitle')).toBe(input);
+    input.value = 'Continued typing';
+    page.el('detail').dispatch('input');
+    page.el('dSave').focus();
+    page.el('dSave').dispatch('click');
+    await page.flush();
+    expect(page.patches.at(-1)?.body).toEqual({ title: 'Continued typing' });
+    page.listRequests.shift()!.resolve({ items: [{ ...item('existing'), title: 'Continued typing' }, item('new')], total: 2 });
+    await page.flush();
+    expect(page.el('dTitle').value).toBe('Continued typing');
+    expect(page.el('dUnsaved').hidden).toBe(true);
+  });
+
+  it('finishes an explicit save when upload completion supersedes its reload', async () => {
+    const page = loadPage();
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [item('existing')], total: 1 });
+    await page.flush();
+    page.el('grid').querySelectorAll('.media-cell')[0]!.dispatch('click');
+    page.el('dTitle').value = 'Saved title';
+    page.el('detail').dispatch('input');
+    page.el('dSave').focus();
+    page.el('dSave').dispatch('click');
+    await page.flush();
+    const explicit = page.listRequests.shift()!;
+    page.el('dropZone').dispatch('drop', { dataTransfer: { files: [{ name: 'new.jpg' }] } });
+    page.uploadRequests[0]!.resolve({ key: 'new', status: 'ready' });
+    await page.flush();
+    runTimers(page.timers);
+    page.listRequests.shift()!.resolve({ items: [{ ...item('existing'), title: 'Saved title' }, item('new')], total: 2 });
+    await page.flush();
+    expect(page.el('dUnsaved').hidden).toBe(true);
+    expect(page.el('dTitle').value).toBe('Saved title');
+    explicit.resolve({ items: [{ ...item('existing'), title: 'Saved title' }], total: 1 });
+    await page.flush();
+    expect(page.el('grid').querySelectorAll('.media-cell').map((node) => node.dataset.key)).toEqual(['existing', 'new']);
+    // The saved row must become the diff baseline, even though its reload lost.
+    page.el('dTitle').value = 'existing';
+    page.el('detail').dispatch('input');
+    page.el('dSave').dispatch('click');
+    await page.flush();
+    expect(page.patches.at(-1)?.body).toEqual({ title: 'existing' });
+    page.listRequests.shift()!.resolve({ items: [item('existing'), item('new')], total: 2 });
+    await page.flush();
+  });
+
+  it('finishes folder selection when upload completion supersedes its reload', async () => {
+    const page = loadPage({ folders: ['trips'] });
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [item('existing')], total: 1 });
+    await page.flush();
+    const folder = page.el('folderTree').querySelectorAll('.folder-btn')[1]!;
+    folder.focus();
+    folder.dispatch('click');
+    await page.flush();
+    const explicit = page.listRequests.shift()!;
+    page.el('dropZone').dispatch('drop', { dataTransfer: { files: [{ name: 'new.jpg' }] } });
+    page.uploadRequests[0]!.resolve({ key: 'new', status: 'ready' });
+    await page.flush();
+    runTimers(page.timers);
+    const background = page.listRequests.shift()!;
+    expect(background.url).toContain('folder=trips');
+    background.resolve({ items: [{ ...item('new'), folder: 'trips' }], total: 1 });
+    await page.flush();
+    expect(page.el('folderTree').querySelectorAll('.is-current').map((node) => node.textContent)).toEqual(['trips']);
+    explicit.resolve({ items: [], total: 0 });
+    await page.flush();
+    expect(page.el('grid').querySelectorAll('.media-cell').map((node) => node.dataset.key)).toEqual(['new']);
+  });
+
+  it.each([
+    ['folderTree', '.folder-btn'],
+    ['uploadQueue', '.btn-secondary'],
+  ])('does not replace focused %s controls during background completion', async (id, selector) => {
+    const page = loadPage();
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [item('existing')], total: 1 });
+    await page.flush();
+    page.el('dropZone').dispatch('drop', { dataTransfer: { files: [{ name: 'new.jpg' }] } });
+    page.uploadRequests[0]!.resolve({ key: 'new', status: 'ready' });
+    await page.flush();
+    const control = page.el(id).querySelectorAll(selector)[0]!;
+    control.focus();
+    runTimers(page.timers);
+    page.listRequests.shift()!.resolve({ items: [item('existing'), item('new')], total: 2 });
+    await page.flush();
+    expect(page.activeElement()).toBe(control);
+    expect(page.el(id).querySelectorAll(selector)[0]).toBe(control);
+    expect(page.el('grid').querySelectorAll('.media-cell').map((node) => node.dataset.key)).toEqual(['existing', 'new']);
+  });
+
+  it('refreshes once for completed uploads, keeps queue results and unsaved details, and renders the server status', async () => {
+    const page = loadPage();
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [item('existing')], total: 1 });
+    await page.flush();
+    page.el('grid').querySelectorAll('.media-cell')[0]!.dispatch('click');
+    page.el('dAltDe').value = 'Unsaved description';
+    page.el('detail').dispatch('input');
+
+    page.el('dropZone').dispatch('drop', { dataTransfer: { files: [{ name: 'new.jpg' }, { name: 'ready.jpg' }] } });
+    expect(page.uploadRequests).toHaveLength(2);
+    page.uploadRequests[0]!.progress(100, 100);
+    await page.flush();
+    runTimers(page.timers);
+    expect(page.listRequests).toHaveLength(0);
+    expect(page.el('grid').querySelectorAll('.media-cell').map((n) => n.dataset.key)).toEqual(['existing']);
+
+    page.uploadRequests[0]!.resolve({ key: 'new', status: 'processing' });
+    page.uploadRequests[1]!.resolve({ key: 'ready', status: 'ready' });
+    await page.flush();
+    runTimers(page.timers);
+    expect(page.listRequests).toHaveLength(1);
+    const processing = { ...item('new'), status: 'processing', thumbSrc: '' };
+    page.listRequests.shift()!.resolve({ items: [item('ready'), processing, item('existing')], total: 3 });
+    await page.flush();
+    expect(page.el('grid').querySelectorAll('.media-cell').map((n) => n.dataset.key)).toEqual(['ready', 'new', 'existing']);
+    expect(page.el('grid').querySelectorAll('.media-cell__badge').map((n) => n.textContent)).toEqual(['processing']);
+    expect(page.el('uploadQueue').querySelectorAll('.upload-row')).toHaveLength(2);
+    expect(page.el('uploadQueue').querySelectorAll('.upload-row__state').map((n) => n.textContent)).toEqual(['done', 'done']);
+    expect(page.el('dAltDe').value).toBe('Unsaved description');
+    expect(page.el('dUnsaved').hidden).toBe(false);
+    expect(page.el('grid').querySelectorAll('.is-selected').map((n) => n.dataset.key)).toEqual(['existing']);
+  });
+
+  it('shows an upload in the current folder without changing the query or clearing the queue', async () => {
+    const page = loadPage({ folders: ['journey'] });
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [], total: 0 });
+    await page.flush();
+    page.el('folderTree').querySelectorAll('.folder-btn')[1]!.dispatch('click');
+    const query = page.listRequests[0]!.url;
+    page.listRequests.shift()!.resolve({ items: [], total: 0 });
+    await page.flush();
+
+    page.el('dropZone').dispatch('drop', { dataTransfer: { files: [{ name: 'new.jpg' }] } });
+    expect(page.uploadRequests[0]!.fields.get('folder')).toBe('journey');
+    page.uploadRequests[0]!.resolve({ key: 'new', status: 'processing' });
+    await page.flush();
+    runTimers(page.timers);
+    expect(page.listRequests).toHaveLength(1);
+    expect(page.listRequests[0]!.url).toBe(query);
+    page.listRequests.shift()!.resolve({ items: [{ ...item('new'), folder: 'journey', status: 'processing' }], total: 1 });
+    await page.flush();
+    expect(page.el('grid').querySelectorAll('.media-cell').map((n) => n.dataset.key)).toEqual(['new']);
+    expect(page.el('grid').querySelectorAll('.media-cell__badge')[0]!.textContent).toBe('processing');
+    expect(page.el('uploadQueue').querySelectorAll('.upload-row')).toHaveLength(1);
+  });
+
+  it.each(['other folder', 'ready filter'])('does not insert a nonmatching upload under the %s and preserves sorting and page', async (context) => {
+    const page = loadPage({ folders: ['journey', 'other'] });
+    const settle = async (): Promise<void> => {
+      page.listRequests.shift()!.resolve({ items: [item('visible')], total: 121 });
+      await page.flush();
+    };
+    await page.flush();
+    await settle();
+    page.el('folderTree').querySelectorAll('.folder-btn')[1]!.dispatch('click');
+    await settle();
+    page.el('dropZone').dispatch('drop', { dataTransfer: { files: [{ name: 'new.jpg' }] } });
+    expect(page.uploadRequests[0]!.fields.get('folder')).toBe('journey');
+
+    if (context === 'other folder') {
+      page.el('folderTree').querySelectorAll('.folder-btn')[2]!.dispatch('click');
+    } else {
+      page.el('fStatus').value = 'ready';
+      page.el('fStatus').dispatch('change');
+    }
+    await settle();
+    page.el('fRecursive').checked = false;
+    page.el('fRecursive').dispatch('change');
+    await settle();
+    page.el('fSort').value = 'title';
+    page.el('fSort').dispatch('change');
+    await settle();
+    page.el('fOrder').value = 'asc';
+    page.el('fOrder').dispatch('change');
+    await settle();
+    page.el('nextPage').dispatch('click');
+    const query = page.listRequests[0]!.url;
+    await settle();
+
+    page.uploadRequests[0]!.resolve({ key: 'new', folder: 'journey', status: 'processing' });
+    await page.flush();
+    runTimers(page.timers);
+    expect(page.listRequests).toHaveLength(1);
+    expect(page.listRequests[0]!.url).toBe(query);
+    expect(query).toContain('page=2');
+    expect(query).toContain('sort=title');
+    expect(query).toContain('order=asc');
+    expect(query).toContain(context === 'other folder' ? 'folder=other' : 'status=ready');
+    await settle();
+    expect(page.el('grid').querySelectorAll('.media-cell').map((n) => n.dataset.key)).toEqual(['visible']);
+    expect(page.el('uploadQueue').querySelectorAll('.upload-row__state')[0]!.textContent).toBe('done');
+    expect(page.el('pageInfo').textContent).toBe('Page 2 of 3');
+  });
+});
 
 describe('media-browser detail panel', () => {
   it('keeps unsaved edits across a reload and asks before switching photos', async () => {
