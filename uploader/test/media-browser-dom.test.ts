@@ -1463,6 +1463,37 @@ describe('Media publication impact and bounded refresh', () => {
     await page.flush(); page.el('grid').querySelectorAll('.media-cell')[0]!.click(); await page.flush();
   }
 
+  it('retires a removed clean detail resource and starts a fresh observation when selected again', async () => {
+    const pending = Promise.withResolvers<unknown>();
+    let reads = 0;
+    const photo = { ...item('a'), impact, usedIn: [{ kind: 'post', key: 'one', title: 'One' }] };
+    const page = loadPage({ request: (url, init) => {
+      if (url !== '/media/items/a' || init?.method === 'PATCH') return;
+      if (++reads === 2) return pending.promise;
+      return Promise.resolve({ status: 200, ok: true, json: async () => page.rows.get('a') });
+    } });
+    await open(page, photo);
+    page.el('dImpact').querySelectorAll('button')[0]!.click(); await page.flush();
+    page.el('fStatus').value = 'failed'; page.el('fStatus').dispatch('change'); await page.flush();
+    page.listRequests.shift()!.resolve({ items: [], total: 0 }); await page.flush();
+    pending.resolve({ status: 200, ok: true, json: async () => photo }); await page.flush();
+    page.timers.filter(timer => timer.ms === 30000 && !timer.cleared).forEach(timer => timer.fn());
+    await page.flush();
+    expect(reads).toBe(2);
+    expect(page.el('detail').dataset.key).toBeUndefined();
+    expect(page.patches).toEqual([]);
+
+    const fresh = { ...photo, title: 'Refreshed photo',
+      impact: { availability: 'available' as const, published: [], drafts: [], newerDrafts: [] } };
+    page.rows.set('a', fresh);
+    page.el('fStatus').value = ''; page.el('fStatus').dispatch('change'); await page.flush();
+    page.listRequests.shift()!.resolve({ items: [fresh, item('b')], total: 2 }); await page.flush();
+    page.el('grid').querySelectorAll('.media-cell')[0]!.click(); await page.flush();
+    expect(reads).toBe(3);
+    expect(page.el('dTitle').value).toBe('Refreshed photo');
+    expect(page.el('dImpact').querySelectorAll('a')).toEqual([]);
+  });
+
   it('resumes read-only detail observations after explicit same-owner reauthentication without replacing dirty inputs', async () => {
     let expired = false, reads = 0;
     const photo = { ...item('a', 'base'), impact, livePending: unchanged };
