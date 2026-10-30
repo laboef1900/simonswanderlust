@@ -268,6 +268,24 @@ longer complete for its original's width — and then `encodeQueue.recover()` re
 from `status = 'processing'`). Variant and original files are written atomically (temp +
 rename), so a crash never leaves a truncated file under a final name.
 
+The Media grid refreshes automatically when uploads complete, with a 200 ms debounce for
+bursts. **Clear finished** is not needed to show the accepted photos; queue entries stay
+visible until cleared. Refreshes retain the current folder, search, status filter, sort and
+page, so a photo outside that query will not appear there. Selections still in view and
+unsaved detail edits survive the refresh; switching to another photo still asks before
+discarding edits. Keyboard focus stays on the same visible photo even if its sort position
+changes. The refresh preserves whichever photo is focused when the response is rendered,
+not when the request started, and does not pull focus away from search, upload, folder,
+queue or detail controls. A focused detail field keeps its caret and selection even before
+the first edit; explicit **Save details** still refreshes the saved values and clears the
+unsaved state. If an automatic completion refresh overtakes an explicit Save or folder
+change, the winning response still completes that explicit update rather than retaining
+an old detail baseline or folder navigation. Arrow and Space navigation continue from the
+restored photo.
+The queue's **done** means the upload was accepted, not that encoding has
+finished: the grid displays the status returned by the server, including **processing**.
+This is a completion-triggered refresh, not continuous polling for encoding progress.
+
 The backlog admits at most 200 waiting jobs, in addition to the two running jobs. When an
 upload receives **429** because that backlog is full, a new photo keeps its original as
 `failed` / `queue_full`, not stranded `processing`; an existing photo's prior status/error is
