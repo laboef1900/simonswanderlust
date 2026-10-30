@@ -82,9 +82,13 @@ window.PublicationRefresh = (function () {
       window.removeEventListener('pagehide', hide);
       window.removeEventListener('pageshow', restore);
     }
-    function beginAction() {
+    function beginAction(affectsResource = true) {
       if (!actions) actionRefresh = false;
-      actions += 1; invalidate(); return generation;
+      actions += 1;
+      // Other-resource work still suppresses background reads, but cannot
+      // supersede an in-flight acknowledgement for the observed resource.
+      if (affectsResource) invalidate();
+      return generation;
     }
     function accept(value, version = generation) {
       if (version !== generation) return;

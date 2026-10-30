@@ -1530,6 +1530,66 @@ describe('Media publication impact and bounded refresh', () => {
     expect(writes).toBe(2);
   });
 
+  it.each(['checking', 'saved'])('keeps the selected save projection while another photo is %s by bulk AI', async (stage) => {
+    const response = (body: unknown) => Promise.resolve({ status: 200, ok: true, json: async () => body });
+    const saving = Promise.withResolvers<unknown>();
+    const checking = Promise.withResolvers<unknown>();
+    const original = { ...item('a'), impact, livePending: unchanged,
+      usedIn: [{ kind: 'post', key: 'one', title: 'Original story' }] };
+    const other = { ...item('b'), title: '' };
+    const fresh = { ...original, caption: { de: 'My caption', en: '' }, conditionalVersion: 1,
+      impact: { availability: 'available' as const, published: [story('fresh')], drafts: [], newerDrafts: [] },
+      usedIn: [{ kind: 'post', key: 'fresh', title: 'Fresh story' }],
+      changedDescriptions: { ...unchanged, de: { alt: false, caption: true } },
+      livePending: { ...unchanged, de: { alt: false, caption: true } } };
+    let reads = 0, writes = 0, otherReads = 0;
+    const page = loadPage({
+      request: (url, init) => {
+        if (url === '/media/items/b' && init?.method !== 'PATCH') {
+          otherReads++;
+          if (stage === 'checking') return checking.promise;
+        }
+        if (url !== '/media/items/a') return;
+        if (init?.method === 'PATCH') { writes++; return saving.promise; }
+        reads++;
+      },
+    });
+    page.rows.set('b', other);
+    await open(page, original);
+    page.el('dCapDe').value = 'My caption'; page.el('detail').dispatch('input');
+    page.el('dSave').click(); await page.flush();
+    expect(page.el('aiAll').disabled).toBe(false);
+    page.el('aiAll').click(); await page.flush();
+    page.el('aiScopeSelected').checked = false;
+    page.el('aiScopeAll').checked = true; page.el('aiScopeAll').dispatch('change'); await page.flush();
+    page.listRequests.shift()!.resolve({ items: [original, other], total: 2 }); await page.flush();
+    for (const id of ['aiFieldAlt', 'aiFieldCaption', 'aiFieldTags']) page.el(id).checked = false;
+    page.el('aiFieldTags').dispatch('change');
+    page.el('aiStart').click(); await page.flush();
+    expect(otherReads).toBe(1);
+    expect(page.described).toEqual(['https://img.example/b-640.webp']);
+    page.timers.filter(timer => timer.ms === 30000 && !timer.cleared).forEach(timer => timer.fn());
+    await page.flush();
+    expect(reads).toBe(1);
+    page.rows.set('a', fresh); saving.resolve(await response(fresh)); await page.flush();
+    expect(page.el('dImpact').querySelectorAll('a').map(link => link.href)).toEqual(['/admin/editor.html?tk=fresh']);
+    expect(page.el('dCapDe').value).toBe('My caption');
+    expect(page.el('dUnsaved').hidden).toBe(true);
+    if (stage === 'checking') {
+      page.timers.filter(timer => timer.ms === 30000 && !timer.cleared).forEach(timer => timer.fn());
+      await page.flush();
+      expect(reads).toBe(1);
+    }
+    checking.resolve(await response(other)); await page.flush();
+    for (const request of page.listRequests.splice(0)) request.resolve({ items: [...page.rows.values()], total: 2 });
+    await page.flush();
+    expect(page.rows.get('b')?.title).toBe(DETAILS.title);
+    expect(page.el('detail').dataset.key).toBe('a');
+    expect(page.el('dImpact').querySelectorAll('a').map(link => link.href)).toEqual(['/admin/editor.html?tk=fresh']);
+    expect(reads).toBe(1);
+    expect(writes).toBe(1);
+  });
+
   it('resumes read-only detail observations after explicit same-owner reauthentication without replacing dirty inputs', async () => {
     let expired = false, reads = 0;
     const photo = { ...item('a', 'base'), impact, livePending: unchanged };
