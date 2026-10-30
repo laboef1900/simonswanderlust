@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { editorDocument, type EditorElement } from './editor-dom-harness.js';
 
 const src = readFileSync('public/admin-confirm.js', 'utf8');
 
@@ -82,5 +83,62 @@ describe('AdminConfirm.ask typed fallback', () => {
   it('rejects a mismatched token', async () => {
     const { api } = load({ prompt: () => 'delete' });
     await expect(api.ask({ title: 'Delete?', typed: 'DELETE' })).resolves.toBe(false);
+  });
+});
+
+describe('AdminConfirm.ask native dialog', () => {
+  function nativeDialog() {
+    const dom = editorDocument('<body></body>');
+    const window: { AdminConfirm?: Api } = {};
+    vm.runInNewContext(src, { window, document: dom.document });
+    const api = window.AdminConfirm!;
+    const dialog = () => dom.document.getElementById('adminConfirm') as EditorElement & { returnValue: string };
+    function close(result?: string) {
+      // Native dialog close requests leave the previous result untouched when
+      // no result is supplied (including Escape in Firefox/WebKit).
+      if (result !== undefined) dialog().returnValue = result;
+      dialog().close();
+      dom.flushDialogEvents();
+    }
+    return { api, dom, dialog, close };
+  }
+
+  it.each(['escape', 'close', 'cancel'] as const)('does not reuse prior consent after %s', async (dismiss) => {
+    const { api, dom, dialog, close } = nativeDialog();
+    const accepted = api.ask({ title: 'Unpublish?' });
+    close('ok');
+    await expect(accepted).resolves.toBe(true);
+
+    const cancelled = api.ask({ title: 'Delete?', danger: true });
+    if (dismiss === 'escape') {
+      dialog().fire('keydown', { key: 'Escape' });
+      dom.flushDialogEvents();
+    } else {
+      close(dismiss === 'cancel' ? 'cancel' : undefined);
+    }
+    await expect(cancelled).resolves.toBe(false);
+
+    const confirmedAgain = api.ask({ title: 'Publish?' });
+    close('ok');
+    await expect(confirmedAgain).resolves.toBe(true);
+  });
+
+  it('requires fresh consent and the token on each typed confirmation', async () => {
+    const { api, dom, dialog, close } = nativeDialog();
+    const accepted = api.ask({ title: 'Delete two trips?', typed: 'DELETE' });
+    dom.document.getElementById('adminConfirmTyped')!.value = 'DELETE';
+    close('ok');
+    await expect(accepted).resolves.toBe(true);
+
+    const escaped = api.ask({ title: 'Delete another trip?', typed: 'DELETE' });
+    dom.document.getElementById('adminConfirmTyped')!.value = 'DELETE';
+    dialog().fire('keydown', { key: 'Escape' });
+    dom.flushDialogEvents();
+    await expect(escaped).resolves.toBe(false);
+
+    const wrongToken = api.ask({ title: 'Delete another trip?', typed: 'DELETE' });
+    dom.document.getElementById('adminConfirmTyped')!.value = 'delete';
+    close('ok');
+    await expect(wrongToken).resolves.toBe(false);
   });
 });
