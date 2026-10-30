@@ -1,5 +1,5 @@
 import type { Loader } from 'astro/loaders';
-import { loaderPool } from './loader-pool.js';
+import { loaderPool, withLoaderSnapshot } from './loader-pool.js';
 import { transformBodyImages, type ImageDims } from './body-images.js';
 import { imageOrigin, retargetImageOrigins } from './images.js';
 import { proseDescription } from './seo.js';
@@ -38,9 +38,9 @@ export function postgresPagesLoader(): Loader {
       const pool = loaderPool(url);
       try {
         store.clear();
-        const { rows } = await pool.query<PageRow>(
+        const { rows } = await withLoaderSnapshot(pool, (client) => client.query<PageRow>(
           `SELECT key, locale, title, body_markdown, images FROM pages`,
-        );
+        ));
         for (const row of rows) {
           const input = rowToPageEntry(row, galleryOrigin);
           const rendered = await renderMarkdown(input.body);
