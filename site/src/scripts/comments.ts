@@ -12,6 +12,7 @@
  * → 201 pending (never optimistic-appended), 409 closed, 429 rate limited,
  * 403 unavailable (Origin check), 400 invalid.
  */
+import { countLabel } from '../i18n/count';
 
 export interface CommentLabels {
   heading: string;
@@ -29,6 +30,7 @@ export interface CommentLabels {
   privacy: string;
   /** Contains `{n}`. */
   count: string;
+  countOne: string;
 }
 
 export interface PublicComment {
@@ -94,7 +96,8 @@ export function paintComments(
   }
   const count = doc.createElement('p');
   count.className = 'comments__count';
-  count.textContent = labels.count.replace('{n}', String(comments.length));
+  count.textContent = countLabel(comments.length, labels.countOne, labels.count)
+    .replace('{n}', String(comments.length));
   list.append(count);
 
   const ol = doc.createElement('ol');
