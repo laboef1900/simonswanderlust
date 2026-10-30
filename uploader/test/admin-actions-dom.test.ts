@@ -168,7 +168,13 @@ function loadPage(file: string, extraGlobals: Record<string, unknown>, scripts: 
     console,
     confirm: () => true,
     prompt: () => 'DELETE',
-    Auth: { ensureAuthed: async () => null, renderHeader() {} },
+    Auth: {
+      ensureAuthed: async () => null, renderHeader() {},
+      setPageTitle(page: string) {
+        const document = ctx.document;
+        if (document && typeof document === 'object' && 'title' in document) document.title = page + ' · Travel journal';
+      },
+    },
     EditorCopy: { en: EDITOR_COPY },
     AdminConfirm: { ask: async () => true, liveUrls: () => ({ de: '', en: '' }), urlsPlain: () => '' },
     ...extraGlobals,
@@ -195,6 +201,29 @@ function loadPosts(extraGlobals: Record<string, unknown> = {}) {
     ...extraGlobals,
   });
 }
+
+describe('import.html rejection accounting', () => {
+  it('shows a rejection-only completed summary and renders HTML-like slugs only as text', () => {
+    const { ctx, el } = loadPage('public/import.html', {});
+    const warning = '<img src=x onerror=alert(1)> (de): no translation (untranslated post) — rejected';
+    const renderFinished = vm.runInContext('renderFinished', ctx) as (job: unknown) => void;
+    renderFinished({
+      status: 'done',
+      summary: {
+        imported: 0, updated: 0, skippedPublished: 0, rejected: 1, failed: 0,
+        images: { total: 0, hosted: 0, failed: 0 }, warnings: [warning],
+      },
+    });
+    expect(el('results').style.display).toBe('');
+    expect(el('counts').textContent).toContain('Rejected: 1');
+    expect(el('importRejected').style.display).toBe('');
+    expect(el('importRejected').textContent).toContain('1 post group(s)');
+    expect(el('warnings').children).toHaveLength(1);
+    expect(el('warnings').children[0]!.textContent).toBe(warning);
+    expect(el('warnings').children[0]!.innerHTML).toBe('');
+    expect(el('warnings').children[0]!.children).toEqual([]);
+  });
+});
 
 const post = { translationKey: 'tk1', titleDe: 'Bukarest', slugDe: 'bukarest', slugEn: 'bucharest', status: 'published' };
 
@@ -1038,7 +1067,7 @@ async function apiPage(initial: SettingsResponse, opts: {
 const calls = (requests: ApiRequest[]) => requests.map((r) => r.method + ' ' + r.url);
 
 describe('settings.html tabs', () => {
-  const PANELS = ['panel-ai-models', 'panel-images', 'panel-comments', 'panel-site'];
+  const PANELS = ['panel-ai-models', 'panel-images', 'panel-comments', 'panel-identity', 'panel-site'];
 
   function tabsPage(hash = '', narrow = false) {
     const replaced: string[] = [];
@@ -1070,6 +1099,16 @@ describe('settings.html tabs', () => {
     expect(t.title()).toBe(' · Comments');
     expect(t.el('tabbtn-comments').tabIndex).toBe(0);
     expect(t.el('tabbtn-ai-models').tabIndex).toBe(-1);
+  });
+
+  it('opens the identity deep link and includes it in keyboard navigation', async () => {
+    const t = tabsPage('#identity');
+    expect(t.visible()).toEqual(['panel-identity']);
+    expect(t.el('tabbtn-identity').tabIndex).toBe(0);
+    expect(t.title()).toBe(' · ' + EDITOR_COPY.identityTab);
+    await t.el('tabbtn-identity').fire('keydown', { key: 'ArrowUp' });
+    expect(t.visible()).toEqual(['panel-comments']);
+    expect(t.replaced).toEqual(['#comments']);
   });
 
   it('a vertical index moves with Up/Down, Home/End, and mirrors the tab in the hash and title', async () => {

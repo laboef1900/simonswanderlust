@@ -241,6 +241,14 @@ storage key, not per variant file. Bulk drag-and-drop upload, virtual folders (a
 table; moving a photo re-labels it, it does not move bytes on disk), search, and per-item alt text
 that the gallery picker reuses.
 
+Re-uploading the same file preserves its existing non-root folder, including when recovering
+a `failed` or `missing` photo, even if the recovery attempt is refused by a full queue.
+A ready photo or a failed/missing photo being re-created may adopt the upload's selected
+folder only while still in the root; the upload response reports the stored folder.
+Processing and `queue_full` recovery retain all stored metadata, including a root folder.
+Other recovery keeps existing title, alt, caption and tags when the upload supplies no
+replacement metadata.
+
 The shared image picker in `public/media-picker.js` exposes read-only folder navigation
 for title images, heroes, and galleries. It uses `MediaApi.folderTree`, the Media page's
 folder styles, and the existing `/media/folders` endpoint. Folder views include descendants;

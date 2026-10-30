@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import type { PostPair } from '../src/posts.js';
-import { assertNotStale } from '../src/posts.js';
+import { MAX_SLUG_BYTES, isSafeSlug, assertNotStale, memoryPostStore, PostError, type PostPair } from '../src/posts.js';
 import type { EditorialReviewResult } from '../src/editorial-review.js';
 import { editorDocument, EditorElement, EditorEvent } from './editor-dom-harness.js';
 import { ui } from '../../site/src/i18n/ui.js';
@@ -10,6 +9,7 @@ import { normalizeGalleryFences } from '../src/body-content.js';
 import { readCaptionOverride, readCaptionsVisible } from '../../site/src/lib/gallery-layout.js';
 import { REGIONS } from '../src/db.js';
 import type { AltAudit } from '../src/alt-audit.js';
+import { publishTokens } from './publish-tokens.js';
 
 // editor.html's inline script is plain top-level browser code. Run it in a vm
 // context whose `document.getElementById` answers from the REAL markup's ids —
@@ -305,6 +305,67 @@ function minimalPair(): StashPayload {
   const loc = (locale: 'de' | 'en') => ({ locale, slug: 'x', title: 'X', excerpt: '', country: '', bodyMarkdown: '', images: {} });
   return { translationKey: 'tk1', status: 'draft', shared: {}, de: loc('de'), en: loc('en') };
 }
+
+describe('unpublish concurrency token in the real editor', () => {
+  it.each(['none', 'before', 'after'] as const)('preserves version ownership (other writer: %s)', async (otherWriter) => {
+    const posts = memoryPostStore();
+    await posts.upsertDraft(fullPair());
+    await posts.publish('tk1', await publishTokens(posts, 'tk1'));
+    let unpublishToken: string | undefined;
+    const h = loadEditor({ confirm: true, fetch: async (url, options) => {
+      if (url === '/posts/tk1/unpublish') {
+        const committed = await posts.unpublish('tk1');
+        unpublishToken = committed.updatedAt.toISOString();
+        if (otherWriter === 'after') {
+          const pair = (await posts.get('tk1'))!;
+          await posts.upsertDraft({ ...pair, de: { ...pair.de, title: 'Another tab' } }, pair.updatedAt);
+        }
+        return response({ unpublished: true, ...committed, build: { ok: true } });
+      }
+      if (url === '/posts/tk1' && options?.method === 'PUT') {
+        const payload = JSON.parse(String(options.body)) as PostPair & { updatedAt: string };
+        try {
+          return response(await posts.upsertDraft(payload, new Date(payload.updatedAt)));
+        } catch (error) {
+          if (error instanceof PostError) return response({ error: error.message, code: error.code }, 409);
+          throw error;
+        }
+      }
+      return response(url === '/posts/tk1' ? await posts.get('tk1') : []);
+    } });
+    expect(await h.api.loadPost('tk1')).toBe(true);
+    const loadedToken = h.api.buildPayload().updatedAt;
+    if (otherWriter === 'before') {
+      const pair = (await posts.get('tk1'))!;
+      await posts.upsertDraft({ ...pair, de: { ...pair.de, title: 'Another tab' } }, pair.updatedAt);
+    }
+    h.el('unpublishBtn').click();
+    await settle();
+    expect(h.api.buildPayload().updatedAt).toBe(otherWriter === 'before' ? loadedToken : unpublishToken);
+    h.el('deTitle').value = 'My edit after unpublish';
+    h.el('deTitle').fire('input');
+    expect(await h.api.doSaveDraft()).toBe(otherWriter === 'none');
+    expect(h.prompts).toHaveLength(otherWriter === 'none' ? 1 : 2);
+    expect((await posts.get('tk1'))!.de.title).toBe(otherWriter === 'none' ? 'My edit after unpublish' : 'Another tab');
+  });
+
+  it('keeps the loaded token and published state when unpublish fails', async () => {
+    const post = { ...fullPair(), status: 'published', updatedAt: '2026-10-25T10:00:00.000Z' };
+    const h = loadEditor({ confirm: true, fetch: async (url) => {
+      if (url === '/posts/tk1/unpublish') return response({
+        error: 'storage_read_only', updatedAt: '2026-10-25T11:00:00.000Z',
+      }, 503);
+      return response(url === '/posts/tk1' ? post : []);
+    } });
+    await h.api.loadPost('tk1');
+    h.el('unpublishBtn').click();
+    await settle();
+    expect(h.api.buildPayload().updatedAt).toBe(post.updatedAt);
+    expect(h.el('slugFieldDe').disabled).toBe(true);
+    expect(h.el('unpublishBtn').disabled).toBe(false);
+    expect(h.el('actionError').textContent).toContain('storage_read_only');
+  });
+});
 
 describe('complete bilingual conflict reload', () => {
   it('reloads both locales before using the new token on the next save', async () => {
@@ -807,6 +868,40 @@ describe('editor.html inline script against its own markup', () => {
   // overwrote the slug — including an imported draft's live WordPress slug.
   describe('slug auto-derivation', () => {
     const type = (el: (id: string) => Element, id: string, value: string) => { el(id).value = value; el(id).fire('input'); };
+
+    it.each(['de', 'en'] as const)('bounds only newly derived %s slugs after ASCII normalization, in parity with the server', (locale) => {
+      const { el } = loadEditor();
+      const field = locale === 'de' ? 'slugFieldDe' : 'slugFieldEn';
+      for (const length of [250, 251, 252, 8192]) {
+        type(el, locale + 'Title', 'Ä'.repeat(length));
+        const slug = el(field).value;
+        expect(slug).toBe('a'.repeat(Math.min(length, MAX_SLUG_BYTES)));
+        if (typeof slug !== 'string') throw new TypeError('Expected a string slug value');
+        expect(isSafeSlug(slug)).toBe(true);
+      }
+      type(el, locale + 'Title', 'a'.repeat(250) + ' b');
+      expect(el(field).value).toBe('a'.repeat(250));
+      type(el, locale + 'Title', '!!!');
+      expect(el(field).value).toBe('untitled');
+      const manual = 'm'.repeat(252);
+      type(el, field, manual);
+      type(el, locale + 'Title', 'Changed title');
+      expect(el(field).value).toBe(manual);
+    });
+
+    it.each(['draft', 'published'] as const)('does not truncate loaded/restored %s URLs on title edits or serialization', (status) => {
+      const { api, el } = loadEditor();
+      const loaded = fullPair();
+      loaded.status = status;
+      loaded.de.slug = 'd'.repeat(252);
+      loaded.en.slug = 'e'.repeat(8192);
+      api.populateForm(loaded);
+      type(el, 'deTitle', 'Changed DE');
+      type(el, 'enTitle', 'Changed EN');
+      const payload = api.buildPayload();
+      expect(payload.de.slug).toBe(loaded.de.slug);
+      expect(payload.en.slug).toBe(loaded.en.slug);
+    });
 
     it('derives from the title on a new post, stops once the slug is hand-edited, resumes when cleared', () => {
       const { el } = loadEditor();
@@ -1942,12 +2037,20 @@ describe('manuscript-first editor refinements', () => {
   it('offers the existing recovery stash after loading and keeps the restored draft unsaved', async () => {
     const restored = fullPair();
     restored.de.title = 'Recovered local title';
+    restored.de.slug = 'd'.repeat(252);
+    restored.en.slug = 'e'.repeat(8192);
     const h = loadEditor({ isAdmin: true, search: '?tk=tk1', confirm: true,
       stash: { key: 'swl:draft:tk1', payload: restored }, fetch: readPost });
     await settle();
     expect(h.el('deTitle').value).toBe('Recovered local title');
     expect(h.el('draftSaveState').textContent).toBe(copy['editor.chrome.saveUnsaved']);
     expect(h.local.getItem('swl:draft:tk1')).not.toBeNull();
+    h.el('deTitle').value = 'Edited after stash restoration';
+    h.el('deTitle').fire('input');
+    h.el('enTitle').value = 'Edited after stash restoration';
+    h.el('enTitle').fire('input');
+    expect(h.api.buildPayload().de.slug).toBe(restored.de.slug);
+    expect(h.api.buildPayload().en.slug).toBe(restored.en.slug);
   });
 });
 
