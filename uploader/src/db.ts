@@ -311,6 +311,30 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS site_identity (
+      id boolean PRIMARY KEY DEFAULT true CHECK (id),
+      revision integer NOT NULL DEFAULT 1 CHECK (revision >= 1),
+      seed_source text NOT NULL CHECK (seed_source IN ('neutral','legacy','restored-legacy')),
+      saved_at timestamptz,
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      site_name text NOT NULL DEFAULT '' CHECK (char_length(site_name) <= 80),
+      author_name text NOT NULL DEFAULT '' CHECK (char_length(author_name) <= 80),
+      canonical_origin text CHECK (canonical_origin IS NULL OR char_length(canonical_origin) <= 300),
+      localized jsonb NOT NULL DEFAULT '{}',
+      social_links jsonb NOT NULL DEFAULT '[]'
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS site_identity_assets (
+      role text PRIMARY KEY CHECK (role IN ('logo','favicon-32','favicon-192','apple-touch-180')),
+      sha256 text NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+      width integer NOT NULL CHECK (width BETWEEN 1 AND 1024),
+      height integer NOT NULL CHECK (height BETWEEN 1 AND 1024),
+      bytes bytea NOT NULL CHECK (octet_length(bytes) <= 262144),
+      created_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
 
   // --- column migrations -----------------------------------------------------
   // @ai-note Schema evolution convention (issue #32): `CREATE TABLE IF NOT

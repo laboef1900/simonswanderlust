@@ -1,5 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { blogPostingJsonLd, isoDate, serializeJsonLd, type BlogPostingInput } from './seo';
+
+const configured = vi.hoisted(() => ({ identity: { authorName: 'Simon' } }));
+vi.mock('./build-identity', () => configured);
+beforeEach(() => { configured.identity.authorName = 'Simon'; });
 
 const input: BlogPostingInput = {
   title: 'Roadtrip durch Rumänien',
@@ -17,6 +21,18 @@ const input: BlogPostingInput = {
 };
 
 describe('blogPostingJsonLd', () => {
+  it('omits an unset author rather than publishing a default name', () => {
+    configured.identity.authorName = '';
+    expect(blogPostingJsonLd(input)).not.toHaveProperty('author');
+  });
+
+  it('uses the configured author and safely serializes hostile text', () => {
+    configured.identity.authorName = '</script><img src=x onerror=alert(1)>';
+    const result = blogPostingJsonLd(input);
+    expect(result.author?.name).toBe(configured.identity.authorName);
+    expect(serializeJsonLd(result)).not.toContain('<');
+    expect(JSON.parse(serializeJsonLd(result)).author.name).toBe(configured.identity.authorName);
+  });
   it('maps all fields onto the schema.org BlogPosting shape', () => {
     expect(blogPostingJsonLd(input)).toEqual({
       '@context': 'https://schema.org',
