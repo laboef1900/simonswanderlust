@@ -63,7 +63,10 @@ window.PublicationRefresh = (function () {
     function restore(event) {
       if (!event.persisted) return;
       start(false);
-      if (active) settledRefresh = true;
+      // Restoration starts a new observation lifetime. Keep its read queued
+      // even when the pending item's ordinary settlement requests no echo.
+      if (actions) actionRefresh = true;
+      else if (active) settledRefresh = true;
       else refresh();
     }
     function hide(event) {

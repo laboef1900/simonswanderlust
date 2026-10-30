@@ -140,6 +140,7 @@ interface Page {
   flush(): Promise<void>;
   focus(): void;
   visibility(hidden: boolean): void;
+  lifecycle(type: 'pagehide' | 'pageshow', persisted: boolean): void;
 }
 
 function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' | 'en'; prompt?: string; xhr?: new () => object;
@@ -258,6 +259,7 @@ function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' 
   const flush = async (): Promise<void> => { for (let i = 0; i < 20; i++) await setImmediate(); };
   return { el, activeElement: () => activeElement, win: ctx, timers, listRequests, patches, rows, described, confirms, confirmAnswer, flush,
     focus: () => windowEvents.dispatch('focus'),
+    lifecycle: (type, persisted) => windowEvents.dispatch(type, { persisted }),
     visibility: (hidden) => {
       const document = ctx.document;
       if (!document || typeof document !== 'object') throw new Error('missing document');
@@ -1557,6 +1559,36 @@ describe('Media publication impact and bounded refresh', () => {
     expect(page.el('dCapDe').value).toBe('My caption');
     expect(page.el('dUnsaved').hidden).toBe(true);
     expect(reads).toBe(1);
+    expect(writes).toBe(1);
+  });
+
+  it('refreshes a cached page once after its pending save settles, without replaying the write', async () => {
+    const response = (body: unknown) => Promise.resolve({ status: 200, ok: true, json: async () => body });
+    const saving = Promise.withResolvers<unknown>();
+    const original = { ...item('a'), impact, livePending: unchanged,
+      usedIn: [{ kind: 'post', key: 'one', title: 'Original story' }] };
+    const fresh = { ...original, caption: { de: 'My caption', en: '' }, conditionalVersion: 1,
+      impact: { availability: 'available' as const, published: [story('fresh')], drafts: [], newerDrafts: [] },
+      usedIn: [{ kind: 'post', key: 'fresh', title: 'Fresh story' }],
+      changedDescriptions: { ...unchanged, de: { alt: false, caption: true } },
+      livePending: { ...unchanged, de: { alt: false, caption: true } } };
+    let reads = 0, writes = 0;
+    const page = loadPage({ request: (url, init) => {
+      if (url !== '/media/items/a') return;
+      if (init?.method === 'PATCH') { writes++; return saving.promise; }
+      reads++;
+    } });
+    await open(page, original);
+    page.el('dCapDe').value = 'My caption'; page.el('detail').dispatch('input');
+    page.el('dSave').click(); await page.flush();
+    page.lifecycle('pagehide', true); await page.flush();
+    page.lifecycle('pageshow', true); await page.flush();
+    expect(reads).toBe(1);
+    page.rows.set('a', fresh); saving.resolve(await response(fresh)); await page.flush();
+    expect(page.el('dImpact').querySelectorAll('a').map(link => link.href)).toEqual(['/admin/editor.html?tk=fresh']);
+    expect(page.el('dCapDe').value).toBe('My caption');
+    expect(page.el('dUnsaved').hidden).toBe(true);
+    expect(reads).toBe(2);
     expect(writes).toBe(1);
   });
 
