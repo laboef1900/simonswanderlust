@@ -110,8 +110,10 @@ function setup(options: SetupOptions = {}) {
   const adopted: { name: string; lat: number; lng: number }[][] = [];
   const renders: unknown[] = [];
   let saveCalls = 0;
+  const publicationActions: string[] = [];
   const fetcher = async (url: string, request: RequestInit = {}) => {
     requests.push({ url, options: request });
+    if (url.endsWith('/route') && ['PUT', 'DELETE'].includes(request.method || '')) publicationActions.push('request');
     const override = await options.fetch?.(url, request);
     if (override) return override;
     if (url.endsWith('/route') && request.method === 'GET') return response(route);
@@ -143,6 +145,8 @@ function setup(options: SetupOptions = {}) {
   vm.runInContext(script, context, { filename: 'editor-gpx.js' });
   const host = {
     getPost: () => ({ ...state }),
+    beginAction: () => { publicationActions.push('begin'); },
+    endAction: () => { publicationActions.push('end'); },
     setBaseUpdatedAt: (value: string) => { state.baseUpdatedAt = value; },
     saveDraft: async () => { saveCalls++; if (options.failSave) return false; state.tk = 'new-pair'; state.baseUpdatedAt = '2026-10-24T10:00:30.000Z'; return true; },
     adoptStops(stops: { name: string; lat: number; lng: number }[]) { adopted.push(stops); },
@@ -163,7 +167,7 @@ function setup(options: SetupOptions = {}) {
     if (!el) throw new Error('missing #' + id);
     return el;
   };
-  return { api, element, requests, state, adopted, renders, get focused() { return dom.document.activeElement; }, get saveCalls() { return saveCalls; } };
+  return { api, element, requests, state, adopted, renders, publicationActions, get focused() { return dom.document.activeElement; }, get saveCalls() { return saveCalls; } };
 }
 
 function startImport(h: GpxTestHarness) {
@@ -254,6 +258,7 @@ function fullEditor(candidate: typeof preview, fetchOverride?: SetupOptions['fet
     setTimeout: () => 0,
     clearTimeout() {},
     addEventListener: dom.document.addEventListener,
+    removeEventListener: dom.document.removeEventListener,
     URLSearchParams, URL, AbortController, Event: EditorEvent, KeyboardEvent: EditorEvent, console,
     crypto: webcrypto, structuredClone,
     matchMedia: () => ({ matches: false, addEventListener() {} }),
@@ -275,7 +280,7 @@ function fullEditor(candidate: typeof preview, fetchOverride?: SetupOptions['fet
   };
   context.window = context;
   vm.createContext(context);
-  for (const file of ['language.js', 'draft-guard.js', 'write-recovery.js', 'waypoint-lookup.js', 'posts-filter.js', 'editor-title-image.js',
+  for (const file of ['publication-state.js', 'publication-refresh.js', 'language.js', 'draft-guard.js', 'write-recovery.js', 'waypoint-lookup.js', 'posts-filter.js', 'editor-title-image.js',
     'gallery-fence.js', 'media-api.js', 'gallery-library.js', 'editor-galleries.js', 'editor-linter.js',
     'llm.js', 'editor-excerpt.js', 'country-centers.js', 'country-coordinates.js', 'tabs.js',
     'editor-review.js', 'editor-inspector.js', 'editor-gpx.js']) {
@@ -333,6 +338,7 @@ describe('private GPX editor lifecycle', () => {
     expect(h.state.baseUpdatedAt).toBe('2026-10-24T10:01:00.000Z');
     expect(h.saveCalls).toBe(0);
     expect(h.api.hasPreview()).toBe(false);
+    expect(h.publicationActions).toEqual(['begin', 'request', 'end']);
   });
 
   it('saves a new post before route attachment and retains its saved identity when attachment fails', async () => {
@@ -345,6 +351,7 @@ describe('private GPX editor lifecycle', () => {
     expect(h.requests.some((request) => request.options.method === 'PUT')).toBe(true);
     expect(h.api.hasPreview()).toBe(true);
     expect(h.focused).toBe(h.element('gpxError'));
+    expect(h.publicationActions).toEqual(['begin', 'request', 'end']);
   });
 
   it('cancels a private preview without changing the attached route', async () => {
@@ -588,6 +595,7 @@ describe('private GPX editor lifecycle', () => {
     expect(h.focused).toBe(h.element(originalAvailable ? 'gpxReimport' : 'gpxImportOpen'));
     expect(h.focused?.hidden).toBe(false);
     expect(h.focused?.disabled).toBe(false);
+    expect(h.publicationActions).toEqual(['begin', 'request', 'end']);
   });
 
   it.each([
@@ -614,6 +622,7 @@ describe('private GPX editor lifecycle', () => {
     } else h.element('gpxDetach').click();
     await settle();
     expect(routeWrites(h)).toHaveLength(1);
+    expect(h.publicationActions).toEqual(['begin', 'request', 'end']);
     const mutationIndex = h.requests.findIndex(({ options }) => options.method === method);
     expect(h.requests.slice(mutationIndex + 1)).toContainEqual({ url: '/posts/pair-1/route', options: { method: 'GET' } });
     expect(h.element('gpxRouteStatus').textContent).toBe(method === 'PUT' ? 'statusAttached' : 'statusNone');

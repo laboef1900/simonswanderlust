@@ -1,7 +1,7 @@
 // Identity is saved independently of operational settings. Only the active locale
 // projection is sent; canonical origin and assets belong to their own features.
 window.SettingsIdentity = (function () {
-  function init() {
+  function init(publication) {
     const $ = (id) => document.getElementById(id);
     const locale = document.documentElement.lang === 'de' ? 'de' : 'en';
     const copy = EditorCopy[locale];
@@ -164,6 +164,7 @@ window.SettingsIdentity = (function () {
       }
       lock(true);
       status(copy.identitySaving);
+      publication.beginAction();
       try {
         const response = await fetch('/settings/identity', {
           method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ revision, identity }),
@@ -184,12 +185,13 @@ window.SettingsIdentity = (function () {
           status(copy.identitySaved);
         }
       } catch { status(BuildReporting.text('unknown'), true); }
-      finally { lock(false); }
+      finally { lock(false); publication.endAction(); }
     });
     $('identityRebuild').addEventListener('click', async () => {
       if (busy || !await AdminConfirm.ask({ title: copy.identityRebuild, body: copy.identityRebuildConfirm, confirmLabel: copy.identityRebuild })) return;
       lock(true);
       status(copy.identityRebuilding);
+      publication.beginAction();
       try {
         const response = await fetch('/rebuild', { method: 'POST' });
         if (response.status === 401) { location.href = '/login'; return; }
@@ -199,7 +201,7 @@ window.SettingsIdentity = (function () {
       } catch { status(BuildReporting.text('unknown'), true); }
       finally {
         lock(false);
-        await BuildReporting.loadStatus($('buildStatus'));
+        publication.endAction();
       }
     });
     return load();

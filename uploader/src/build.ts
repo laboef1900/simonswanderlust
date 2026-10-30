@@ -10,6 +10,7 @@ import { BuildSnapshotTimeoutError, withBuildSnapshot, writeBuildAssets, type Bu
 import { DEFAULT_LANGUAGE } from './language.js';
 import { StorageReadOnlyError } from './storage-owner.js';
 import { buildFailureMessage, createBuildState, observeLiveRelease, type BuildFailureCode, type BuildReport, type BuildStatusResponse, type BuildTrigger } from './build-state.js';
+import { publishReleaseManifest, removeReleaseManifest, sweepReleaseManifests } from './release-manifest.js';
 
 export interface BuildOutcome extends BuildReport { cause?: unknown }
 
@@ -76,7 +77,7 @@ export interface SiteBuilderOptions extends WorkCancellationOptions {
   keep?: number;
   /** Deadline for one `astro build` child; default `BUILD_TIMEOUT_MS`. */
   timeoutMs?: number;
-  runBuild?: (outDir: string) => Promise<void>;
+  runBuild?: (outDir: string, manifestPath: string) => Promise<void>;
   /**
    * Shared with the encode queue so a build and image encoding never run at
    * the same time — both are memory-hungry and share one container. The build
@@ -126,7 +127,7 @@ export function runChildBuild(
   cwd: string,
   timeoutMs: number,
   onSpawn?: (child: ChildProcess) => void,
-  opts: WorkCancellationOptions & { applicationName?: string; snapshot?: BuildSnapshot } = {},
+  opts: WorkCancellationOptions & { applicationName?: string; snapshot?: BuildSnapshot; manifestPath?: string } = {},
 ): Promise<void> {
   assertWorkWritable(opts);
   const env: NodeJS.ProcessEnv = {
@@ -137,6 +138,8 @@ export function runChildBuild(
   // Never inherit operator-supplied snapshot identifiers, including empty ones.
   delete env.SITE_DATABASE_SNAPSHOT;
   if (opts.snapshot) env.SITE_DATABASE_SNAPSHOT = opts.snapshot.databaseSnapshot;
+  delete env.SITE_RELEASE_MANIFEST;
+  if (opts.manifestPath) env.SITE_RELEASE_MANIFEST = opts.manifestPath;
   if (opts.applicationName) {
     env.PGAPPNAME = opts.applicationName;
     if (env.DATABASE_URL) {
@@ -184,7 +187,7 @@ export function runChildBuild(
 
 /** Spawn `astro build` via plain node — no npx/npm/shell, so the runtime image
  * can stay minimal and non-root. Telemetry is disabled for headless runs. */
-function runAstroBuild(siteAppDir: string, outDir: string, timeoutMs: number, opts: WorkCancellationOptions & { applicationName?: string; snapshot?: BuildSnapshot }): Promise<void> {
+function runAstroBuild(siteAppDir: string, outDir: string, timeoutMs: number, opts: WorkCancellationOptions & { applicationName?: string; snapshot?: BuildSnapshot; manifestPath: string }): Promise<void> {
   const astroBin = join(siteAppDir, 'node_modules', 'astro', 'bin', 'astro.mjs');
   return runChildBuild(process.execPath, [astroBin, 'build', '--outDir', outDir], siteAppDir, timeoutMs, undefined, opts);
 }
@@ -241,7 +244,10 @@ async function prunePromotedRelease(releases: string, stamp: string, opts: WorkC
         // further mutation merely because the filesystem error was ordinary.
         assertWorkWritable(opts);
         warnPrune(stamp, 'remove', error);
+        continue;
       }
+      stage = 'ownership';
+      await removeReleaseManifest(opts.releasesRoot, old, opts);
     }
   } catch (error) {
     warnPrune(stamp, stage, error);
@@ -267,27 +273,37 @@ let stampSeq = 0;
  * `keep` and displaces a real rollback candidate (#110). Staging dirs are
  * removed on failure, swept at the next run, and ignored by pruning.
  */
-async function buildAndDeploy(opts: Pick<SiteBuilderOptions, 'siteAppDir' | 'releasesRoot' | 'signal' | 'isWritable'> & { stamp: string; promoted: () => void; keep: number; runBuild: (outDir: string) => Promise<void> }): Promise<string> {
+async function buildAndDeploy(opts: Pick<SiteBuilderOptions, 'siteAppDir' | 'releasesRoot' | 'signal' | 'isWritable'> & { stamp: string; promoted: () => void; keep: number; runBuild: (outDir: string, manifestPath: string) => Promise<void> }): Promise<string> {
   const releases = join(opts.releasesRoot, 'releases');
   assertWorkWritable(opts);
   await mkdir(releases, { recursive: true });
   await sweepLeftovers(opts.siteAppDir, releases, opts);
+  await sweepReleaseManifests(opts.releasesRoot, opts);
   const stamp = opts.stamp;
   const buildTmp = join(opts.siteAppDir, '.build-tmp', stamp);
+  const manifestPath = join(opts.siteAppDir, '.build-tmp', `${stamp}.manifest.json`);
   const staging = join(releases, `.${stamp}.partial`);
   const dest = join(releases, stamp);
   try {
     assertWorkWritable(opts);
-    await opts.runBuild(buildTmp);
+    await opts.runBuild(buildTmp, manifestPath);
     assertWorkWritable(opts);
     await cp(buildTmp, staging, { recursive: true, filter: () => { assertWorkWritable(opts); return true; } });
     assertWorkWritable(opts);
     await rename(staging, dest);
+    await publishReleaseManifest(manifestPath, opts.releasesRoot, stamp, opts);
   } catch (e) {
     if (isWorkWritable(opts)) await rm(staging, { recursive: true, force: true }).catch(() => { /* best-effort; swept next run */ });
     throw e;
   } finally {
     if (isWorkWritable(opts)) await rm(buildTmp, { recursive: true, force: true });
+    // The copied manifest is durable beside its release; child scratch output
+    // has no remaining reader. Optional cleanup never changes the build result,
+    // and each removal must independently retain storage ownership.
+    for (const path of [manifestPath, `${manifestPath}.partial`]) {
+      if (!isWorkWritable(opts)) break;
+      await rm(path, { force: true }).catch(() => { /* swept before the next build */ });
+    }
   }
   const tmpLink = join(opts.releasesRoot, `.current.${stamp}`);
   assertWorkWritable(opts);
@@ -338,9 +354,9 @@ export function createSiteBuilder(opts: SiteBuilderOptions): SiteBuilder {
           const deploy = (snapshot?: BuildSnapshot) => {
             deploymentStarted = true;
             const buildWork = snapshot ? { ...work, signal: snapshot.signal } : work;
-            const runBuild = async (outDir: string) => {
-              if (opts.runBuild) await opts.runBuild(outDir);
-              else await runAstroBuild(opts.siteAppDir, outDir, timeoutMs, { ...buildWork, applicationName: opts.applicationName, snapshot });
+            const runBuild = async (outDir: string, manifestPath: string) => {
+              if (opts.runBuild) await opts.runBuild(outDir, manifestPath);
+              else await runAstroBuild(opts.siteAppDir, outDir, timeoutMs, { ...buildWork, applicationName: opts.applicationName, snapshot, manifestPath });
               if (snapshot) await writeBuildAssets(outDir, snapshot);
             };
             return buildAndDeploy({

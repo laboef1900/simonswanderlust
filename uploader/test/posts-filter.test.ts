@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { REGIONS } from '../src/db.js';
+import { publication, loadPublicationState, type AvailablePublication } from './publication-client-fixture.js';
 
 // posts-filter.js is a plain browser IIFE (window.PostsFilter) holding the
 // posts list's pure search/filter/sort and thumbnail-URL logic. Run it in a vm
@@ -12,7 +13,8 @@ const src = readFileSync('public/posts-filter.js', 'utf8');
 
 interface Summary {
   translationKey: string; title: string; slugs: { de: string; en: string };
-  status: 'draft' | 'published'; updatedAt: string; hasUnpublishedChanges: boolean;
+  status: 'draft' | 'published'; updatedAt: string;
+  publication: AvailablePublication | { availability: 'unavailable' } | { availability: 'missing' };
   secondaryStatus: 'none' | 'omitted' | 'empty' | 'started'; heroSrc: string; heroWidth: number; heroFormat?: 'jpeg';
   date: string; country: string; region: string;
 }
@@ -28,14 +30,14 @@ interface Api {
 
 function load(): Api {
   const windowStub: { PostsFilter?: Api } = {};
-  vm.runInNewContext(src, { window: windowStub, URLSearchParams });
+  vm.runInNewContext(src, { window: windowStub, URLSearchParams, PublicationState: loadPublicationState() });
   if (!windowStub.PostsFilter) throw new Error('posts-filter.js did not assign window.PostsFilter');
   return windowStub.PostsFilter;
 }
 
 const post = (o: Partial<Summary>): Summary => ({
   translationKey: 'tk', title: 'Titel', slugs: { de: 'slug-de', en: 'slug-en' },
-  status: 'draft', updatedAt: '2025-01-01T00:00:00.000Z', hasUnpublishedChanges: false,
+  status: 'draft', updatedAt: '2025-01-01T00:00:00.000Z', publication: publication(o.status || 'draft'),
   secondaryStatus: 'started', heroSrc: 'https://img/h', heroWidth: 1600,
   date: '2024-05-01', country: 'Rumänien', region: 'europe', ...o,
 });
@@ -130,9 +132,9 @@ describe('PostsFilter.apply — filtering', () => {
 
   it('filters the two editorial readiness states without changing draft/published semantics', () => {
     const readiness = [
-      post({ translationKey: 'changed', status: 'published', hasUnpublishedChanges: true, secondaryStatus: 'started' }),
-      post({ translationKey: 'missing-live', status: 'published', hasUnpublishedChanges: false, secondaryStatus: 'empty' }),
-      post({ translationKey: 'missing-draft', status: 'draft', hasUnpublishedChanges: false, secondaryStatus: 'empty' }),
+      post({ translationKey: 'changed', status: 'published', publication: publication('published', true), secondaryStatus: 'started' }),
+      post({ translationKey: 'missing-live', status: 'published', secondaryStatus: 'empty' }),
+      post({ translationKey: 'missing-draft', status: 'draft', secondaryStatus: 'empty' }),
     ];
     expect(keys(api.apply(readiness, { status: 'unpublished' }))).toEqual(['changed']);
     expect(keys(api.apply(readiness, { status: 'missing-secondary' }))).toEqual(['missing-live', 'missing-draft']);
@@ -222,3 +224,16 @@ describe('PostsFilter URL state', () => {
 });
 
 
+
+it('filters only observed newer drafts, including pending translation coverage, never unavailable or missing projections', () => {
+  const api = load();
+  const rows = [
+    post({ translationKey: 'pending-secondary', status: 'published', publication: {
+      ...publication('published', true), committedLocales: ['en'], live: { de: 'not-live', en: 'live' },
+    } }),
+    post({ translationKey: 'clean', status: 'published', publication: publication() }),
+    post({ translationKey: 'unknown', status: 'published', publication: { availability: 'unavailable' } }),
+    post({ translationKey: 'deleted', status: 'published', publication: { availability: 'missing' } }),
+  ];
+  expect(api.apply(rows, { status: 'unpublished' }).map((row) => row.translationKey)).toEqual(['pending-secondary']);
+});

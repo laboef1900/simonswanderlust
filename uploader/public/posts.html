@@ -32,7 +32,7 @@
                 <option value="">All statuses</option>
                 <option value="draft">Draft</option>
                 <option value="published">Published</option>
-                <option value="unpublished">Unpublished changes</option>
+                <option id="unpublishedOption" value="unpublished"></option>
                 <option id="missingSecondaryOption" value="missing-secondary" data-language-copy="MissingTranslation"></option>
               </select>
             </label>
@@ -110,6 +110,8 @@
 
     <script src="/admin/editor-image-copy.js"></script>
     <script src="/admin/build-reporting.js"></script>
+    <script src="/admin/publication-state.js"></script>
+    <script src="/admin/publication-refresh.js"></script>
     <script src="/admin/gpx-copy.js"></script>
     <script src="/admin/auth.js"></script>
     <script src="/admin/language.js"></script>
@@ -123,9 +125,13 @@
       const selected = new Set();     // translationKeys ticked in the list
       let filtersInitialized = false;
       let openMoreActions = null;
+      let listStale = true;
+      let listMutating = false;
+      let buildStatus = null;
       const copy = EditorCopy.en;
       SiteLanguage.localize(document);
       $('languagesHeading').textContent = copy.postsLanguages;
+      $('unpublishedOption').textContent = copy.postsChanges;
 
       // Status views: toggle buttons over the SAME state as the #fStatus select
       // (one source of truth — the select's value), so the URL, Edit's returnTo
@@ -241,6 +247,7 @@
       // and re-enables it in `finally`: a dropped connection used to reject the
       // await, leaving "Deleting…" on screen and the buttons dead until reload.
       async function unpublishPost(p, btn) {
+        if (listStale || listMutating) return;
         const title = p.title || '(untitled)';
         const ok = await AdminConfirm.ask({
           title: 'Unpublish this trip?',
@@ -249,6 +256,9 @@
           danger: true,
         });
         if (!ok) return;
+        listMutating = true;
+        publicationRefresh.beginAction();
+        render();
         btn.disabled = true;
         $('out').textContent = 'Unpublishing…';
         try {
@@ -257,6 +267,7 @@
           const body = await res.json().catch(() => ({}));
           if (!res.ok) { $('out').textContent = res.status >= 500 ? BuildReporting.text('unknown') : (body.error || res.status); return; }
           if (body.unpublished !== true) { $('out').textContent = BuildReporting.text('unknown'); return; }
+          acceptMutation(p.translationKey, body.publication);
           const msg = describeOutcome('unpublish', body, { title });
           $('out').textContent = msg;
           await load(msg);
@@ -264,11 +275,15 @@
         } catch (e) {
           $('out').textContent = BuildReporting.text('unknown');
         } finally {
-          btn.disabled = false;
+          listMutating = false;
+          btn.disabled = listStale;
+          publicationRefresh.endAction();
+          render();
         }
       }
 
       async function deletePost(p, btn) {
+        if (listStale || listMutating) return;
         const title = p.title || '(untitled)';
         const warning = p.status === 'published'
           ? '\n\nThis post is PUBLISHED — it will be removed from the live site on the next build.'
@@ -280,6 +295,9 @@
           danger: true,
         });
         if (!ok) return;
+        listMutating = true;
+        publicationRefresh.beginAction();
+        render();
         btn.disabled = true; // no double-fire while the request is in flight
         $('out').textContent = 'Deleting…';
         try {
@@ -288,6 +306,7 @@
           const body = await res.json().catch(() => ({}));
           if (!res.ok) { $('out').textContent = res.status >= 500 ? BuildReporting.text('unknown') : (body.error || res.status); return; }
           if (body.deleted !== true) { $('out').textContent = BuildReporting.text('unknown'); return; }
+          acceptMutation(p.translationKey, body.publication);
           const msg = describeOutcome('delete', body, { title }) + (body.cleanupPending ? ' ' + GpxCopy.en.cleanupPending : '');
           $('out').textContent = msg;
           // Pass the outcome so load() does not clobber it with "N post(s) loaded."
@@ -297,7 +316,10 @@
         } catch (e) {
           $('out').textContent = BuildReporting.text('unknown');
         } finally {
-          btn.disabled = false;
+          listMutating = false;
+          btn.disabled = listStale;
+          publicationRefresh.endAction();
+          render();
         }
       }
 
@@ -337,7 +359,7 @@
         const storyList = '\n\nSelected stories:\n• ' + selectedStories;
         const live = keys.filter((key) => {
           const post = allPosts.find((p) => p.translationKey === key);
-          return post && post.status === 'published';
+          return post && post.publication?.availability === 'available' && post.publication.status === 'published';
         }).length;
         if (action === 'delete') {
           const warning = live > 0
@@ -352,9 +374,7 @@
           });
         }
         const verb = action === 'publish' ? 'Publish' : 'Unpublish';
-        const liveNote = live > 0
-          ? live + ' selected ' + (live === 1 ? 'story is' : 'stories are') + ' already on the live site.'
-          : 'None of the selected stories are currently live.';
+        const liveNote = PublicationState.text('selection', { n: live });
         return AdminConfirm.ask({
           title: verb + ' ' + keys.length + ' selected ' + (keys.length === 1 ? 'story?' : 'stories?'),
           body: liveNote + storyList,
@@ -380,12 +400,16 @@
       }
 
       async function runBulk(action) {
+        if (listStale || listMutating) return;
         // Snapshot before the async confirmation: filter or checkbox changes
         // while the dialog is open must never alter the confirmed request.
         const keys = Object.freeze([...selected]);
         const baseLanguageUpdatedAt = SiteLanguage.config().updatedAt;
         if (keys.length === 0) return;
         if (!(await confirmBulk(action, keys))) return;
+        listMutating = true;
+        publicationRefresh.beginAction();
+        render();
         const buttons = [$('bulkPublish'), $('bulkUnpublish'), $('bulkDelete')];
         buttons.forEach((b) => { b.disabled = true; });
         $('out').textContent = 'Running ' + action + ' on ' + keys.length + ' post(s)…';
@@ -399,6 +423,7 @@
           const body = await res.json().catch(() => ({}));
           if (!res.ok) { $('out').textContent = res.status >= 500 ? BuildReporting.text('unknown') : (body.error || res.status); return; }
           if (!Number.isInteger(body.succeeded) || !Number.isInteger(body.failed)) { $('out').textContent = BuildReporting.text('unknown'); return; }
+          for (const result of body.results || []) acceptMutation(result.key, result.publication);
           const msg = summarizeBulk(action, body) + (body.cleanupPending ? ' ' + GpxCopy.en.cleanupPending : '');
           // Keep failed stories selected so the visible failure report is also
           // immediately actionable: the author can fix them and retry without
@@ -417,7 +442,9 @@
         } catch (e) {
           $('out').textContent = BuildReporting.text('unknown');
         } finally {
-          buttons.forEach((b) => { b.disabled = false; });
+          listMutating = false;
+          publicationRefresh.endAction();
+          render();
         }
       }
 
@@ -536,6 +563,20 @@
 
       function renderRows(posts) {
         const tbody = $('postsList');
+        const active = document.activeElement;
+        const focusedPost = tbody.contains(active) ? active.dataset.postKey : undefined;
+        const focusedControl = tbody.contains(active) ? active.dataset.postControl : undefined;
+        let expandedPost, nextFocus, matchingTitle;
+        for (const menu of tbody.querySelectorAll('.post-more')) {
+          if (menu.open) expandedPost = menu.dataset.postKey;
+          // A queued toggle on a discarded menu must not close its replacement.
+          menu.open = false;
+        }
+        function identify(control, key, role) {
+          control.dataset.postKey = key;
+          control.dataset.postControl = role;
+          if (key === focusedPost && role === focusedControl && !control.disabled) nextFocus = control;
+        }
         tbody.innerHTML = '';
         openMoreActions = null;
         if (!posts.length) {
@@ -550,6 +591,7 @@
             ? 'No posts match these filters.'
             : 'No posts yet.';
           td.appendChild(message);
+          let emptyAction;
           if (allPosts.length) {
             const clear = document.createElement('button');
             clear.id = 'clearEmptyFilters';
@@ -557,20 +599,26 @@
             clear.className = 'btn-link';
             clear.textContent = 'Clear filters';
             clear.addEventListener('click', resetFilters);
+            identify(clear, '', 'clear');
+            emptyAction = clear;
             td.appendChild(clear);
           } else {
             const create = document.createElement('a');
             create.href = editorHref();
             create.className = 'action-link';
             create.textContent = 'Create a new post';
+            identify(create, '', 'new');
+            emptyAction = create;
             td.appendChild(create);
           }
           tr.appendChild(td);
           tbody.appendChild(tr);
+          if (focusedControl) emptyAction.focus({ preventScroll: !!nextFocus });
           return;
         }
         for (const p of posts) {
           const tr = document.createElement('tr');
+          const controlsUnavailable = listStale || listMutating || p.publication?.availability !== 'available';
           tr.setAttribute('role', 'row');
 
           const tdSel = document.createElement('td');
@@ -583,7 +631,9 @@
             const cb = document.createElement('input');
             cb.type = 'checkbox';
             cb.checked = selected.has(p.translationKey);
+            cb.disabled = controlsUnavailable;
             cb.setAttribute('aria-label', 'Select ' + (p.title || 'untitled post'));
+            identify(cb, p.translationKey, 'select');
             cb.addEventListener('change', () => {
               if (cb.checked) selected.add(p.translationKey); else selected.delete(p.translationKey);
               syncSelectAll();
@@ -605,6 +655,8 @@
           titleLink.className = 'post-title-link';
           titleLink.setAttribute('aria-label', 'Edit ' + (p.title || 'untitled post'));
           titleLink.textContent = p.title || '(untitled)';
+          identify(titleLink, p.translationKey, 'title');
+          if (p.translationKey === focusedPost) matchingTitle = titleLink;
           tdTitle.appendChild(titleLink);
           const meta = tripMeta(p);
           if (meta) tdTitle.appendChild(meta);
@@ -615,16 +667,17 @@
           tdStatus.setAttribute('role', 'cell');
           tdStatus.setAttribute('data-label', 'Status');
           const badge = document.createElement('span');
-          const safeStatus = p.status === 'published' ? 'published' : 'draft';
-          badge.className = 'status-pill ' + safeStatus;
-          badge.textContent = safeStatus;
+          const observed = listStale ? { availability: 'unavailable' } : p.publication;
+          const state = PublicationState.publicationState(observed);
+          badge.className = 'status-pill ' + (state === 'live' ? 'published' : 'draft');
+          badge.textContent = PublicationState.label(observed, me?.isAdmin);
           tdStatus.appendChild(badge);
-          if (p.status === 'published' && p.hasUnpublishedChanges) {
-            const changed = document.createElement('span');
-            changed.className = 'status-pill draft';
-            changed.textContent = 'Unpublished changes';
-            changed.title = 'The live post is unchanged until you publish again.';
-            tdStatus.appendChild(changed);
+          const qualifier = me?.isAdmin ? PublicationState.qualifiers(observed, buildStatus) : '';
+          if (qualifier) {
+            const detail = document.createElement('p');
+            detail.className = 'muted';
+            detail.textContent = qualifier;
+            tdStatus.appendChild(detail);
           }
           tr.appendChild(tdStatus);
 
@@ -650,6 +703,7 @@
           editLink.textContent = 'Edit';
           editLink.className = 'action-link';
           editLink.setAttribute('aria-label', 'Edit ' + (p.title || 'untitled post'));
+          identify(editLink, p.translationKey, 'edit');
           actions.appendChild(editLink);
 
           // Unpublish and Delete are admin-only, so an author's row offers Edit
@@ -657,17 +711,21 @@
           if (me && me.isAdmin) {
             const more = document.createElement('details');
             more.className = 'post-more';
+            more.dataset.postKey = p.translationKey;
             const summary = document.createElement('summary');
             summary.textContent = 'More actions';
             summary.setAttribute('aria-label', 'More actions for ' + (p.title || 'untitled post'));
+            identify(summary, p.translationKey, 'more');
             more.appendChild(summary);
             const moreActions = document.createElement('div');
             moreActions.className = 'post-more-actions';
-            if (p.status === 'published') {
+            if (p.publication?.availability === 'available' && p.publication.status === 'published') {
               const unpubBtn = document.createElement('button');
               unpubBtn.type = 'button';
               unpubBtn.textContent = 'Unpublish';
               unpubBtn.className = 'btn-secondary';
+              unpubBtn.disabled = controlsUnavailable;
+              identify(unpubBtn, p.translationKey, 'unpublish');
               unpubBtn.addEventListener('click', () => unpublishPost(p, unpubBtn));
               moreActions.appendChild(unpubBtn);
             }
@@ -675,10 +733,16 @@
             delBtn.type = 'button';
             delBtn.textContent = 'Delete';
             delBtn.className = 'btn-remove';
+            delBtn.disabled = controlsUnavailable;
+            identify(delBtn, p.translationKey, 'delete');
             delBtn.addEventListener('click', () => deletePost(p, delBtn));
             moreActions.appendChild(delBtn);
             more.appendChild(moreActions);
             wirePostDisclosure(more, summary);
+            if (expandedPost === p.translationKey) {
+              more.open = true;
+              openMoreActions = more;
+            }
             actions.appendChild(more);
           }
           tdActions.appendChild(actions);
@@ -686,6 +750,7 @@
 
           tbody.appendChild(tr);
         }
+        if (focusedControl) (nextFocus || matchingTitle || $('fSearch')).focus({ preventScroll: !!nextFocus });
       }
 
       function syncSelectAll() {
@@ -710,6 +775,9 @@
         syncStatusViews();
         $('newPost').href = editorHref();
         if (updateUrl) syncFilterUrl();
+        const selectionUnavailable = allPosts.some((post) => selected.has(post.translationKey) && post.publication?.availability !== 'available');
+        for (const id of ['bulkPublish', 'bulkUnpublish', 'bulkDelete']) $(id).disabled = listStale || listMutating || selectionUnavailable;
+        $('selectAll').disabled = listStale || listMutating;
       }
 
       function fillOptions(select, values) {
@@ -726,77 +794,90 @@
         select.value = values.includes(previous) ? previous : '';
       }
 
-      async function load(statusMsg) {
-        // Remove stale rows and destructive controls before every reload. A
-        // failed refresh must not leave old actions reachable, even briefly.
-        allPosts = [];
-        openMoreActions = null;
-        $('postsList').innerHTML = '';
-        $('postsTable').hidden = true;
-        $('filters').hidden = true;
-        $('statusViews').hidden = true;
-        $('bulkBar').hidden = true;
-        $('retryLoad').hidden = true;
-        $('loadMsg').hidden = false;
-        $('loadMsg').setAttribute('role', 'status');
-        $('loadMsg').textContent = 'Loading posts…';
-
-        // A refresh failure must not hide the outcome the caller already
-        // reported (e.g. a successful unpublish followed by a failed reload).
-        const loadFailed = (why) => {
-          allPosts = [];
-          selected.clear();
-          $('postsList').innerHTML = '';
-          $('resultsCount').textContent = '';
-          // Counts of a list that is gone must not survive, even hidden.
-          for (const { count } of statusViewButtons) count.textContent = '';
-          $('loadMsg').setAttribute('role', 'alert');
-          $('loadMsg').textContent = 'Posts could not be loaded.';
-          $('retryLoad').hidden = false;
-          refreshBulkBar();
-          $('out').textContent = (statusMsg != null ? statusMsg + '\n' : '') + 'Could not load posts: ' + why;
-        };
-        try {
-          const lang = await SiteLanguage.get(true);
-          const secondary = lang.locales.find((locale) => locale !== lang.primary);
-          const missingOption = $('missingSecondaryOption');
-          missingOption.hidden = !secondary;
-          missingOption.disabled = !secondary;
-          missingOption.textContent = secondary ? SiteLanguage.text('BodyEmpty', { language: SiteLanguage.names[secondary] }) : SiteLanguage.text('MissingTranslation');
-          const missingView = statusViewButtons.find(({ view }) => view.status === 'missing-secondary');
-          missingView.button.hidden = !secondary;
-          missingView.label.textContent = missingOption.textContent;
-          const res = await fetch('/posts');
-          if (res.status === 401) { location.href = '/login'; return; }
-          if (!res.ok) { loadFailed(res.status); return; }
-          const loaded = await res.json();
-          if (!Array.isArray(loaded)) { loadFailed('invalid response'); return; }
-          allPosts = loaded;
-        } catch (e) {
-          loadFailed(e);
-          return;
+      function acceptMutation(key, publication) {
+        publicationRefresh.invalidate();
+        if (publication?.availability === 'missing') {
+          allPosts = allPosts.filter((post) => post.translationKey !== key);
+          selected.delete(key);
+        } else {
+          const post = allPosts.find((post) => post.translationKey === key);
+          if (post) {
+            post.publication = publication || { availability: 'unavailable' };
+            if (publication?.availability === 'available') post.status = publication.status;
+          }
         }
-        // Drop selections for posts that no longer exist (e.g. after a bulk delete).
-        for (const key of [...selected]) {
+        render();
+      }
+      function applyPosts({ posts, status, language }) {
+        const lang = SiteLanguage.accept(language);
+        allPosts = posts;
+        buildStatus = status;
+        listStale = false;
+        for (const key of selected) {
           if (!allPosts.some((post) => post.translationKey === key)) selected.delete(key);
         }
-        const countryOptions = PostsFilter.countries(allPosts);
+        const countries = PostsFilter.countries(allPosts);
         fillOptions($('fRegion'), PostsFilter.REGIONS);
-        fillOptions($('fCountry'), countryOptions);
+        fillOptions($('fCountry'), countries);
         if (!filtersInitialized) {
-          setFilterControls(PostsFilter.fromSearch(location.search, countryOptions));
+          setFilterControls(PostsFilter.fromSearch(location.search, countries));
           filtersInitialized = true;
         }
-        if (SiteLanguage.config().locales.length === 1 && $('fStatus').value === 'missing-secondary') $('fStatus').value = '';
-        $('loadMsg').hidden = true;
+        const secondary = lang.locales.find((locale) => locale !== lang.primary);
+        const missingOption = $('missingSecondaryOption');
+        missingOption.hidden = !secondary;
+        missingOption.disabled = !secondary;
+        missingOption.textContent = secondary ? SiteLanguage.text('BodyEmpty', { language: SiteLanguage.names[secondary] }) : SiteLanguage.text('MissingTranslation');
+        const missingView = statusViewButtons.find(({ view }) => view.status === 'missing-secondary');
+        missingView.button.hidden = !secondary;
+        missingView.label.textContent = missingOption.textContent;
+        if (!secondary && $('fStatus').value === 'missing-secondary') $('fStatus').value = '';
+        const unavailable = allPosts.some((post) => PublicationState.publicationState(post.publication) === 'unavailable');
+        $('loadMsg').hidden = !unavailable;
+        $('loadMsg').textContent = unavailable ? PublicationState.text('unavailable') : '';
+        $('retryLoad').hidden = !unavailable;
         $('filters').hidden = false;
         $('statusViews').hidden = false;
         $('postsTable').hidden = false;
         render(true);
-        // Callers that already set an outcome pass it through so rebuild and
-        // partial-failure details survive the reload.
-        $('out').textContent = statusMsg != null ? statusMsg : '';
       }
+      const publicationRefresh = PublicationRefresh.create({
+        async read(signal, publish) {
+          const [facts, status] = await Promise.all([
+            Promise.all([
+              PublicationRefresh.json('/posts', signal),
+              PublicationRefresh.json('/language', signal),
+            ]).then(([posts, language]) => {
+              if (!Array.isArray(posts)) throw new Error('invalid_posts');
+              const facts = { posts, language, status: null };
+              publish(facts);
+              return facts;
+            }),
+            me?.isAdmin ? PublicationRefresh.json('/rebuild/status', signal).catch((error) => {
+              if (error.status === 401) throw error;
+              return null;
+            }) : null,
+          ]);
+          return { ...facts, status };
+        },
+        apply: applyPosts,
+        unavailable() {
+          listStale = true;
+          buildStatus = null;
+          $('loadMsg').hidden = false;
+          $('loadMsg').setAttribute('role', 'alert');
+          $('loadMsg').textContent = PublicationState.text('stale');
+          $('retryLoad').hidden = false;
+          render();
+        },
+        unauthorized() { location.href = '/login'; },
+      });
+      function load(statusMsg) {
+        if (statusMsg != null) $('out').textContent = statusMsg;
+        publicationRefresh.start(false);
+        return publicationRefresh.refresh();
+      }
+      $('retryLoad').textContent = PublicationState.text('refresh');
 
       for (const id of ['fSearch', 'fStatus', 'fRegion', 'fCountry', 'fSort', 'fOrder']) {
         $(id).addEventListener('input', () => render(true));
@@ -850,7 +931,7 @@
         me = await Auth.ensureAuthed();
         if (!me) return;
         Auth.renderHeader(me);
-        await load();
+        publicationRefresh.start();
       })();
     </script>
   </body>

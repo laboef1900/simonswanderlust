@@ -1,6 +1,6 @@
 window.SettingsLanguage = (function () {
   'use strict';
-  function init() {
+  function init(publication) {
     const $ = (id) => document.getElementById(id);
     let loaded = null;
     let busy = false;
@@ -58,11 +58,14 @@ window.SettingsLanguage = (function () {
       event.preventDefault();
       if (busy || !loaded) return;
       const next = candidate();
+      let mutating = false;
       busy = true;
       $('languageFields').disabled = true;
       $('languageReload').disabled = true;
       try {
         if (!(await AdminConfirm.ask({ title: SiteLanguage.text('ChangeTitle'), body: scope(), confirmLabel: SiteLanguage.text('Save') }))) return;
+        mutating = true;
+        publication.beginAction();
         status(SiteLanguage.text('Saving'));
         $('languageBlockers').replaceChildren();
         const response = await fetch('/language', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(next) });
@@ -80,13 +83,13 @@ window.SettingsLanguage = (function () {
         }
         paint(body);
         BuildReporting.renderOutcome($('languageStatus'), 'language', body);
-        await BuildReporting.loadStatus($('buildStatus'));
       } catch (error) {
         status(BuildReporting.text('unknown'));
       } finally {
         busy = false;
         $('languageFields').disabled = false;
         $('languageReload').disabled = false;
+        if (mutating) publication.endAction();
       }
     });
     return load();
