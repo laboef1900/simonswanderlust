@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Post Editor · Simon's Wanderlust</title>
+    <title>Post Editor</title>
     <link rel="stylesheet" href="/admin/admin.css" />
     <link rel="stylesheet" href="/admin/editor-gpx.css" />
     <link rel="stylesheet" href="/admin/gpx-map.css" />
@@ -534,6 +534,9 @@
       let loadedUpdatedAt = null;
       let loadBlocked = false;
       let recoveryDraft = null; // immutable pre-reload form while population is unsafe
+      // A restored stash that records no usable base version (#345): its content
+      // cannot be checked against what is stored, so it is never saved.
+      let restoreBaseUnknown = false;
       let storyReview = null;
       let excerptAssist = null;
       let reviewIsAdmin = false;
@@ -544,6 +547,7 @@
       const galleryEditors = {};
 
       // ---- slugify ----
+      const MAX_SLUG_BYTES = 251; // ASCII only; parity tested against posts.ts.
       function slugify(str) {
         return str
           .toLowerCase()
@@ -553,6 +557,8 @@
           .replace(/[^a-z0-9]+/g, '-')
           .replace(/^-+|-+$/g, '')
           .replace(/-{2,}/g, '-')
+          .slice(0, MAX_SLUG_BYTES)
+          .replace(/-+$/, '')
           || 'untitled';
       }
 
@@ -1375,10 +1381,11 @@
       // on401 routes a session-expiry through DraftGuard (stash draft + ?next=) instead
       // of a raw redirect, matching every other 401 handler in this editor.
       const suggestOn401 = () => guard.redirectToLogin();
-      AltSuggest.wire({ button: $('deHeroSuggest'), fileInput: $('deHeroFile'), altInput: $('deHeroAlt'), statusEl: $('deHeroStatus'), lang: 'de', on401: suggestOn401 });
-      AltSuggest.wire({ button: $('enHeroSuggest'), fileInput: $('enHeroFile'), altInput: $('enHeroAlt'), statusEl: $('enHeroStatus'), lang: 'en', on401: suggestOn401 });
-      AltSuggest.wire({ button: $('deBodyImgSuggest'), fileInput: $('deBodyImgFile'), altInput: $('deBodyImgAlt'), statusEl: $('deBodyImgStatus'), lang: 'de', on401: suggestOn401 });
-      AltSuggest.wire({ button: $('enBodyImgSuggest'), fileInput: $('enBodyImgFile'), altInput: $('enBodyImgAlt'), statusEl: $('enBodyImgStatus'), lang: 'en', on401: suggestOn401 });
+      const truncatedText = editorCopy.altSuggestTruncated;
+      AltSuggest.wire({ button: $('deHeroSuggest'), fileInput: $('deHeroFile'), altInput: $('deHeroAlt'), statusEl: $('deHeroStatus'), lang: 'de', on401: suggestOn401, truncatedText });
+      AltSuggest.wire({ button: $('enHeroSuggest'), fileInput: $('enHeroFile'), altInput: $('enHeroAlt'), statusEl: $('enHeroStatus'), lang: 'en', on401: suggestOn401, truncatedText });
+      AltSuggest.wire({ button: $('deBodyImgSuggest'), fileInput: $('deBodyImgFile'), altInput: $('deBodyImgAlt'), statusEl: $('deBodyImgStatus'), lang: 'de', on401: suggestOn401, truncatedText });
+      AltSuggest.wire({ button: $('enBodyImgSuggest'), fileInput: $('enBodyImgFile'), altInput: $('enBodyImgAlt'), statusEl: $('enBodyImgStatus'), lang: 'en', on401: suggestOn401, truncatedText });
 
       // ---- assemble PostPair payload ----
       // Deliberately no `status` or `scheduledAt`: the store decides status
@@ -1457,7 +1464,9 @@
         return {
           translationKey: currentTk || undefined,
           // Concurrency echo — JSON.stringify drops it when undefined (new post).
-          updatedAt: loadedUpdatedAt || undefined,
+          // Never the loaded token for an unknown-base restore: a re-stash would
+          // turn it into a base that matches, and the next restore would save.
+          updatedAt: (!restoreBaseUnknown && loadedUpdatedAt) || undefined,
           shared,
           de,
           en,
@@ -1707,8 +1716,8 @@
       // Persists the current on-screen form. Returns true on success so Publish
       // can save first and validate exactly what's on screen.
       async function doSaveDraft({ gpxAttach = false } = {}) {
-        if (loadBlocked) {
-          showErr(editorCopy.reloadFailed);
+        if (loadBlocked || restoreBaseUnknown) {
+          showErr(restoreBaseUnknown ? editorCopy.restoreBlocked : editorCopy.reloadFailed);
           return false;
         }
         if (!gpxAttach && !gpxEditor.guardAction()) return false;
@@ -1895,6 +1904,11 @@
           const body = await res.json().catch(() => ({}));
           if (!res.ok) { showErr('Unpublish failed: ' + (body.error || res.status)); setStatus(''); return; }
           isPublished = false;
+          // Unpublish is an emergency brake even from a stale tab. Advancing
+          // its save token is safe only if no unseen edit preceded the brake.
+          if (body.previousUpdatedAt === loadedUpdatedAt && body.updatedAt) {
+            loadedUpdatedAt = body.updatedAt;
+          }
           $('slugFieldDe').disabled = false;
           $('slugFieldEn').disabled = false;
           setStatus('Unpublished "' + title + '".');
@@ -2070,6 +2084,7 @@
         loadedSlugs.en = post.en?.slug || '';
         recoveryDraft = null;
         loadBlocked = false;
+        restoreBaseUnknown = false;
         $('pageTitle').textContent = 'Edit post';
         showErr('');
 
@@ -2177,6 +2192,22 @@
           noGeometry: GpxCopy.en.mapNoGeometry,
         },
       });
+      // @ai-warning #345. A stash is content PLUS the version it was edited
+      // against (the `updatedAt` buildPayload records). Restoring it must keep
+      // that base: pairing stale content with the freshly loaded post's token
+      // makes the server accept a save that overwrites both locales of a newer
+      // version. A stale base reaches the existing 409 conflict dialog. A base
+      // the server cannot judge — absent (legacy stash, or one taken before the
+      // first save), unparsable, or newer than the version just loaded — is
+      // returned as null: the caller blocks saving rather than omit the
+      // precondition (which skips the check) or invent a version.
+      function restoredBaseFor(stashBase, serverBase) {
+        const base = typeof stashBase === 'string' ? Date.parse(stashBase) : NaN;
+        if (!Number.isFinite(base)) return null;
+        const server = typeof serverBase === 'string' ? Date.parse(serverBase) : NaN;
+        return Number.isFinite(server) && base > server ? null : stashBase;
+      }
+
       // ---- init ----
       (async () => {
         const s = await Auth.ensureAuthed();
@@ -2198,18 +2229,60 @@
         // the guard's dirty state here either way.
         const stash = guard.tryRestore();
         if (stash && !guard.wasDismissed(stash)) {
+          const restoredTk = stash.payload.translationKey || currentTk;
+          // Only a save that PUTs carries a base; a new-post stash creates.
+          const restoredBase = restoredTk ? restoredBaseFor(stash.payload.updatedAt, loadedUpdatedAt) : null;
+          const baseUnknown = !!restoredTk && restoredBase === null;
+          const serverChanged = !!(restoredBase && loadedUpdatedAt)
+            && Date.parse(restoredBase) !== Date.parse(loadedUpdatedAt);
+          const notice = baseUnknown ? editorCopy.restoreUnknownBase : serverChanged ? editorCopy.restoreStale : '';
           const restore = await AdminConfirm.ask({
-            title: 'Restore unsaved draft?',
-            body: 'Found an unsaved local draft from ' + new Date(stash.savedAt).toLocaleString() + '.',
-            confirmLabel: 'Restore',
+            title: editorCopy.restoreTitle,
+            body: editorCopy.restoreBody.replace('{time}', new Date(stash.savedAt).toLocaleString())
+              + (notice ? '\n\n' + notice : ''),
+            confirmLabel: editorCopy.restoreConfirm,
           });
           if (restore) {
             guard.adopt(stash);
             storyReview?.invalidate();
-            currentTk = stash.payload.translationKey || currentTk;
-            populateForm(stash.payload);
-            guard.markDirty();
-            setStatus('Restored unsaved draft — remember to Save draft.');
+            currentTk = restoredTk;
+            // Token and block go first, so even a half-applied restore cannot
+            // save over the newer version with the fresh token.
+            if (restoredBase) loadedUpdatedAt = restoredBase;
+            restoreBaseUnknown = baseUnknown;
+            let populated = true;
+            try {
+              populateForm(stash.payload);
+            } catch (error) {
+              // #332: never offer a mixed server/stash form for saving, and keep
+              // the untouched stash (not the mixed form) as what gets re-stashed.
+              populated = false;
+              console.error('Local draft restoration failed', error);
+              recoveryDraft = structuredClone(stash.payload);
+              loadBlocked = true;
+              guard.markDirty();
+              guard.stashNow();
+              showErr(editorCopy.reloadFailed);
+              setStatus('');
+            }
+            if (populated) {
+              // A published post's slug fields are disabled and its URL is
+              // locked: keep the live slugs (as restoreRevision does) rather
+              // than a stash slug the author could neither see nor correct.
+              const keptLiveSlugs = isPublished
+                && ['de', 'en'].some((l) => loadedSlugs[l] && slugFieldFor(l).value !== loadedSlugs[l]);
+              if (isPublished) {
+                for (const l of ['de', 'en']) if (loadedSlugs[l]) slugFieldFor(l).value = loadedSlugs[l];
+              }
+              guard.markDirty();
+              if (baseUnknown) {
+                setStatus('');
+                showErr(editorCopy.restoreBlocked);
+              } else {
+                setStatus((serverChanged ? editorCopy.restoredStale : editorCopy.restored)
+                  + (keptLiveSlugs ? ' ' + editorCopy.restoreSlugsKept : ''));
+              }
+            }
           } else {
             guard.dismissRestore(stash);
           }
