@@ -759,6 +759,14 @@ rotation are hashed from the country code, so a country always stamps the same
 way. `mix-blend-mode: multiply` at full opacity on an opaque canvas chip; the
 chip stays square while the ink is rotated.
 
+The date is the stored trip's **calendar date**, not a UTC instant: `Stamp.astro`
+reads local day/month/year, matching the loader's local-midnight convention and
+the hero/card date formatters. Do not use UTC getters here. Runtime rebuilds via
+the app's `/rebuild` endpoint were verified in UTC, Europe/Zurich and
+America/Los_Angeles with unchanged `2024-01-01` and `2024-03-01` synthetic
+published stories: both DE and EN stamps retain `01 01 2024` and `01 03 2024`
+respectively (#400).
+
 ### Route Divider (signature)
 
 Filled `brand-red` dot → dashed 2px navy rule → a 16px compass arrow at
