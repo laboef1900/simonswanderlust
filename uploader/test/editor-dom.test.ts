@@ -2016,6 +2016,128 @@ describe('editor region select', () => {
   });
 });
 
+describe('revision restore protects unsaved bilingual work (#390)', () => {
+  const loadedAt = '2026-10-27T11:25:00.000Z';
+  const revision = {
+    id: 'revision-1', savedAt: '2026-10-25T09:00:00.000Z',
+    snapshot: {
+      ...fullPair(),
+      shared: { ...fullPair().shared, route: 'Earlier route' },
+      de: { ...fullPair().de, title: 'Earlier DE title', bodyMarkdown: 'Earlier DE body' },
+      en: { ...fullPair().en, title: 'Earlier EN title', bodyMarkdown: 'Earlier EN body' },
+    },
+  };
+  async function open(confirm: boolean) {
+    const h = loadEditor({ confirm, fetch: async (url) => {
+      if (url === '/posts/tk1') return response({ ...fullPair(), updatedAt: loadedAt });
+      if (url === '/posts/tk1/revisions') return response([
+        { id: revision.id, savedAt: revision.savedAt, titleDe: revision.snapshot.de.title, status: 'draft' },
+      ]);
+      if (url === '/posts/tk1/revisions/' + revision.id) return response(revision);
+      if (url.endsWith('/alt-audit')) return response({ images: [] });
+      throw new Error('Unexpected revision request: ' + url);
+    } });
+    await h.api.loadPost('tk1');
+    await settle();
+    h.el('revisionsCard').open = true;
+    return h;
+  }
+
+  for (const locale of ['de', 'en'] as const) {
+    it(`keeps ${locale.toUpperCase()}-only edits and the open revision list on Cancel`, async () => {
+      const h = await open(false);
+      h.el(locale + 'Title').value = 'Unsaved title';
+      h.el(locale + 'Title').fire('input');
+      h.editors[locale === 'de' ? 0 : 1]!.value('Unsaved manuscript');
+      const before = h.api.buildPayload();
+      const list = h.el('revisionsList').innerHTML;
+      required(h.el('revisionsList'), 'button').click();
+      await settle();
+      expect(h.prompts).toHaveLength(1);
+      expect(h.prompts[0]!.body).toContain(revision.snapshot.de.title);
+      expect(h.prompts[0]!.body).toContain(new Date(revision.savedAt).toLocaleString());
+      expect(h.api.buildPayload()).toEqual(before);
+      expect(h.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveUnsaved']);
+      expect(h.el('revisionsCard').open).toBe(true);
+      expect(h.el('revisionsList').innerHTML).toBe(list);
+      expect(h.requests.every(({ options }) => !options.method || options.method === 'GET')).toBe(true);
+    });
+
+    it(`replaces both locales and shared details only after accepting ${locale.toUpperCase()}-only dirty restore`, async () => {
+      const h = await open(true);
+      h.editors[locale === 'de' ? 0 : 1]!.value('Unsaved manuscript');
+      required(h.el('revisionsList'), 'button').click();
+      await settle();
+      expect(h.prompts).toHaveLength(1);
+      expect(h.api.buildPayload()).toMatchObject({
+        de: revision.snapshot.de, en: revision.snapshot.en, shared: revision.snapshot.shared,
+        updatedAt: loadedAt,
+      });
+      expect(h.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveUnsaved']);
+      expect(h.el('revisionsCard').open).toBe(true);
+      expect(h.requests.every(({ options }) => !options.method || options.method === 'GET')).toBe(true);
+    });
+  }
+
+  it('also protects shared-only unsaved changes', async () => {
+    const h = await open(false);
+    h.el('fmRoute').value = 'Unsaved shared route';
+    h.el('fmRoute').fire('input');
+    const before = h.api.buildPayload();
+    required(h.el('revisionsList'), 'button').click();
+    await settle();
+    expect(h.prompts).toHaveLength(1);
+    expect(h.api.buildPayload()).toEqual(before);
+  });
+
+  it('loads a clean form without a prompt and leaves the restored content unsaved', async () => {
+    const h = await open(false);
+    expect(h.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveSaved']);
+    required(h.el('revisionsList'), 'button').click();
+    await settle();
+    expect(h.prompts).toEqual([]);
+    expect(h.api.buildPayload()).toMatchObject({
+      de: revision.snapshot.de, en: revision.snapshot.en, shared: revision.snapshot.shared,
+      updatedAt: loadedAt,
+    });
+    expect(h.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveUnsaved']);
+    expect(h.requests.every(({ options }) => !options.method || options.method === 'GET')).toBe(true);
+  });
+});
+
+describe('revision restore with both locales dirty', () => {
+  it('keeps both manuscripts, titles, shared details and the drawer when cancelled', async () => {
+    const h = loadEditor({ confirm: false, fetch: async (url) => {
+      if (url === '/posts/tk1') return response({ ...fullPair(), updatedAt: '2026-10-27T11:25:00.000Z' });
+      if (url === '/posts/tk1/revisions') return response([
+        { id: 'revision-1', savedAt: '2026-10-25T09:00:00.000Z', titleDe: 'Bukarest', status: 'draft' },
+      ]);
+      if (url === '/posts/tk1/revisions/revision-1') return response({
+        snapshot: fullPair(), savedAt: '2026-10-25T09:00:00.000Z',
+      });
+      return response({ images: [] });
+    } });
+    await h.api.loadPost('tk1');
+    await settle();
+    h.el('revisionsCard').open = true;
+    for (const [index, locale] of ['de', 'en'].entries()) {
+      h.el(locale + 'Title').value = 'Unsaved ' + locale;
+      h.el(locale + 'Title').fire('input');
+      h.editors[index]!.value('Unsaved body ' + locale);
+    }
+    h.el('fmRoute').value = 'Unsaved shared route';
+    h.el('fmRoute').fire('input');
+    const before = h.api.buildPayload();
+    required(h.el('revisionsList'), 'button').click();
+    await settle();
+    expect(h.prompts).toHaveLength(1);
+    expect(h.api.buildPayload()).toEqual(before);
+    expect(h.el('revisionsCard').open).toBe(true);
+    expect(h.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveUnsaved']);
+    expect(h.requests.every(({ options }) => !options.method || options.method === 'GET')).toBe(true);
+  });
+});
+
 describe('restoring a local draft keeps the version it was edited against (#345)', () => {
   const V1 = '2026-10-27T11:20:26.092Z';
   const V2 = '2026-10-27T11:25:00.000Z';
@@ -2087,6 +2209,41 @@ describe('restoring a local draft keeps the version it was edited against (#345)
     expect(server.stored().de.title).toBe('Bukarest');
     expect(h.prompts.map((prompt) => prompt.title)).toContain('Reload the latest version?');
     expect(h.el('deTitle').value).toBe('Stashed DE edit');
+  });
+
+  it.each([V1, undefined])('revision restore cannot refresh a restored stash base of %s', async (base) => {
+    const server = versionedServer(serverV2());
+    const snapshot = fullPair();
+    snapshot.de.title = 'Selected revision DE';
+    snapshot.en.title = 'Selected revision EN';
+    const h = loadEditor({
+      isAdmin: true, search: '?tk=tk1',
+      stash: { key: 'swl:draft:tk1', payload: stashOf(base) },
+      confirm: (prompt) => [copy['editor.chrome.restoreTitle'], copy['editor.chrome.revisionRestoreTitle']].includes(prompt.title),
+      fetch: async (url, options) => {
+        if (url === '/posts/tk1/revisions') return response([
+          { id: 'revision-1', savedAt: V2, titleDe: snapshot.de.title, status: 'draft' },
+        ]);
+        if (url === '/posts/tk1/revisions/revision-1') return response({ snapshot, savedAt: V2 });
+        return server.fetch(url, options);
+      },
+    });
+    await settle();
+    required(h.el('revisionsList'), 'button').click();
+    await settle();
+    expect(h.el('deTitle').value).toBe(snapshot.de.title);
+    expect(h.el('enTitle').value).toBe(snapshot.en.title);
+    expect(h.api.buildPayload().updatedAt).toBe(base);
+    expect(h.requests.filter(isPut)).toEqual([]);
+    expect(await h.api.doSaveDraft()).toBe(false);
+    expect(server.writes).toEqual([]);
+    expect(server.stored().en.title).toBe('Newer EN saved elsewhere');
+    if (base === undefined) {
+      expect(h.requests.filter(isPut)).toEqual([]);
+      expect(h.el('actionError').textContent).toBe(copy['editor.chrome.restoreBlocked']);
+    } else {
+      expect(h.prompts.map((prompt) => prompt.title)).toContain('Reload the latest version?');
+    }
   });
 
   it('restores and saves both locales when the stash base is the stored version', async () => {

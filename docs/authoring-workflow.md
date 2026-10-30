@@ -213,6 +213,20 @@ Gallery descriptions are the exception: alt text and captions for photos in the 
 library use the current library values on the next rebuild, without republishing each
 article. This does not publish any draft text or change gallery order.
 
+**Revisions → Restore into editor** loads a saved snapshot into the form, not into the
+database. If you have unsaved edits, a confirmation names the revision and its time,
+and warns that it replaces content and metadata in **both German and English**, plus
+shared story details. **Cancel** leaves your fields, text selections and local recovery
+draft intact. A clean form loads the revision without that extra prompt; edits made
+while the revision is loading still trigger confirmation.
+
+After loading, the form is marked **Unsaved changes**. Review both languages before
+choosing **Save draft**; only a separate **Publish** changes the live story. Published
+posts retain their current, locked slugs even when the revision used older ones.
+Restoring a revision does not reset conflict protection: a local recovery draft based
+on an older saved version still cannot overwrite a newer writer, and a recovery draft
+without a known base version remains blocked from saving.
+
 ### Import and trim a private GPX route
 
 Open **Story details → GPX route → Import GPX** and choose a local `.gpx` file

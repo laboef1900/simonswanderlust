@@ -2127,11 +2127,24 @@
       // gets its own revision) — there is no direct server-side restore.
       async function restoreRevision(id) {
         if (!gpxEditor.guardAction()) return;
-        showErr('');
         const res = await fetch('/posts/' + encodeURIComponent(currentTk) + '/revisions/' + encodeURIComponent(id));
         if (res.status === 401) { guard.redirectToLogin(); return; }
         if (!res.ok) { showErr('Could not load revision: ' + res.status); return; }
         const rev = await res.json();
+        // Check after the fetch: edits made while it loads still need consent.
+        if (guard.isDirty()) {
+          const restore = await AdminConfirm.ask({
+            title: editorCopy.revisionRestoreTitle,
+            body: editorCopy.revisionRestoreBody
+              .replace('{time}', () => new Date(rev.savedAt).toLocaleString())
+              .replace('{title}', () => rev.snapshot.de?.title || rev.snapshot.en?.title || editorCopy.revisionUntitled),
+            confirmLabel: editorCopy.revisionRestoreConfirm,
+          });
+          if (!restore) return;
+        }
+        showErr('');
+        // This replaces content, not the save base. Keep loadedUpdatedAt and
+        // any #345 unknown-base block; savedAt is only the revision's label.
         // On a published post the slug fields are disabled (slug locked for
         // SEO), but buildPayload still reads their .value — restoring a
         // snapshot from before a slug change would make every Save 409
