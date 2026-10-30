@@ -203,6 +203,22 @@ page has no gallery.
   CLS returns.
 - All strings come from `site/src/i18n/ui.ts` via data attributes, mirroring `data-readstory`
   (Golden Rule 7).
+- **Decoded thumbnail only** (#384): reuse the grid image's non-empty `currentSrc` only
+  when it is complete with a positive natural width. A lazy, loading, broken or
+  missing candidate produces no thumbnail element, not an empty `src` or a request
+  for the grid's fallback. The responsive large picture, formats and native link
+  fallback stay unchanged.
+
+Qualification (2026-10-28): four failing-before DOM cases and the complete site
+suite/Astro check/build passed. Actual `main.ts` served a runtime-built synthetic
+37-photo story and generated variants. Fresh-cache DE/EN checks at 390px/DPR2 and
+1440px/DPR1 retained the loaded thumbnail, then navigated to an unrequested last
+photo: exactly one AVIF request (1280px or 1920px), no fallback-WebP thumbnail request
+and no empty-source image. Home/End, disabled end controls, Escape/focus restoration
+and no-JavaScript navigation to the 3000px WebP all worked. Final screenshots await
+the existing entrance animation and assert opaque dialog/picture styles.
+Evidence: `.local/backlog-execution-2026-10-27/issue-384-browser/proof.json`.
+This is isolated Chromium viewport coverage, not a physical-device or production claim.
 
 ### Slider controls and accessibility
 
