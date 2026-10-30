@@ -1,7 +1,7 @@
 import { TEST_TRUST, GATEWAY_TRUST } from './trusted-proxy-fixture.js';
 import { publishBody, publishTokens } from './publish-tokens.js';
 import { describe, expect, it, beforeEach, vi } from 'vitest';
-import { mkdtemp, mkdir, readdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
@@ -10,6 +10,7 @@ import sharp from 'sharp';
 import FormData from 'form-data';
 import { buildServer, type ServerConfig } from '../src/server.js';
 import { rehostImage } from '../src/wp-images.js';
+import { contentHashKey } from '../src/storage.js';
 import { rehostKey, ImportTooLargeError, ImportInsufficientSpaceError, type ImportDeps, type ImportProgress, type ImportSummary, type PreparedImport } from '../src/wp-import.js';
 import { createImportRunner, memoryImportJobStore, type ImportRunner } from '../src/import-jobs.js';
 import { defaultSettings, validate } from '../src/settings.js';
@@ -20,7 +21,7 @@ import { memorySessionStore, type SessionStore } from '../src/sessions.js';
 import { memoryPostStore, type PostStore } from '../src/posts.js';
 import { memoryPageStore, type PageStore } from '../src/pages.js';
 import { memoryMediaStore, type MediaStore } from '../src/media-store.js';
-import { BacklogFullError, createEncodeQueue, type EncodeQueue } from '../src/encode-queue.js';
+import { createEncodeQueue, type EncodeQueue } from '../src/encode-queue.js';
 import { createWorkLock, type WorkLock } from '../src/work-lock.js';
 import { fixedWindowLimiter, accountLockoutLimiter } from '../src/rate-limit.js';
 import type { SiteBuilder, BuildOutcome } from '../src/build.js';
@@ -75,13 +76,11 @@ function stubBackup(dir = '/tmp/none', running = false) {
  * the real encoder is covered in encode-queue.test.ts, and a 19s-per-frame
  * pipeline has no place in the route suite.
  */
-function stubQueue(opts: { full?: boolean } = {}) {
+function stubQueue() {
   const enqueued: string[] = [];
   const queue: EncodeQueue = {
-    enqueue: (key) => {
-      if (opts.full) throw new BacklogFullError();
-      enqueued.push(key);
-    },
+    withAdmission: (_key, operation) => operation(),
+    enqueue: (key) => { enqueued.push(key); },
     isActive: (key) => enqueued.includes(key),
     recover: async () => 0,
     drain: async () => {},
@@ -258,10 +257,12 @@ describe('POST /upload', () => {
     const kept = await upload(b, cookie, { key: 'trips/dup/hero', folder: 'Norway' }, img);
     expect(kept.json()).toMatchObject({ duplicate: true, folder: 'Iceland/South' });
     expect((await b.media.get(key))?.folder).toBe('Iceland/South');
-    // Same while the first upload is still encoding.
+    // Same while the first upload is still encoding — and the queued job is not
+    // queued a second time (#348's re-enqueue covers only an absent key).
     await b.media.setStatus(key, 'processing');
     const busy = await upload(b, cookie, { key: 'trips/dup/hero', folder: 'Norway' }, img);
     expect(busy.json()).toMatchObject({ duplicate: true, status: 'processing', folder: 'Iceland/South' });
+    expect(b.enqueued).toEqual([key]);
   });
 
   it('a duplicate reports the folder that was PERSISTED, not the one a failed best-effort patch asked for', async () => {
@@ -391,11 +392,203 @@ describe('POST /upload', () => {
     expect(res.json().key).toMatch(/^library\/\d{4}\/l1002345-[0-9a-f]{8}$/);
   });
 
-  it('429s when the encode backlog is full', async () => {
-    const b = build({ encodeQueue: stubQueue({ full: true }).queue });
+  /**
+   * #348: a REAL encode queue at its backlog limit — its one slot encoding and
+   * its one backlog slot taken by two fillers, both parked behind a held
+   * exclusive lock (a "build") — so the next enqueue is a genuine
+   * BacklogFullError. `release()` lets the queue drain with real sharp encodes.
+   * `wrap` decorates the store the ROUTES see; the queue writes the inner one.
+   */
+  async function buildFullQueue(wrap: (m: MediaStore) => MediaStore = (m) => m) {
+    const inner = memoryMediaStore({ baseUrl: 'https://img.simonswanderlust.com' });
+    const lock = createWorkLock();
+    const gate = Promise.withResolvers<void>();
+    const held = lock.runExclusive(() => gate.promise);
+    const queue = createEncodeQueue({ store: inner, storageDir: dir, lock, concurrency: 1, maxBacklog: 1, log: () => {} });
+    const b = build({ media: wrap(inner), encodeQueue: queue });
     const { cookie } = await authed(b);
-    const res = await upload(b, cookie, { key: 'trips/full/hero' });
+    for (const background of ['#a11', '#1a1']) {
+      const filler = await sharp({ create: { width: 64, height: 48, channels: 3, background } }).jpeg().toBuffer();
+      expect((await upload(b, cookie, { key: 'trips/filler/photo' }, filler)).statusCode).toBe(200);
+    }
+    expect(queue.stats()).toEqual({ pending: 1, running: 1 });
+    const img = await jpeg();
+    const key = contentHashKey('trips/full/hero', img, SETTINGS);
+    const release = async () => { gate.resolve(); await held; await queue.idle(); };
+    const retry = () => b.app.inject({ method: 'POST', url: '/media/retry', cookies: cookie, payload: { keys: [key] } });
+    return { ...b, media: inner, queue, cookie, img, key, release, retry };
+  }
+
+  it('a 429 from a full backlog leaves a recoverable failed row, and a re-send after the drain encodes to ready', async () => {
+    const b = await buildFullQueue();
+    const form = { key: 'trips/full/hero', folder: 'Iceland', title: 'Glacier' };
+    const res = await upload(b, b.cookie, form, b.img);
     expect(res.statusCode).toBe(429);
+    // Not `processing` with nothing queued: retryable, deletable, and the
+    // original plus the request's metadata are kept for the recovery.
+    expect(await b.media.get(b.key)).toMatchObject({ status: 'failed', error: 'queue_full', folder: 'Iceland', title: 'Glacier' });
+    expect(b.queue.isActive(b.key)).toBe(false);
+    expect(existsSync(join(dir, `${b.key}-orig.jpg`))).toBe(true);
+
+    // Still full: the client's retry (same form) is refused again — never a false success.
+    expect((await upload(b, b.cookie, form, b.img)).statusCode).toBe(429);
+    expect(await b.media.get(b.key)).toMatchObject({ status: 'failed', error: 'queue_full' });
+
+    await b.release();
+    const again = await upload(b, b.cookie, form, b.img);
+    expect(again.statusCode).toBe(200);
+    expect(again.json()).toMatchObject({ key: b.key, status: 'processing' });
+    expect(again.json().duplicate).toBe(true);
+    expect(b.queue.isActive(b.key)).toBe(true);
+    await b.queue.idle();
+    expect(await b.media.get(b.key)).toMatchObject({ status: 'ready', error: null, folder: 'Iceland', title: 'Glacier' });
+    expect(existsSync(join(dir, `${b.key}-640.webp`))).toBe(true);
+  });
+
+  it.each([
+    ['failed', 'encode_failed'],
+    ['missing', null],
+  ] as const)('a 429 re-send of a %s row restores its status and error; the re-send after the drain encodes it', async (status, error) => {
+    const b = await buildFullQueue();
+    expect((await upload(b, b.cookie, { key: 'trips/full/hero' }, b.img)).statusCode).toBe(429);
+    await b.media.setStatus(b.key, status, error ?? undefined);
+
+    expect((await upload(b, b.cookie, { key: 'trips/full/hero' }, b.img)).statusCode).toBe(429);
+    expect(await b.media.get(b.key)).toMatchObject({ status, error });
+    expect(b.queue.isActive(b.key)).toBe(false);
+
+    await b.release();
+    const again = await upload(b, b.cookie, { key: 'trips/full/hero' }, b.img);
+    expect(again.statusCode).toBe(200);
+    expect(again.json().duplicate).toBeUndefined();
+    await b.queue.idle();
+    expect(await b.media.get(b.key)).toMatchObject({ status: 'ready', error: null });
+  });
+
+  it('a stranded processing row the queue does not hold is settled on a refused re-send and enqueued on a later one', async () => {
+    const b = await buildFullQueue();
+    expect((await upload(b, b.cookie, { key: 'trips/full/hero' }, b.img)).statusCode).toBe(429);
+    // The state a pre-#348 429 (or a crash) left behind: `processing`, nothing
+    // queued — here without even the original on disk.
+    const strand = async () => {
+      await b.media.setStatus(b.key, 'processing');
+      await rm(join(dir, `${b.key}-orig.jpg`));
+    };
+    await strand();
+
+    // Still full: an honest 429 that leaves no unqueued `processing` row; the
+    // original is back, so the failed row is recoverable.
+    expect((await upload(b, b.cookie, { key: 'trips/full/hero' }, b.img)).statusCode).toBe(429);
+    expect(await b.media.get(b.key)).toMatchObject({ status: 'failed', error: 'queue_full' });
+    expect(b.queue.isActive(b.key)).toBe(false);
+    expect(existsSync(join(dir, `${b.key}-orig.jpg`))).toBe(true);
+
+    await b.release();
+    await strand();
+    const again = await upload(b, b.cookie, { key: 'trips/full/hero' }, b.img);
+    expect(again.statusCode).toBe(200);
+    expect(again.json()).toMatchObject({ key: b.key, status: 'processing', duplicate: true });
+    expect(b.queue.isActive(b.key)).toBe(true);
+    await b.queue.idle();
+    expect(await b.media.get(b.key)).toMatchObject({ status: 'ready', error: null });
+    expect(existsSync(join(dir, `${b.key}-orig.jpg`))).toBe(true);
+  });
+
+  it('POST /media/retry recovers a queue_full row once the backlog drains, and keeps it failed while full', async () => {
+    const b = await buildFullQueue();
+    expect((await upload(b, b.cookie, { key: 'trips/full/hero' }, b.img)).statusCode).toBe(429);
+    const full = await b.retry();
+    expect(full.statusCode).toBe(429);
+    expect(full.json()).toMatchObject({ queued: 0 });
+    expect(await b.media.get(b.key)).toMatchObject({ status: 'failed', error: 'queue_full' });
+
+    await b.release();
+    const res = await b.retry();
+    expect(res.json()).toEqual({ ok: true, queued: 1 });
+    await b.queue.idle();
+    expect(await b.media.get(b.key)).toMatchObject({ status: 'ready', error: null });
+  });
+
+  it.each(['upload', 'retry'] as const)('a pending refusal rollback excludes same-key %s admission until the row is settled', async (entry) => {
+    const reached = Promise.withResolvers<void>();
+    const landing = Promise.withResolvers<void>();
+    const b = await buildFullQueue((m) => ({
+      ...m,
+      setStatusIfProcessing: async (...args) => {
+        reached.resolve();
+        await landing.promise;
+        return m.setStatusIfProcessing(...args);
+      },
+    }));
+    const a = upload(b, b.cookie, { key: 'trips/full/hero', folder: 'Iceland/South', alt: 'Curated' }, b.img);
+    await reached.promise;
+    await b.release();
+    // Hold the second encode: checking only after ready missed the original race.
+    const encodeGate = Promise.withResolvers<void>();
+    // Occupy the queue's next job via its store read without replacing the encoder.
+    const get = b.media.get;
+    const encoding = Promise.withResolvers<void>();
+    b.media.get = async (key) => {
+      const row = await get(key);
+      if (key === b.key && b.queue.isActive(key)) {
+        encoding.resolve();
+        await encodeGate.promise;
+      }
+      return row;
+    };
+    const admission = Promise.withResolvers<void>();
+    const withAdmission = b.queue.withAdmission;
+    b.queue.withAdmission = (key, operation) => {
+      admission.resolve();
+      return withAdmission(key, operation);
+    };
+    const second = entry === 'upload'
+      ? upload(b, b.cookie, { key: 'trips/full/hero', folder: 'Norway', alt: 'Replacement' }, b.img)
+      : b.retry();
+    await admission.promise;
+    expect(b.queue.isActive(b.key)).toBe(false);
+    expect(await get(b.key)).toMatchObject({ status: 'processing' });
+    landing.resolve();
+    expect((await a).statusCode).toBe(429);
+    expect((await second).statusCode).toBe(200);
+    await encoding.promise;
+    expect(b.queue.isActive(b.key)).toBe(true);
+    expect(await get(b.key)).toMatchObject({
+      status: 'processing', error: null, folder: 'Iceland/South',
+      alt: { de: 'Curated', en: 'Curated' },
+    });
+    // This is the exact persisted state a crash must recover.
+    expect((await b.media.list({ status: 'processing' })).items.map((item) => item.key)).toContain(b.key);
+    encodeGate.resolve();
+    await b.queue.idle();
+    expect(await get(b.key)).toMatchObject({ status: 'ready', error: null });
+  });
+
+  it('repeated queue-refused orphan uploads preserve curated metadata before and after admission', async () => {
+    const b = await buildFullQueue();
+    await upload(b, b.cookie, { key: 'trips/full/hero' }, b.img);
+    await b.media.setStatus(b.key, 'processing');
+    const curated = {
+      folder: 'Iceland/South', title: 'Glacier',
+      alt: { de: 'Gletscher', en: 'Glacier' },
+      caption: { de: 'Am Morgen', en: 'At dawn' }, tags: ['ice'],
+    };
+    await b.media.patch(b.key, curated);
+    const before = await b.media.get(b.key);
+    const form = { key: 'trips/full/hero', folder: 'Norway', title: 'Replacement', alt: 'Replacement' };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      expect((await upload(b, b.cookie, form, b.img)).statusCode).toBe(429);
+      expect(await b.media.get(b.key)).toMatchObject({ ...curated, status: 'failed', error: 'queue_full' });
+    }
+    await b.release();
+    const accepted = await upload(b, b.cookie, form, b.img);
+    expect(accepted.statusCode).toBe(200);
+    expect(accepted.json()).toMatchObject({ duplicate: true, folder: curated.folder, status: 'processing' });
+    await b.queue.idle();
+    expect(await b.media.get(b.key)).toMatchObject({
+      ...curated, status: 'ready', error: null,
+      encoding: before?.encoding, uploadedAt: before?.uploadedAt, uploadedBy: before?.uploadedBy,
+    });
   });
 
   it('records EXIF-free uploads without lat/lng and stores the supplied folder/title', async () => {
