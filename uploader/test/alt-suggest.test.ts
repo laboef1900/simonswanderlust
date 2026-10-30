@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { ui } from '../../site/src/i18n/ui.js';
 
 const script = readFileSync('public/alt-suggest.js', 'utf8');
 
@@ -39,6 +40,79 @@ describe('local alt text remains separate from remote review credentials', () =>
     expect(page.prepImage).not.toHaveBeenCalled();
     expect(page.caption).not.toHaveBeenCalled();
     expect(page.altInput.value).toBe('');
+  });
+});
+
+// #351: the shipped llm.js behind the editor button and the gallery's hosted
+// suggestion, with only the network and the canvas stubbed — the model reply
+// decides what reaches the field.
+describe('alt suggestion with a reasoning model', () => {
+  const llmScript = readFileSync('public/llm.js', 'utf8');
+  const IMAGE_URL = 'https://images.example/photo-640.webp';
+  function load(content: string, finishReason: string) {
+    const config = { captionProvider: 'lm-studio', captionBaseUrl: 'http://localhost:1234/v1', captionApiKey: null, lmModel: 'local-vision', captionPrompt: 'describe', captionTimeoutMs: 5000, captionMaxTokens: 256, captionMaxEdge: 768 };
+    const fetch = vi.fn(async (url: string) => url === '/ai-config?purpose=caption' ? Response.json(config)
+      : url === IMAGE_URL ? new Response('image')
+      : Response.json({ choices: [{ finish_reason: finishReason, message: { content } }] }));
+    // The scripts assign window.LLM and window.AltSuggest; window is the context.
+    const ctx: {
+      window?: unknown; LLM?: { prepImage: unknown };
+      AltSuggest?: { wire(options: unknown): void; suggestHosted(options: { url: string; lang: string; signal: AbortSignal }): Promise<string> };
+      [name: string]: unknown;
+    } = { fetch, URL, AbortController, AbortSignal, setTimeout, clearTimeout, Event, location: { href: '', protocol: 'http:' } };
+    ctx.window = ctx;
+    vm.createContext(ctx);
+    vm.runInContext(llmScript, ctx);
+    ctx.LLM!.prepImage = async () => ({ dataUrl: 'data:image/jpeg;base64,fixture' });
+    vm.runInContext(script, ctx);
+    return { altSuggest: ctx.AltSuggest!, fetch };
+  }
+  async function suggest(content: string, finishReason: string) {
+    const { altSuggest, fetch } = load(content, finishReason);
+    let click: () => Promise<void> = async () => {};
+    const altInput = { value: 'author text', dispatchEvent: vi.fn() };
+    const statusEl = { textContent: '' };
+    // editor.html passes the same dictionary entry.
+    altSuggest.wire({
+      button: { addEventListener: (_name: string, listener: () => Promise<void>) => { click = listener; } },
+      fileInput: { files: [{}] }, altInput, statusEl, lang: 'en', truncatedText: ui.en['editor.chrome.altSuggestTruncated'],
+    });
+    await click();
+    return { altInput, status: statusEl.textContent, modelCalls: fetch.mock.calls.length - 1 };
+  }
+  const draft = '<think>Draft: {"altEn":"draft guess","altDe":"Entwurf"} but wait, the sign actually';
+  const complete = '{"altEn":"A complete-looking answer","altDe":"Eine Antwort"}';
+
+  it('fills the final answer, not the draft written while thinking', async () => {
+    const page = await suggest(draft + ' reads Quito</think>{"altEn":"A sign reading Quito","altDe":"Ein Schild mit Quito"}', 'stop');
+    expect(page.altInput.value).toBe('A sign reading Quito');
+    expect(page.altInput.dispatchEvent).toHaveBeenCalledOnce();
+  });
+
+  it('leaves the field untouched and shows the token-limit hint for a truncated reply, even a complete-looking one', async () => {
+    for (const content of [draft, complete]) {
+      const page = await suggest(content, 'length');
+      expect(page.modelCalls).toBe(1);
+      expect(page.altInput.value).toBe('author text');
+      expect(page.altInput.dispatchEvent).not.toHaveBeenCalled();
+      expect(page.status).toBe(ui.en['editor.chrome.altSuggestTruncated']);
+    }
+  });
+
+  it('leaves the field untouched and keeps the general failure for an unclosed thought that finished normally', async () => {
+    const page = await suggest(draft, 'stop');
+    expect(page.altInput.value).toBe('author text');
+    expect(page.altInput.dispatchEvent).not.toHaveBeenCalled();
+    expect(page.status).not.toBe(ui.en['editor.chrome.altSuggestTruncated']);
+  });
+
+  it('carries the truncated category to the gallery caller instead of a suggestion', async () => {
+    for (const content of [draft, complete]) {
+      await expect(load(content, 'length').altSuggest.suggestHosted({ url: IMAGE_URL, lang: 'en', signal: new AbortController().signal }))
+        .rejects.toThrow(/^Caption response was truncated$/);
+    }
+    await expect(load(draft, 'stop').altSuggest.suggestHosted({ url: IMAGE_URL, lang: 'en', signal: new AbortController().signal }))
+      .rejects.toThrow(/^Caption request failed/);
   });
 });
 

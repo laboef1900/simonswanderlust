@@ -172,7 +172,7 @@ export interface PostStore {
   upsertDraft(pair: PostPair, baseUpdatedAt?: Date): Promise<StoredPostPair>;
   publish(translationKey: string, tokens: PublishTokens): Promise<{ updatedAt: Date }>;
   /** Flip a pair back to draft (the "emergency brake" — the live site drops it on the next build). */
-  unpublish(translationKey: string): Promise<void>;
+  unpublish(translationKey: string): Promise<{ previousUpdatedAt: Date; updatedAt: Date }>;
   /** Hard-delete both locale rows, freeing their slugs for reuse. */
   remove(translationKey: string): Promise<void>;
   /**
@@ -229,16 +229,23 @@ interface Stored extends PostPair {
 }
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
+/** ASCII grammar makes characters equal bytes; leave four bytes for `.mdx`. */
+export const MAX_SLUG_BYTES = 251;
 /** db.ts `REGIONS` (which the posts CHECK is built from), widened so untrusted strings can be tested against it. */
 const REGION_KEYS: readonly string[] = REGIONS;
 
 /** True for a slug safe to use in a URL and as a storage path segment. */
 export function isSafeSlug(slug: string): boolean {
-  return SLUG_RE.test(slug);
+  return slug.length <= MAX_SLUG_BYTES && SLUG_RE.test(slug);
 }
 
-function checkSlug(slug: string): void {
-  if (!isSafeSlug(slug)) throw new PostError(`invalid slug "${slug}" (lowercase a-z, 0-9, hyphen)`);
+export function checkSlug(slug: string, locale: Locale): void {
+  if (typeof slug !== 'string') throw new PostError(`${locale}.slug must be a string`);
+  const bytes = Buffer.byteLength(slug, 'utf8');
+  if (bytes > MAX_SLUG_BYTES) {
+    throw new PostError(`${locale}.slug must be at most ${MAX_SLUG_BYTES} ASCII bytes (received ${bytes})`);
+  }
+  if (!isSafeSlug(slug)) throw new PostError(`${locale}.slug invalid slug (lowercase a-z, 0-9, hyphen)`);
 }
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -316,13 +323,13 @@ export function validateDraft(pair: unknown): asserts pair is PostPair {
       throw new PostError(`${locale}.keyFacts must be an object of strings`);
     }
     const slug = l.slug ?? '';
-    if (slug !== '') checkSlug(slug as string);
+    if (slug !== '') checkSlug(slug as string, locale);
     if (locale === 'de' && !(typeof l.title === 'string' && l.title.trim())) throw new PostError('a German title is required to start a draft');
   }
 }
 
 function validateLocale(p: PostLocale): void {
-  checkSlug(p.slug);
+  checkSlug(p.slug, p.locale);
   if (!p.title.trim()) throw new PostError(`${p.locale}: title required`);
   if (!p.excerpt.trim()) throw new PostError(`${p.locale}: excerpt required`);
   if (!p.country.trim()) throw new PostError(`${p.locale}: country required`);
@@ -494,6 +501,7 @@ function draftWithDefaults(pair: PostPair): PostPair {
   // can omit `locale` at runtime despite the TS type, and the error message
   // must still name which side failed.
   const fillLocale = (l: PostLocale, locale: Locale): PostLocale => {
+    if ((l.slug ?? '') !== '') checkSlug(l.slug, locale);
     const err = imagesMapError(l.images) ?? heroImageError(l.heroImage);
     if (err) throw new PostError(`${locale}: ${err}`);
     const titleError = heroImageError(l.titleImage);
@@ -662,8 +670,10 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
       return withPair(tk, () => {
         const p = byKey.get(tk);
         if (!p) throw new PostError('post not found');
+        const previousUpdatedAt = new Date(p.updatedAt);
         p.status = 'draft';
         p.updatedAt = nextTime(p.updatedAt);
+        return { previousUpdatedAt, updatedAt: new Date(p.updatedAt) };
       });
     },
     async remove(tk) {
@@ -1023,11 +1033,13 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
       try {
         await client.query('BEGIN');
         await lockPostPair(client, tk);
-        if (!(await readPostPair(client, tk, true))) throw new PostError('post not found');
-        await touchPostPair(client, tk);
+        const pair = await readPostPair(client, tk, true);
+        if (!pair) throw new PostError('post not found');
+        const updatedAt = await touchPostPair(client, tk);
         await client.query(`UPDATE posts SET status='draft' WHERE translation_key=$1`, [tk]);
         writable();
         await client.query('COMMIT');
+        return { previousUpdatedAt: pair.updatedAt, updatedAt };
       } catch (error) {
         await client.query('ROLLBACK').catch(() => {});
         throw error;

@@ -60,6 +60,7 @@ interface SandboxOptions {
   isAdmin?: boolean;
   /** Render a page that declares a `.cms-page-actions` command group. */
   pageActions?: boolean;
+  identity?: { siteName: string; studioDescriptor: { de?: string; en?: string }; canonicalOrigin: string | null };
 }
 
 function shellSandbox(pathname: string, options: SandboxOptions = {}) {
@@ -163,6 +164,7 @@ function shellSandbox(pathname: string, options: SandboxOptions = {}) {
   };
 
   const documentStub = {
+    title: 'Posts',
     body,
     get activeElement() { return activeElement; },
     querySelector(selector: string) {
@@ -226,6 +228,7 @@ function shellSandbox(pathname: string, options: SandboxOptions = {}) {
   const copy = Object.fromEntries(Object.entries(ui.en)
     .filter(([key]) => key.startsWith('editor.chrome.'))
     .map(([key, value]) => [key.slice('editor.chrome.'.length), value]));
+  copy.siteTitleFallback = ui.en['site.titleFallback'];
   const navigation = Promise.withResolvers<string>();
   let href = '';
   const location = {
@@ -236,6 +239,7 @@ function shellSandbox(pathname: string, options: SandboxOptions = {}) {
   };
   const requests: { url: string; method: string | undefined }[] = [];
   const context: Record<string, unknown> = {
+    SiteIdentity: options.identity,
     EditorCopy: { en: copy },
     document: documentStub,
     location,
@@ -262,6 +266,7 @@ function shellSandbox(pathname: string, options: SandboxOptions = {}) {
   const accountTrigger = part('.cms-account-menu__trigger');
 
   return {
+    get title() { return documentStub.title; },
     main,
     heading,
     lede,
@@ -327,6 +332,25 @@ function expectDrawerClosed(shell: DrawerParts) {
 }
 
 describe('Auth navigation shell', () => {
+  it('paints configured identity as text, never as shell markup', () => {
+    const hostile = '</title><img src=x onerror=alert(1)>';
+    const shell = shellSandbox('/admin/posts.html', {
+      identity: { siteName: hostile, studioDescriptor: { en: '<script>descriptor()</script>' }, canonicalOrigin: null },
+    });
+    expect(shell.title).toBe('Posts · ' + hostile);
+    expect(shell.part('.cms-masthead-right > .cms-brand-sub').textContent).toBe('<script>descriptor()</script>');
+    expect(shell.html).not.toContain(hostile);
+    expect(shell.html).not.toContain('<script>descriptor()');
+  });
+
+  it('falls back from an empty descriptor to site name, then localized neutral name', () => {
+    const named = shellSandbox('/admin/posts.html', { identity: { siteName: 'Field notes', studioDescriptor: { de: 'Inactive text' }, canonicalOrigin: null } });
+    expect(named.part('.cms-masthead-right > .cms-brand-sub').textContent).toBe('Field notes');
+    const neutral = shellSandbox('/admin/posts.html');
+    expect(neutral.part('.cms-masthead-right > .cms-brand-sub').textContent).toBe(ui.en['site.titleFallback']);
+    expect(neutral.title).toBe('Posts · ' + ui.en['site.titleFallback']);
+  });
+
   it('marks the logical current page, including editor as part of Posts', () => {
     const desk = shellSandbox('/admin/index.html');
     expect(desk.html.match(/aria-current="page"/g)).toHaveLength(1);
