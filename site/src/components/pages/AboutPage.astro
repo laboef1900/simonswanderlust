@@ -76,7 +76,7 @@ const description = plain ? plain.slice(0, 150) : t('about.title');
       <!-- Main Content Block -->
       <div>
         <h1 class="text-3xl font-extrabold text-navy md:text-4xl">{heading}</h1>
-        <article class="prose prose-lg mt-6 max-w-none prose-headings:font-extrabold prose-headings:text-navy prose-a:font-semibold prose-a:text-brand-red prose-blockquote:border-l-2 prose-blockquote:border-brand-red/60 prose-blockquote:italic prose-p:first-of-type:first-letter:float-left prose-p:first-of-type:first-letter:mr-3 prose-p:first-of-type:first-letter:text-5xl prose-p:first-of-type:first-letter:font-extrabold prose-p:first-of-type:first-letter:text-brand-red">
+        <article class="prose prose-lg mt-6 max-w-none prose-headings:font-extrabold prose-headings:text-navy prose-a:font-semibold prose-a:text-brand-red prose-blockquote:border-l-2 prose-blockquote:border-brand-red/60 prose-blockquote:italic [&>p:first-of-type]:first-letter:float-left [&>p:first-of-type]:first-letter:mr-3 [&>p:first-of-type]:first-letter:text-5xl [&>p:first-of-type]:first-letter:font-extrabold [&>p:first-of-type]:first-letter:text-brand-red">
           {Content ? <Content /> : null}
         </article>
         <GalleryIsland locale={locale} />
