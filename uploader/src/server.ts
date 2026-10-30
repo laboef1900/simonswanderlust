@@ -33,7 +33,7 @@ import {
 } from './ai-providers.js';
 import { validateDraft, validateForPublish, PostError, type PostStore, type PostPair, type StoredPostPair, type PostUsageRow, assertNotStale, assertPublishTokens, type PublishTokens } from './posts.js';
 import { GpxError } from './gpx-errors.js';
-import { analyzeBodyImages, bodyImageKey } from './publish-gate.js';
+import { analyzeBodyContent, bodyImageKey } from './publish-gate.js';
 import { auditAltText } from './alt-audit.js';
 import { renderPreviewHtml, previewCsp } from './preview.js';
 import { loadGalleryMetadata } from './gallery-metadata.js';
@@ -1479,12 +1479,15 @@ export function buildServer(cfg: ServerConfig): AppServer {
   }
 
   /** Render once per locale; metadata alone is never a publication reference. */
-  async function publicationImages(pair: StoredPostPair): Promise<{ foreign: string[]; keys: string[] }> {
+  async function publicationBody(pair: StoredPostPair): Promise<{ foreign: string[]; keys: string[] }> {
     const foreign = new Set<string>();
     const keys = new Set<string>();
     for (const locale of ['de', 'en'] as const) {
       const l = pair[locale];
-      const body = await analyzeBodyImages(l.bodyMarkdown, l.images, imageBase);
+      const body = await analyzeBodyContent(l.bodyMarkdown, l.images, imageBase);
+      if (body.hasH1) {
+        throw new PostError(`${locale}: body must not contain an H1; the story hero provides the page H1`);
+      }
       for (const src of body.foreign) foreign.add(src);
       const storyUrl = new URL(`${locale === 'en' ? '/en' : ''}/${l.slug}/`, imageBase).href;
       for (const src of body.sources) {
@@ -1698,11 +1701,16 @@ export function buildServer(cfg: ServerConfig): AppServer {
     const state = await posts.getPublishState(tk);
     if (!state) return reply.code(404).send({ error: 'post not found' });
     const { pair } = state;
-    try { assertPublishTokens(state, tokens); validateForPublish(pair); } catch (e) {
+    let analysis: { foreign: string[]; keys: string[] };
+    try {
+      assertPublishTokens(state, tokens);
+      validateForPublish(pair);
+      analysis = await publicationBody(pair);
+    } catch (e) {
       if (e instanceof PostError) return reply.code(e.code === 'conflict' ? 409 : 400).send({ error: e.message, code: e.code });
       throw e;
     }
-    const { foreign, keys: imageKeys } = await publicationImages(pair);
+    const { foreign, keys: imageKeys } = analysis;
     if (foreign.length > 0) {
       return reply.code(409).send({
         error: foreignImagesMessage(foreign.length),
@@ -1804,7 +1812,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
         if (!pair) throw new PostError('post not found');
         if (action === 'publish') {
           validateForPublish(pair);
-          const { foreign, keys: imageKeys } = await publicationImages(pair);
+          const { foreign, keys: imageKeys } = await publicationBody(pair);
           if (foreign.length > 0) throw new PostError(foreignImagesMessage(foreign.length));
           const notReady = await notReadyPhotos(pair, imageKeys);
           if (notReady.length > 0) {

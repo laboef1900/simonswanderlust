@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { transformBodyImages } from './body-images.js';
+import { analyzeRenderedBody, transformBodyImages } from './body-images.js';
 import { escapeMeta } from './gallery-layout.js';
 import { renderMarkdown } from './render-markdown.js';
 import { SHIKI_CSS } from './shiki-classes.js';
@@ -444,9 +444,8 @@ describe('transformBodyImages — gallery value coercion', () => {
   });
 });
 
-describe('bodyImageSources — what the sanitized body would load (#91 publish gate)', () => {
-  it('reads img/source src+srcset and gallery lines from the sanitized tree, in every shape galleryCode accepts', async () => {
-    const { bodyImageSources } = await import('./body-images.js');
+describe('analyzeRenderedBody — sanitized heading and image semantics', () => {
+  it('reads img/source src+srcset and gallery lines from the sanitized tree, in every shape galleryCode accepts', () => {
     const html = [
       '<img alt="x > y" src="https://old.example/a.jpg">',
       '<picture><source srcset="https://old.example/b.jpg 1x, https://old.example/c.jpg 2x"><img src="https://img.example.com/own"></picture>',
@@ -455,9 +454,22 @@ describe('bodyImageSources — what the sanitized body would load (#91 publish g
       '<pre><code class="language-js">https://old.example/not-a-gallery</code></pre>',
       '<p>src="https://old.example/text-not-attr"</p>',
     ].join('\n');
-    expect(bodyImageSources(html)).toEqual({
+    expect(analyzeRenderedBody(html)).toEqual({
+      hasH1: false,
       sources: ['https://old.example/a.jpg', 'https://old.example/b.jpg', 'https://old.example/c.jpg', 'https://img.example.com/own'],
       galleryLines: ['https://img.example.com/one', 'https://old.example/g.jpg'],
     });
+  });
+
+  it.each([
+    ['<h1>Title</h1>', true],
+    ['<div><blockquote><ul><li><h1>&#35; Title</h1></li></ul></blockquote></div>', true],
+    ['<pre><code class="language-gallery"><h1>Actual heading</h1></code></pre>', true],
+    ['<code>&lt;h1&gt;Literal&lt;/h1&gt;</code>', false],
+    ['<p>&#60;h1&#62;Literal&#60;/h1&#62;</p>', false],
+    ['<script><h1>Removed</h1></script>', false],
+    ['<h2 title="<h1>">Section</h2>', false],
+  ])('detects only surviving H1 elements in %s', (html, hasH1) => {
+    expect(analyzeRenderedBody(html).hasH1).toBe(hasH1);
   });
 });

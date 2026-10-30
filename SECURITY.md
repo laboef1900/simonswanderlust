@@ -694,14 +694,14 @@ domain (an inline image with no `images` entry passes through unchanged) or drop
 gallery line fails the origin allow-list), and after the DNS cutover both 404. `POST
 /posts/:tk/publish` and the bulk `publish` action therefore refuse while the **rendered** body of
 either locale would emit an `<img>` — or contains a gallery line — whose **origin is not the image
-host** (`analyzeBodyImages`, `uploader/src/publish-gate.ts` — origin equality, never a prefix, the
+host** (`analyzeBodyContent`, `uploader/src/publish-gate.ts` — origin equality, never a prefix, the
 gallery allow-list's rule). Each candidate is resolved against the image host first, because a
 browser gives a reference with no origin of its own the page's: `//old.example/a.jpg` (and its
 `&#47;&#47;` and `\\` spellings) is a foreign hot-link the sanitizer keeps, while
 `https:old.example/a.jpg` is a path on our own host and refusing it would be a false refusal.
 The gate renders the body with the build's own `renderMarkdown` and
 reads `img`/`source` sources and gallery lines from the sanitized hast tree itself
-(`bodyImageSources` in `site/src/lib/body-images.ts`, before any `images` resolution), so every Markdown/HTML subtlety — escapes,
+(`analyzeRenderedBody` in `site/src/lib/body-images.ts`, before any `images` resolution), so every Markdown/HTML subtlety — escapes,
 `<…>` destinations, character references, code spans, backticks inside attributes — is decided
 by the one parser that decides it for readers; a text scanner cannot be kept in agreement with
 the renderer, and three review rounds proved it. No fetch, no DNS, no file access; the rendered
@@ -725,6 +725,16 @@ gallery URL/dimension guards, preview CSP, and EXIF/privacy controls are reconfi
 See [the approved readiness specification](docs/superpowers/specs/2026-10-25-publish-readiness-references-design.md)
 for failure recovery, rollback, and verification.
 
+**Story heading semantics share this analysis** (#375). `publicationBody` uses the same
+render per locale to refuse any surviving sanitized HAST `h1` element at any depth.
+Single publish returns the expected locale-specific 400; bulk retains its per-pair failure
+envelope and publishes/rebuilds only successful pairs. Renderer failures remain internal errors,
+not H1 refusals or successes. The refusal precedes snapshot writes, exports and builds.
+`validateForPublish` remains synchronous structural validation, not the complete eligibility gate.
+No Markdown is rewritten and About/page publication gains no H1 restriction. Pre-transform
+foreign sources and post-transform readiness references retain their existing policies.
+See [the approved heading contract](docs/superpowers/specs/2026-10-27-rendered-body-h1-gate-design.md).
+
 ## Output sanitization (stored XSS)
 
 Post bodies are DB-stored Markdown rendered to HTML at build time. Before that HTML reaches the
@@ -733,6 +743,10 @@ public site it is run through **`rehype-sanitize`** (`site/src/lib/body-images.t
 tuned so it does **not** break legitimate output: heading `id`s stay un-prefixed (so the table of
 contents `#anchor` links resolve) and `class` survives everywhere. Verified end-to-end against a
 published post carrying an XSS payload.
+
+The #375 H1 predicate reads the shared sanitize-first tree; it does not relax the
+schema, image injection guards, preview CSP or photo privacy controls. Enforcing one
+story H1 is a document-semantics rule, **not an XSS protection**.
 
 **No element may carry `style`** (#124). Astro's Markdown renderer passes raw HTML through, so the
 sanitizer cannot distinguish a Shiki `<span style="color:…">` from an author-typed one — and an

@@ -19,7 +19,7 @@ The WordPress/Elementor import preserved all prose and photos, but also preserve
 
 `htmlToMarkdown` now repairs the Elementor heading/subtitle artifact, splits hard-break-joined opening copy before the facts block, and drops an empty legacy TOC slot. A real authored contents section with list content is preserved.
 
-`validateForPublish` synchronously refuses either locale when its body contains an ATX `# ` heading or raw `<h1>` element. Fenced Markdown/HTML examples are ignored. The error names the locale and explains that the story hero supplies the page H1. This is a structural publish gate, not an editorial-quality gate.
+**Amended by owner-approved #375 (2026-10-28):** `validateForPublish` remains synchronous structural field validation. Single and bulk story publication additionally use `publicationBody` → `analyzeBodyContent` to refuse any surviving `h1` element in the renderer's sanitized HAST, at any nesting depth. ATX, Setext, container-nested and raw-HTML headings follow the same grammar as the reader output; inline, indented and fenced code, escaped markup and sanitizer-removed content do not count as headings. The single-route 400 names the locale and explains that the hero supplies the page H1; bulk reports a per-pair failure. Renderer failures remain internal errors. This does not rewrite bodies, extend the historical one-time content pass, or ban H1s in About/pages. See `2026-10-27-rendered-body-h1-gate-design.md`.
 
 ## Alt decision
 
@@ -36,5 +36,5 @@ The exact per-locale before/after record, including body hunks, key facts, hero 
 ## Verification
 
 - `uploader/test/wp-content.test.ts` covers heading/subtitle merge, opening hard-break paragraphs, empty TOC removal, and preservation of a real contents section.
-- `uploader/test/posts.test.ts` covers Markdown and raw-HTML H1 refusal plus fenced examples.
+- Heading regressions now belong to `site/src/lib/body-images.test.ts`, `uploader/test/publish-gate.test.ts` and `uploader/test/server.test.ts`: sanitized-element semantics, renderer parity and single/bulk publication behavior. The old scanner-specific assertions in `posts.test.ts` are removed with the scanner.
 - `uploader/test/alt-audit.test.ts` covers the filename warning without changing publish eligibility.
