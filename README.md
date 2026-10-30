@@ -156,10 +156,17 @@ If the GHCR package requires authentication, run `docker login ghcr.io` before p
 Open **http://localhost:3000/login** to create the first admin account, then head to the
 editor and write your first post.
 
-For public hosting, put an HTTPS reverse proxy in front of the app and route your blog
-and image domains to it. Compose exposes port 3000 on **loopback only**; Postgres stays
-on the internal container network. See [architecture and deployment](ARCHITECTURE.md)
-and the [security model](SECURITY.md) before exposing the service.
+For public hosting, use **one HTTPS reverse proxy in the host network namespace**, with no
+CDN or additional proxy hop, and route both blog and image domains to `127.0.0.1:3000`.
+Preserve the verbatim `Host`, overwrite `X-Forwarded-Proto` with the proxy's own scheme,
+and append or overwrite `X-Forwarded-For` so the rightmost entry is its accepted client.
+Compose exposes port 3000 on **loopback only** and sets `TRUSTED_PROXY: docker-gateway`
+literally; do not add it to `.env`. The app trusts only loopback and the discovered bridge
+gateway at hop zero, and refuses boot if gateway discovery fails. Postgres stays internal.
+Before cutover, verify the actual target-server peer, HTTPS `Secure` cookies and independent
+rate-limit buckets from two external networks; Docker Desktop TCP proof is not a VPS
+rehearsal. See [architecture and deployment](ARCHITECTURE.md) and the
+[security model](SECURITY.md#transport-headers--proxy) before exposing the service.
 
 The [2026-10-29 native amd64/arm64 rehearsal](docs/2026-10-29-clean-install-rehearsal.md)
 records exact released-image digests, a verified two-host TLS proxy example, installation
