@@ -71,14 +71,14 @@ async function collect(loader: Loader) {
           await writeFile(join(outDir, 'index.html'), output);
         });
       } });
-      const first = builder.build();
+      const first = builder.build('rebuild');
       await captured.promise;
       // The real snapshot is captured; saves are allowed to commit while the build is paused.
       await pool.query('UPDATE site_language SET enabled_locales=$1', [[primary]]);
       await pool.query("UPDATE pages SET title='PRIVATE PAGE',body_markdown='PRIVATE BODY' WHERE locale=$1", [secondary]);
       await pool.query("UPDATE site_nav SET config=jsonb_set(config,ARRAY['header','0','label',$1],to_jsonb('PRIVATE NAV'::text))", [secondary]);
       await pool.query("UPDATE site_identity SET site_name='PRIVATE IDENTITY'");
-      const queued = builder.build();
+      const queued = builder.build('rebuild');
       resume.resolve();
       expect((await first).ok).toBe(true);
       expect((await queued).ok).toBe(false);

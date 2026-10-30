@@ -30,7 +30,7 @@ function dump(rows: RouteDumpRow[], routeArchive?: RouteArchiveManifest): Dump {
     post_routes: rows }, ...(routeArchive ? { routeArchive } : {}) };
 }
 function database(rows: RouteDumpRow[]): Connectable {
-  const query = async (sql: string) => ({ rows: sql.includes('to_regclass') ? [{ present: true }]
+  const query = async (sql: string) => ({ rows: sql.includes('to_regclass') ? [{ present: true, journeys: true, locales: true, members: true }]
     : sql.includes('FROM site_language') ? [{
       id: true, primary_locale: 'de', enabled_locales: ['de', 'en'], locked_at: null, updated_at: now.toISOString(),
     }]

@@ -26,9 +26,10 @@ const fakeDb = (
   const language = { id: true, primary_locale: 'de', enabled_locales: ['de', 'en'], locked_at: null, updated_at: '2026-10-27T12:00:00.000Z' };
   // Order matters: 'FROM media_folders' also contains 'FROM media'.
   const query = async (sql: string) => ({
-    rows: sql.includes('to_regclass') ? [{ present: true }]
+    rows: sql.includes('to_regclass') ? [{ present: true, journeys: true, locales: true, members: true }]
       : sql.includes('FROM site_language') ? [language]
       : sql.includes('FROM site_nav') ? [{ id: 1, config: DEFAULT_NAVIGATION, updated_at: language.updated_at }]
+      : /FROM journey(?:s|_locales|_members)/.test(sql) ? []
       : sql.includes("to_jsonb(posts)->>'omitted'") ? posts.filter(post => post.omitted === true)
       : sql.includes('FROM users') ? users
       : sql.includes('FROM pages') ? pages
@@ -77,7 +78,10 @@ describe('dumpDatabase', () => {
     const dump = JSON.parse(gunzipSync(await readFile(join(dir, name))).toString('utf8'));
     expect(dump.tables.comments).toEqual([{ id: 'c1', translation_key: 'p1', locale: 'de', name: 'R', body: 'hi', status: 'pending', is_author: false }]);
     expect(dump.tables.users).toEqual([{ id: 'u1', username: 'simon' }]);
-    expect(dump.version).toBe(13);
+    expect(dump.version).toBe(14);
+    expect(dump.tables.journeys).toEqual([]);
+    expect(dump.tables.journey_locales).toEqual([]);
+    expect(dump.tables.journey_members).toEqual([]);
     expect(dump.tables.site_language[0]).toMatchObject({ primary_locale: 'de', enabled_locales: ['de', 'en'] });
     expect(dump.tables.posts).toEqual(['de', 'en'].map(locale => ({
       id: `p-${locale}`, translation_key: 'p1', locale, slug: 's', status: 'draft', omitted: false, published_snapshot: null, published_at: null,
@@ -164,6 +168,7 @@ describe('dumpDatabase', () => {
         if (sql.includes("to_regclass('site_identity')")) return { rows: [{ absent: preIdentity }] };
         if (sql.includes("to_regclass('site_language')")) return { rows: [{ present: false }] };
         if (sql.includes("to_regclass('site_nav')")) return { rows: [{ present: false }] };
+        if (sql.includes("to_regclass('journeys')")) return { rows: [{ journeys: false, locales: false, members: false }] };
         if (sql.includes('FROM posts ORDER')) expect(sql).not.toContain('omitted');
         return client.query(sql, params);
       } };
@@ -216,7 +221,7 @@ describe('dumpDatabase', () => {
     };
     const file = join(dir, await dumpDatabase(db, dir, new Date(), { preLanguageMigration: true }));
     const dump = readDump(file);
-    expect(dump.version).toBe(13);
+    expect(dump.version).toBe(14);
     expect(dump.tables.site_language?.[0]).toMatchObject({
       primary_locale: 'en', enabled_locales: ['en'], locked_at: '2026-10-27T12:00:00.000Z',
     });

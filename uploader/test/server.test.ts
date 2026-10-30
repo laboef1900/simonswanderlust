@@ -39,7 +39,6 @@ import { memorySecretsStore, SecretsError } from '../src/secrets.js';
 import type { AiProvider, AiProviderKind } from '../src/ai-providers.js';
 import { memoryOnboardingStore, type OnboardingProgress, type OnboardingState } from '../src/onboarding.js';
 import type { ReleaseManifestV1 } from '../../site/src/lib/publication-manifest.js';
-import { memoryLanguageStore } from '../src/language.js';
 
 let dir: string;
 beforeEach(async () => {
@@ -189,20 +188,21 @@ describe('Postgres navigation API boundary', () => {
       expect(s.calls).toHaveLength(1);
     } finally { await b.app.close(); }
   });
-  it.each(['outcome', 'throw'] as const)('acknowledges committed state on a %s rebuild failure', async (failure) => {
+  it('acknowledges committed navigation with a sanitized failed-build report', async () => {
     const language = memoryLanguageStore();
     const navigation = memoryNavigationStore(language);
-    const builder = stubBuilder({ ok: false, error: 'not public' }).builder;
-    if (failure === 'throw') builder.build = async () => { throw new Error('private infrastructure detail'); };
+    const builder = stubBuilder({ ok: false, attemptId: '1793300000000-1-1234', liveRelease: '1793290000000-1-1234', code: 'build_failed', error: 'private infrastructure detail' }).builder;
     const b = build({ language, navigation, builder });
     try {
       const { cookie } = await authed(b);
       const updatedAt = (await navigation.get()).updatedAt.toISOString();
       const saved = await b.app.inject({ method: 'PUT', url: '/settings/navigation', cookies: cookie,
         payload: { updatedAt, config: { ...DEFAULT_NAVIGATION, footer: [] } } });
-      expect(saved.statusCode).toBe(502);
-      expect(saved.json()).toMatchObject({ persisted: true, code: 'navigation_build_failed', saved: { config: { footer: [] } } });
-      expect(saved.body).not.toContain('infrastructure');
+      expect(saved.statusCode).toBe(200);
+      expect(saved.json()).toMatchObject({ saved: { config: { footer: [] } },
+        build: { ok: false, attemptId: '1793300000000-1-1234', liveRelease: '1793290000000-1-1234', code: 'build_failed' } });
+      expect(saved.json()).not.toHaveProperty('persisted');
+      expect(saved.body).not.toContain('private infrastructure detail');
       expect((await navigation.get()).updatedAt.toISOString()).toBe(saved.json().saved.updatedAt);
       expect((await navigation.get()).config.footer).toEqual([]);
     } finally { await b.app.close(); }

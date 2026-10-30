@@ -1583,7 +1583,7 @@
           endAction: () => publicationRefresh.endAction(),
         };
         SettingsIdentity.init(publicationActions);
-        SettingsNavigation.init();
+        SettingsNavigation.init(publicationActions);
         SettingsLanguage.init(publicationActions);
         publicationRefresh.start();
         await loadBackups();

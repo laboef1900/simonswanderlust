@@ -9,7 +9,7 @@ import { ensureSchema, type DbPool } from '../src/db.js';
 import { pgPageStore, type PagePair } from '../src/pages.js';
 import { pgLanguageStore } from '../src/language.js';
 import { pgPostStore, type PostLocale, type PostPair } from '../src/posts.js';
-import { dumpDatabase, readDump, restoreDatabase, PAGES_NAV_DUMP_VERSION, IDENTITY_DUMP_VERSION, LANGUAGE_DUMP_VERSION, type Dump } from '../src/backup.js';
+import { dumpDatabase, readDump, restoreDatabase, DUMP_VERSION, IDENTITY_DUMP_VERSION, LANGUAGE_DUMP_VERSION, type Dump } from '../src/backup.js';
 import { seedSiteIdentity } from '../src/site-identity.js';
 import { DEFAULT_NAVIGATION } from '../../site/src/lib/navigation.js';
 import { reportNamespaceCollisions } from '../src/namespace-report.js';
@@ -169,7 +169,7 @@ function story(slug = 'story'): PostPair {
     const nav = structuredClone(DEFAULT_NAVIGATION); nav.legal.push({ kind: 'page', target: 'contact' });
     await pool.query('UPDATE site_nav SET config=$1 WHERE id=1', [JSON.stringify(nav)]);
     const file = join(dir, await dumpDatabase(pool, dir)); const dump = readDump(file);
-    expect(dump.version).toBe(PAGES_NAV_DUMP_VERSION);
+    expect(dump.version).toBe(DUMP_VERSION);
     await pages.remove('contact'); await restoreDatabase(pool, file);
     const restored = await pages.get('contact'); expect(restored.de).toEqual(published.de); expect(restored.en).toEqual(published.en); expect(restored.status).toBe('published');
     expect((await pool.query('SELECT config FROM site_nav')).rows[0]!.config).toEqual(nav);

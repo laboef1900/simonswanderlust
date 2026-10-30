@@ -15,6 +15,7 @@ afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 function fixture(): Dump {
   return { version: DUMP_VERSION, createdAt: '2026-10-27T12:00:00.000Z', tables: {
     users: [], posts: [], post_routes: [], site_identity: [identityDumpRow()], site_identity_assets: [],
+    journeys: [], journey_locales: [], journey_members: [],
     pages: [], site_nav: [{ id: 1, config: { version: 1, header: [], footer: [], legal: [] }, updated_at: '2026-10-27T12:00:00.000Z' }],
     site_language: [{ id: true, primary_locale: 'de', enabled_locales: ['de', 'en'], locked_at: null, updated_at: '2026-10-27T12:00:00.000Z' }],
   } };
@@ -39,6 +40,7 @@ describe('identity dump version and full-storage validation', () => {
     }
     const legacy = fixture(); legacy.version = IDENTITY_DUMP_VERSION - 1;
     delete legacy.tables.site_identity; delete legacy.tables.site_identity_assets;
+    delete legacy.tables.journeys; delete legacy.tables.journey_locales; delete legacy.tables.journey_members;
     expect(readDump(await save(legacy)).version).toBe(IDENTITY_DUMP_VERSION - 1);
   });
 
