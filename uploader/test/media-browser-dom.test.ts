@@ -1530,6 +1530,36 @@ describe('Media publication impact and bounded refresh', () => {
     expect(writes).toBe(2);
   });
 
+  it.each([false, true])('retains the selected save projection across hiding (return before ack: %s)', async (returnBeforeAck) => {
+    const response = (body: unknown) => Promise.resolve({ status: 200, ok: true, json: async () => body });
+    const saving = Promise.withResolvers<unknown>();
+    const original = { ...item('a'), impact, livePending: unchanged,
+      usedIn: [{ kind: 'post', key: 'one', title: 'Original story' }] };
+    const fresh = { ...original, caption: { de: 'My caption', en: '' }, conditionalVersion: 1,
+      impact: { availability: 'available' as const, published: [story('fresh')], drafts: [], newerDrafts: [] },
+      usedIn: [{ kind: 'post', key: 'fresh', title: 'Fresh story' }],
+      changedDescriptions: { ...unchanged, de: { alt: false, caption: true } },
+      livePending: { ...unchanged, de: { alt: false, caption: true } } };
+    let reads = 0, writes = 0;
+    const page = loadPage({ request: (url, init) => {
+      if (url !== '/media/items/a') return;
+      if (init?.method === 'PATCH') { writes++; return saving.promise; }
+      reads++;
+    } });
+    await open(page, original);
+    page.el('dCapDe').value = 'My caption'; page.el('detail').dispatch('input');
+    page.el('dSave').click(); await page.flush();
+    page.visibility(true); await page.flush();
+    if (returnBeforeAck) { page.visibility(false); await page.flush(); }
+    page.rows.set('a', fresh); saving.resolve(await response(fresh)); await page.flush();
+    expect(page.el('dImpact').querySelectorAll('a').map(link => link.href)).toEqual(['/admin/editor.html?tk=fresh']);
+    if (!returnBeforeAck) { page.visibility(false); await page.flush(); }
+    expect(page.el('dCapDe').value).toBe('My caption');
+    expect(page.el('dUnsaved').hidden).toBe(true);
+    expect(reads).toBe(1);
+    expect(writes).toBe(1);
+  });
+
   it.each(['checking', 'saved'])('keeps the selected save projection while another photo is %s by bulk AI', async (stage) => {
     const response = (body: unknown) => Promise.resolve({ status: 200, ok: true, json: async () => body });
     const saving = Promise.withResolvers<unknown>();
