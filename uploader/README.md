@@ -578,6 +578,12 @@ Edits made during an in-flight save remain dirty until a later save includes the
 Failed saves and cancelled URL-change confirmations retain the unsaved form.
 A browser recovery stash is not a server save, and saving a published post's draft
 does not change its live version.
+Restoring a local draft retains the saved-version token it was edited against.
+A stale restore gets a conflict rather than overwriting a newer server version.
+An existing post's stash without a usable version can be restored for copying, but
+cannot be saved: copy the needed text, reload, and decline the restore to return to
+the saved version. If the post has since been published, its current live slugs are
+kept. A failed restore keeps its original stash and blocks saving the partial form.
 
 ## Alt-text audit (advisory)
 
