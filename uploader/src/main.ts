@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolveTrustPolicy, type TrustPolicy } from './trusted-proxy.js';
 import { mkdir } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { buildServer } from './server.js';
@@ -25,12 +27,23 @@ import { createGpxFiles } from './gpx-files.js';
 import { createGpxWorker } from './gpx-worker.js';
 import { createPublicTrackWorker } from './gpx-public-worker.js';
 import { createGpxService } from './gpx-service.js';
+import { pgSiteIdentityStore, seedSiteIdentity } from './site-identity.js';
+import { LEGACY_REVIEW_PROMPT } from './site-identity-legacy.js';
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {
   console.error('DATABASE_URL is required; refusing to start without it.');
   process.exit(1);
 }
+
+let proxyPolicy: TrustPolicy;
+try {
+  proxyPolicy = resolveTrustPolicy(process.env.TRUSTED_PROXY, () => readFileSync('/proc/net/route', 'utf8'));
+} catch (error) {
+  console.error(error instanceof Error ? error.message : 'TRUSTED_PROXY configuration is invalid.');
+  process.exit(1);
+}
+console.info(`trusted proxy peers: ${proxyPolicy.describe}`);
 
 // Validate before connecting/migrating. Absence disables only optional remote AI.
 const encryptionKey = parseEncryptionKey(process.env.ENCRYPTION_KEY);
@@ -47,14 +60,17 @@ const pool = createPool(databaseUrl, owner.applicationName);
 pool.on('error', () => console.error('Application database connection unavailable.'));
 await ensureSchema(pool);
 owner.assertWritable();
+await seedSiteIdentity(pool);
+const identityStore = await pgSiteIdentityStore(pool);
 const secrets = pgSecretsStore(pool, encryptionKey);
 // AI provider registry migration (spec §5), before listen(): copy the legacy
 // shared key to every provider that already received it, THEN persist the
 // derived settings. A crash in between reruns to the same ids; a failure here
 // fails boot exactly as an unreachable ensureSchema does.
 const aiMigration = settings.pendingAiMigration();
+if (aiMigration) await secrets.migrateLegacyKey(LEGACY_AI_KEY_SLOT, aiMigration.keyedProviderIds.map(slotFor));
+if (identityStore.get().seedSource === 'legacy') settings.preserveLegacyReviewPrompt(LEGACY_REVIEW_PROMPT);
 if (aiMigration) {
-  await secrets.migrateLegacyKey(LEGACY_AI_KEY_SLOT, aiMigration.keyedProviderIds.map(slotFor));
   settings.completeAiMigration();
   console.log(`settings: migrated AI settings to the provider registry (${settings.get().aiProviders.length} providers)`);
 }
@@ -94,6 +110,7 @@ const builder = createSiteBuilder({
   siteAppDir: process.env.SITE_APP_DIR ?? '/app/site',
   releasesRoot: siteDir,
   lock: workLock,
+  pool,
   ...runtime,
   applicationName: owner.applicationName + ':build',
 });
@@ -141,6 +158,7 @@ const housekeepingTimer = setInterval(housekeeping, 3_600_000);
 housekeepingTimer.unref();
 
 const app = buildServer({
+  trustProxy: proxyPolicy.trust,
   storageDir,
   baseUrl,
   imgHost,
@@ -149,6 +167,7 @@ const app = buildServer({
   users,
   sessions,
   settings,
+  identityStore,
   secrets,
   posts,
   pages,

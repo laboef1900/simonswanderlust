@@ -1,5 +1,5 @@
 import type { Loader } from 'astro/loaders';
-import { loaderPool } from './loader-pool.js';
+import { loaderPool, withLoaderSnapshot } from './loader-pool.js';
 import { transformBodyImages, type ImageDims } from './body-images.js';
 import { imageOrigin, retargetImageOrigins, type RemoteHeroImage } from './images.js';
 
@@ -104,13 +104,16 @@ export function postgresTripsLoader(): Loader {
         // @ai-warning: article content still comes ONLY from published snapshots,
         // never working columns (#20). Current library gallery descriptions are
         // the sole approved exception; they do not mutate the stored snapshot.
-        const { rows } = await pool.query<{ published_snapshot: PostRow }>(
-          `SELECT published_snapshot
-             FROM posts WHERE status = 'published' AND published_snapshot IS NOT NULL`,
-        );
-        const { rows: media } = await pool.query<MediaDescriptionRow>(
-          'SELECT key, alt_de, alt_en, caption_de, caption_en FROM media',
-        );
+        const { rows, media } = await withLoaderSnapshot(pool, async (client) => {
+          const { rows } = await client.query<{ published_snapshot: PostRow }>(
+            `SELECT published_snapshot
+               FROM posts WHERE status = 'published' AND published_snapshot IS NOT NULL`,
+          );
+          const { rows: media } = await client.query<MediaDescriptionRow>(
+            'SELECT key, alt_de, alt_en, caption_de, caption_en FROM media',
+          );
+          return { rows, media };
+        });
         const descriptions = {
           de: new Map<string, { alt: string; caption: string }>(),
           en: new Map<string, { alt: string; caption: string }>(),
