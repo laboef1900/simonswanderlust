@@ -976,3 +976,69 @@ platform-specific evidence and withheld deployment authorization, alongside the 
 runtime ownership safeguards. Before deployment qualification, the owner must provide an
 authorized disposable target directory on the actual deployment filesystem; no existing
 production content is a qualification fixture.
+
+## Temporary qualification retirement (2026-10-30)
+
+The owner authorized preserving the qualification artifacts, migrating relevant coverage,
+and removing the obsolete temporary #304 scaffold. The migration already exists in
+PR #486 at `49c2a1d092823ea77fc22e98cef061fbc16b496a`; retirement does not copy its product
+implementation into this design PR or change its acceptance-held disposition.
+`.github/issue-304-native/` and `.github/workflows/issue-304-native.yml` are now retired.
+No production binding, native test, application behavior or deployment gate changes here.
+
+### Durable consumer-visible coverage
+
+Paths below belong to the #305 product branch at that exact head, not to this design-only
+branch. They exercise the shipped binding or real ownership consumers, not source text or
+workflow wiring. No additional test migration is needed:
+
+| Retired proof behavior | Durable product coverage |
+|---|---|
+| Invalid argument types/ranges/arity; closed descriptor is a syscall failure, not contention; non-file descriptor refusal | `uploader/test/data-owner.integration.test.ts`, `owned native descriptor lifetime` descriptor-boundary case |
+| Live and kernel-confirmed SIGSTOP owner excludes a contender; explicit close while owner lives and SIGKILL release ownership without replacing the inode | The same suite's close/SIGKILL parameterized cases |
+| Ordinary child cannot extend ownership; deliberate descriptor inheritance does extend it until the last descriptor dies | The same suite's ordinary/explicit child cases, including surviving-child and inode assertions |
+| Filesystem-before-Postgres admission, app/restore exclusion, PG loss latches read-only while filesystem exclusion survives, and failed PG admission closes the unadmitted descriptor | `data-owner.integration.test.ts`, `product native filesystem + PostgreSQL ownership`; `.github/native-owner/package-qualify.py` additionally exercises the real packaged main and offline CLI across independent containers |
+| Restore refuses draining or newly admitted app sessions without terminating them | `uploader/test/storage-owner.integration.test.ts`; real main/restore integration in `uploader/test/gpx-main-boot.integration.test.ts` |
+| Packaged runtime, source/binary provenance, real entry-point ordering, stopped/live-owner exclusion, ordinary-child lifetime, PG-loss mutation fencing, process-death/graceful-close reacquisition and offline restores | `.github/native-owner/package-qualify.py`, exercised by `packaged owner · native amd64/arm64` in `.github/workflows/ci.yml` |
+
+The permanent `owned flock · native amd64/arm64` jobs select all three ownership/real-main
+integration suites on current product source with disposable Postgres. The ordinary uploader
+job also builds the addon before its full suite. Packaged qualification is separate: it runs
+automatically on the owned #305 PR or by explicit `qualify_native_package` dispatch. Required
+uploader/site job names are unchanged. These jobs live in #486; retiring the design scaffold
+does not claim that they have landed on `dev`.
+
+The temporary frozen-source workers, mount peers, image inventory, fixture setup and
+build-diagnostic exporter are not product APIs. Their historical results are retained;
+their implementation-specific diagnostic tests are retired with the exporter rather than
+copied as unrelated product tests. The old two-mount qualification remains evidence for
+its inspected ext4 bind/named mounts only. Current product host tests and packaged
+named-volume tests are not represented as a fresh repetition of that historical matrix.
+
+### Preservation and verification provenance
+
+The gitignored local evidence root is `.local/backlog-execution-2026-10-27/`:
+
+- `native-lock-prerequisite/` retains the original macOS arm64/APFS qualification,
+  private fixture inputs and stable lock inode.
+- `issue-304-native-ci-40866450527/` retains both native Linux architectures' successful
+  bind/named-volume reports. Earlier `issue-304-native-ci-*` attempts remain intact.
+- `issue-305-ci-40948955110/` retains the exact `49c2a1d` packaged-runtime reports and
+  job outcomes. [That CI run](https://github.com/laboef1900/simonswanderlust/actions/runs/40948955110)
+  passed all six jobs, with 22 packaged runtime steps per architecture.
+- `issue-470-cleanup-20261030/` retains the retired scaffold/workflow snapshot, the
+  pre-existing untracked Python cache, and `preservation-manifest.json` with file sizes
+  and SHA-256 identities. Private inputs remain local; they must never become PR artifacts.
+
+These are retained historical executions, not newly run native qualification. This
+documentation/scaffold-only retirement does not change behavioral coverage or justify
+duplicating the already durable tests. Current-head required CI and independent review
+remain merge gates. #305/#306 product acceptance is separate.
+
+Forced ENOLCK and deliberately non-CLOEXEC descriptor rejection remain unexercised.
+No NFS/SMB/FUSE, musl, Docker Desktop host-sharing or uninspected deployment filesystem
+is qualified. **Actual-target filesystem qualification remains mandatory before deployment
+or enablement**, using an owner-authorized disposable target directory and the selected
+binary with the complete process/descriptor/DB-loss/restore matrix. Successful acquisition
+does not enforce or satisfy that operational gate. No release, deployment, restore of
+owner data, or gate waiver follows from this retirement.
