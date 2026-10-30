@@ -191,14 +191,33 @@ ASVS L1 exception record: `docs/superpowers/specs/2026-09-14-comments-design.md`
 - **`POST` order of checks is load-bearing** and pinned by tests: (1) per-IP rate limit → 429,
   no insert; (2) **honeypot** — a non-blank `website` field answers **204 with an empty body**,
   no row, no log line (a 400 would train the bot; 204 does not look like the real 201);
-  (3) **Origin check** — the `Origin` header, else the origin of `Referer`, must equal
-  `new URL(PUBLIC_BASE_URL).origin` by **origin equality, never a prefix match** (the gallery
-  allow-list lesson: `https://simonswanderlust.com.evil.example` must fail); missing both,
-  unparsable, or mismatched → 403; (4) validation → 400 with the generic code `invalid_comment`,
+  (3) **Origin check** — the `Origin` header, else the origin of `Referer` only when Origin
+  is absent/empty, must equal the request's allowed **blog** origin by **origin equality,
+  never a prefix match** (#319). Credentials, malformed/non-HTTP(S) URLs, an Origin with
+  a path/query/fragment, missing both headers or mismatch → 403. A malformed Origin
+  cannot be rescued by Referer; (4) validation → 400 with the generic code `invalid_comment`,
   never the store's wording; (5) published pair → 404; (6) global or per-post flag off → 409;
   (7) insert as **`pending`** → 201 `{ ok: true }` — the new id is not echoed, so a caller cannot
   probe moderation. JSON body capped at 4 KiB; unknown fields (`email`, `parentId`, `status`)
   are ignored, never stored.
+- **Blog-origin source (#319):** resolve one origin per request. A supplied
+  `ServerConfig.commentsOrigin` override wins and invalid values fail closed. Otherwise the
+  temporary fallback is trusted `req.protocol` plus the **verbatim Host header**. It never
+  derives the expected origin from Origin, Referer or `X-Forwarded-Host`. The #369 immediate-peer
+  policy governs forwarded protocol and client IP; the proxy must preserve Host, overwrite
+  forwarded protocol and reject unintended public hostnames. Missing/malformed authority
+  fails closed. Both `PUBLIC_BASE_URL`'s image authority and actual `IMG_HOST` are excluded,
+  including alternate schemes. Authority comparisons normalize default ports under the
+  actual request protocol; explicit `:443`/`:80` cannot bypass the exclusion. A different
+  non-default port is not excluded merely for sharing a hostname. Malformed `IMG_HOST`
+  refuses the fallback, without overriding an explicit valid `commentsOrigin`. The only
+  exception is the existing single-origin loopback image/blog topology (`imgHostServesBlog`),
+  with matching image origin and serving authority.
+  This is CSRF equality, not authorization or a deployment-domain allow-list: until configured,
+  a non-image authority deliberately forwarded by the trusted proxy can accept its own
+  same-origin submissions. #276 will insert the current validated canonical identity between
+  the explicit override and fallback; #319 neither implements that API nor seeds identity from
+  a request. No CORS, session, persistence or ASVS-exception expansion is involved.
 - **Hold-for-moderation.** Every accepted comment is `pending`; nothing is public until an admin
   approves it on `/admin/comments.html` (`requireAdmin`, see below). Deletion is erasure.
 - **Rate limit:** 5 `POST`s per address per 15 minutes plus a process-wide 200 per hour, keyed on

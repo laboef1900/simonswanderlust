@@ -26,8 +26,8 @@ import type { RateLimiter } from './rate-limit.js';
 export interface PublicCommentsOptions {
   comments?: CommentStore;
   posts: PostStore;
-  /** Exact origin (scheme://host[:port]) a browser POST must carry. */
-  allowedOrigin: string;
+  /** One serialized allowed origin per request; null refuses the submission. */
+  allowedOrigin: (req: FastifyRequest) => string | null;
   /** Site-wide comments switch; false answers 409 and `enabled: false`. */
   commentsEnabled: () => boolean;
   /** Per-IP limiter — its OWN map, never the login limiter. */
@@ -73,17 +73,39 @@ export function toPublic(c: PublicComment, postedLocale: Locale, isAuthor: boole
   };
 }
 
-/** Origin of the request: `Origin`, else the origin of `Referer`; null when neither parses. */
+/**
+ * Parse HTTP URLs without WHATWG's repair of malformed authority syntax.
+ * Credentials (including empty userinfo), whitespace and escaped authorities
+ * are never acceptable on this CSRF boundary.
+ */
+function httpUrl(value: unknown, originOnly: boolean): URL | null {
+  if (typeof value !== 'string' || /[\s\p{C}\\]/u.test(value)) return null;
+  const match = /^https?:\/\/([^/?#]+)(.*)$/i.exec(value);
+  if (!match || !/^(?:\[[\da-f:.]+\]|[^:@%[\]]+)(?::\d+)?$/i.test(match[1]!)) return null;
+  if (originOnly && match[2] !== '' && match[2] !== '/') return null;
+  try {
+    const url = new URL(value);
+    return url.hostname && !url.username && !url.password ? url : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Strict origin URL, normalized for equality; never a path-bearing URL. */
+export function commentOrigin(value: unknown): string | null {
+  return httpUrl(value, true)?.origin ?? null;
+}
+
+/** Trusted protocol plus raw Host only — never Fastify's forwarded hostname. */
+export function commentAuthorityOrigin(protocol: string, host: unknown): string | null {
+  if ((protocol !== 'http' && protocol !== 'https') || typeof host !== 'string' || /[/?#]/.test(host)) return null;
+  return commentOrigin(`${protocol}://${host}`);
+}
+
+/** Origin wins when present, even when malformed; only absence permits Referer. */
 export function requestOrigin(headers: { origin?: unknown; referer?: unknown }): string | null {
-  const origin = headers.origin;
-  if (typeof origin === 'string' && origin !== '') {
-    try { return new URL(origin).origin; } catch { return null; }
-  }
-  const referer = headers.referer;
-  if (typeof referer === 'string' && referer !== '') {
-    try { return new URL(referer).origin; } catch { return null; }
-  }
-  return null;
+  if (headers.origin !== undefined && headers.origin !== '') return commentOrigin(headers.origin);
+  return httpUrl(headers.referer, false)?.origin ?? null;
 }
 
 const NOT_FOUND = { error: 'not_found' } as const;
@@ -140,7 +162,8 @@ export function registerPublicComments(app: FastifyInstance, opts: PublicComment
       return reply.code(204).send();
     }
     // 3. Origin equality (never a prefix), Referer as the fallback.
-    if (requestOrigin(req.headers) !== opts.allowedOrigin) {
+    const allowedOrigin = opts.allowedOrigin(req);
+    if (allowedOrigin === null || requestOrigin(req.headers) !== allowedOrigin) {
       return reply.code(403).send({ error: 'forbidden' });
     }
     // 4. Validation — one generic code; the island maps it to i18n copy.
