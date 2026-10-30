@@ -191,7 +191,13 @@ image archives live under `/data/backup/db`, on the **same disk as the running a
 Schedule a host-level offsite backup of `./uploader/data` as well; keep any AI encryption
 master key separately. A local backup alone is not disaster recovery.
 
-[Backup and restore procedures](ARCHITECTURE.md#backups--disaster-recovery).
+[Backup and restore procedures](ARCHITECTURE.md#backups--disaster-recovery) ·
+[App upgrade and supported recovery runbook](ARCHITECTURE.md#app-upgrades-and-supported-recovery).
+Before upgrading, capture a coherent old-app dump, matching private route archive, image
+recovery material, operator-managed settings/bootstrap copy and separately escrowed key
+generation under a write freeze. Settings are not included in the dump; there is no native
+settings snapshot. **No eligible backward release pair is currently established; recovery
+is roll-forward only.**
 
 ## Under the hood
 
@@ -243,7 +249,9 @@ integration tests need a separate `TEST_DATABASE_URL`.
 - Image backups exclude unfinished temporary files and capture completed images that cross
   an incremental archive boundary, using a cutoff from the images filesystem.
 
-Before upgrading, take **Back up now** and retain the previous image and backup.
+Before upgrading, follow the [canonical runbook](ARCHITECTURE.md#app-upgrades-and-supported-recovery):
+take **Back up now** under a write freeze and retain the complete matching recovery generation
+and previous image identity. Retaining that identity does **not** authorize a downgrade.
 The first image backup after this upgrade creates a **full image archive** to establish
 the new cutoff provenance; allow capacity for that archive plus the existing free-space
 reserve. Missing or invalid backup state also requires a full archive. Existing archives
@@ -260,13 +268,38 @@ explicitly adopted waypoints remain shared stops at their exact coordinates.
 Deploying does not publish drafts or rebuild the live blog. Route precision is not
 anonymization: remove sensitive points and inspect separately adopted stops before Publish.
 
-Upgrading from before v0.15.0: take **Back up now** before deploying. First boot migrates
-`settings.json` and the stored AI key into the provider registry, keeping
-`settings.json.pre-ai-registry`. Rolling back needs the older image, the dump and that file.
+**Historical v0.15.0 migration/recovery note — not a supported downgrade target.**
+The v0.14.1 → v0.15.0 transition migrated `settings.json` and the legacy stored AI key into
+the provider registry, retaining `settings.json.pre-ai-registry`, and widened the region
+constraint. Before such a migration, the recovery point must include an old-app pre-deploy
+dump and matching pre-upgrade settings/bootstrap with separate master-key escrow.
+Recovering the legacy registry/key arrangement would require **both** that pre-deploy dump
+and the pre-upgrade settings (or a verified matching `settings.json.pre-ai-registry`), plus
+the exact target schema and release-specific procedure. A post-upgrade dump does not undo the
+registry migration even when its format version is unchanged; a migration copy is not a
+snapshot of later settings edits.
+
+Every retained story would also need a region accepted by the old renderer. A pre-upgrade
+snapshot may remove newer region values at the cost of losing later edits; there is **no
+automatic region reassignment, slug change or owner-content rewrite**. Otherwise retain a
+compatible secure release and repair forward. These old tags are historical, not current
+security-supported recovery targets. The owner amended the historical downgrade rehearsal
+criterion on 2026-10-28: qualify supported upgrade/roll-forward recovery instead, and report
+backward recovery as unsupported/pending until an eligible pair exists. No historical
+downgrade or region-reassignment rehearsal is claimed.
+
+**Release gate:** complete the [release recovery checklist](ARCHITECTURE.md#release-recovery-checklist)
+before tagging. Notes must state schema/settings migrations (including “none”), dump writer
+and reader versions/fidelity exclusions, full recovery material and capacity, actual
+Compose/bootstrap/proxy changes, explicit rebuild requirements, and release-specific
+recovery steps with evidence or **“roll-forward only; no supported downgrade.”** Eligibility
+is limited to the immediately previous security-supported, rehearsed pair; none is established
+today. #347's patched codec floor is mandatory and its recovery remains roll-forward only.
+An app upgrade does not authorize a [Postgres-major change](ARCHITECTURE.md#upgrading-a-postgres-major-eg-17--18).
 
 1. On a `feature/*` branch from `dev`, update both apps' package and lockfile versions,
    plus `IMAGE_TAG` defaults in `docker-compose.yml` and `uploader/.env.example`. Update
-   the release notes here.
+   the release notes here and satisfy the release gate above; generated notes alone do not qualify.
 2. Merge a green PR into `dev`, then a green release PR from `dev` into `main`.
 3. Tag the merged release on `main` (example for this release):
 

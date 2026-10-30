@@ -230,8 +230,9 @@ time are kept — they are useful and carry no location.
 able to run — see `uploader/src/disk.ts`. A full `/data` otherwise fails mid-pipeline and can
 leave a partial variant set with no complete record. The incremental images archive — the
 largest single writer on the volume — applies the same reserve on its way in (#113): it refuses
-when its estimated size would not leave that room, and its temp file never survives a failed or
-interrupted run, so the backup feature cannot fill the disk it shares with the site. Free space
+when its estimated size would not leave that room. Failed output is removed only after its
+writer settles; exit cleanup is best-effort and SIGKILL leftovers are swept on the next run.
+An unlink failure is logged for the next sweep, not reported as a successful archive. Free space
 is also reported on `/health` — **only to an admin session** (#132): the route itself is public
 because the compose healthcheck polls it without a cookie, but `free`/`total` for `/data` would
 let anyone on the internet watch the volume fill up and time a disk-exhaustion attempt against
@@ -248,6 +249,15 @@ clock rollback, foreign nested mounts and arbitrary network filesystems are outs
 timestamp protocol. Legacy, missing or corrupt cutoff provenance forces a full archive with
 the existing reserve, retaining old archives rather than guessing from filenames. Admin-only
 backup access, private original/EXIF handling, storage ownership and key guards are unchanged.
+
+Writer settlement was reconfirmed for #430 (2026-10-28): an owned tar pack and Node destination
+pipeline await destination open/write/close before failure cleanup or successful activation.
+Cancellation cannot activate the archive or advance its cutoff, and backup quiescence waits
+for that settlement before storage ownership is released. Tar may finish admitted **read-only**
+input work after its pack is destroyed; pipeline error listeners remain installed and the closed
+destination cannot receive further bytes. This does not claim every private tar input descriptor
+has closed at rejection. Prior completed archives, originals, dumps and route companions are
+not failure-cleanup targets. Authorization, restore validation and persisted formats are unchanged.
 
 `POST /import` has the same precondition (issue #94), with the same 507 and the same reserve, but
 sized from a **count** rather than a byte total — a WXR declares URLs, not sizes — using the
@@ -359,6 +369,9 @@ this fix requires a new release image and an owner-controlled redeployment. Reco
 **roll forward only** while retaining the patched codec floors: restoring sharp 0.35.3/0.35.4
 would reopen vulnerable decoding, including boot/rescan of retained originals. Preserve data;
 do not re-import or bulk re-encode as a dependency rollback.
+The [app upgrade/recovery policy](ARCHITECTURE.md#app-upgrades-and-supported-recovery) does
+not relax this floor: no backward pair is currently eligible, and #347 remains roll-forward
+only. A retained vulnerable image digest is diagnostic evidence, never deployment approval.
 
 The metadata allow-list below, private-original restrictions, SVG original naming, accepted
 formats, and upload/import/preview authorization are unchanged. Benign JPEG, AVIF and SVG
@@ -911,6 +924,16 @@ deliberate trade-off, not an oversight:
 
 ### Backups
 
+- App upgrades follow the [canonical recovery runbook](ARCHITECTURE.md#app-upgrades-and-supported-recovery).
+  Freeze/drain all mutations and storage writers before capture and retain one coherent
+  dump/settings/bootstrap/image/private-route generation with separate matching key escrow.
+  Settings capture remains operator-managed, not an app-native snapshot. Mixing pre-change
+  credentials with post-change provider settings can disclose a key to the wrong destination;
+  reconcile partial saves before capture. Protect original photo/GPX recovery material as
+  private data. Recovery preserves the storage-owner fence, source validation and verified
+  pre-restore undo set below; no reverse DDL, region mutation or volume deletion is implied.
+  Eligible backward recovery would additionally need an immediately previous secure,
+  release-specific rehearsed pair; none is established, and the codec floor above still applies.
 - Backup dumps (`/data/backup/db/db-*.json.gz`) contain the `users` table **including scrypt
   password hashes** — treat backup files as sensitive, same as the database itself. `sessions` are
   **never** dumped (disposable, and token hashes don't belong in a backup).
@@ -923,24 +946,47 @@ deliberate trade-off, not an oversight:
   logical dumps do not capture the settings file. A lost master key requires reissuing
   the provider credential, not bypassing encryption. Removing a row does not revoke the
   key externally or remove copies in old backups.
-- Image archives (`/data/backup/db/images-*.tar`) contain no password hashes — only the already
-  publicly served image files — but their download route stays behind the same admin gate and
-  strict filename validation as the dumps.
+- Image archives (`/data/backup/db/images-*.tar`) contain public variants **and private
+  full-resolution originals**. Originals may retain EXIF/GPS and other source metadata:
+  handle these archives as sensitive recovery material, like database dumps. Downloads remain
+  admin-only with strict filename validation. Image archives are **never pruned** automatically;
+  each may hold a unique part of the recovery chain. Deleting a photo from the media library
+  does **not** purge earlier archives or their offsite copies.
+  The read-only [`audit-exif` command](#published-image-metadata-allow-list) inspects public
+  variants, not private originals or archive history: a clean result does not certify those
+  copies GPS-free and does not erase anything. Private GPX originals belong to **separate
+  companion route archives** referenced by v10 database dump manifests, not image tars.
+  Protect offsite copies and retain separate key escrow as described in
+  [Backups & disaster recovery](ARCHITECTURE.md#backups--disaster-recovery).
 - The download route (`GET /backups/:name`) is **admin-only** and validates the filename against a
   strict pattern (`^db-\d{8}-\d{6}\.json\.gz$` or `^images-\d{8}-\d{6}\.tar$`) before touching the
   filesystem — no path traversal.
-- Restore is **CLI-only**
-  (`docker compose exec app node --import tsx src/cli.ts restore [--yes] /data/backup/db/<file>`
-  — the shell-less runtime image requires invoking `node` directly), never a web route, because
-  it's destructive: it deletes and re-inserts `users`, `posts`, media, and `pages` in one
-  transaction (`pages` only when present in the dump — v1 dumps predate them and leave existing
-  pages untouched). Deleting `users` cascades to `sessions`, so a restore invalidates every login.
-  The CLI is guarded against operator mistakes, not attackers (#114): the file name must match
-  the dump pattern, the operator confirms against a summary of the dump and of the live rows
-  (`--yes` for scripts; the printed target is `host:port/dbname` — the `DATABASE_URL` password is
-  never echoed), and a **pre-restore dump** of the current state is written into the backup
-  directory first — the restore aborts if that dump fails, so a restore that cannot be undone is
-  never run.
+- Restore is **CLI-only**, never a web route. Confirm the intended image, database and `/data`
+  mount, retain the source recovery set, stop every app/maintenance writer sharing them and
+  wait for exit and drained database sessions; keep Postgres running. Use:
+
+  ```sh
+  docker compose stop app
+  docker compose run --rm --no-deps --entrypoint node app --import tsx src/cli.ts restore /data/backup/db/db-YYYYMMDD-HHmmss.json.gz
+  ```
+
+  The explicit Node entrypoint supports the shell-less image. Do not add service ports.
+  Fresh-schema recovery keeps all ingress closed throughout the zero-user/setup window;
+  see the [major-upgrade alternative](ARCHITECTURE.md#upgrading-a-postgres-major-eg-17--18).
+  This guidance reconfirms the unchanged [GPX storage-owner boundary](#gpx-routes--private-source-and-public-snapshot):
+  exclusive ownership and absence of app sessions are mandatory, never bypassed by killing
+  sessions or disabling fencing.
+  Current v10 recovery replaces `users`, `posts`, `pages`, `media`, `media_folders`,
+  `app_secrets`, `comments` and `post_routes`, with manifest-paired private originals.
+  [Database dumps](ARCHITECTURE.md#database-dumps) documents legacy absent-field behavior.
+  Sessions are not restored; deleting users invalidates every login. Settings/key escrow
+  remain external. The CLI validates the source set, prints a credential-free target and
+  live/dump counts, and requires literal `yes`. `--yes` skips only that prompt, never ownership,
+  source validation or the **verified pre-restore recovery set** written before replacement.
+  If undo capture/verification fails, replacement aborts. Restart with `docker compose up -d app`
+  only after successful completion and result inspection, reconcile settings/key escrow,
+  then sign in and explicitly rebuild. Failed or ambiguous completion: leave the app stopped,
+  preserve input/undo/staged sets and investigate rather than retrying blindly.
 - In-app backups live on the **same disk** as the live data; disaster recovery requires an
   offsite host-level backup of `./uploader/data` — see
   [ARCHITECTURE.md](ARCHITECTURE.md#backups--disaster-recovery).
