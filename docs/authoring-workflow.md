@@ -73,6 +73,18 @@ two different posts, or a slug equals another post's slug in the *other* languag
 are filed by slug, without a language) — is **rejected** with a warning naming the owner, and
 nothing is written. Resolve the slug in the editor and run the import again.
 
+**Untranslated stories:** The current importer requires a published DE/EN pair. A published
+German or English post without a Polylang translation group is counted individually as
+**Rejected**, with its unchanged slug and language in the warning list; a group missing its
+other published language is rejected too. Neither creates a draft nor downloads photos, even
+with **Replace existing drafts with the export** selected. An export containing only these
+refusals still completes as an import job with a rejection summary and zero planned work —
+it does not mean those stories were migrated. The five post counters sum to distinct Polylang
+groups plus individual untranslated published DE/EN items, not the number of XML rows in pairs.
+The warning list is capped, but the rejected count remains exact. Unknown/missing languages,
+non-post items and unpublished posts remain excluded; an export with no reportable items
+still fails as empty. No translation or replacement slug is generated.
+
 ---
 
 ## Stage 1 — Upload the photos (do this first)
@@ -177,6 +189,21 @@ can still be running when the upload returns: wait until the photo is ready befo
    The slug and shared fields (date, countryCode, region, coordinates) carry over automatically.
 5. Click **Save draft** — both locale rows are written to Postgres. The post is not yet live.
 
+**Slug length (#353, rollout-gated):** the existing lowercase ASCII slug grammar is limited
+to **251 bytes**, so `<slug>.mdx` fits a 255-byte filename. Only newly auto-derived slugs
+are truncated after normalization (with a cut-off trailing hyphen removed). Typed, pasted,
+loaded, restored, stashed and published slugs are never shortened. An unset locale may stay
+empty in a draft; publishing needs both slugs. Excessive saved/imported inputs are refused
+with the locale field and length rather than renamed. MDX export checks both locales before
+writing either file; database backups preserve legacy records that cannot be exported.
+
+**Before activating the cap on an existing installation**, run the owner-authorized
+read-only working/snapshot inventory described in
+`docs/superpowers/specs/2026-10-27-slug-length-bound-design.md`. Any over-bound result,
+including an imported draft, blocks rollout until an explicit owner decision. Do not shorten
+a live WordPress URL, unpublish a record, or rewrite a backup as a workaround. Implementation
+does not establish that the owner corpus has passed this gate.
+
 ### Fill coordinates from the country
 
 Enter a country in either language's **Country** field, then leave the field. Recognized
@@ -242,6 +269,17 @@ refreshes the snapshot.
 Gallery descriptions are the exception: alt text and captions for photos in the Media
 library use the current library values on the next rebuild, without republishing each
 article. This does not publish any draft text or change gallery order.
+
+**More actions → Unpublish** returns both languages to draft and rebuilds the site.
+The previous release remains visible until that rebuild succeeds; if it fails, the
+old live pages remain until a successful rebuild. After your own successful unpublish,
+you can edit and **Save draft** in the same tab without reloading, provided nobody
+else saved since the version you loaded. The editor adopts the unpublish's new
+concurrency token only when its transaction-captured predecessor matches the
+editor's current token. Unpublish still removes the story when your form is stale,
+but a save made elsewhere before unpublish or while its rebuild is running still
+produces the normal conflict dialog on your next save rather than overwriting it.
+Choose **Cancel** there to keep your unsaved edits on screen for copying.
 
 ### Import and trim a private GPX route
 
@@ -323,8 +361,10 @@ name the affected stories. Important details:
   validation (or a half-created pair with only one locale row) is listed by name in the status
   box with its reason; everything else goes through. Failed stories remain selected for retry;
   successfully processed stories are deselected.
-- **Bulk delete asks you to type `DELETE`.** There is no undo — revisions are per-save snapshots
-  of a post, so deleting the post takes them with it.
+- **Bulk delete asks you to type `DELETE`.** Type the exact token and press Enter, or click
+  **Delete**. Enter with a mismatched token keeps the confirmation open; Escape or Cancel
+  dismisses it without deleting. There is no undo — revisions are per-save snapshots of a
+  post, so deleting the post takes them with it.
 
 ### Export / backup
 

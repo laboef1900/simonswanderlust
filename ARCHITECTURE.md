@@ -593,8 +593,14 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   are recorded and logged, never crash the app.
 - **Images archive safety (#113,
   [spec](docs/superpowers/specs/2026-09-05-images-archive-safety-design.md))** — the incremental
-  `images-*.tar` is streamed to a `.<pid>.tmp` that is unlinked on any failure, including the
-  process exiting mid-stream; stale temps from a SIGKILL are swept at boot and before each run.
+  `images-*.tar` is streamed to a `.<pid>.tmp`. Since [#430](docs/superpowers/specs/2026-10-28-image-archive-stream-settlement-design.md),
+  the owned pack/destination pipeline waits for pending destination open, writes and close before
+  unlinking failed output or atomically activating a successful archive. The original error survives
+  cleanup; an unlink failure is logged for the next sweep. Exit cleanup remains best-effort; stale
+  temps from SIGKILL are swept at boot and before each run. Backup quiescence waits for writer
+  settlement, and cancellation prevents activation/cutoff advancement. Private tar input jobs can
+  still finish read-only work after pack destruction, but cannot write the closed destination.
+  Recovery is a new attempt after settlement, **not deleting prior archives**.
   The archive refuses (recorded as `lastError`, cutoff unchanged) when its estimated size plus the
   same 2 GiB reserve `/upload` keeps would not fit. Since [#335](docs/superpowers/specs/2026-10-25-image-archive-publication-boundary-design.md),
   selection includes content mtime **or publication ctime**, excluding atomic-write `.part-*`
@@ -753,12 +759,22 @@ On the server: pull the GHCR image directly (no `dhi.io` login needed there — 
 `IMAGE_TAG` in `.env`, then `docker compose pull && docker compose up -d`. Cutting a release = bump
 the `IMAGE_TAG` defaults (`docker-compose.yml`, `uploader/.env.example`), commit, tag, push the tag.
 
+**Native codec updates (#347):** record the current image digest before an owner-controlled
+upgrade, then release and deploy a newly built image; changing `package-lock.json` or running
+Rebuild site does not replace loaded codecs. The verified sharp 0.35.5 candidate uses libheif
+1.23.5, librsvg 2.63.2 and libvips 8.18.7 in both trees on both supported Linux architectures.
+The previous digest is diagnostic/recovery evidence, **not** authorization to restore vulnerable
+codecs: #347 recovery is roll-forward only. No schema/data migration or re-encoding is required;
+the existing originals, variants and static releases remain intact. Release/deployment is a
+separate owner action, not part of the dependency PR.
+
 ## Configuration (environment)
 
 | Var | Used by | Purpose |
 | :-- | :-- | :-- |
 | `DATABASE_URL` | app | Postgres connection (content + auth) |
 | `ENCRYPTION_KEY` | app | Optional 64-hex master key for encrypted AI credentials; unset permits local workflows, malformed values refuse boot; escrow separately |
+| `TRUSTED_PROXY` | app / compose literal | Unset or `loopback`: loopback peers only. Compose sets `docker-gateway`: also trust the single discovered IPv4 default gateway, at hop zero only. Empty/unknown values or failed gateway discovery refuse boot. Not an `.env` setting; changing bridge/proxy topology requires a new trust spec. |
 | `PUBLIC_BASE_URL` | app | Public base for image URLs (e.g. `https://img.simonswanderlust.com`) |
 | `IMG_HOST` | app | Hostname routed to the image-variant static handler (defaults to the host of `PUBLIC_BASE_URL`) |
 | `SITE_APP_DIR` | app | Path to the Astro project the builder spawns (`/app/site`) |
@@ -786,6 +802,13 @@ topology validation in the approved spec. This table does not introduce an opera
 - **Public, authenticated:** the admin app (`/admin/`) and its API — session-cookie gated, with
   admin-only operations (publishing, user management, rebuild, backups).
 - **Internal only:** Postgres is not exposed to the internet (no published port).
+- **Immediate proxy peer:** the shipped bridge topology permits one host TLS proxy. The app
+  validates the socket address before accepting forwarded IP/protocol and stops at hop zero;
+  it never trusts the whole bridge network. The host must preserve `Host`, overwrite the
+  forwarded scheme, and put its accepted client at the rightmost XFF position. See
+  [Transport, headers & proxy](SECURITY.md#transport-headers--proxy) for the accepted
+  host-process residual, measured Docker Desktop TCP evidence and the remaining target-VPS
+  loopback/real-client verification gate.
 
 Both public and admin traffic now terminate in the **same process**, which is a deliberate,
 accepted trade-off for the WordPress-style topology (see [Security posture — accepted

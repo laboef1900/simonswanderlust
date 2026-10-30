@@ -914,6 +914,9 @@ and the `<dialog>`s appended to `<body>` share one set:
   Rebuild. `.btn-new` is the accent command link (New post, New trip). Form actions sit in
   one `.form-actions` row, primary first; dense rows (bulk bars, folder actions,
   revisions, comment moderation) use the small height.
+- **Confirmations** require fresh consent for each opening. Escape, Cancel, and a
+  result-less `close()` never reuse an earlier acceptance; a typed confirmation also
+  requires the current prompt's exact token.
 - **Sections** inside the white workspace are flat: stacked `.card`s divide by a hairline
   (`--line`), never as cards inside the workspace card. Simple form pages (Users, Import)
   keep fields at a `34rem` measure.
@@ -968,6 +971,15 @@ and the `<dialog>`s appended to `<body>` share one set:
   lightbox captions. Edits apply only to this gallery in the active locale, commit with
   Insert/Update gallery, and Cancel discards them. The manuscript widget marks hidden
   captions explicitly. On phones, each reset button sits below its textarea.
+- With gallery previews enabled, typing or pasting at either collapsed fence edge
+  inserts prose on separate lines outside the gallery, including at the start or
+  end of the manuscript. Arrow-key navigation and clicking the visually empty
+  boundary must not prefix the opener or suffix the closer. Undo/redo, local alt
+  edits, picker replacements, and the raw-Markdown toggle retain their existing
+  behavior; the saved Markdown remains the source of truth. Undo/redo restores
+  the caret with the inserted text, not at the fence or trailing padding, so
+  continued typing stays in the same paragraph. Consecutive typing remains one
+  undo group.
 - Story details sits beside the manuscript on desktop. Its header carries one
   icon-only panel toggle (`panel-right-close` / `panel-right-open`, named Collapse /
   Expand story details); collapsing slides the panel right into a slim rail that

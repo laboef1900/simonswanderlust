@@ -1239,3 +1239,11 @@ Recovery remains §13's verified undo dump and atomic restore, followed by resta
 Rebuild. For an unwanted asset, remove or replace the saved role and rebuild; retain its source
 locally if it may be needed again. Existing release rollback retains that release's captured
 assets, and no original upload is stored.
+
+### Integration preparation — 2026-10-30
+
+Baseline `2a33742d5f9e1236b387e235661324c49c8641fd` retains the identity v11
+allocation. The asset-route registration and fingerprinted identity cache policy are
+combined with the baseline trusted-proxy type and native static-serving policy;
+neither boundary is replaced. Prior runtime evidence remains historical, with new
+integration checks recorded separately in the local preparation ledger.
