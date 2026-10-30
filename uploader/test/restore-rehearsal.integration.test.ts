@@ -176,7 +176,7 @@ maybe('restore rehearsal: app backup → fresh database → restore CLI → prod
 
   async function bootApp(root: string, databaseUrl: string, key: string | undefined): Promise<RunningApp> {
     const port = await freePort();
-    const { ENCRYPTION_KEY: _inherited, ...inherited } = process.env;
+    const { ENCRYPTION_KEY: _inherited, TRUSTED_PROXY: _proxyInherited, ...inherited } = process.env;
     const env: NodeJS.ProcessEnv = {
       ...inherited, ...dataEnv(root), DATABASE_URL: databaseUrl, HOST: '127.0.0.1', PORT: String(port),
       PUBLIC_BASE_URL: IMAGE_BASE, IMG_HOST, SITE_DIR: join(root, 'site'),
@@ -284,7 +284,7 @@ maybe('restore rehearsal: app backup → fresh database → restore CLI → prod
     const comments = pgCommentStore(productionPool);
     const reader = await comments.create({ translationKey: tk, locale: 'de', name: 'Leserin', body: 'Wunderschöner See!' });
     await comments.approve(reader.id);
-    await comments.replyAsAuthor({ translationKey: tk, body: 'Danke fürs Lesen!', postedLocale: 'de' });
+    await comments.replyAsAuthor({ translationKey: tk, body: 'Danke fürs Lesen!', postedLocale: 'de' }, 'Rehearsal author');
     await comments.create({ translationKey: tk, locale: 'en', name: 'Waiting reader', body: 'Still in moderation' });
 
     await pgPageStore(productionPool).save({
@@ -464,7 +464,7 @@ maybe('restore rehearsal: app backup → fresh database → restore CLI → prod
       enabled: true,
       comments: [
         { authorName: 'Leserin', body: 'Wunderschöner See!', isAuthor: false },
-        { body: 'Danke fürs Lesen!', isAuthor: true },
+        { authorName: 'Rehearsal author', body: 'Danke fürs Lesen!', isAuthor: true },
       ],
     });
     const queue = await (await fetch(`${restored.base}/moderation/comments?status=pending`, { headers: { cookie: admin } })).json() as Record<string, unknown>;
