@@ -58,9 +58,13 @@ function matchBrace(s: string, start: number): number {
 /** Extract the first JSON object that carries a non-empty altEn + altDe from a
  *  model reply. Scans each `{`, matching braces string-aware, so it tolerates
  *  prose/code-fence wrapping, a stray `{…}` before the real object, and literal
- *  braces inside string values — cases a plain regex match mishandles. */
+ *  braces inside string values — cases a plain regex match mishandles.
+ *  Thinking is discarded first, by the same rule as parseEditorialReview and
+ *  the browser's photo-details parser: a reasoning model may write a draft
+ *  `{altEn, altDe}` while thinking, and an unclosed `<think>` runs to EOF — a
+ *  thought cut off mid-way is not an answer (#351). */
 export function parseCaption(content: string): Caption {
-  const s = String(content);
+  const s = String(content).replace(/<think>[\s\S]*?(?:<\/think>|$)/gi, '');
   let sawJson = false;
   for (let i = 0; i < s.length; i++) {
     if (s[i] !== '{') continue;

@@ -144,16 +144,25 @@ An empty `SITE_DIR` starts a build from `SITE_APP_DIR`, so check both paths befo
    now covers image variants *and* the built blog output, since both live under the same `/data`
    volume: `mkdir -p uploader/data && sudo chown -R 1000:1000 uploader/data` (run from the
    monorepo root).
-5. Point your reverse proxy (nginx/Caddy/Traefik) at the container, terminating TLS: **both**
-   `https://simonswanderlust.com` **and** `https://img.simonswanderlust.com` → `127.0.0.1:3000`.
-   One Fastify process serves both domains — a host-header check (`IMG_HOST`) picks image-variant
-   serving vs. the blog/admin, so each domain behaves exactly as before the merge. **The proxy
-   must forward the original, verbatim `Host` header for both domains** (nginx:
-   `proxy_set_header Host $host;` — do not rely on the default, which some nginx configs override
-   with `$proxy_host`/the upstream name). If the `Host` header reaching the app isn't exactly
-   `img.simonswanderlust.com`, image URLs silently fall through to the blog/admin routing instead
-   of serving image variants.
+5. Run **one host-level TLS proxy** (nginx/Caddy/Traefik), without a CDN or additional proxy
+   hop: **both** `https://simonswanderlust.com` **and** `https://img.simonswanderlust.com`
+   → `127.0.0.1:3000`. One Fastify process serves both domains; its raw `Host` check
+   (`IMG_HOST`) selects image variants versus blog/admin.
+   Preserve the verbatim `Host`, overwrite `X-Forwarded-Proto` with the proxy's scheme,
+   and append or overwrite XFF so the rightmost address is the client the proxy accepted.
+   nginx: `proxy_set_header Host $http_host;`,
+   `proxy_set_header X-Forwarded-Proto $scheme;`,
+   `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`.
+   Never rely on an upstream-name `Host` rewrite: it sends image requests to blog/admin.
+   Compose's literal `TRUSTED_PROXY: docker-gateway` trusts only loopback and the discovered
+   bridge gateway at hop zero. Do not put it in `.env`; a different network/proxy topology
+   requires a new spec. Failed gateway discovery refuses boot rather than losing `Secure`
+   cookies or collapsing every reader into one limiter bucket.
 6. Open `https://simonswanderlust.com/login` to create the first admin account, then upload.
+   Before public cutover, inspect the target server's observed proxy peer, confirm `Secure`
+   on an HTTPS login, and verify independent login-limit buckets from two external networks.
+   The #369 Docker Desktop production-image TCP probe covers the Linux VM host-network
+   proxy → app bridge path, not the target VPS's published-loopback/NAT configuration.
 
 The admin panel is reachable directly at `https://simonswanderlust.com/admin/` — the same process
 serves it, so there's nothing to proxy to separately anymore.
@@ -168,9 +177,11 @@ an idle queue or as confirmation that no release exists.
 
 Full details in [`../SECURITY.md`](../SECURITY.md); the essentials:
 
-- **Always run behind the TLS-terminating reverse proxy.** The app trusts `X-Forwarded-*`
-  (so per-IP login throttling and the cookie `secure` flag work); your proxy MUST set
-  `X-Forwarded-Proto`. Do not expose port 3000 directly to the internet.
+- **Public hosting requires the documented host TLS proxy.** Forwarded headers are accepted
+  only from an allow-listed immediate peer, never from an arbitrary bridge container.
+  Host-local processes remain inside the trust boundary. The proxy must preserve `Host`,
+  overwrite forwarded protocol and supply the accepted client as rightmost XFF. Never expose
+  port 3000 directly or broaden trust to a subnet to compensate for misconfiguration.
 - **Password-verifying endpoints are rate-limited** per client IP (`/login`, `/setup`, and the
   authenticated `POST /users/me/password`: 10 requests per 15 minutes) to slow brute-force; they
   share one bucket, so failed current-password guesses count against login attempts from that IP.
@@ -267,6 +278,21 @@ The queue's **done** means the upload was accepted, not that encoding has
 finished: the grid displays the status returned by the server, including **processing**.
 This is a completion-triggered refresh, not continuous polling for encoding progress.
 
+The backlog admits at most 200 waiting jobs, in addition to the two running jobs. When an
+upload receives **429** because that backlog is full, a new photo keeps its original as
+`failed` / `queue_full`, not stranded `processing`; an existing photo's prior status/error is
+restored unless another request already admitted or completed its job. Once capacity returns,
+**Retry** or re-uploading the same bytes encodes the retained photo. Re-upload also repairs an
+older orphan `processing` row by enqueueing it when no active job owns the key (#348).
+Upload, Retry, and boot/rescan recovery serialize admission and refusal rollback for the
+same key, including the awaited status write. Recovery re-reads the row after waiting rather
+than admitting a stale `processing` snapshot. Re-uploading a `queue_full` photo changes only
+its status and restores its original; curated folder, localized descriptions, title, tags,
+and the saved encoding profile are retained even across repeated refusals.
+Recovery starts each admitted job immediately, so a later candidate's database read failure
+does not strand earlier admissions. The rescan still reports the error; already admitted
+photos finish independently, while remaining `processing` photos can recover on a later rescan.
+
 Three consequences worth knowing:
 
 - **Publishing is gated on encode state.** A post referencing a photo that is not yet `ready` is
@@ -356,6 +382,13 @@ photo-details limit before returning any metadata. A higher ceiling permits more
 and may increase provider charges and latency; the chosen model must support it.
 This does not toggle thinking or change the separate caption timeout. Existing settings
 files without the field use 8,000; saved values survive restart.
+
+Alt-text suggestions discard case-insensitive `<think>…</think>` blocks, including
+an unfinished block through the end of the reply. A `finish_reason: "length"` reply
+is refused even if it contains valid-looking caption JSON. Hero/body fields and
+hosted-gallery alt text retain their existing value on refusal; the token-limit
+hint names **Maximum output tokens** rather than suggesting a connection problem.
+Gallery suggestions still require explicit acceptance before changing Markdown.
 
 Non-secret settings (`aiProviders`, `aiDefaultProviderId`, `captionProviderId`, `lmModel`,
 `captionTimeoutMs`, `captionMaxTokens`, `captionMaxEdge`, `captionPrompt`) live in settings.json.
@@ -585,6 +618,12 @@ Edits made during an in-flight save remain dirty until a later save includes the
 Failed saves and cancelled URL-change confirmations retain the unsaved form.
 A browser recovery stash is not a server save, and saving a published post's draft
 does not change its live version.
+Restoring a local draft retains the saved-version token it was edited against.
+A stale restore gets a conflict rather than overwriting a newer server version.
+An existing post's stash without a usable version can be restored for copying, but
+cannot be saved: copy the needed text, reload, and decline the restore to return to
+the saved version. If the post has since been published, its current live slugs are
+kept. A failed restore keeps its original stash and blocks saving the partial form.
 
 ## Alt-text audit (advisory)
 
