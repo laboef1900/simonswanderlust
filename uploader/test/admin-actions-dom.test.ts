@@ -168,7 +168,13 @@ function loadPage(file: string, extraGlobals: Record<string, unknown>, scripts: 
     console,
     confirm: () => true,
     prompt: () => 'DELETE',
-    Auth: { ensureAuthed: async () => null, renderHeader() {} },
+    Auth: {
+      ensureAuthed: async () => null, renderHeader() {},
+      setPageTitle(page: string) {
+        const document = ctx.document;
+        if (document && typeof document === 'object' && 'title' in document) document.title = page + ' · Travel journal';
+      },
+    },
     EditorCopy: { en: EDITOR_COPY },
     AdminConfirm: { ask: async () => true, liveUrls: () => ({ de: '', en: '' }), urlsPlain: () => '' },
     ...extraGlobals,
@@ -803,7 +809,7 @@ async function apiPage(initial: SettingsResponse, opts: {
 const calls = (requests: ApiRequest[]) => requests.map((r) => r.method + ' ' + r.url);
 
 describe('settings.html tabs', () => {
-  const PANELS = ['panel-ai-models', 'panel-images', 'panel-comments', 'panel-site'];
+  const PANELS = ['panel-ai-models', 'panel-images', 'panel-comments', 'panel-identity', 'panel-site'];
 
   function tabsPage(hash = '', narrow = false) {
     const replaced: string[] = [];
@@ -835,6 +841,16 @@ describe('settings.html tabs', () => {
     expect(t.title()).toBe(' · Comments');
     expect(t.el('tabbtn-comments').tabIndex).toBe(0);
     expect(t.el('tabbtn-ai-models').tabIndex).toBe(-1);
+  });
+
+  it('opens the identity deep link and includes it in keyboard navigation', async () => {
+    const t = tabsPage('#identity');
+    expect(t.visible()).toEqual(['panel-identity']);
+    expect(t.el('tabbtn-identity').tabIndex).toBe(0);
+    expect(t.title()).toBe(' · ' + EDITOR_COPY.identityTab);
+    await t.el('tabbtn-identity').fire('keydown', { key: 'ArrowUp' });
+    expect(t.visible()).toEqual(['panel-comments']);
+    expect(t.replaced).toEqual(['#comments']);
   });
 
   it('a vertical index moves with Up/Down, Home/End, and mirrors the tab in the hash and title', async () => {

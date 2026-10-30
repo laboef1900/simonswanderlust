@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { parseWxr, type ParsedPost } from './wxr-parse.js';
 import { htmlToMarkdown, markdownImages } from './wp-content.js';
 import { rehostImage, type RehostResult, type RehostResume } from './wp-images.js';
-import { isSafeSlug, PostError, type ImageDims, type PostLocale, type PostPair, type PostStore, type PostSummary, type StoredPostPair } from './posts.js';
+import { checkSlug, PostError, type ImageDims, type PostLocale, type PostPair, type PostStore, type PostSummary, type StoredPostPair } from './posts.js';
 import { rewriteFences, rewriteOutsideGalleries } from './body-content.js';
 import { FetchError } from './safe-fetch.js';
 import { insufficientSpaceForImport, type DiskSpace } from './disk.js';
@@ -796,8 +796,12 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
     // @ai-warning: validate slugs at the import boundary BEFORE re-hosting images
     // or writing to the DB — an unsafe slug would otherwise become a storage path
     // segment (traversal) and a live URL.
-    if (!isSafeSlug(de.slug) || !isSafeSlug(en.slug)) {
-      summary.rejected++; warnings.push(`group ${group}: unsafe slug (${de.slug} / ${en.slug}) — rejected`); continue;
+    try {
+      checkSlug(de.slug, 'de');
+      checkSlug(en.slug, 'en');
+    } catch (error) {
+      if (!(error instanceof PostError)) throw error;
+      summary.rejected++; warnings.push(`group ${group}: unsafe slug (${error.message}) — rejected`); continue;
     }
     // Pair identity is the (DE slug, EN slug) tuple as a UNIT: exactly one existing
     // post touches either slug AND it owns both. Binding on a single matching slug

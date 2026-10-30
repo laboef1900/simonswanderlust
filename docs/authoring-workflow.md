@@ -159,6 +159,21 @@ can still be running when the upload returns: wait until the photo is ready befo
    The slug and shared fields (date, countryCode, region, coordinates) carry over automatically.
 5. Click **Save draft** — both locale rows are written to Postgres. The post is not yet live.
 
+**Slug length (#353, rollout-gated):** the existing lowercase ASCII slug grammar is limited
+to **251 bytes**, so `<slug>.mdx` fits a 255-byte filename. Only newly auto-derived slugs
+are truncated after normalization (with a cut-off trailing hyphen removed). Typed, pasted,
+loaded, restored, stashed and published slugs are never shortened. An unset locale may stay
+empty in a draft; publishing needs both slugs. Excessive saved/imported inputs are refused
+with the locale field and length rather than renamed. MDX export checks both locales before
+writing either file; database backups preserve legacy records that cannot be exported.
+
+**Before activating the cap on an existing installation**, run the owner-authorized
+read-only working/snapshot inventory described in
+`docs/superpowers/specs/2026-10-27-slug-length-bound-design.md`. Any over-bound result,
+including an imported draft, blocks rollout until an explicit owner decision. Do not shorten
+a live WordPress URL, unpublish a record, or rewrite a backup as a workaround. Implementation
+does not establish that the owner corpus has passed this gate.
+
 ### Fill coordinates from the country
 
 Enter a country in either language's **Country** field, then leave the field. Recognized
@@ -224,6 +239,17 @@ refreshes the snapshot.
 Gallery descriptions are the exception: alt text and captions for photos in the Media
 library use the current library values on the next rebuild, without republishing each
 article. This does not publish any draft text or change gallery order.
+
+**More actions → Unpublish** returns both languages to draft and rebuilds the site.
+The previous release remains visible until that rebuild succeeds; if it fails, the
+old live pages remain until a successful rebuild. After your own successful unpublish,
+you can edit and **Save draft** in the same tab without reloading, provided nobody
+else saved since the version you loaded. The editor adopts the unpublish's new
+concurrency token only when its transaction-captured predecessor matches the
+editor's current token. Unpublish still removes the story when your form is stale,
+but a save made elsewhere before unpublish or while its rebuild is running still
+produces the normal conflict dialog on your next save rather than overwriting it.
+Choose **Cancel** there to keep your unsaved edits on screen for copying.
 
 ### Import and trim a private GPX route
 

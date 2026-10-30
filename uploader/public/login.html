@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Sign in · Simon's Wanderlust</title>
+    <title>Sign in</title>
     <link rel="stylesheet" href="/admin/admin.css" />
   </head>
   <body class="login-page">
@@ -38,7 +38,7 @@
       const $ = (id) => document.getElementById(id);
       $('studioName').textContent = EditorCopy.en.studioName;
       $('studioMark').textContent = EditorCopy.en.studioName.charAt(0);
-      $('studioDescriptor').textContent = EditorCopy.en.studioDescriptor;
+      $('studioDescriptor').textContent = Auth.identityDescriptor();
       let needsSetup = false;
       const nextPath = DraftGuard.safeNextPath(new URLSearchParams(location.search).get('next'));
       async function init() {
