@@ -641,6 +641,13 @@ tuned so it does **not** break legitimate output: heading `id`s stay un-prefixed
 contents `#anchor` links resolve) and `class` survives everywhere. Verified end-to-end against a
 published post carrying an XSS payload.
 
+**Import formatting boundary reconfirmed (#389, 2026-10-28).** The facts-bounded
+opening-paragraph repair operates on Turndown's existing parsed DOM and emits Markdown,
+not raw HTML. It is not a sanitizer. The render sanitizer above, gallery origin equality
+and store-level `images` validation below remain mandatory and unchanged; gallery
+content is excluded from this prose repair. Import authorization, safe fetches,
+resource caps, cancellation, EXIF filtering, slug identity and publish gates are unchanged.
+
 **No element may carry `style`** (#124). Astro's Markdown renderer passes raw HTML through, so the
 sanitizer cannot distinguish a Shiki `<span style="color:…">` from an author-typed one — and an
 author-typed `style="position:fixed;inset:0;background:url(https://evil/…)"` would overlay every
