@@ -2,9 +2,7 @@ import { largestVariant } from './images.js';
 
 import type { Locale } from '../i18n/ui';
 
-// @ai-note: schema.org structured data, not user-visible UI copy — deliberately
-// not a ui.ts key (same author for both locales; keeps i18n churn out of SEO).
-const AUTHOR_NAME = 'Simon';
+import { identity } from './build-identity';
 
 /**
  * Production origin — fallback base URL when `Astro.site` is unset.
@@ -56,7 +54,7 @@ export interface BlogPostingJsonLd {
   description: string;
   inLanguage: Locale;
   image: { '@type': 'ImageObject'; url: string; width: number; height: number };
-  author: { '@type': 'Person'; name: string };
+  author?: { '@type': 'Person'; name: string };
   mainEntityOfPage: string;
 }
 
@@ -75,7 +73,7 @@ export function blogPostingJsonLd(input: BlogPostingInput): BlogPostingJsonLd {
       width: input.image.width,
       height: input.image.height,
     },
-    author: { '@type': 'Person', name: AUTHOR_NAME },
+    ...(identity.authorName ? { author: { '@type': 'Person' as const, name: identity.authorName } } : {}),
     mainEntityOfPage: input.url,
   };
 }

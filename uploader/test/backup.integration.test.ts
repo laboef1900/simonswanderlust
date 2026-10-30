@@ -15,6 +15,7 @@ import { dumpDatabase, readDump, restoreDatabase, BACKUP_FILE_RE, DUMP_VERSION }
 import { pgCommentStore } from '../src/comments.js';
 import { pgMediaStore } from '../src/media-store.js';
 import { runCli } from './run-cli.js';
+import { seedSiteIdentity } from '../src/site-identity.js';
 
 const url = process.env.TEST_DATABASE_URL;
 const maybe = url ? describe : describe.skip;
@@ -25,6 +26,7 @@ maybe('backup round-trip (Postgres)', () => {
   beforeAll(async () => {
     pool = createPool(url as string);
     await ensureSchema(pool);
+    await seedSiteIdentity(pool);
     await pool.query('DELETE FROM posts');
     await pool.query('DELETE FROM sessions');
     await pool.query('DELETE FROM users');
@@ -439,7 +441,7 @@ maybe('backup round-trip (Postgres)', () => {
       expect((await comments.listForAdmin({ status: 'spam' })).map((c) => c.id)).toEqual([b.id]);
       expect((await comments.listForAdmin()).map((c) => c.id)).toEqual([a.id]);
       expect(await comments.approve(a.id)).toBe(true);
-      const reply = await comments.replyAsAuthor({ translationKey: tk, body: 'Thanks!', postedLocale: 'en' });
+      const reply = await comments.replyAsAuthor({ translationKey: tk, body: 'Thanks!', postedLocale: 'en' }, 'Simon');
       expect(reply).toMatchObject({ status: 'approved', isAuthor: true, name: 'Simon', locale: 'en' });
       expect((await comments.listApproved(tk)).map((c) => [c.name, c.isAuthor])).toEqual([['Reader', false], ['Simon', true]]);
       expect((await comments.listApproved(tk, 'en')).map((c) => c.name)).toEqual(['Simon']);
@@ -479,7 +481,7 @@ maybe('backup round-trip (Postgres)', () => {
       const tk = p.translationKey;
       const a = await comments.create({ translationKey: tk, locale: 'de', name: 'A', body: 'x', senderHash: 'h1' });
       await comments.setStatus(a.id, 'rejected');
-      const r = await comments.replyAsAuthor({ translationKey: tk, body: 'reply' });
+      const r = await comments.replyAsAuthor({ translationKey: tk, body: 'reply' }, 'Simon');
       const file = join(dir, await dumpDatabase(pool, dir));
       const dump = readDump(file);
       expect(dump.tables.comments).toHaveLength(2);
@@ -581,6 +583,7 @@ maybe('backup round-trip (Postgres)', () => {
       const { dumpFile, backupDir, env } = await seed();
       const r = await runCli(['restore', '--yes', dumpFile], env);
       expect(r.code).toBe(0);
+      expect(r.stdout).toContain('identity: restored stored identity and assets.');
       const written = preDumps(backupDir);
       expect(written).toHaveLength(1);
       const preDumpPath = join(backupDir, 'db', written[0]!);
@@ -632,6 +635,34 @@ maybe('backup round-trip (Postgres)', () => {
       expect(r.stderr).toContain('pre-restore dump into');
       expect(r.stderr).toContain('restore aborted, nothing was changed');
       expect(await usernames()).toEqual(['alice', 'bob']);
+    }, 30_000);
+
+    it('announces a legacy restore and includes the replaced identity in the undo set', async () => {
+      const { dumpFile, backupDir, env } = await seed();
+      const old = readDump(dumpFile);
+      old.version = 10;
+      delete old.tables.site_identity; delete old.tables.site_identity_assets;
+      writeFileSync(dumpFile, gzipSync(JSON.stringify(old)));
+      await pool.query("UPDATE site_identity SET site_name='Undo journal', canonical_origin='https://restore.example'");
+      const r = await runCli(['restore', '--yes', dumpFile], env);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain('identity: restored legacy brand (dump predates identity). Review Settings → Site identity');
+      expect((await pool.query('SELECT site_name, seed_source, canonical_origin, saved_at FROM site_identity')).rows[0])
+        .toEqual({ site_name: "Simon's Wanderlust", seed_source: 'restored-legacy', canonical_origin: 'https://restore.example', saved_at: null });
+      const undo = readDump(join(backupDir, 'db', preDumps(backupDir)[0]!));
+      expect(undo.tables.site_identity![0]!.site_name).toBe('Undo journal');
+    }, 30_000);
+
+    it('rejects malformed identity before undo capture or any database replacement', async () => {
+      const { dumpFile, backupDir, env } = await seed();
+      const malformed = readDump(dumpFile);
+      malformed.tables.site_identity![0]!.localized = { tagline: { de: 'valid', en: 42 } };
+      writeFileSync(dumpFile, gzipSync(JSON.stringify(malformed)));
+      const r = await runCli(['restore', '--yes', dumpFile], env);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain('tagline.en');
+      expect(await usernames()).toEqual(['alice', 'bob']);
+      expect(preDumps(backupDir)).toEqual([]);
     }, 30_000);
 
     it('refuses an unsupported dump version before writing a pre-dump', async () => {
