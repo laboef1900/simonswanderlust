@@ -1825,8 +1825,9 @@ export function buildServer(cfg: ServerConfig): AppServer {
     const pair = await posts.get(tk);
     if (!pair) return reply.code(404).send({ error: 'post not found' });
     if (pair.status !== 'published') return reply.code(409).send({ error: 'post is not published' });
+    let committed: { previousUpdatedAt: Date; updatedAt: Date };
     try {
-      await posts.unpublish(tk);
+      committed = await posts.unpublish(tk);
     } catch (e) {
       if (e instanceof PostError) {
         if (e.code === 'storage_read_only') return readOnly(reply);
@@ -1835,7 +1836,11 @@ export function buildServer(cfg: ServerConfig): AppServer {
       throw e;
     }
     const build = await cfg.builder.build();
-    return reply.send({ unpublished: true, build });
+    // Both tokens belong to this transaction, not a later writer during the build.
+    return reply.send({
+      unpublished: true, build,
+      previousUpdatedAt: committed.previousUpdatedAt, updatedAt: committed.updatedAt,
+    });
   });
 
   // Hard delete (both locale rows), freeing the slugs for reuse. MDX backups in

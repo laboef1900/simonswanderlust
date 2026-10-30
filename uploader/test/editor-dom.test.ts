@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import type { PostPair } from '../src/posts.js';
-import { assertNotStale } from '../src/posts.js';
+import { assertNotStale, memoryPostStore, PostError, type PostPair } from '../src/posts.js';
 import type { EditorialReviewResult } from '../src/editorial-review.js';
 import { editorDocument, EditorElement, EditorEvent } from './editor-dom-harness.js';
 import { ui } from '../../site/src/i18n/ui.js';
@@ -10,6 +9,7 @@ import { normalizeGalleryFences } from '../src/body-content.js';
 import { readCaptionOverride, readCaptionsVisible } from '../../site/src/lib/gallery-layout.js';
 import { REGIONS } from '../src/db.js';
 import type { AltAudit } from '../src/alt-audit.js';
+import { publishTokens } from './publish-tokens.js';
 
 // editor.html's inline script is plain top-level browser code. Run it in a vm
 // context whose `document.getElementById` answers from the REAL markup's ids —
@@ -305,6 +305,67 @@ function minimalPair(): StashPayload {
   const loc = (locale: 'de' | 'en') => ({ locale, slug: 'x', title: 'X', excerpt: '', country: '', bodyMarkdown: '', images: {} });
   return { translationKey: 'tk1', status: 'draft', shared: {}, de: loc('de'), en: loc('en') };
 }
+
+describe('unpublish concurrency token in the real editor', () => {
+  it.each(['none', 'before', 'after'] as const)('preserves version ownership (other writer: %s)', async (otherWriter) => {
+    const posts = memoryPostStore();
+    await posts.upsertDraft(fullPair());
+    await posts.publish('tk1', await publishTokens(posts, 'tk1'));
+    let unpublishToken: string | undefined;
+    const h = loadEditor({ confirm: true, fetch: async (url, options) => {
+      if (url === '/posts/tk1/unpublish') {
+        const committed = await posts.unpublish('tk1');
+        unpublishToken = committed.updatedAt.toISOString();
+        if (otherWriter === 'after') {
+          const pair = (await posts.get('tk1'))!;
+          await posts.upsertDraft({ ...pair, de: { ...pair.de, title: 'Another tab' } }, pair.updatedAt);
+        }
+        return response({ unpublished: true, ...committed, build: { ok: true } });
+      }
+      if (url === '/posts/tk1' && options?.method === 'PUT') {
+        const payload = JSON.parse(String(options.body)) as PostPair & { updatedAt: string };
+        try {
+          return response(await posts.upsertDraft(payload, new Date(payload.updatedAt)));
+        } catch (error) {
+          if (error instanceof PostError) return response({ error: error.message, code: error.code }, 409);
+          throw error;
+        }
+      }
+      return response(url === '/posts/tk1' ? await posts.get('tk1') : []);
+    } });
+    expect(await h.api.loadPost('tk1')).toBe(true);
+    const loadedToken = h.api.buildPayload().updatedAt;
+    if (otherWriter === 'before') {
+      const pair = (await posts.get('tk1'))!;
+      await posts.upsertDraft({ ...pair, de: { ...pair.de, title: 'Another tab' } }, pair.updatedAt);
+    }
+    h.el('unpublishBtn').click();
+    await settle();
+    expect(h.api.buildPayload().updatedAt).toBe(otherWriter === 'before' ? loadedToken : unpublishToken);
+    h.el('deTitle').value = 'My edit after unpublish';
+    h.el('deTitle').fire('input');
+    expect(await h.api.doSaveDraft()).toBe(otherWriter === 'none');
+    expect(h.prompts).toHaveLength(otherWriter === 'none' ? 1 : 2);
+    expect((await posts.get('tk1'))!.de.title).toBe(otherWriter === 'none' ? 'My edit after unpublish' : 'Another tab');
+  });
+
+  it('keeps the loaded token and published state when unpublish fails', async () => {
+    const post = { ...fullPair(), status: 'published', updatedAt: '2026-10-25T10:00:00.000Z' };
+    const h = loadEditor({ confirm: true, fetch: async (url) => {
+      if (url === '/posts/tk1/unpublish') return response({
+        error: 'storage_read_only', updatedAt: '2026-10-25T11:00:00.000Z',
+      }, 503);
+      return response(url === '/posts/tk1' ? post : []);
+    } });
+    await h.api.loadPost('tk1');
+    h.el('unpublishBtn').click();
+    await settle();
+    expect(h.api.buildPayload().updatedAt).toBe(post.updatedAt);
+    expect(h.el('slugFieldDe').disabled).toBe(true);
+    expect(h.el('unpublishBtn').disabled).toBe(false);
+    expect(h.el('actionError').textContent).toContain('storage_read_only');
+  });
+});
 
 describe('complete bilingual conflict reload', () => {
   it('reloads both locales before using the new token on the next save', async () => {
