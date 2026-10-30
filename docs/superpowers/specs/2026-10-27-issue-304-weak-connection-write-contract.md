@@ -1276,3 +1276,20 @@ qualify image rendering: fixture thumbnail URLs used the wrong loopback origin; 
 final recovery also left a stale grid label although detail/SQL were correct. The retained
 record names those limits. Owned sessions/cookies were cleared, interceptions detached,
 both tabs closed and the app stopped.
+
+The next full review established that the stale grid label was a listing regression, not
+merely a fixture limitation: detail-only adoption also left filtered membership, ordering,
+total and selection stale. Successful acknowledgements and explicit Use stored now invoke
+the existing sequenced listing reload. Its dirty-panel guard preserves newer inputs and
+comparison bases; its request tickets reject superseded queries. Three consumer regressions
+failed before repair; all56 Media DOM cases passed afterward.
+
+Actual `e93ba96` qualification verified Save A→B and genuine second-tab409 → Use stored:
+the photo left the filtered list, selection/bulk actions cleared, and canonical title/folder
+appeared in refreshed views. A genuine post-save listing200 held while the author typed
+preserved exact dirty nodes, focus, scroll and comparison bases on release, while grid title
+and ordering updated. Caption-only subsequent PATCHes omitted title/folder. Native320px
+dirty reopen retained the lifetime protections. Both correct-origin thumbnails returned
+HTTP200 WebP; HTTP and PostgreSQL readbacks agreed. The record includes13 explicit PATCHes
+(11 successes, two conflicts), fixture/exploratory writes and excluded mis-targeted holds;
+no recovery replay was observed. Sessions, cookies, tabs, app and interceptions were cleaned.
