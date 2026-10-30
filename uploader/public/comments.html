@@ -39,6 +39,31 @@
         return n;
       };
 
+      // Page-lifetime only: changing views must not discard another reply.
+      const replyDrafts = new Map();
+      const pendingReplies = new Set();
+      const renderedRows = new Map();
+
+      function focusedReplyControl() {
+        for (const [id, { controls, ta }] of renderedRows) {
+          const index = controls.indexOf(document.activeElement);
+          if (index !== -1) return {
+            id, index,
+            selection: document.activeElement === ta
+              ? [ta.selectionStart, ta.selectionEnd, ta.selectionDirection] : null,
+          };
+        }
+        return null;
+      }
+
+      function restoreReplyFocus(focus) {
+        if (!focus) return;
+        const control = renderedRows.get(focus.id)?.controls[focus.index];
+        if (!control) { $('statusFilter').focus({ preventScroll: true }); return; }
+        control.focus({ preventScroll: true });
+        if (focus.selection) control.setSelectionRange(...focus.selection);
+      }
+
       async function api(method, url, body) {
         const res = await fetch(url, {
           method,
@@ -53,6 +78,11 @@
 
       async function setStatus(c, status) {
         await api('POST', '/moderation/comments/' + encodeURIComponent(c.id) + '/status', { status });
+      }
+
+      async function deleteComment(c) {
+        const result = await api('DELETE', '/moderation/comments/' + encodeURIComponent(c.id));
+        if (result !== null) replyDrafts.delete(c.id);
       }
 
       async function confirmThen(opts, fn) {
@@ -71,16 +101,19 @@
         for (const para of String(c.body).split(/\n{2,}/)) li.appendChild(el('p', para, 'comment__body'));
 
         const actions = el('div', undefined, 'comment-actions');
+        const controls = [];
         const act = (label, fn, variant) => {
           const b = el('button', label);
           b.type = 'button';
           if (variant) b.className = variant;
           b.addEventListener('click', async () => {
+            const focus = focusedReplyControl();
             b.disabled = true;
-            try { await fn(); await load(); } catch (e) { $('out').textContent = 'Failed: ' + e.message; }
+            try { await fn(); await load(focus); } catch (e) { $('out').textContent = 'Failed: ' + e.message; }
             finally { b.disabled = false; }
           });
           actions.appendChild(b);
+          controls.push(b);
         };
         if (c.status === 'pending') act('Approve', () => setStatus(c, 'approved'));
         else act('Unapprove', () => setStatus(c, 'pending'), 'btn-secondary');
@@ -88,12 +121,12 @@
           title: 'Mark as spam?',
           body: 'This comment by "' + c.name + '" is permanently deleted. This cannot be undone.',
           confirmLabel: 'Delete as spam', danger: true,
-        }, () => api('DELETE', '/moderation/comments/' + encodeURIComponent(c.id))), 'btn-remove');
+        }, () => deleteComment(c)), 'btn-remove');
         act('Delete', () => confirmThen({
           title: 'Delete this comment?',
           body: 'This comment by "' + c.name + '" is permanently deleted' + (c.status === 'approved' ? ' and disappears from the site on the next rebuild' : '') + '. This cannot be undone.',
           confirmLabel: 'Delete', danger: true,
-        }, () => api('DELETE', '/moderation/comments/' + encodeURIComponent(c.id))), 'btn-remove');
+        }, () => deleteComment(c)), 'btn-remove');
         li.appendChild(actions);
 
         const form = el('form', undefined, 'comment-reply');
@@ -102,33 +135,65 @@
         ta.rows = 2;
         ta.setAttribute('aria-label', 'Reply as author');
         ta.placeholder = 'Reply as the author…';
+        ta.value = replyDrafts.get(c.id) || '';
+        ta.addEventListener('input', () => {
+          if (ta.value) replyDrafts.set(c.id, ta.value);
+          else replyDrafts.delete(c.id);
+        });
         const send = el('button', 'Reply as author', 'btn-secondary');
         send.type = 'submit';
+        send.disabled = pendingReplies.has(c.id);
         form.append(ta, send);
+        controls.push(ta, send);
+        renderedRows.set(c.id, { controls, ta, send });
         form.addEventListener('submit', async (e) => {
           e.preventDefault();
-          if (!ta.value.trim()) return;
+          if (pendingReplies.has(c.id) || !ta.value.trim()) return;
+          const body = ta.value;
+          replyDrafts.set(c.id, body);
+          const focus = focusedReplyControl();
+          pendingReplies.add(c.id);
           send.disabled = true;
           try {
-            await api('POST', '/moderation/comments/' + encodeURIComponent(c.id) + '/reply', { body: ta.value });
+            const result = await api('POST', '/moderation/comments/' + encodeURIComponent(c.id) + '/reply', { body });
+            if (result === null) return;
+            // Keep anything written while the request was pending, even if a
+            // different action has already replaced this row's textarea.
+            if (replyDrafts.get(c.id) === body) {
+              replyDrafts.delete(c.id);
+              const current = renderedRows.get(c.id);
+              if (current) current.ta.value = '';
+            }
             $('out').textContent = 'Reply published.';
-            await load();
+            await load(focus);
           } catch (err) { $('out').textContent = 'Reply failed: ' + err.message; }
-          finally { send.disabled = false; }
+          finally {
+            pendingReplies.delete(c.id);
+            send.disabled = false;
+            const current = renderedRows.get(c.id);
+            if (current) current.send.disabled = false;
+            if (document.activeElement === document.body) restoreReplyFocus(focus);
+          }
         });
         li.appendChild(form);
         return li;
       }
 
-      async function load() {
+      async function load(fallbackFocus = null) {
         const status = $('statusFilter').value;
         let data;
         try { data = await api('GET', '/moderation/comments?status=' + encodeURIComponent(status)); }
         catch (e) { $('out').textContent = 'Could not load comments: ' + e.message; return; }
         if (!data) return;
         const ul = $('list');
+        // Capture at render time, not request time: the author can keep typing
+        // and moving the caret while moderation or the list request is pending.
+        const focus = focusedReplyControl()
+          || (document.activeElement === document.body ? fallbackFocus : null);
+        renderedRows.clear();
         ul.replaceChildren();
         for (const c of data.comments) ul.appendChild(row(c));
+        restoreReplyFocus(focus);
         if (!data.comments.length) $('out').textContent = 'No ' + status + ' comments.';
       }
 

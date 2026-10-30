@@ -333,6 +333,18 @@ routes behind it (`GET /moderation/comments`, `POST /moderation/comments/:id/sta
 `requireAdmin`: unauthenticated callers get 401, authors 403, and a non-UUID id is a 400.
 Approving does not rebuild the site — comments are runtime data, never baked by `astro build`.
 
+Unsent author replies stay in memory, keyed by comment ID, while this page is open.
+Only one reply can be sending per comment ID: its submit button stays disabled even
+when filtering or moderation recreates the row, and becomes available again after
+success or failure so a later intentional reply or retry is possible.
+Moderation actions and switching between Pending and Approved preserve other replies;
+hidden rows recover their own draft when shown again. A successful reply clears only
+the submitted text, preserving newer edits made while it was sending; failed replies
+keep their input. List refreshes restore the active row control and textarea selection
+when that row remains visible, or focus the status filter when it disappears. Drafts
+are not saved to browser storage or the server: navigating away or reloading the page
+discards them.
+
 ## Galleries
 
 Several photos render as one grid from a fenced ```` ```gallery ```` block, one image URL per line.
