@@ -1,6 +1,7 @@
+import { TEST_TRUST, GATEWAY_TRUST } from './trusted-proxy-fixture.js';
 import { publishBody, publishTokens } from './publish-tokens.js';
 import { describe, expect, it, beforeEach, vi } from 'vitest';
-import { mkdtemp, mkdir, readdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
@@ -9,7 +10,8 @@ import sharp from 'sharp';
 import FormData from 'form-data';
 import { buildServer, type ServerConfig } from '../src/server.js';
 import { rehostImage } from '../src/wp-images.js';
-import { rehostKey, ImportTooLargeError, ImportInsufficientSpaceError, type ImportDeps, type ImportProgress, type ImportSummary, type PreparedImport } from '../src/wp-import.js';
+import { contentHashKey } from '../src/storage.js';
+import { prepareImport, rehostKey, ImportTooLargeError, ImportInsufficientSpaceError, type ImportDeps, type ImportProgress, type ImportSummary, type PreparedImport } from '../src/wp-import.js';
 import { createImportRunner, memoryImportJobStore, type ImportRunner } from '../src/import-jobs.js';
 import { defaultSettings, validate } from '../src/settings.js';
 import type { Settings, SettingsStore } from '../src/settings.js';
@@ -19,7 +21,7 @@ import { memorySessionStore, type SessionStore } from '../src/sessions.js';
 import { memoryPostStore, type PostStore } from '../src/posts.js';
 import { memoryPageStore, type PageStore } from '../src/pages.js';
 import { memoryMediaStore, type MediaStore } from '../src/media-store.js';
-import { BacklogFullError, createEncodeQueue, type EncodeQueue } from '../src/encode-queue.js';
+import { createEncodeQueue, type EncodeQueue } from '../src/encode-queue.js';
 import { createWorkLock, type WorkLock } from '../src/work-lock.js';
 import { fixedWindowLimiter, accountLockoutLimiter } from '../src/rate-limit.js';
 import type { SiteBuilder, BuildOutcome } from '../src/build.js';
@@ -75,13 +77,11 @@ function stubBackup(dir = '/tmp/none', running = false) {
  * the real encoder is covered in encode-queue.test.ts, and a 19s-per-frame
  * pipeline has no place in the route suite.
  */
-function stubQueue(opts: { full?: boolean } = {}) {
+function stubQueue() {
   const enqueued: string[] = [];
   const queue: EncodeQueue = {
-    enqueue: (key) => {
-      if (opts.full) throw new BacklogFullError();
-      enqueued.push(key);
-    },
+    withAdmission: (_key, operation) => operation(),
+    enqueue: (key) => { enqueued.push(key); },
     isActive: (key) => enqueued.includes(key),
     recover: async () => 0,
     drain: async () => {},
@@ -106,6 +106,7 @@ function build(extra: Partial<ServerConfig> = {}): Built {
   const importJobs = (extra.importJobs as ImportRunner) ?? createImportRunner({ store: memoryImportJobStore(), log: () => {} });
   const pages = (extra.pages as PageStore) ?? memoryPageStore();
   const built = buildServer({
+    trustProxy: TEST_TRUST,
     storageDir: dir, baseUrl: 'https://img.simonswanderlust.com',
     users, sessions, settings: fakeStore(), secrets: memorySecretsStore(),
     posts, media, encodeQueue, importJobs, pages,
@@ -257,10 +258,29 @@ describe('POST /upload', () => {
     const kept = await upload(b, cookie, { key: 'trips/dup/hero', folder: 'Norway' }, img);
     expect(kept.json()).toMatchObject({ duplicate: true, folder: 'Iceland/South' });
     expect((await b.media.get(key))?.folder).toBe('Iceland/South');
-    // Same while the first upload is still encoding.
+    // Same while the first upload is still encoding — and the queued job is not
+    // queued a second time (#348's re-enqueue covers only an absent key).
     await b.media.setStatus(key, 'processing');
     const busy = await upload(b, cookie, { key: 'trips/dup/hero', folder: 'Norway' }, img);
     expect(busy.json()).toMatchObject({ duplicate: true, status: 'processing', folder: 'Iceland/South' });
+    expect(b.enqueued).toEqual([key]);
+  });
+
+  it.each([
+    { status: 'failed' as const, storedFolder: 'Iceland/South', dropFolder: '', expected: 'Iceland/South' },
+    { status: 'missing' as const, storedFolder: 'Iceland/South', dropFolder: 'Norway', expected: 'Iceland/South' },
+    { status: 'failed' as const, storedFolder: '', dropFolder: 'Norway', expected: 'Norway' },
+  ])('re-uploading a $status photo keeps its curated folder or fills the root', async ({ status, storedFolder, dropFolder, expected }) => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const img = await jpeg();
+    const first = await upload(b, cookie, { key: 'trips/recover/hero', folder: storedFolder }, img);
+    const key = first.json().key as string;
+    await b.media.setStatus(key, status);
+    const recovered = await upload(b, cookie, { key: 'trips/recover/hero', folder: dropFolder }, img);
+    expect(recovered.statusCode).toBe(200);
+    expect(recovered.json()).toMatchObject({ key, status: 'processing', folder: expected });
+    expect((await b.media.get(key))?.folder).toBe(expected);
   });
 
   it('a duplicate reports the folder that was PERSISTED, not the one a failed best-effort patch asked for', async () => {
@@ -299,7 +319,9 @@ describe('POST /upload', () => {
     expect(existsSync(join(dir, `${key}-orig.jpg`))).toBe(true);
     const img = { host: 'img.simonswanderlust.com' };
     // The lossy variant is public...
-    expect((await b.app.inject({ method: 'GET', url: `/${key}-640.webp`, headers: img })).statusCode).toBe(200);
+    const variant = await b.app.inject({ method: 'GET', url: `/${key}-640.webp`, headers: img });
+    expect(variant.statusCode).toBe(200);
+    expect(variant.headers['access-control-allow-origin']).toBe('*');
     // ...but the full-resolution original is not downloadable.
     expect((await b.app.inject({ method: 'GET', url: `/${key}-orig.jpg`, headers: img })).statusCode).toBe(404);
     // ...and neither is a crash-leftover temp of it (#118: storage.ts writes
@@ -308,6 +330,18 @@ describe('POST /upload', () => {
     await writeFile(join(dir, `${key}-1280.webp.part-0a1b2c3d`), 'half a variant');
     expect((await b.app.inject({ method: 'GET', url: `/${key}-orig.jpg.part-0a1b2c3d`, headers: img })).statusCode).toBe(404);
     expect((await b.app.inject({ method: 'GET', url: `/${key}-1280.webp.part-0a1b2c3d`, headers: img })).statusCode).toBe(404);
+    for (const suffix of ['-orig.jpg', '-orig.jpg.part-0a1b2c3d', '-1280.webp.part-0a1b2c3d']) {
+      const privateBytes = readFileSync(join(dir, `${key}${suffix}`));
+      for (const prefix of ['//', '/./', '/x/../', '/x/%2e%2e/']) {
+        const url = `${prefix}${key}${suffix}`;
+        const denied = await b.app.inject({ method: 'GET', url, headers: img });
+        // Static 10 rejects ambiguous path syntax with 403 before allowedPath;
+        // canonical private files still 404 above. Either refusal protects the
+        // boundary, but a redirect, success or server error must never pass.
+        expect([403, 404], url).toContain(denied.statusCode);
+        expect(denied.rawPayload.includes(privateBytes), url).toBe(false);
+      }
+    }
   });
 
   it('returns immediately with status "processing" and enqueues the encode', async () => {
@@ -376,11 +410,211 @@ describe('POST /upload', () => {
     expect(res.json().key).toMatch(/^library\/\d{4}\/l1002345-[0-9a-f]{8}$/);
   });
 
-  it('429s when the encode backlog is full', async () => {
-    const b = build({ encodeQueue: stubQueue({ full: true }).queue });
+  /**
+   * #348: a REAL encode queue at its backlog limit — its one slot encoding and
+   * its one backlog slot taken by two fillers, both parked behind a held
+   * exclusive lock (a "build") — so the next enqueue is a genuine
+   * BacklogFullError. `release()` lets the queue drain with real sharp encodes.
+   * `wrap` decorates the store the ROUTES see; the queue writes the inner one.
+   */
+  async function buildFullQueue(wrap: (m: MediaStore) => MediaStore = (m) => m) {
+    const inner = memoryMediaStore({ baseUrl: 'https://img.simonswanderlust.com' });
+    const lock = createWorkLock();
+    const gate = Promise.withResolvers<void>();
+    const held = lock.runExclusive(() => gate.promise);
+    const queue = createEncodeQueue({ store: inner, storageDir: dir, lock, concurrency: 1, maxBacklog: 1, log: () => {} });
+    const b = build({ media: wrap(inner), encodeQueue: queue });
     const { cookie } = await authed(b);
-    const res = await upload(b, cookie, { key: 'trips/full/hero' });
+    for (const background of ['#a11', '#1a1']) {
+      const filler = await sharp({ create: { width: 64, height: 48, channels: 3, background } }).jpeg().toBuffer();
+      expect((await upload(b, cookie, { key: 'trips/filler/photo' }, filler)).statusCode).toBe(200);
+    }
+    expect(queue.stats()).toEqual({ pending: 1, running: 1 });
+    const img = await jpeg();
+    const key = contentHashKey('trips/full/hero', img, SETTINGS);
+    const release = async () => { gate.resolve(); await held; await queue.idle(); };
+    const retry = () => b.app.inject({ method: 'POST', url: '/media/retry', cookies: cookie, payload: { keys: [key] } });
+    return { ...b, media: inner, queue, cookie, img, key, release, retry };
+  }
+
+  it('a 429 from a full backlog leaves a recoverable failed row, and a re-send after the drain encodes to ready', async () => {
+    const b = await buildFullQueue();
+    const form = { key: 'trips/full/hero', folder: 'Iceland', title: 'Glacier' };
+    const res = await upload(b, b.cookie, form, b.img);
     expect(res.statusCode).toBe(429);
+    // Not `processing` with nothing queued: retryable, deletable, and the
+    // original plus the request's metadata are kept for the recovery.
+    expect(await b.media.get(b.key)).toMatchObject({ status: 'failed', error: 'queue_full', folder: 'Iceland', title: 'Glacier' });
+    expect(b.queue.isActive(b.key)).toBe(false);
+    expect(existsSync(join(dir, `${b.key}-orig.jpg`))).toBe(true);
+
+    // Still full: the client's retry (same form) is refused again — never a false success.
+    expect((await upload(b, b.cookie, form, b.img)).statusCode).toBe(429);
+    expect(await b.media.get(b.key)).toMatchObject({ status: 'failed', error: 'queue_full' });
+
+    await b.release();
+    const again = await upload(b, b.cookie, form, b.img);
+    expect(again.statusCode).toBe(200);
+    expect(again.json()).toMatchObject({ key: b.key, status: 'processing' });
+    expect(again.json().duplicate).toBe(true);
+    expect(b.queue.isActive(b.key)).toBe(true);
+    await b.queue.idle();
+    expect(await b.media.get(b.key)).toMatchObject({ status: 'ready', error: null, folder: 'Iceland', title: 'Glacier' });
+    expect(existsSync(join(dir, `${b.key}-640.webp`))).toBe(true);
+  });
+
+  it.each([
+    ['failed', 'encode_failed'],
+    ['missing', null],
+  ] as const)('a 429 re-send of a %s row restores its status and error; the re-send after the drain encodes it', async (status, error) => {
+    const b = await buildFullQueue();
+    expect((await upload(b, b.cookie, { key: 'trips/full/hero' }, b.img)).statusCode).toBe(429);
+    await b.media.setStatus(b.key, status, error ?? undefined);
+    const curated = {
+      folder: 'Iceland/South', title: 'Glacier',
+      alt: { de: 'Gletscher', en: 'Glacier' },
+      caption: { de: 'Am Morgen', en: 'At dawn' }, tags: ['ice'],
+    };
+    await b.media.patch(b.key, curated);
+    const form = { key: 'trips/full/hero', folder: 'Norway' };
+
+    expect((await upload(b, b.cookie, form, b.img)).statusCode).toBe(429);
+    expect(await b.media.get(b.key)).toMatchObject({ ...curated, status, error });
+    expect(b.queue.isActive(b.key)).toBe(false);
+
+    await b.release();
+    const again = await upload(b, b.cookie, form, b.img);
+    expect(again.statusCode).toBe(200);
+    expect(again.json().duplicate).toBeUndefined();
+    expect(again.json()).toMatchObject({ key: b.key, status: 'processing', folder: curated.folder });
+    await b.queue.idle();
+    expect(await b.media.get(b.key)).toMatchObject({ ...curated, status: 'ready', error: null });
+  });
+
+  it('a stranded processing row the queue does not hold is settled on a refused re-send and enqueued on a later one', async () => {
+    const b = await buildFullQueue();
+    expect((await upload(b, b.cookie, { key: 'trips/full/hero' }, b.img)).statusCode).toBe(429);
+    // The state a pre-#348 429 (or a crash) left behind: `processing`, nothing
+    // queued — here without even the original on disk.
+    const strand = async () => {
+      await b.media.setStatus(b.key, 'processing');
+      await rm(join(dir, `${b.key}-orig.jpg`));
+    };
+    await strand();
+
+    // Still full: an honest 429 that leaves no unqueued `processing` row; the
+    // original is back, so the failed row is recoverable.
+    expect((await upload(b, b.cookie, { key: 'trips/full/hero' }, b.img)).statusCode).toBe(429);
+    expect(await b.media.get(b.key)).toMatchObject({ status: 'failed', error: 'queue_full' });
+    expect(b.queue.isActive(b.key)).toBe(false);
+    expect(existsSync(join(dir, `${b.key}-orig.jpg`))).toBe(true);
+
+    await b.release();
+    await strand();
+    const again = await upload(b, b.cookie, { key: 'trips/full/hero' }, b.img);
+    expect(again.statusCode).toBe(200);
+    expect(again.json()).toMatchObject({ key: b.key, status: 'processing', duplicate: true });
+    expect(b.queue.isActive(b.key)).toBe(true);
+    await b.queue.idle();
+    expect(await b.media.get(b.key)).toMatchObject({ status: 'ready', error: null });
+    expect(existsSync(join(dir, `${b.key}-orig.jpg`))).toBe(true);
+  });
+
+  it('POST /media/retry recovers a queue_full row once the backlog drains, and keeps it failed while full', async () => {
+    const b = await buildFullQueue();
+    expect((await upload(b, b.cookie, { key: 'trips/full/hero' }, b.img)).statusCode).toBe(429);
+    const full = await b.retry();
+    expect(full.statusCode).toBe(429);
+    expect(full.json()).toMatchObject({ queued: 0 });
+    expect(await b.media.get(b.key)).toMatchObject({ status: 'failed', error: 'queue_full' });
+
+    await b.release();
+    const res = await b.retry();
+    expect(res.json()).toEqual({ ok: true, queued: 1 });
+    await b.queue.idle();
+    expect(await b.media.get(b.key)).toMatchObject({ status: 'ready', error: null });
+  });
+
+  it.each(['upload', 'retry'] as const)('a pending refusal rollback excludes same-key %s admission until the row is settled', async (entry) => {
+    const reached = Promise.withResolvers<void>();
+    const landing = Promise.withResolvers<void>();
+    const b = await buildFullQueue((m) => ({
+      ...m,
+      setStatusIfProcessing: async (...args) => {
+        reached.resolve();
+        await landing.promise;
+        return m.setStatusIfProcessing(...args);
+      },
+    }));
+    const a = upload(b, b.cookie, { key: 'trips/full/hero', folder: 'Iceland/South', alt: 'Curated' }, b.img);
+    await reached.promise;
+    await b.release();
+    // Hold the second encode: checking only after ready missed the original race.
+    const encodeGate = Promise.withResolvers<void>();
+    // Occupy the queue's next job via its store read without replacing the encoder.
+    const get = b.media.get;
+    const encoding = Promise.withResolvers<void>();
+    b.media.get = async (key) => {
+      const row = await get(key);
+      if (key === b.key && b.queue.isActive(key)) {
+        encoding.resolve();
+        await encodeGate.promise;
+      }
+      return row;
+    };
+    const admission = Promise.withResolvers<void>();
+    const withAdmission = b.queue.withAdmission;
+    b.queue.withAdmission = (key, operation) => {
+      admission.resolve();
+      return withAdmission(key, operation);
+    };
+    const second = entry === 'upload'
+      ? upload(b, b.cookie, { key: 'trips/full/hero', folder: 'Norway', alt: 'Replacement' }, b.img)
+      : b.retry();
+    await admission.promise;
+    expect(b.queue.isActive(b.key)).toBe(false);
+    expect(await get(b.key)).toMatchObject({ status: 'processing' });
+    landing.resolve();
+    expect((await a).statusCode).toBe(429);
+    expect((await second).statusCode).toBe(200);
+    await encoding.promise;
+    expect(b.queue.isActive(b.key)).toBe(true);
+    expect(await get(b.key)).toMatchObject({
+      status: 'processing', error: null, folder: 'Iceland/South',
+      alt: { de: 'Curated', en: 'Curated' },
+    });
+    // This is the exact persisted state a crash must recover.
+    expect((await b.media.list({ status: 'processing' })).items.map((item) => item.key)).toContain(b.key);
+    encodeGate.resolve();
+    await b.queue.idle();
+    expect(await get(b.key)).toMatchObject({ status: 'ready', error: null });
+  });
+
+  it('repeated queue-refused orphan uploads preserve curated metadata before and after admission', async () => {
+    const b = await buildFullQueue();
+    await upload(b, b.cookie, { key: 'trips/full/hero' }, b.img);
+    await b.media.setStatus(b.key, 'processing');
+    const curated = {
+      folder: 'Iceland/South', title: 'Glacier',
+      alt: { de: 'Gletscher', en: 'Glacier' },
+      caption: { de: 'Am Morgen', en: 'At dawn' }, tags: ['ice'],
+    };
+    await b.media.patch(b.key, curated);
+    const before = await b.media.get(b.key);
+    const form = { key: 'trips/full/hero', folder: 'Norway', title: 'Replacement', alt: 'Replacement' };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      expect((await upload(b, b.cookie, form, b.img)).statusCode).toBe(429);
+      expect(await b.media.get(b.key)).toMatchObject({ ...curated, status: 'failed', error: 'queue_full' });
+    }
+    await b.release();
+    const accepted = await upload(b, b.cookie, form, b.img);
+    expect(accepted.statusCode).toBe(200);
+    expect(accepted.json()).toMatchObject({ duplicate: true, folder: curated.folder, status: 'processing' });
+    await b.queue.idle();
+    expect(await b.media.get(b.key)).toMatchObject({
+      ...curated, status: 'ready', error: null,
+      encoding: before?.encoding, uploadedAt: before?.uploadedAt, uploadedBy: before?.uploadedBy,
+    });
   });
 
   it('records EXIF-free uploads without lat/lng and stores the supplied folder/title', async () => {
@@ -754,7 +988,7 @@ describe('media library', () => {
 describe('buildServer config', () => {
   it('boots with a relative storageDir (resolves it to absolute)', async () => {
     const rel = relative(process.cwd(), dir);
-    const srv = buildServer({ storageDir: rel, baseUrl: 'https://img.simonswanderlust.com', users: memoryUserStore(), sessions: memorySessionStore(), settings: fakeStore(), secrets: memorySecretsStore(), posts: memoryPostStore(), pages: memoryPageStore(), media: memoryMediaStore({ baseUrl: 'https://img.simonswanderlust.com' }), encodeQueue: stubQueue().queue, imgHost: 'img.simonswanderlust.com', siteDir: join(dir, 'site'), builder: stubBuilder().builder, backupDir: dir + '/backup', dbBackup: stubBackup().backup, dbCheck: async () => {} });
+    const srv = buildServer({ trustProxy: TEST_TRUST, storageDir: rel, baseUrl: 'https://img.simonswanderlust.com', users: memoryUserStore(), sessions: memorySessionStore(), settings: fakeStore(), secrets: memorySecretsStore(), posts: memoryPostStore(), pages: memoryPageStore(), media: memoryMediaStore({ baseUrl: 'https://img.simonswanderlust.com' }), encodeQueue: stubQueue().queue, imgHost: 'img.simonswanderlust.com', siteDir: join(dir, 'site'), builder: stubBuilder().builder, backupDir: dir + '/backup', dbBackup: stubBackup().backup, dbCheck: async () => {} });
     await expect(srv.ready()).resolves.toBeDefined();
     await srv.close();
   });
@@ -1509,7 +1743,7 @@ describe('auth endpoints', () => {
   });
 
   // Login attempts with a proxy-appended client address, so one test can play
-  // several sources (trustProxy: 1 keys on the RIGHTMOST X-Forwarded-For entry).
+  // several sources (an immediate trusted loopback peer preserves the RIGHTMOST entry).
   const loginFrom = (b: Built, ip: string, payload: Record<string, unknown>) => b.app.inject({
     method: 'POST', url: '/login',
     headers: { 'content-type': 'application/json', 'x-forwarded-for': ip },
@@ -1618,14 +1852,12 @@ describe('auth endpoints', () => {
   });
 
   it('per-IP limiter keys on the proxy-appended address, not a client-supplied X-Forwarded-For entry', async () => {
-    // trustProxy: 1 trusts only the socket hop (the reverse proxy), so req.ip is
-    // the RIGHTMOST X-Forwarded-For entry — the one the proxy appended. With
-    // `true` (#108) req.ip was the LEFTMOST, client-supplied entry, and rotating
-    // it opened a fresh bucket per request. This test fails on that regression.
-    const b = build({ loginLimiter: fixedWindowLimiter({ max: 1, windowMs: 60_000 }) });
+    // Even when the client supplies a leftmost entry, only the immediate
+    // allow-listed gateway is trusted; the rightmost client gets the bucket.
+    const b = build({ trustProxy: GATEWAY_TRUST, loginLimiter: fixedWindowLimiter({ max: 1, windowMs: 60_000 }) });
     await b.users.create({ username: 'simon', password: 'password123456', isAdmin: false });
     const login = (xff: string) => b.app.inject({
-      method: 'POST', url: '/login',
+      method: 'POST', url: '/login', remoteAddress: '172.18.0.1',
       headers: { 'content-type': 'application/json', 'x-forwarded-for': xff },
       payload: { username: 'simon', password: 'bad' },
     });
@@ -1634,6 +1866,51 @@ describe('auth endpoints', () => {
     expect((await login('10.0.0.2, 198.51.100.7')).statusCode).toBe(429);
     // A different proxy-appended client gets its own bucket.
     expect((await login('10.0.0.3, 203.0.113.9')).statusCode).toBe(401);
+  });
+
+  it('ignores rotating forwarded addresses from a co-tenant container', async () => {
+    const b = build({ trustProxy: GATEWAY_TRUST, loginLimiter: fixedWindowLimiter({ max: 1, windowMs: 60_000 }) });
+    const login = (xff: string) => b.app.inject({
+      method: 'POST', url: '/login', remoteAddress: '172.18.0.3',
+      headers: { 'x-forwarded-for': xff },
+      payload: { username: 'missing', password: 'wrongpassword' },
+    });
+    expect((await login('198.51.100.7')).statusCode).toBe(401);
+    expect((await login('203.0.113.9')).statusCode).toBe(429);
+  });
+
+  it('stops after one hop even when the rightmost forwarded address is itself trusted', async () => {
+    const b = build({ trustProxy: GATEWAY_TRUST, loginLimiter: fixedWindowLimiter({ max: 1, windowMs: 60_000 }) });
+    const first = await b.app.inject({
+      method: 'POST', url: '/login', remoteAddress: '172.18.0.1',
+      headers: { 'x-forwarded-for': '203.0.113.9, 172.18.0.1' },
+      payload: { username: 'missing', password: 'wrongpassword' },
+    });
+    expect(first.statusCode).toBe(401);
+    const direct = await b.app.inject({
+      method: 'POST', url: '/login', remoteAddress: '172.18.0.1',
+      payload: { username: 'missing', password: 'wrongpassword' },
+    });
+    expect(direct.statusCode).toBe(429);
+  });
+
+  it.each([
+    { peer: '172.18.0.1', proto: 'https', secure: true },
+    { peer: '172.18.0.1', proto: undefined, secure: false },
+    { peer: '172.18.0.3', proto: 'https', secure: false },
+  ])('sets Secure on setup and login only for a trusted HTTPS proxy ($peer, $proto)', async ({ peer, proto, secure }) => {
+    const b = build({ trustProxy: GATEWAY_TRUST });
+    const payload = { username: 'proxy-admin', password: 'password123456' };
+    for (const url of ['/setup', '/login']) {
+      const response = await b.app.inject({
+        method: 'POST', url, remoteAddress: peer,
+        headers: proto ? { 'x-forwarded-proto': proto } : {},
+        payload,
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['set-cookie']).toMatch(/sid=/);
+      expect(/;\s*Secure(?:;|$)/i.test(String(response.headers['set-cookie']))).toBe(secure);
+    }
   });
 
   it('locked account is refused before password verification (no scrypt for a locked account)', async () => {
@@ -2455,6 +2732,52 @@ describe('posts editor', () => {
     en: { locale: 'en', slug: 'en-s', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
   });
 
+  it.each(['de', 'en'] as const)('rejects excessive %s slugs with a bounded field-specific 400 before create/update', async (locale) => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder });
+    const { cookie } = await authed(b);
+    for (const length of [252, 8192]) {
+      const input = sample();
+      input[locale].slug = 'a'.repeat(length);
+      const created = await b.app.inject({ method: 'POST', url: '/posts', cookies: cookie, payload: input });
+      expect(created.statusCode).toBe(400);
+      expect(created.json().error).toBe(`${locale}.slug must be at most 251 ASCII bytes (received ${length})`);
+      expect(await b.posts.list()).toEqual([]);
+    }
+    const created = await b.app.inject({ method: 'POST', url: '/posts', cookies: cookie, payload: sample() });
+    const tk = created.json().translationKey as string;
+    const before = await b.posts.get(tk);
+    const revisions = await b.posts.listRevisions(tk);
+    for (const length of [252, 8192]) {
+      const input = { ...sample(), translationKey: tk, confirmSlugChange: true };
+      input[locale].slug = 'a'.repeat(length);
+      const updated = await b.app.inject({ method: 'PUT', url: `/posts/${tk}`, cookies: cookie, payload: input });
+      expect(updated.statusCode).toBe(400);
+      expect(updated.json().error).toBe(`${locale}.slug must be at most 251 ASCII bytes (received ${length})`);
+      expect(await b.posts.get(tk)).toEqual(before);
+      expect(await b.posts.listRevisions(tk)).toEqual(revisions);
+    }
+    expect(s.calls).toEqual([]);
+    await b.app.close();
+  });
+
+  it.each([250, 251])('saves and publishes %i-byte DE/EN slugs byte-identically through HTTP', async (length) => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder });
+    const { cookie } = await authed(b);
+    const input = sample();
+    input.de.slug = 'd'.repeat(length);
+    input.en.slug = 'e'.repeat(length);
+    const created = await b.app.inject({ method: 'POST', url: '/posts', cookies: cookie, payload: input });
+    expect(created.statusCode).toBe(200);
+    const tk = created.json().translationKey as string;
+    const published = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
+    expect(published.statusCode).toBe(200);
+    expect(await b.posts.get(tk)).toMatchObject({ status: 'published', de: { slug: input.de.slug }, en: { slug: input.en.slug } });
+    expect(s.calls).toHaveLength(1);
+    await b.app.close();
+  });
+
   it('requires the strict 4KiB explicit publish body without a bodyless compatibility path', async () => {
     const b = build(); const { cookie } = await authed(b);
     const saved = await b.posts.upsertDraft({ ...sample(), status: 'draft', de: { ...sample().de, locale: 'de' }, en: { ...sample().en, locale: 'en' } });
@@ -2652,14 +2975,84 @@ describe('posts editor', () => {
     const { cookie } = await authed(b);
     const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     const tk = created.json().translationKey;
-    await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
+    const published = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     expect(s.calls.length).toBe(1);
     const un = await b.app.inject({ method: 'POST', url: `/posts/${tk}/unpublish`, cookies: cookie });
     expect(un.statusCode).toBe(200);
-    expect(un.json()).toEqual({ unpublished: true, build: { ok: true, release: 'r1' } });
+    expect(un.json()).toEqual({
+      unpublished: true, build: { ok: true, release: 'r1' },
+      previousUpdatedAt: published.json().updatedAt, updatedAt: expect.any(String),
+    });
     expect(s.calls.length).toBe(2);
     const got = await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie });
     expect(got.json().status).toBe('draft');
+    expect(un.json().updatedAt).toBe(got.json().updatedAt);
+    expect(new Date(un.json().updatedAt).getTime()).toBeGreaterThan(new Date(created.json().updatedAt).getTime());
+    const saved = await b.app.inject({
+      method: 'PUT', url: `/posts/${tk}`, cookies: cookie,
+      payload: { ...sample(), updatedAt: un.json().updatedAt },
+    });
+    expect(saved.statusCode).toBe(200);
+  });
+
+  it('unpublish returns its own token when a later writer saves during the rebuild', async () => {
+    const posts = memoryPostStore();
+    let tokenAtBuild: string | undefined;
+    const builder: SiteBuilder = {
+      ...stubBuilder().builder,
+      build: async () => {
+        const [summary] = await posts.list();
+        const pair = (await posts.get(summary!.translationKey))!;
+        tokenAtBuild = pair.updatedAt.toISOString();
+        await posts.upsertDraft({ ...pair, de: { ...pair.de, title: 'Another tab' } }, pair.updatedAt);
+        return { ok: true, release: 'r1' };
+      },
+    };
+    const b = build({ posts, builder });
+    const { cookie } = await authed(b);
+    const created = await b.app.inject({ method: 'POST', url: '/posts', cookies: cookie, payload: sample() });
+    const tk = created.json().translationKey;
+    await posts.publish(tk, await publishTokens(posts, tk));
+    const un = await b.app.inject({ method: 'POST', url: `/posts/${tk}/unpublish`, cookies: cookie });
+    expect(un.statusCode).toBe(200);
+    expect(un.json().updatedAt).toBe(tokenAtBuild);
+    expect(un.json().updatedAt).not.toBe((await posts.get(tk))!.updatedAt.toISOString());
+    const stale = await b.app.inject({
+      method: 'PUT', url: `/posts/${tk}`, cookies: cookie,
+      payload: { ...sample(), updatedAt: un.json().updatedAt },
+    });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json().code).toBe('conflict');
+    expect((await posts.get(tk))!.de.title).toBe('Another tab');
+  });
+
+  it('reports the locked predecessor when another tab saves after the route preflight', async () => {
+    const posts = memoryPostStore();
+    const b = build({ posts, builder: stubBuilder().builder });
+    const { cookie } = await authed(b);
+    const created = await b.app.inject({ method: 'POST', url: '/posts', cookies: cookie, payload: sample() });
+    const tk = created.json().translationKey;
+    const published = await posts.publish(tk, await publishTokens(posts, tk));
+    const get = posts.get.bind(posts);
+    let precedingToken: Date | undefined;
+    vi.spyOn(posts, 'get').mockImplementationOnce(async (key) => {
+      const before = (await get(key))!;
+      const saved = await posts.upsertDraft({
+        ...before, de: { ...before.de, title: 'Saved between preflight and lock' },
+      }, before.updatedAt);
+      precedingToken = saved.updatedAt;
+      return before;
+    });
+    const un = await b.app.inject({ method: 'POST', url: `/posts/${tk}/unpublish`, cookies: cookie });
+    expect(un.statusCode).toBe(200);
+    expect(un.json().previousUpdatedAt).toBe(precedingToken?.toISOString());
+    expect(un.json().previousUpdatedAt).not.toBe(published.updatedAt.toISOString());
+    const stale = await b.app.inject({
+      method: 'PUT', url: `/posts/${tk}`, cookies: cookie,
+      payload: { ...sample(), updatedAt: published.updatedAt.toISOString() },
+    });
+    expect(stale.statusCode).toBe(409);
+    expect((await posts.get(tk))!.de.title).toBe('Saved between preflight and lock');
   });
 
   it('a failed rebuild is surfaced but the store change still lands (unpublish + delete)', async () => {
@@ -2668,10 +3061,14 @@ describe('posts editor', () => {
     const { cookie } = await authed(b);
     const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     const tk = created.json().translationKey;
-    await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
+    const published = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     const un = await b.app.inject({ method: 'POST', url: `/posts/${tk}/unpublish`, cookies: cookie });
     expect(un.statusCode).toBe(200);
-    expect(un.json()).toEqual({ unpublished: true, build: { ok: false, error: 'a build is already running' } });
+    expect(un.json()).toEqual({
+      unpublished: true, build: { ok: false, error: 'a build is already running' },
+      previousUpdatedAt: published.json().updatedAt,
+      updatedAt: (await b.posts.get(tk))!.updatedAt.toISOString(),
+    });
     expect((await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).json().status).toBe('draft');
     // re-publish, then delete while the builder keeps failing: DB delete lands, outcome surfaced
     await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
@@ -3017,6 +3414,40 @@ describe('WordPress import', () => {
     const res = await b.app.inject({ method: 'POST', url: '/import', headers: { ...form.getHeaders() }, cookies: cookie, payload: form });
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBe('no importable posts found in export');
+  });
+
+  it.each([false, true])('completes a groupless-only export as a rejection-only 202 job (overwrite=%s)', async (overwrite) => {
+    const rehost = vi.fn(async () => ({ src: 'https://img/unexpected', width: 1, height: 1 }));
+    const b = build({ prepareImport: (xml, deps) => prepareImport(xml, { ...deps, rehost }) });
+    const upsert = vi.spyOn(b.posts, 'upsertDraft');
+    const { cookie } = await authed(b);
+    const xml = wxrWith('https://wp.example/must-not-fetch.jpg')
+      .replaceAll('<category domain="post_translations" nicename="impg"><![CDATA[impg]]></category>', '');
+    const res = await postImport(b, cookie, xml, { overwriteDrafts: String(overwrite) });
+    expect(res.statusCode).toBe(202);
+    expect(res.json().planned).toEqual({
+      groups: { total: 0, done: 0 }, images: { planned: 0, hosted: 0, failed: 0 },
+    });
+    await b.importJobs.settle();
+    const status = await b.app.inject({ method: 'GET', url: '/import/status', cookies: cookie });
+    expect(status.statusCode).toBe(200);
+    const job = status.json().job;
+    expect(job).toMatchObject({
+      id: res.json().id, status: 'done',
+      progress: { groups: { total: 0, done: 0 }, images: { planned: 0, hosted: 0, failed: 0 } },
+      summary: {
+        imported: 0, updated: 0, skippedPublished: 0, rejected: 2, failed: 0,
+        images: { total: 0, hosted: 0, failed: 0 },
+        warnings: [
+          'imp-de (de): no translation (untranslated post) — rejected',
+          'imp-en (en): no translation (untranslated post) — rejected',
+        ],
+      },
+    });
+    expect(job.finishedAt).toBeTruthy();
+    expect(rehost).not.toHaveBeenCalled();
+    expect(upsert).not.toHaveBeenCalled();
+    expect(await b.posts.list()).toEqual([]);
   });
 
   // issue #100: a re-run of an export whose posts are all already published is
@@ -3772,6 +4203,28 @@ describe('POST /settings/image-preview', () => {
       const res = await preview(b, cookie, { format, quality: '50' });
       expect(res.statusCode).toBe(200);
       expect((await sharp(res.rawPayload).metadata()).exif, `${format} carried EXIF`).toBeUndefined();
+    }
+    expect(await readdir(dir)).toEqual(before);
+    expect((await b.media.list({})).items).toEqual([]);
+  });
+
+  it.each(['avif', 'svg'] as const)('decodes %s preview input without retaining metadata or writing media', async (source) => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const input = source === 'avif'
+      ? await sharp(await gpsJpeg(300, 200)).withMetadata().avif().toBuffer()
+      : Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200"><rect width="300" height="200" fill="#5a7"/></svg>');
+    if (source === 'avif') expect((await sharp(input).metadata()).exif).toBeDefined();
+    const before = await readdir(dir);
+    // Decoder selection follows bytes, not the caller's untrusted MIME label.
+    const result = await preview(b, cookie, { format: 'webp', quality: '60' }, input);
+    expect(result.statusCode).toBe(200);
+    const meta = await sharp(result.rawPayload).metadata();
+    expect({ format: meta.format, width: meta.width, height: meta.height, exif: meta.exif })
+      .toEqual({ format: 'webp', width: 300, height: 200, exif: undefined });
+    const pixel = await sharp(result.rawPayload).extract({ left: 0, top: 0, width: 1, height: 1 }).raw().toBuffer();
+    for (const [index, expected] of [85, 170, 119].entries()) {
+      expect(Math.abs(pixel[index]! - expected)).toBeLessThan(25);
     }
     expect(await readdir(dir)).toEqual(before);
     expect((await b.media.list({})).items).toEqual([]);

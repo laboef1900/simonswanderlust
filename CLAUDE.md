@@ -120,8 +120,9 @@ exception merely to make a check pass. Record accepted exceptions in the relevan
    screenshots/`.jpeg`/`.png` are ignored too.
 6. **No Secrets** — Never commit `.env`, API keys, or credentials. Production secrets MUST come
    from a cryptographically secure generator, be independently rotatable, and never be logged.
-7. **No Hardcoded UI Strings** — ALL user-facing copy lives in `site/src/i18n/ui.ts` for both
-   locales (completeness-tested — this guards against the old site's German-in-English-footer bug).
+7. **No Hardcoded UI Strings** — Interface copy and neutral fallbacks live in `site/src/i18n/ui.ts`
+   for both locales (completeness-tested). Owner-authored identity text lives in Postgres, not
+   the translation dictionary; exact upgrade-only brand values live in `site-identity-legacy.ts`.
 8. **Strict Typing and Validation** — `tsconfig` extends `astro/tsconfigs/strict`. No `any`, no
    `@ts-ignore`, no `astro check` suppressions to force a pass. Fix the underlying type issue.
    Validate untrusted data at every boundary (Zod for content; explicit checks on uploader payloads).
@@ -143,8 +144,9 @@ Classify a change before implementing it:
   honeypot, comment limiter, the public JSON shape), the `images`-map and
   body-HTML render path, gallery URL allow-listing, `safeFetch`/WXR import, path-traversal guards,
   EXIF/GPS handling, the schema in `uploader/src/db.ts`, backup/restore, the build/publish
-  pipeline, `/data` layout, AI credentials (the provider registry, `app_secrets` slots,
-  `/ai-providers*` and `/ai-config`), or **any slug or route change**.
+  pipeline, the site identity tables and exported identity/content build snapshot, the
+  canonical-origin/comment-origin roles, `/data` layout, AI credentials (the provider registry,
+  `app_secrets` slots, `/ai-providers*` and `/ai-config`), or **any slug or route change**.
 
 | Risk | Design and specification | Verification | Review and recovery |
 | --- | --- | --- | --- |
@@ -234,9 +236,14 @@ the `/data` volume and only changes via Publish, **Rebuild site now**, or `POST 
 
 | Service | Port | Exposure |
 | --- | --- | --- |
-| `app` (Fastify: blog + admin + images) | `3000` | **Loopback** (`127.0.0.1:3000`) — the only published port; the host's reverse proxy is the sole ingress (#108) |
+| `app` (Fastify: blog + admin + images) | `3000` | **Loopback** (`127.0.0.1:3000`) — the only published port; one host TLS proxy, with immediate-peer address validation (#108, #369) |
 | `db` (Postgres 18) | `5432` | **Internal** — compose network only; never published to the host |
 | Astro dev server | `4321` | **Loopback** — local development only |
+
+Compose sets `TRUSTED_PROXY: docker-gateway` literally, not through `.env`. It trusts loopback
+and the discovered default gateway at hop zero only; missing/ambiguous discovery refuses boot.
+Changing bridge/proxy topology or adding a CDN requires a new spec. Docker Desktop TCP evidence
+does not replace the target-VPS peer/header/two-external-network checks before DNS cutover.
 
 ## Accessibility and High-Impact Actions
 
@@ -286,10 +293,21 @@ Full security model: `SECURITY.md`. These patterns MUST be preserved when changi
   streamed size cap). File access goes through path-traversal guards (`assertSafeKey`,
   `assertSafeFolder`). Keep these intact; re-assert at read boundaries that build paths from
   database content, not just at write boundaries.
-- **Configuration** — Do NOT grow `.env`. App settings live in a JSON settings store on the data
-  volume (`uploader/src/settings.ts`, atomic-rename writes) managed via the admin Settings page;
+- **Configuration** — Do NOT grow `.env`. Operational app settings live in a JSON settings
+  store on the data volume (`uploader/src/settings.ts`, atomic-rename writes), managed via
+  admin Settings. Site identity (names, localized text, social links and the reserved canonical
+  origin/logo/favicon fields) lives in Postgres with content and travels in DB dumps.
   `.env` is reserved for bootstrap values (`DATABASE_URL`/`POSTGRES_PASSWORD`, `PUBLIC_BASE_URL` —
-  see `uploader/.env.example`).
+  see `uploader/.env.example`). `SITE_IDENTITY_JSON` and `SITE_DATABASE_SNAPSHOT` are internal,
+  unconditionally builder-set values, never operator settings.
+- **Identity contract (#274)** — Use the shared `site/src/lib/site-identity.ts` validator for
+  full stored DE/EN maps before projecting active locales. Seeds are one-time and leave
+  `saved_at` NULL; new author replies use the cached author name, never the login username.
+  Saves persist without rebuilding; public text changes on Publish/Rebuild. Dumps v11 include
+  identity/assets; pre-identity restores recover legacy text and retain a live canonical origin.
+  Asset APIs/rendering remain #275; canonical editing/SEO, comment-origin wiring and unconfigured
+  noindex remain #276. Do not widen #274 into those children or claim their controls are active.
+  See the approved 2026-10-27 identity spec and `docs/site-identity-branding-allowlist.md`.
 
 ### 2. Framework and Output Safety
 
@@ -1019,6 +1037,13 @@ blog/
   `posts_region_check`; a region page is built and linked only once its locale has a published
   story (`liveRegions` in `site/src/lib/trips.ts`). See
   `docs/superpowers/specs/2026-10-19-new-regions-design.md`.
+- **Implemented, release pending:** #347 native image decoder hardening (2026-10-27,
+  owner-approved). Both locks resolve sharp 0.35.5 / libvips package 1.3.4; uploader's
+  install-script permission follows sharp 0.35.5. DHI ARM64 and emulated AMD64 candidates
+  loaded the patched heif/rsvg/vips versions and passed JPEG/AVIF/SVG upload, served-variant,
+  private-original, EXIF-free preview and rescan checks. Formats and EXIF privacy stay unchanged.
+  Recovery is roll-forward only; a new image release/deployment is still required.
+  See `docs/superpowers/specs/2026-10-27-issue-347-sharp-codec-upgrade.md`.
 - **In progress:** Reader comments (epic #202, spec #203) — design spec landed 2026-09-14
   (`docs/superpowers/specs/2026-09-14-comments-design.md`, incl. an ASVS L1 exception record).
   #205 admin moderation queue landed: `uploader/public/comments.html` (served at
