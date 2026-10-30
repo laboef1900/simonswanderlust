@@ -1204,3 +1204,34 @@ Settled desktop/mobile screenshots and HTTP/SQL agreement are retained. Logout, 
 sessions, closed tabs/interceptions and closed app/provider ports completed the run;
 owned fixtures remain. Normal uploader scheduling passed 152 files / 3,663 tests, the site
 suite passed 36 files / 507 tests, and all six local checks passed at this code head.
+
+### Visibility and cached-page restoration
+
+Hiding a page now detaches and aborts its background read without superseding a selected
+item's pending acknowledgement. A detached read cannot report a false failure after the
+page returns. Both Save visibility orderings failed before the repair and passed afterward.
+Actual `943c92f` HTTP/SQL qualification used explicitly synthetic main-world visibility
+transitions: native tab/window controls did not produce a hidden document in this managed
+browser. Those scenarios are not claimed as native visibility proof.
+
+The same runtime did achieve genuine BFCache navigation and exposed another defect:
+trusted persisted pagehide/pageshow events fenced the old acknowledgement correctly, but
+restoration lost its requested read while Save remained pending. The form became clean
+while impact omitted a newly authorized story present in the acknowledgement. Restoration
+now retains one deferred read through final action settlement; ordinary item completion
+still avoids a read echo, and no write is replayed. The consumer regression failed before
+repair; all 86 Media DOM/observer cases passed afterward.
+
+Actual `b7580d4` qualification passed both return-before-acknowledgement and response-
+continued-while-away orderings, with trusted persisted events. Each made one PATCH and
+exactly one fresh selected-item GET. Holding that GET separately proved the old-lifetime
+acknowledgement stayed fenced; the new read repaired authorized links/counts/live pending
+without replacing the acknowledged captions or delta. The away case records callbacks
+after restoration, not JavaScript execution while frozen. Clean Save made no request.
+
+Manual Refresh and selection fencing passed; an obsolete intercepted read was canceled,
+not fabricated as late delivery. Real Publish/rebuild, correct-host DE/EN output and SQL
+agreed. Settled desktop/mobile captures, failed admin-host 404 probes and the unchanged
+native-visibility limit are retained. Logout, auth/media 401s, zero sessions, closed tabs
+and interceptions, and a stopped app completed the run. Normal scheduling passed all
+152 uploader files / 3,668 tests, 36 site files / 507 tests, and all six local checks.
