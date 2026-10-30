@@ -355,6 +355,13 @@ newest-first sequence already shows, and on the story page, where the reader
 has already arrived and the number told them nothing they act on. Spending
 the mark where it carries meaning is not a retreat from the identity.
 
+**Equal-date stories keep one order (#377).** `byLocale` orders trip dates
+newest first, then the pair's shared `translationKey` ascending by code-point
+comparison. Localized titles, slugs and save chronology never decide ties.
+The homepage cover (including competing featured stories), its entry number,
+home/region grids, previous/next links, footer latest list and RSS share that
+rule, so DE and EN retain the same pair order after saves and rebuilds.
+
 ### Named Rules
 
 **The One Tracking Rule.** `--tracking-log` (`0.18em`) is the only tracking a

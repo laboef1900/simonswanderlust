@@ -87,10 +87,51 @@ describe('trips helpers', () => {
     ]);
   });
 
-  it('equal-date entries keep stable input order', () => {
-    const a = fake('de/aaa', '2021-07-25', 'a');
-    const b = fake('de/bbb', '2021-07-25', 'b');
-    expect(byLocale([b, a], 'de').map((t) => t.id)).toEqual(['de/bbb', 'de/aaa']);
+  describe('equal dates (#377)', () => {
+    // Two multi-part stories on one trip day, both translated. Input order is
+    // the content store's, which follows Postgres heap order and changes on save.
+    const aDe = fake('de/zzz-teil-1', '2021-07-25', 'a');
+    const bDe = fake('de/aaa-teil-2', '2021-07-25', 'b');
+    const aEn = fake('en/aaa-part-1', '2021-07-25', 'a');
+    const bEn = fake('en/zzz-part-2', '2021-07-25', 'b');
+    const older = fake('de/older', '2021-07-24', 'c');
+    const newer = fake('de/newer', '2021-07-26', 'd');
+    const ids = (trips: Trip[], locale: 'de' | 'en') => byLocale(trips, locale).map((t) => t.id);
+
+    it('orders the same whatever the input order', () => {
+      const forward = [older, aDe, newer, bDe];
+      expect(ids(forward, 'de')).toEqual(ids([...forward].reverse(), 'de'));
+      expect(ids([aDe, bDe], 'de')).toEqual(ids([bDe, aDe], 'de'));
+    });
+
+    it('keeps newest first around the tie', () => {
+      const order = ids([older, bDe, newer, aDe], 'de');
+      expect(order[0]).toBe('de/newer');
+      expect(order[3]).toBe('de/older');
+    });
+
+    it('gives a DE/EN pair the same relative order, whatever their slugs', () => {
+      // The DE and EN rows move independently in the heap: feed them opposite ways.
+      const pool = [aDe, bDe, bEn, aEn];
+      const keys = (locale: 'de' | 'en') =>
+        byLocale(pool, locale).map((t) => t.data.translationKey);
+      expect(keys('de')).toEqual(keys('en'));
+    });
+
+    it('gives entryNumberOf the same N° whatever the input order', () => {
+      const forward = [older, aDe, newer, bDe, aEn, bEn];
+      const reversed = [...forward].reverse();
+      for (const trip of forward) {
+        expect(entryNumberOf(trip, reversed)).toBe(entryNumberOf(trip, forward));
+      }
+      // Date direction is untouched: oldest = 1, newest = the locale's count.
+      expect(entryNumberOf(older, reversed)).toBe(1);
+      expect(entryNumberOf(newer, reversed)).toBe(4);
+      // A pair keeps its tie order in both locales.
+      expect(entryNumberOf(aDe, forward) > entryNumberOf(bDe, forward)).toBe(
+        entryNumberOf(aEn, reversed) > entryNumberOf(bEn, reversed),
+      );
+    });
   });
 
   it('finds the translation pair via translationKey', () => {

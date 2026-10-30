@@ -47,10 +47,36 @@ export function heroAltOf(trip: Trip): string | undefined {
   return alt.toLowerCase() === trip.data.title.trim().toLowerCase() ? '' : undefined;
 }
 
+/**
+ * Code-point comparison: unlike `localeCompare`, the result never depends on
+ * the build host's ICU data or default locale.
+ */
+function compareCodePoints(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * One locale's stories, newest first. The single ordering rule behind the
+ * homepage cover, `entryNumberOf`, prev/next, region grids, footer and RSS.
+ *
+ * @ai-warning Equal dates are common (posts.date is a day, multi-part trips
+ * share one) and the input order is NOT data: it is the content store's
+ * insertion order, i.e. Postgres heap order from an unordered loader query,
+ * which moves whenever a row is saved — and the DE and EN rows move
+ * independently. Ties therefore break on `translationKey`, which both locales
+ * of a pair share, so the order is total, reproducible across rebuilds and
+ * identical in DE and EN. `id` is a last resort that only a corrupt set (two
+ * stories in one locale with one key) can reach. Issue #377.
+ */
 export function byLocale(trips: Trip[], locale: Locale): Trip[] {
   return trips
     .filter((t) => localeOf(t) === locale)
-    .sort((a, b) => b.data.date.getTime() - a.data.date.getTime());
+    .sort(
+      (a, b) =>
+        b.data.date.getTime() - a.data.date.getTime() ||
+        compareCodePoints(a.data.translationKey, b.data.translationKey) ||
+        compareCodePoints(a.id, b.id),
+    );
 }
 
 export function translationOf(trip: Trip, all: Trip[]): Trip | undefined {
