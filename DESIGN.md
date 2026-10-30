@@ -949,6 +949,9 @@ and the `<dialog>`s appended to `<body>` share one set:
   Rebuild. `.btn-new` is the accent command link (New post, New trip). Form actions sit in
   one `.form-actions` row, primary first; dense rows (bulk bars, folder actions,
   revisions, comment moderation) use the small height.
+- **Confirmations** require fresh consent for each opening. Escape, Cancel, and a
+  result-less `close()` never reuse an earlier acceptance; a typed confirmation also
+  requires the current prompt's exact token.
 - **Sections** inside the white workspace are flat: stacked `.card`s divide by a hairline
   (`--line`), never as cards inside the workspace card. Simple form pages (Users, Import)
   keep fields at a `34rem` measure.
@@ -1003,6 +1006,15 @@ and the `<dialog>`s appended to `<body>` share one set:
   lightbox captions. Edits apply only to this gallery in the active locale, commit with
   Insert/Update gallery, and Cancel discards them. The manuscript widget marks hidden
   captions explicitly. On phones, each reset button sits below its textarea.
+- With gallery previews enabled, typing or pasting at either collapsed fence edge
+  inserts prose on separate lines outside the gallery, including at the start or
+  end of the manuscript. Arrow-key navigation and clicking the visually empty
+  boundary must not prefix the opener or suffix the closer. Undo/redo, local alt
+  edits, picker replacements, and the raw-Markdown toggle retain their existing
+  behavior; the saved Markdown remains the source of truth. Undo/redo restores
+  the caret with the inserted text, not at the fence or trailing padding, so
+  continued typing stays in the same paragraph. Consecutive typing remains one
+  undo group.
 - Story details sits beside the manuscript on desktop. Its header carries one
   icon-only panel toggle (`panel-right-close` / `panel-right-open`, named Collapse /
   Expand story details); collapsing slides the panel right into a slim rail that
@@ -1044,7 +1056,7 @@ and the `<dialog>`s appended to `<body>` share one set:
   dialog is the exception that saves, so it states scope, fields, destination and photo
   count first; overwriting renames the action to **Generate and overwrite**.
 - Settings is one flat document per tab beside a quiet vertical tab index (**AI models**,
-  Images, Comments, Site & backups), not a stack of competing cards. The active tab sits
+  Images, Comments, Site identity, Site & backups), not a stack of competing cards. The active tab sits
   on the accent-soft surface, is mirrored in the URL hash (unknown → AI models) and in
   the title (**Settings · AI models**, the tab in muted weight). AI models holds the
   **Providers** list — name with a small `default` badge, kind and key state as text,
@@ -1059,6 +1071,18 @@ and the `<dialog>`s appended to `<body>` share one set:
   picker, a WebP/AVIF segmented choice and **Preview**, then the original and the result in
   two equal panes (stacked below 48rem) captioned with format, pixels, file size and saving,
   with a synchronized **1:1 pixels** view. Tabs still save independently.
+- Site identity uses the same paired fields for enabled-locale taglines, profile details and
+  admin descriptors, with shared site/author names above. Social links are an ordered list
+  with labelled Move up, Move down and Remove actions; a seventh link cannot be added.
+  Saving checks the loaded revision: conflicts retain the author's inputs until an explicit,
+  confirmed reload. Save never rebuilds. The timing note distinguishes the next public
+  Publish/Rebuild from immediate new author replies and next-load admin chrome; **Rebuild
+  site now** confirms that it uses saved values, not unsaved form input. Domain and asset
+  controls remain owned by #276 and #275.
+  Text limits count NFC-normalized, trimmed Unicode code points; supplementary characters
+  do not consume two slots. Excess input stays intact and receives focus on Save rather
+  than being truncated by an HTML UTF-16 length cap. Configured wordmarks and footer text
+  wrap even when a valid name or social label contains no spaces.
 - Below 72rem the index becomes a horizontal, wrapping strip above the panel (its arrow
   keys follow) and paired fields stack; provider rows and use-case rows stack below
   48rem. The topbar stays in normal flow.
