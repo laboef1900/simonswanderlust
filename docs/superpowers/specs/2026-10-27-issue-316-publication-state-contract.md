@@ -1143,3 +1143,35 @@ Same-realm reference checks and an additional same-realm held-query trial establ
 actual invariant without deleting the failed probes. Desktop/320px captures, correct-origin
 thumbnail200s, public DE/EN200s and HTTP/SQL agreement are retained. Logout, zero sessions,
 closed cookies/tabs, removed interception and a stopped app completed both isolated runs.
+
+### Overlapping comparison settlement
+
+Final review found the opposite recovery ordering still mattered: an older Check stored
+read settling before a newer Use mine acknowledgement advanced the observer generation,
+so the valid new impact projection was discarded. Beginning an action and accepting a
+projection still fence older observations; completing an action now only decrements the
+pending count and preserves the existing refresh scheduling. Both successful and failed
+old-read regressions failed before repair; all79 Media DOM/observer cases passed afterward.
+
+Actual `59fa6e7` qualification held genuine server responses around two real409 conflicts.
+An old comparison GET200 was delivered, or failed at the browser connection boundary,
+before the successful PATCH acknowledgement. A real second draft acquired the photo
+between the snapshots, making the old and fresh projections distinguishable. The immediate
+acknowledgement UI showed the new story links/counts, changed descriptions and live pending
+state, with clean acknowledged values and untouched EN. Each primary interaction made
+one comparison GET and two explicit PATCHes; checking the clean base made no request.
+The injected connection failure is not claimed as a server outage.
+
+A32.197-second held acknowledgement caused no observer reads or automatic writes.
+Dirty observation for32.044seconds and a separate narrow manual Refresh retained exact
+nodes, original base, focus/caret and scroll; the next leaf-only Save preserved the
+independently changed title. Clean-resource retirement for32.007seconds made no old-item
+reads or writes, and selecting B showed B's impact only. Real DE/EN public pages retained
+their galleries. HTTP and independent SQL agreed. Stable desktop/320px captures and
+corrected fixture probes remain recorded; logout200, zero sessions, closed tabs/cookies,
+detached interceptions and a stopped app completed the run.
+
+The same integrated stack moves database-backed mixed test files into the existing
+serialized integration project. No assertions or production bootstrap checks were
+weakened. Normal uploader project scheduling passed all152files/3,661tests and the full
+six-step check at this source; CI run `40981244277` passed separately.

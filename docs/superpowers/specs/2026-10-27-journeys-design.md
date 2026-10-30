@@ -1048,3 +1048,21 @@ the recovered empty EN slug derived normally. POST, GET and SQL agreed. Desktop/
 keyboard states were inspected. The record discloses rejected fixture attempts and an
 initially cancelled recovery; successful qualification was separate. Owned sessions,
 browser storage/tabs and app were closed, with synthetic data and evidence retained.
+
+### Database-suite isolation qualification
+
+CI run `40979505214` exposed a real harness race in the inherited journey contract:
+its PostgreSQL cases ran in the parallel unit project, and `ensureSchema` encountered
+`could not open relation with OID 26988` while another fixture dropped a schema.
+A per-case search path does not isolate database-wide catalog reads. The preceding
+local run forced file serialization and therefore did not exercise that scheduling.
+
+Every mixed database-backed suite in the integrated stack now uses the existing
+serialized `.integration.test.ts` lane: journey stores, navigation stores, build
+routes, language API, Media impact and write receipts. The assertions and production
+bootstrap behavior are unchanged; the unit project retains its normal parallelism.
+
+At `2e916d8`, all six checks passed with two uploader workers and no file-parallelism
+override: 160 uploader files / 3,861 tests, 40 site files / 573 tests, both type checks
+and the actual build. CI run `40981249705` then passed. The original failing run is
+retained alongside the repair; a blind retry did not establish qualification.
