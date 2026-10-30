@@ -5,6 +5,8 @@ import { webcrypto } from 'node:crypto';
 import { setImmediate } from 'node:timers/promises';
 import { ui } from '../../site/src/i18n/ui.js';
 import * as MediaConditional from '../public/media-conditional.js';
+import type { MediaImpact, StoryUse } from '../src/media-impact.js';
+import type { ChangedDescriptions } from '../src/media-store.js';
 
 // media-browser.js is the library page's DOM glue (media.html). Its
 // user-visible contracts that no pure helper can carry — the detail panel
@@ -18,6 +20,8 @@ const apiSrc = readFileSync('public/media-api.js', 'utf8');
 const aiSrc = readFileSync('public/media-ai.js', 'utf8');
 const dialogSrc = readFileSync('public/media-ai-dialog.js', 'utf8');
 const browserSrc = readFileSync('public/media-browser.js', 'utf8');
+const impactSrc = readFileSync('public/media-impact.js', 'utf8');
+const refreshSrc = readFileSync('public/publication-refresh.js', 'utf8');
 const markup = readFileSync('public/media.html', 'utf8');
 const pageIds = [...markup.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]!);
 const checkedIds = new Set([...markup.matchAll(/<input[^>]*\bid="([^"]+)"[^>]*\bchecked\b/g)].map((m) => m[1]!));
@@ -27,6 +31,7 @@ type Listener = (ev: Record<string, unknown>) => void;
 class FakeNode {
   id = '';
   className = '';
+  href = '';
   private text = '';
   get textContent(): string { return this.text + this.children.map(child => child.textContent).join(''); }
   set textContent(value: string) { this.text = value; this.children = []; }
@@ -73,7 +78,10 @@ class FakeNode {
     const cls = sel.replace(/^\./, '');
     const out: FakeNode[] = [];
     const walk = (n: FakeNode): void => {
-      for (const c of n.children) { if (c.className.split(' ').includes(cls)) out.push(c); walk(c); }
+      for (const c of n.children) {
+        if (sel.startsWith('.') ? c.className.split(' ').includes(cls) : c.tagName.toLowerCase() === sel.toLowerCase()) out.push(c);
+        walk(c);
+      }
     };
     walk(this);
     return out;
@@ -89,6 +97,10 @@ interface Item {
   key: string; title: string; folder: string; status: string; thumbSrc: string;
   alt: { de: string; en: string }; caption: { de: string; en: string };
   tags: string[]; exif: null; width: number; height: number; origBytes: number; variantBytes: number;
+  impact?: MediaImpact;
+  livePending?: ChangedDescriptions | null;
+  changedDescriptions?: ChangedDescriptions;
+  usedIn?: { kind: string; key: string; title: string }[];
 }
 function item(key: string, altDe = ''): Item {
   return {
@@ -118,7 +130,7 @@ interface Page {
   activeElement(): FakeNode | null;
   /** The page's global object, for replacing a module's function after load. */
   win: Record<string, unknown>;
-  timers: { fn: () => void; cleared: boolean }[];
+  timers: { fn: () => void; cleared: boolean; ms: number }[];
   listRequests: Deferred[];
   patches: { url: string; body: Record<string, unknown> }[];
   rows: Map<string, Item>;
@@ -126,6 +138,9 @@ interface Page {
   confirms: string[];
   confirmAnswer: { value: boolean };
   flush(): Promise<void>;
+  focus(): void;
+  visibility(hidden: boolean): void;
+  lifecycle(type: 'pagehide' | 'pageshow', persisted: boolean): void;
 }
 
 function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' | 'en'; prompt?: string; xhr?: new () => object;
@@ -148,7 +163,9 @@ function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' 
     if (!n) throw new Error('no element #' + id);
     return n;
   };
-  const timers: { fn: () => void; cleared: boolean }[] = [];
+  const timers: { fn: () => void; cleared: boolean; ms: number }[] = [];
+  const windowEvents = new FakeNode('window');
+  const documentEvents = new FakeNode('document');
   const listRequests: Deferred[] = [];
   const patches: { url: string; body: Record<string, unknown> }[] = [];
   const rows = new Map<string, Item>();
@@ -169,7 +186,10 @@ function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' 
       const patch = body.conditional.patch;
       const saved = { ...base, ...patch, alt: { ...base.alt, ...patch.alt }, caption: { ...base.caption, ...patch.caption } };
       rows.set(key, saved);
-      return ok({ ...saved, conditionalVersion: 1 });
+      return ok({ ...saved, conditionalVersion: 1, changedDescriptions: {
+        de: { alt: base.alt.de !== saved.alt.de, caption: base.caption.de !== saved.caption.de },
+        en: { alt: base.alt.en !== saved.alt.en, caption: base.caption.en !== saved.caption.en },
+      } });
     }
     if (url.startsWith('/media/items/')) return ok(rows.get(url.slice('/media/items/'.length)));
     const { promise, resolve } = Promise.withResolvers<unknown>();
@@ -183,6 +203,9 @@ function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' 
   const describePhoto = opts.describe ?? (async () => DETAILS);
   const ctx: Record<string, unknown> = {
     document: {
+      hidden: false,
+      addEventListener: documentEvents.addEventListener.bind(documentEvents),
+      removeEventListener() {},
       documentElement: { lang: opts.locale ?? 'en' },
       get activeElement() { return activeElement; },
       getElementById,
@@ -192,8 +215,10 @@ function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' 
     location: { href: '', origin: 'https://app.example', protocol: 'https:' },
     fetch,
     URL, AbortController, AbortSignal,
-    crypto: webcrypto, addEventListener() {},
-    setTimeout: (fn: () => void) => { timers.push({ fn, cleared: false }); return timers.length; },
+    crypto: webcrypto,
+    addEventListener: windowEvents.addEventListener.bind(windowEvents),
+    removeEventListener() {},
+    setTimeout: (fn: () => void, ms: number) => { timers.push({ fn, cleared: false, ms }); return timers.length; },
     clearTimeout: (id: number) => { const t = timers[id - 1]; if (t) t.cleared = true; },
     confirm: (msg: string) => { confirms.push(msg); return confirmAnswer.value; },
     prompt: () => opts.prompt ?? null,
@@ -228,9 +253,19 @@ function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' 
   vm.runInContext(apiSrc, ctx);
   vm.runInContext(aiSrc, ctx);
   vm.runInContext(dialogSrc, ctx);
+  vm.runInContext(refreshSrc, ctx);
+  vm.runInContext(impactSrc, ctx);
   vm.runInContext(browserSrc, ctx);
   const flush = async (): Promise<void> => { for (let i = 0; i < 20; i++) await setImmediate(); };
-  return { el, activeElement: () => activeElement, win: ctx, timers, listRequests, patches, rows, described, confirms, confirmAnswer, flush };
+  return { el, activeElement: () => activeElement, win: ctx, timers, listRequests, patches, rows, described, confirms, confirmAnswer, flush,
+    focus: () => windowEvents.dispatch('focus'),
+    lifecycle: (type, persisted) => windowEvents.dispatch(type, { persisted }),
+    visibility: (hidden) => {
+      const document = ctx.document;
+      if (!document || typeof document !== 'object') throw new Error('missing document');
+      Reflect.set(document, 'hidden', hidden);
+      documentEvents.dispatch('visibilitychange');
+    } };
 }
 
 function runTimers(timers: { fn: () => void; cleared: boolean }[]): void {
@@ -869,6 +904,7 @@ describe('media conditional save recovery in real consumers', () => {
     page.listRequests.shift()!.resolve({ items: [row, ...siblings], total: 1 + siblings.length });
     await page.flush();
     page.el('grid').querySelectorAll('.media-cell')[0]!.dispatch('click');
+    await page.flush();
   }
   function change(page: Page, id: string, value: string): void {
     page.el(id).value = value;
@@ -1044,6 +1080,8 @@ describe('media conditional save recovery in real consumers', () => {
       }
     } });
     await open(page);
+    expect(reads).toBe(1); // Initial impact observation, before the save/recovery phase.
+    reads = 0;
     change(page, 'dTitle', 'Mine');
     change(page, 'dAltDe', 'Local alt');
     change(page, 'dTags', 'local');
@@ -1061,6 +1099,10 @@ describe('media conditional save recovery in real consumers', () => {
     await page.flush();
     expect(writes).toBe(1);
     expect(reads).toBe(1);
+    page.el('dCheckStored').click();
+    await page.flush();
+    expect(reads).toBe(2); // Explicit comparison reuses its own read for impact too.
+    expect(writes).toBe(1);
   });
 
   it('does not call an all-achieved probe a confirmed save or clean later edits', async () => {
@@ -1068,16 +1110,17 @@ describe('media conditional save recovery in real consumers', () => {
     let reads = 0;
     const page = loadPage({ request: (url, init) => {
       if (init?.method === 'PATCH') return Promise.reject(new Error('lost'));
-      if (url === '/media/items/a') { reads++; return pending.promise; }
+      if (url === '/media/items/a') { reads++; return reads === 1 ? response(200, item('a')) : pending.promise; }
     } });
     await open(page);
+    expect(reads).toBe(1); // Initial impact observation must not serve as post-write recovery.
     change(page, 'dTitle', 'Submitted');
     page.el('dSave').click();
     await page.flush();
     change(page, 'dTitle', 'Newer');
     pending.resolve(await response(200, { ...item('a'), title: 'Submitted' }));
     await page.flush();
-    expect(reads).toBe(1);
+    expect(reads).toBe(2); // One initial impact read plus exactly one recovery read.
     expect(page.el('dTitle').value).toBe('Newer');
     expect(page.el('dUnsaved').hidden).toBe(false);
     expect(page.el('dCompare').textContent).toContain('Intended value stored');
@@ -1092,6 +1135,8 @@ describe('media conditional save recovery in real consumers', () => {
         if (url === '/media/items/a') { reads++; return response(200, item('a')); }
       } });
       await open(page);
+      expect(reads).toBe(1); // Isolate save-time reads from initial impact observation.
+      reads = 0;
       change(page, 'dTitle', 'Submitted');
       page.el('dSave').click();
       await page.flush();
@@ -1224,6 +1269,8 @@ describe('media conditional save recovery in real consumers', () => {
       }
     } });
     await open(page);
+    expect(reads).toBe(1); // Initial impact observation, separate from AI preflight/recovery.
+    reads = 0;
     page.el('aiSelected').click();
     await page.flush();
     page.el('aiStart').click();
@@ -1268,11 +1315,13 @@ describe('single-photo AI conditional expectations', () => {
 
 describe('conditional media response validation', () => {
   const response = (body: unknown) => Promise.resolve({ status: 200, ok: true, json: async () => body });
-  async function clearTitle(page: Page): Promise<void> {
+  async function clearTitle(page: Page, afterInitialRead: () => void): Promise<void> {
     await page.flush();
     page.listRequests.shift()!.resolve({ items: [item('a')], total: 1 });
     await page.flush();
     page.el('grid').querySelectorAll('.media-cell')[0]!.click();
+    await page.flush();
+    afterInitialRead();
     page.el('dTitle').value = '';
     page.el('detail').dispatch('input');
     page.el('dSave').click();
@@ -1293,7 +1342,10 @@ describe('conditional media response validation', () => {
       if (init?.method === 'PATCH') { writes++; return Promise.reject(new Error('lost')); }
       if (url === '/media/items/a') { reads++; return response(current); }
     } });
-    await clearTitle(page);
+    await clearTitle(page, () => {
+      expect(reads).toBe(1); // Initial impact read; recovery gets its own one-read budget.
+      reads = 0;
+    });
     expect(reads).toBe(1);
     expect(writes).toBe(1);
     expect(page.el('dTitle').value).toBe('');
@@ -1319,7 +1371,10 @@ describe('conditional media response validation', () => {
       if (init?.method === 'PATCH') { writes++; return response(acknowledgement); }
       if (url === '/media/items/a') { reads++; return response({}); }
     } });
-    await clearTitle(page);
+    await clearTitle(page, () => {
+      expect(reads).toBe(1); // Initial impact read; recovery gets its own one-read budget.
+      reads = 0;
+    });
     expect(writes).toBe(1);
     expect(reads).toBe(1);
     expect(page.el('dTitle').value).toBe('');
@@ -1394,5 +1449,381 @@ describe('explicit conditional detail choices after more editing', () => {
     page.el('dUseStored').click();
     expect(page.el('dTitle').value).toBe('Stored');
     expect(page.el('dUnsaved').hidden).toBe(true);
+  });
+});
+
+describe('Media publication impact and bounded refresh', () => {
+  const zero = { gallery: 0, galleryCaptionFollowsLibrary: 0, heroTitle: false, inline: 0 };
+  const unchanged = { de: { alt: false, caption: false }, en: { alt: false, caption: false } };
+  const story = (translationKey: string, captions = 1) => ({ translationKey, title: translationKey,
+    locales: { de: { ...zero, gallery: 3, galleryCaptionFollowsLibrary: captions }, en: { ...zero, gallery: 1, galleryCaptionFollowsLibrary: 1 } } });
+  const impact: MediaImpact = { availability: 'available', published: [story('one'), story('two')],
+    drafts: [story('draft')], newerDrafts: [{ ...story('removed'), locales: { de: zero, en: zero } }] };
+  async function open(page: Page, photo: Item = item('a')) {
+    page.rows.set(photo.key, photo);
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [photo, item('b')], total: 2 });
+    await page.flush(); page.el('grid').querySelectorAll('.media-cell')[0]!.click(); await page.flush();
+  }
+
+  it('retires a removed clean detail resource and starts a fresh observation when selected again', async () => {
+    const pending = Promise.withResolvers<unknown>();
+    let reads = 0;
+    const photo = { ...item('a'), impact, usedIn: [{ kind: 'post', key: 'one', title: 'One' }] };
+    const page = loadPage({ request: (url, init) => {
+      if (url !== '/media/items/a' || init?.method === 'PATCH') return;
+      if (++reads === 2) return pending.promise;
+      return Promise.resolve({ status: 200, ok: true, json: async () => page.rows.get('a') });
+    } });
+    await open(page, photo);
+    page.el('dImpact').querySelectorAll('button')[0]!.click(); await page.flush();
+    page.el('fStatus').value = 'failed'; page.el('fStatus').dispatch('change'); await page.flush();
+    page.listRequests.shift()!.resolve({ items: [], total: 0 }); await page.flush();
+    pending.resolve({ status: 200, ok: true, json: async () => photo }); await page.flush();
+    page.timers.filter(timer => timer.ms === 30000 && !timer.cleared).forEach(timer => timer.fn());
+    await page.flush();
+    expect(reads).toBe(2);
+    expect(page.el('detail').dataset.key).toBeUndefined();
+    expect(page.patches).toEqual([]);
+
+    const fresh = { ...photo, title: 'Refreshed photo',
+      impact: { availability: 'available' as const, published: [], drafts: [], newerDrafts: [] } };
+    page.rows.set('a', fresh);
+    page.el('fStatus').value = ''; page.el('fStatus').dispatch('change'); await page.flush();
+    page.listRequests.shift()!.resolve({ items: [fresh, item('b')], total: 2 }); await page.flush();
+    page.el('grid').querySelectorAll('.media-cell')[0]!.click(); await page.flush();
+    expect(reads).toBe(3);
+    expect(page.el('dTitle').value).toBe('Refreshed photo');
+    expect(page.el('dImpact').querySelectorAll('a')).toEqual([]);
+  });
+
+  it.each([false, true])('keeps the save projection when an obsolete comparison settles first (failed read: %s)', async (failed) => {
+    const response = (body: unknown, status = 200) => Promise.resolve({ status, ok: status === 200, json: async () => body });
+    const older = Promise.withResolvers<unknown>();
+    const saving = Promise.withResolvers<unknown>();
+    const original = { ...item('a'), impact, livePending: unchanged };
+    const competing = { ...original, caption: { de: 'Competing caption', en: '' } };
+    const fresh = { ...competing, caption: { de: 'My caption', en: '' }, conditionalVersion: 1,
+      impact: { availability: 'available' as const, published: [story('fresh')], drafts: [], newerDrafts: [] },
+      usedIn: [{ kind: 'post' as const, key: 'fresh', title: 'Fresh story' }],
+      changedDescriptions: { ...unchanged, de: { alt: false, caption: true } },
+      livePending: { ...unchanged, de: { alt: false, caption: true } } };
+    let reads = 0, writes = 0;
+    const page = loadPage({ request: (url, init) => {
+      if (url !== '/media/items/a') return;
+      if (init?.method === 'PATCH') return ++writes === 1
+        ? response({ error: 'media_changed', current: competing }, 409) : saving.promise;
+      return ++reads === 1 ? response(original) : older.promise;
+    } });
+    await open(page, original);
+    page.el('dCapDe').value = 'My caption'; page.el('detail').dispatch('input');
+    page.el('dSave').click(); await page.flush();
+    page.el('dCheckStored').click(); await page.flush();
+    page.el('dUseMine').click(); await page.flush();
+    if (failed) older.reject(new Error('Comparison connection lost'));
+    else older.resolve(await response(competing));
+    await page.flush();
+    page.rows.set('a', fresh); saving.resolve(await response(fresh)); await page.flush();
+    expect(page.el('dImpact').querySelectorAll('a').map(link => link.href)).toEqual(['/admin/editor.html?tk=fresh']);
+    expect(page.el('dCapDe').value).toBe('My caption');
+    expect(page.el('dUnsaved').hidden).toBe(true);
+    expect(page.el('dCompare').textContent).toBe('');
+    expect(reads).toBe(2);
+    expect(writes).toBe(2);
+  });
+
+  it.each([false, true])('retains the selected save projection across hiding (return before ack: %s)', async (returnBeforeAck) => {
+    const response = (body: unknown) => Promise.resolve({ status: 200, ok: true, json: async () => body });
+    const saving = Promise.withResolvers<unknown>();
+    const original = { ...item('a'), impact, livePending: unchanged,
+      usedIn: [{ kind: 'post', key: 'one', title: 'Original story' }] };
+    const fresh = { ...original, caption: { de: 'My caption', en: '' }, conditionalVersion: 1,
+      impact: { availability: 'available' as const, published: [story('fresh')], drafts: [], newerDrafts: [] },
+      usedIn: [{ kind: 'post', key: 'fresh', title: 'Fresh story' }],
+      changedDescriptions: { ...unchanged, de: { alt: false, caption: true } },
+      livePending: { ...unchanged, de: { alt: false, caption: true } } };
+    let reads = 0, writes = 0;
+    const page = loadPage({ request: (url, init) => {
+      if (url !== '/media/items/a') return;
+      if (init?.method === 'PATCH') { writes++; return saving.promise; }
+      reads++;
+    } });
+    await open(page, original);
+    page.el('dCapDe').value = 'My caption'; page.el('detail').dispatch('input');
+    page.el('dSave').click(); await page.flush();
+    page.visibility(true); await page.flush();
+    if (returnBeforeAck) { page.visibility(false); await page.flush(); }
+    page.rows.set('a', fresh); saving.resolve(await response(fresh)); await page.flush();
+    expect(page.el('dImpact').querySelectorAll('a').map(link => link.href)).toEqual(['/admin/editor.html?tk=fresh']);
+    if (!returnBeforeAck) { page.visibility(false); await page.flush(); }
+    expect(page.el('dCapDe').value).toBe('My caption');
+    expect(page.el('dUnsaved').hidden).toBe(true);
+    expect(reads).toBe(1);
+    expect(writes).toBe(1);
+  });
+
+  it('refreshes a cached page once after its pending save settles, without replaying the write', async () => {
+    const response = (body: unknown) => Promise.resolve({ status: 200, ok: true, json: async () => body });
+    const saving = Promise.withResolvers<unknown>();
+    const original = { ...item('a'), impact, livePending: unchanged,
+      usedIn: [{ kind: 'post', key: 'one', title: 'Original story' }] };
+    const fresh = { ...original, caption: { de: 'My caption', en: '' }, conditionalVersion: 1,
+      impact: { availability: 'available' as const, published: [story('fresh')], drafts: [], newerDrafts: [] },
+      usedIn: [{ kind: 'post', key: 'fresh', title: 'Fresh story' }],
+      changedDescriptions: { ...unchanged, de: { alt: false, caption: true } },
+      livePending: { ...unchanged, de: { alt: false, caption: true } } };
+    let reads = 0, writes = 0;
+    const page = loadPage({ request: (url, init) => {
+      if (url !== '/media/items/a') return;
+      if (init?.method === 'PATCH') { writes++; return saving.promise; }
+      reads++;
+    } });
+    await open(page, original);
+    page.el('dCapDe').value = 'My caption'; page.el('detail').dispatch('input');
+    page.el('dSave').click(); await page.flush();
+    page.lifecycle('pagehide', true); await page.flush();
+    page.lifecycle('pageshow', true); await page.flush();
+    expect(reads).toBe(1);
+    page.rows.set('a', fresh); saving.resolve(await response(fresh)); await page.flush();
+    expect(page.el('dImpact').querySelectorAll('a').map(link => link.href)).toEqual(['/admin/editor.html?tk=fresh']);
+    expect(page.el('dCapDe').value).toBe('My caption');
+    expect(page.el('dUnsaved').hidden).toBe(true);
+    expect(reads).toBe(2);
+    expect(writes).toBe(1);
+  });
+
+  it.each(['checking', 'saved'])('keeps the selected save projection while another photo is %s by bulk AI', async (stage) => {
+    const response = (body: unknown) => Promise.resolve({ status: 200, ok: true, json: async () => body });
+    const saving = Promise.withResolvers<unknown>();
+    const checking = Promise.withResolvers<unknown>();
+    const original = { ...item('a'), impact, livePending: unchanged,
+      usedIn: [{ kind: 'post', key: 'one', title: 'Original story' }] };
+    const other = { ...item('b'), title: '' };
+    const fresh = { ...original, caption: { de: 'My caption', en: '' }, conditionalVersion: 1,
+      impact: { availability: 'available' as const, published: [story('fresh')], drafts: [], newerDrafts: [] },
+      usedIn: [{ kind: 'post', key: 'fresh', title: 'Fresh story' }],
+      changedDescriptions: { ...unchanged, de: { alt: false, caption: true } },
+      livePending: { ...unchanged, de: { alt: false, caption: true } } };
+    let reads = 0, writes = 0, otherReads = 0;
+    const page = loadPage({
+      request: (url, init) => {
+        if (url === '/media/items/b' && init?.method !== 'PATCH') {
+          otherReads++;
+          if (stage === 'checking') return checking.promise;
+        }
+        if (url !== '/media/items/a') return;
+        if (init?.method === 'PATCH') { writes++; return saving.promise; }
+        reads++;
+      },
+    });
+    page.rows.set('b', other);
+    await open(page, original);
+    page.el('dCapDe').value = 'My caption'; page.el('detail').dispatch('input');
+    page.el('dSave').click(); await page.flush();
+    expect(page.el('aiAll').disabled).toBe(false);
+    page.el('aiAll').click(); await page.flush();
+    page.el('aiScopeSelected').checked = false;
+    page.el('aiScopeAll').checked = true; page.el('aiScopeAll').dispatch('change'); await page.flush();
+    page.listRequests.shift()!.resolve({ items: [original, other], total: 2 }); await page.flush();
+    for (const id of ['aiFieldAlt', 'aiFieldCaption', 'aiFieldTags']) page.el(id).checked = false;
+    page.el('aiFieldTags').dispatch('change');
+    page.el('aiStart').click(); await page.flush();
+    expect(otherReads).toBe(1);
+    expect(page.described).toEqual(['https://img.example/b-640.webp']);
+    page.timers.filter(timer => timer.ms === 30000 && !timer.cleared).forEach(timer => timer.fn());
+    await page.flush();
+    expect(reads).toBe(1);
+    page.rows.set('a', fresh); saving.resolve(await response(fresh)); await page.flush();
+    expect(page.el('dImpact').querySelectorAll('a').map(link => link.href)).toEqual(['/admin/editor.html?tk=fresh']);
+    expect(page.el('dCapDe').value).toBe('My caption');
+    expect(page.el('dUnsaved').hidden).toBe(true);
+    if (stage === 'checking') {
+      page.timers.filter(timer => timer.ms === 30000 && !timer.cleared).forEach(timer => timer.fn());
+      await page.flush();
+      expect(reads).toBe(1);
+    }
+    checking.resolve(await response(other)); await page.flush();
+    for (const request of page.listRequests.splice(0)) request.resolve({ items: [...page.rows.values()], total: 2 });
+    await page.flush();
+    expect(page.rows.get('b')?.title).toBe(DETAILS.title);
+    expect(page.el('detail').dataset.key).toBe('a');
+    expect(page.el('dImpact').querySelectorAll('a').map(link => link.href)).toEqual(['/admin/editor.html?tk=fresh']);
+    expect(reads).toBe(1);
+    expect(writes).toBe(1);
+  });
+
+  it('resumes read-only detail observations after explicit same-owner reauthentication without replacing dirty inputs', async () => {
+    let expired = false, reads = 0;
+    const photo = { ...item('a', 'base'), impact, livePending: unchanged };
+    const page = loadPage({ request: (url, init) => {
+      if (url !== '/media/items/a' || init?.method === 'PATCH') return;
+      reads++;
+      return Promise.resolve({ status: expired ? 401 : 200, ok: !expired,
+        json: async () => expired ? { error: 'unauthorized' } : page.rows.get('a') });
+    } });
+    await open(page, photo);
+    page.el('dAltDe').value = 'unsaved local'; page.el('detail').dispatch('input');
+    expired = true;
+    page.el('dImpact').querySelectorAll('button')[0]!.click(); await page.flush();
+    expect(reads).toBe(2);
+    expect(page.el('uploadQueue').hidden).toBe(false);
+    expired = false;
+    page.rows.set('a', { ...photo, impact: { availability: 'available', published: [], drafts: [], newerDrafts: [] } });
+    page.el('uploadQueue').querySelectorAll('button').find(button => button.textContent === ui.en['editor.chrome.uploadResume'])!.click();
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [photo], total: 1 }); await page.flush();
+    expect(reads).toBe(3);
+    expect(page.el('dImpact').textContent).toContain('No eligible story');
+    expect(page.el('dAltDe').value).toBe('unsaved local');
+    expect(page.el('dUnsaved').hidden).toBe(false);
+    page.el('dImpact').querySelectorAll('button')[0]!.click(); await page.flush();
+    expect(reads).toBe(4);
+    page.timers.find(timer => timer.ms === 30000 && !timer.cleared)!.fn(); await page.flush();
+    expect(reads).toBe(5);
+    expect(page.patches).toEqual([]);
+  });
+
+  it('retains focused impact controls through refresh, falls back when a link disappears, and never steals external focus', async () => {
+    const page = loadPage();
+    const photo = { ...item('a'), impact, usedIn: [{ kind: 'post', key: 'one', title: 'Authorized title' }] };
+    await open(page, photo);
+    const refresh = () => page.el('dImpact').querySelectorAll('button')[0]!;
+    refresh().focus(); refresh().click(); await page.flush();
+    expect(page.activeElement()).toBe(refresh());
+    const link = page.el('dImpact').querySelectorAll('a')[0]!;
+    link.focus();
+    page.timers.find(timer => timer.ms === 30000 && !timer.cleared)!.fn(); await page.flush();
+    expect(page.activeElement()).toBe(page.el('dImpact').querySelectorAll('a')[0]);
+    expect(page.activeElement()?.href).toBe('/admin/editor.html?tk=one');
+    page.rows.set('a', { ...photo, impact: { availability: 'available', published: [], drafts: [], newerDrafts: [] } });
+    page.timers.find(timer => timer.ms === 30000 && !timer.cleared)!.fn(); await page.flush();
+    expect(page.el('dImpact').querySelectorAll('a')).toEqual([]);
+    expect(page.activeElement()).toBe(refresh());
+    page.el('dTitle').focus();
+    page.timers.find(timer => timer.ms === 30000 && !timer.cleared)!.fn(); await page.flush();
+    expect(page.activeElement()).toBe(page.el('dTitle'));
+  });
+
+  it('explains the per-write DE caption union, distinct stories, separate draft scope and unaffected EN without author admin requests', async () => {
+    const requests: string[] = [];
+    const page = loadPage({ isAdmin: false, request: (url) => { requests.push(url); return undefined; } });
+    await open(page, { ...item('a'), impact, usedIn: [{ kind: 'post', key: 'one', title: 'Authorized title' }] });
+    page.el('dCapDe').value = 'Saved caption'; page.el('detail').dispatch('input');
+    page.el('dSave').click(); await page.flush();
+    const text = page.el('dImpact').textContent;
+    expect(text).toContain('2 distinct stories with gallery effects from this save');
+    expect(text).toContain('1 distinct stories with gallery effects from this save');
+    expect(text).toContain('EN: unaffected by this save.');
+    expect(text).toContain('preview now, live after successful Publish');
+    expect(text).toContain('Different saved drafts');
+    expect(text).toContain('0 distinct stories with gallery effects from this save');
+    expect(text).toContain('3 gallery occurrences');
+    expect(text).not.toContain('Pending live descriptions');
+    expect(page.el('dImpact').querySelectorAll('a').map((link) => link.href)).toEqual(['/admin/editor.html?tk=one']);
+    expect(requests.some((url) => /publication\/summary|rebuild|settings/.test(url))).toBe(false);
+    expect(page.patches).toHaveLength(1);
+    const helper = page.win.MediaImpact as { affected(stories: StoryUse[], changed: ChangedDescriptions): string[] };
+    expect(helper.affected([story('one'), story('one'), story('two', 0)], { de: { alt: true, caption: true }, en: { alt: true, caption: false } })).toEqual(['one', 'two']);
+  });
+
+  it('reports unchanged descriptions, hero-only no-gallery effect and About-only empty impact', async () => {
+    const page = loadPage({ isAdmin: false });
+    const heroOnly: MediaImpact = { availability: 'available', published: [{ ...story('hero'),
+      locales: { de: { ...zero, heroTitle: true, inline: 1 }, en: zero } }], drafts: [], newerDrafts: [] };
+    await open(page, { ...item('a'), impact: heroOnly });
+    page.el('dTitle').value = 'Only title'; page.el('detail').dispatch('input'); page.el('dSave').click(); await page.flush();
+    expect(page.el('dImpact').textContent).toContain('Descriptions unchanged.');
+    page.el('dCapDe').value = 'Description'; page.el('detail').dispatch('input'); page.el('dSave').click(); await page.flush();
+    expect(page.el('dImpact').textContent).toContain('No gallery effect.');
+    expect(page.el('dImpact').textContent).toContain('hero/title: yes');
+    const helper = page.win.MediaImpact as { render(...args: unknown[]): void };
+    const editorCopy = page.win.EditorCopy as { en: object };
+    helper.render(page.el('dImpact'), { impact: { availability: 'available', published: [], drafts: [], newerDrafts: [] },
+      usedIn: [{ kind: 'page', key: 'about', title: 'About' }] }, unchanged, false,
+      editorCopy.en, () => {});
+    expect(page.el('dImpact').textContent).toContain('No eligible story');
+    expect(page.el('dImpact').querySelectorAll('a')).toEqual([]);
+  });
+
+  it.each([false, true])('reuses the item response for impact without another GET (unknown outcome: %s)', async (unknown) => {
+    let reads = 0;
+    let writes = 0;
+    const fresh: Item = { ...item('a', 'saved alt'),
+      impact: { availability: 'available', published: [], drafts: [], newerDrafts: [] },
+      livePending: { de: { alt: true, caption: false }, en: { alt: false, caption: false } } };
+    const response = (body: unknown) => Promise.resolve({ status: 200, ok: true, json: async () => body });
+    const page = loadPage({ request: (url, init) => {
+      if (url !== '/media/items/a') return;
+      if (init?.method === 'PATCH') {
+        writes++;
+        return unknown ? Promise.reject(new Error('lost acknowledgement')) : response({
+          ...fresh, conditionalVersion: 1,
+          changedDescriptions: { de: { alt: true, caption: false }, en: { alt: false, caption: false } },
+        });
+      }
+      reads++;
+      return response(writes ? fresh : { ...item('a'), impact });
+    } });
+    await open(page);
+    expect(reads).toBe(1);
+    expect(page.el('dImpact').textContent).toContain('2 stories with uses');
+    page.el('dAltDe').value = 'saved alt'; page.el('detail').dispatch('input');
+    page.el('dSave').click(); await page.flush();
+    expect(reads).toBe(unknown ? 2 : 1);
+    expect(writes).toBe(1);
+    expect(page.el('dImpact').textContent).toContain('No eligible story');
+    expect(page.el('dImpact').textContent).toContain('DE: pending against the live release — alt text: yes, caption: no.');
+    expect(page.el('dUnsaved').hidden).toBe(!unknown);
+    if (unknown) expect(page.el('dCompare').textContent).toContain('Save outcome unknown');
+    else expect(page.el('out').textContent).toContain('Photo details saved.');
+  });
+
+  it('refreshes only projections while dirty, preserving base expectations and last save result', async () => {
+    const page = loadPage();
+    await open(page, { ...item('a', 'base'), impact, livePending: unchanged });
+    page.el('dAltDe').value = 'local'; page.el('detail').dispatch('input');
+    page.rows.set('a', { ...item('a', 'foreign base'), impact: { availability: 'available', published: [], drafts: [], newerDrafts: [] },
+      livePending: { de: { alt: false, caption: true }, en: { alt: false, caption: false } } });
+    page.timers.find((timer) => timer.ms === 30000 && !timer.cleared)!.fn(); await page.flush();
+    expect(page.el('dAltDe').value).toBe('local');
+    expect(page.el('dUnsaved').hidden).toBe(false);
+    expect(page.el('dImpact').textContent).toContain('No eligible story');
+    expect(page.el('dImpact').textContent).toContain('caption: yes');
+    expect(page.patches).toEqual([]);
+    page.el('dSave').click(); await page.flush();
+    expect(page.patches[0]?.body).toMatchObject({ conditional: { patch: { alt: { de: 'local' } }, expect: { alt: { de: 'base' } } } });
+    expect(page.el('out').textContent).toContain('Photo details saved.');
+  });
+
+  it('discards reads superseded by selection and save; deadline marks unavailable without clearing dirty text', async () => {
+    const reads: Array<{ key: string; response: { resolve(value: unknown): void } }> = [];
+    const page = loadPage({ request: (url, init) => {
+      if (!url.startsWith('/media/items/') || init?.method === 'PATCH') return undefined;
+      const response = Promise.withResolvers<unknown>(); reads.push({ key: url, response }); return response.promise;
+    } });
+    await open(page);
+    expect(reads).toHaveLength(1);
+    page.el('grid').querySelectorAll('.media-cell')[1]!.click(); await page.flush();
+    expect(reads).toHaveLength(2);
+    reads[0]!.response.resolve({ ok: true, status: 200, json: async () => ({ ...item('a'), impact }) });
+    reads[1]!.response.resolve({ ok: true, status: 200, json: async () => ({ ...item('b'), impact: { availability: 'available', published: [], drafts: [], newerDrafts: [] } }) });
+    await page.flush();
+    expect(page.el('detail').dataset.key).toBe('b');
+    expect(page.el('dImpact').textContent).toContain('No eligible story');
+    expect(page.el('dImpact').textContent).not.toContain('Authorized title');
+    page.el('dAltDe').value = 'keep dirty'; page.el('detail').dispatch('input');
+    page.timers.find((timer) => timer.ms === 30000 && !timer.cleared)!.fn(); await page.flush();
+    expect(reads).toHaveLength(3);
+    page.focus(); page.focus(); await page.flush(); expect(reads).toHaveLength(3);
+    page.timers.find((timer) => timer.ms === 10000 && !timer.cleared)!.fn(); await page.flush();
+    expect(page.el('dImpact').textContent).toContain('Impact unavailable or stale');
+    expect(page.el('dAltDe').value).toBe('keep dirty');
+    page.el('dSave').click(); await page.flush();
+    reads[2]!.response.resolve({ ok: true, status: 200, json: async () => ({ ...item('b'), impact }) });
+    await page.flush();
+    expect(page.el('dImpact').textContent).not.toContain('2 stories with uses');
+    expect(page.patches).toHaveLength(1);
+    page.visibility(true);
+    expect(page.timers.filter((timer) => timer.ms === 30000 && !timer.cleared)).toHaveLength(0);
   });
 });

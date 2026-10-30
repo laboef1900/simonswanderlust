@@ -10,7 +10,7 @@ import type { DbClient } from './db.js';
 import { encodeVariant, normalizeProcessOptions, probeImage, type ImageProbe } from './pipeline.js';
 import { WIDTHS } from './variants.js';
 import { assertSafeKey } from './storage.js';
-import { deleteMedia, imageUsage, VARIANT_FILE_RE } from './media-files.js';
+import { deleteMedia, imageUsage, VARIANT_FILE_RE, type UsageRef } from './media-files.js';
 import {
   redactForNonAdmin, MediaStoreError, MediaChangedError, assertSafeFolder,
   type MediaError, type MediaItem, type MediaQuery, type MediaStatus, type MediaStore,
@@ -46,7 +46,8 @@ import { exportPost, exportAll } from './export.js';
 import type { SiteBuilder } from './build.js';
 import { projectBuildReport } from './build-state.js';
 import { createReleaseManifestReader } from './release-manifest.js';
-import { createPublicationProjection } from './publication.js';
+import { createPublicationProjection, galleryPending, type DescriptionPending } from './publication.js';
+import { mediaImpact, type MediaImpact } from './media-impact.js';
 import { prepareImport, ImportTooLargeError, ImportInsufficientSpaceError, type ImportDeps, type PreparedImport } from './wp-import.js';
 import { WxrParseError } from './wxr-parse.js';
 import { createImportRunner, memoryImportJobStore, ImportBusyError, type ImportRunner, type ImportJob } from './import-jobs.js';
@@ -545,6 +546,26 @@ export function buildServer(cfg: ServerConfig): AppServer {
    */
   const serializeMedia = (item: MediaItem, isAdmin: boolean) => (isAdmin ? item : redactForNonAdmin(item));
 
+  async function mediaDetailProjection(item: MediaItem, isAdmin: boolean) {
+    let impact: MediaImpact = { availability: 'unavailable' };
+    let usedIn: UsageRef[] | undefined;
+    try {
+      const corpus = await usageCorpus();
+      usedIn = imageUsage(item.src, corpus.posts, corpus.pages);
+      impact = await mediaImpact(await cfg.posts.mediaImpactCorpus(), item.key, imageBase);
+    } catch { app.log.warn('Media impact unavailable'); }
+    let livePending: DescriptionPending | null = null;
+    if (isAdmin) {
+      try {
+        const observation = await publication.read();
+        const pending = observation ? await galleryPending(observation, cfg.media, imageBase) : null;
+        if (pending) livePending = pending.byKey.get(item.key)
+          ?? { de: { alt: false, caption: false }, en: { alt: false, caption: false } };
+      } catch { app.log.warn('Media pending projection unavailable'); }
+    }
+    return { impact, ...(usedIn ? { usedIn } : {}), ...(isAdmin ? { livePending } : {}) };
+  }
+
   const mediaError = (e: unknown, reply: import('fastify').FastifyReply) => {
     if (e instanceof MediaStoreError) {
       const status = e.code === 'not_found' ? 404 : e.code === 'exists' || e.code === 'not_empty' ? 409 : 400;
@@ -689,21 +710,25 @@ export function buildServer(cfg: ServerConfig): AppServer {
     const key = (req.params as { '*': string })['*'];
     const item = await cfg.media.get(key);
     if (!item) return reply.code(404).send({ error: 'image not found' });
-    const corpus = await usageCorpus();
+    reply.header('Cache-Control', 'no-store');
+    const isAdmin = Boolean(req.authUser?.isAdmin);
     return reply.send({
-      ...serializeMedia(item, Boolean(req.authUser?.isAdmin)),
-      usedIn: imageUsage(item.src, corpus.posts, corpus.pages),
+      ...serializeMedia(item, isAdmin),
+      ...await mediaDetailProjection(item, isAdmin),
     });
   });
 
   app.patch('/media/items/*', { preHandler: requireAuth }, async (req, reply) => {
+    reply.header('Cache-Control', 'no-store');
     const key = (req.params as { '*': string })['*'];
     let conditional;
     try { conditional = canonicalizeConditional(req.body); }
     catch { return reply.code(400).send({ error: 'invalid_media_conditional' }); }
     try {
       const saved = await cfg.media.patchConditional(key, conditional);
-      return reply.send({ ...serializeMedia(saved, Boolean(req.authUser?.isAdmin)), conditionalVersion: 1 });
+      const isAdmin = Boolean(req.authUser?.isAdmin);
+      return reply.send({ ...serializeMedia(saved, isAdmin), conditionalVersion: 1,
+        changedDescriptions: saved.changedDescriptions, ...await mediaDetailProjection(saved, isAdmin) });
     } catch (e) {
       if (e instanceof MediaChangedError) {
         return reply.code(409).send({

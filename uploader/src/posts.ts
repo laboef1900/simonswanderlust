@@ -14,6 +14,8 @@ import { namespaceOf, reservation } from '../../site/src/lib/reserved-routes.js'
 import { lockContentNamespaces, registerMemoryClaims, memorySlugOwner } from './content-namespace.js';
 import type { Publication, PublicationFact } from './publication-contract.js';
 import { PUBLISHED_SNAPSHOT_DIGEST_SQL } from '../../site/src/lib/publication-manifest.js';
+import type { MediaImpactStory } from './media-impact.js';
+import type { PostRow as RenderPostRow } from '../../site/src/lib/postgres-loader.js';
 
 export type Locale = 'de' | 'en';
 /**
@@ -186,6 +188,8 @@ export interface PostStore {
   list(): Promise<PostSummary[]>;
   /** Internal consistent mode/row facts; digests must never reach author responses. */
   publicationFacts(): Promise<PublicationFact[]>;
+  /** Story-only impact corpus, with mode/coverage and both versions from one consistent read. */
+  mediaImpactCorpus(): Promise<MediaImpactStory[]>;
   get(translationKey: string): Promise<StoredPostPair | null>;
   getForSave(translationKey: string, ownerUserId: string): Promise<SaveRead<StoredPostPair> | null>;
   getPublishState(translationKey: string): Promise<PublishState | null>;
@@ -700,6 +704,18 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
     async publicationFacts() {
       return language.runExclusive(async (mode) => [...byKey.values()].map((p) => facts(p, mode)));
     },
+    async mediaImpactCorpus() {
+      return language.runExclusive(async (mode) => structuredClone([...byKey.values()].map((p) => {
+        const fact = facts(p, mode);
+        return { translationKey: p.translationKey, title: p.de.title || p.en.title || p.translationKey,
+          rows: mode.locales.filter((locale) => fact.requestedLocales.includes(locale) || fact.committedLocales.includes(locale))
+            .map((locale) => ({
+              locale, status: p.rowStatus[locale], requested: fact.requestedLocales.includes(locale),
+              working: memorySnapshot(p, locale) as unknown as RenderPostRow,
+              published: fact.committedLocales.includes(locale) ? p.snapshotContent[locale] as unknown as RenderPostRow : null,
+            })) };
+      })));
+    },
     async pageSlugOwner(locale, slug) { return memorySlugOwner(language, locale, slug, 'page')?.name ?? null; },
     async list() {
       return language.runExclusive(async (mode) => {
@@ -1168,6 +1184,26 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
         pairs.set(row.translation_key, pair);
       }
       return [...pairs].map(([tk, pair]) => publicationFact(tk, pair, language));
+    }),
+    mediaImpactCorpus: () => consistentRead(async (client, language) => {
+      const { rows } = await client.query<PostRow>(`SELECT *, ${PUBLICATION_COLUMNS_SQL} FROM posts ORDER BY translation_key, locale`);
+      const pairs = new Map<string, PostRow[]>();
+      for (const row of rows) {
+        const pair = pairs.get(row.translation_key) ?? [];
+        pair.push(row);
+        pairs.set(row.translation_key, pair);
+      }
+      return [...pairs].map(([translationKey, pair]) => {
+        const fact = publicationFact(translationKey, pair, language);
+        return { translationKey, title: pair.find((row) => row.locale === 'de')?.title
+            || pair.find((row) => row.locale === 'en')?.title || translationKey,
+          rows: pair.filter((row) => fact.requestedLocales.includes(row.locale) || fact.committedLocales.includes(row.locale))
+            .map((row) => ({
+              locale: row.locale, status: row.status, requested: fact.requestedLocales.includes(row.locale),
+              working: { ...row, stops: row.stops ?? null },
+              published: fact.committedLocales.includes(row.locale) ? row.published_snapshot as RenderPostRow : null,
+            })) };
+      });
     }),
     get: (tk) => consistentRead((client, language) => readPostPair(client, tk, language)),
     getForSave: (tk, ownerUserId) => consistentRead(async (client, language) => {

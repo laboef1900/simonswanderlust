@@ -8,7 +8,7 @@ window.PublicationRefresh = (function () {
   }
   function create(options) {
     let generation = 0, active = null, timer = null, started = false, actions = 0;
-    let lastTrigger = -Infinity, settledRefresh = false;
+    let lastTrigger = -Infinity, settledRefresh = false, actionRefresh = false;
     const resource = () => options.resource ? options.resource() : '';
     function invalidate() { generation += 1; active?.controller.abort(); }
     function schedule() {
@@ -37,7 +37,7 @@ window.PublicationRefresh = (function () {
       Promise.resolve().then(() => options.read(controller.signal, publish)).then(resolve, reject);
       operation.promise = bounded.then((value) => { if (current()) options.apply(value); })
         .catch((error) => {
-          if (!started || generation !== version || key !== resource() || actions) return;
+          if (active !== operation || !started || generation !== version || key !== resource() || actions) return;
           // Fresh post facts do not become unavailable because independent optional
           // build history stalled. Progress already cleared its old qualifiers.
           if (!received || error.status === 401) options.unavailable(error);
@@ -52,13 +52,21 @@ window.PublicationRefresh = (function () {
     function focus() { if (!document.hidden) refresh('focus'); }
     function visibility() {
       schedule();
-      if (document.hidden) invalidate();
-      else focus();
+      if (document.hidden) {
+        // Hiding cancels background observation, not a selected item's pending
+        // acknowledgement. Detach first so its rejection cannot report failure.
+        const hiddenRead = active;
+        active = null;
+        hiddenRead?.controller.abort();
+      } else focus();
     }
     function restore(event) {
       if (!event.persisted) return;
       start(false);
-      if (active) settledRefresh = true;
+      // Restoration starts a new observation lifetime. Keep its read queued
+      // even when the pending item's ordinary settlement requests no echo.
+      if (actions) actionRefresh = true;
+      else if (active) settledRefresh = true;
       else refresh();
     }
     function hide(event) {
@@ -82,13 +90,28 @@ window.PublicationRefresh = (function () {
       window.removeEventListener('pagehide', hide);
       window.removeEventListener('pageshow', restore);
     }
-    function beginAction() { actions += 1; invalidate(); }
-    function accept(value) { invalidate(); options.apply(value); }
-    function endAction() {
-      invalidate(); actions = Math.max(0, actions - 1);
+    function beginAction(affectsResource = true) {
+      if (!actions) actionRefresh = false;
+      actions += 1;
+      // Other-resource work still suppresses background reads, but cannot
+      // supersede an in-flight acknowledgement for the observed resource.
+      if (affectsResource) invalidate();
+      return generation;
+    }
+    function accept(value, version = generation) {
+      if (version !== generation) return;
+      invalidate(); options.apply(value);
+    }
+    // Item acknowledgements/recovery reads already carry a fresh projection. Their
+    // callers can settle without a duplicate GET; scheduled/manual reads stay enabled.
+    function endAction(refreshAfter = true) {
+      // Starting an action fences old reads; settlement must not invalidate a
+      // newer in-flight action's acknowledgement.
+      actions = Math.max(0, actions - 1);
+      actionRefresh = actionRefresh || refreshAfter;
       if (!actions) {
-        if (active) settledRefresh = true;
-        else refresh();
+        settledRefresh = actionRefresh && !!active;
+        if (actionRefresh && !active) refresh();
       }
     }
     return { start, stop, refresh, invalidate, beginAction, endAction, accept };
