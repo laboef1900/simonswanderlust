@@ -172,6 +172,35 @@ describe('memoryPageStore', () => {
     expect((await s.get('about')).updatedAt).toEqual(v3.updatedAt);
   });
 
+  it('overlapping saves from one updatedAt: exactly one is accepted, the other conflicts and writes nothing (#344)', async () => {
+    const s = memoryPageStore();
+    const base = await s.save(pair());
+    const edit = (title: string): PagePair => ({ ...pair(), de: { ...pair().de, title } });
+    // Both calls start before either settles — two tabs saving at once.
+    const [a, b] = await Promise.allSettled([s.save(edit('tab-a'), base.updatedAt!), s.save(edit('tab-b'), base.updatedAt!)]);
+    expect(b).toMatchObject({ status: 'rejected', reason: { code: 'conflict' } });
+    if (a.status !== 'fulfilled') throw new Error('first save was refused');
+    const stored = await s.get('about');
+    expect(stored.de.title).toBe('tab-a');
+    expect(a.value).toEqual(stored);
+    expect(a.value.updatedAt!.getTime()).toBeGreaterThan(base.updatedAt!.getTime());
+    // One revision: the true predecessor, taken once.
+    expect((await s.listRevisions('about')).map((r) => r.titleDe)).toEqual(['Über mich']);
+  });
+
+  it('overlapping token-less saves are both accepted in order, and the overwritten one is a revision (#344)', async () => {
+    const s = memoryPageStore();
+    const edit = (title: string): PagePair => ({ ...pair('fresh'), de: { ...pair('fresh').de, title } });
+    const [a, b] = await Promise.all([s.save(edit('first')), s.save(edit('second'))]);
+    expect(a.de.title).toBe('first');
+    expect(b.de.title).toBe('second');
+    expect(b.updatedAt!.getTime()).toBeGreaterThan(a.updatedAt!.getTime());
+    expect(await s.get('fresh')).toEqual(b);
+    const revs = await s.listRevisions('fresh');
+    expect(revs.map((r) => r.titleDe)).toEqual(['first']);
+    expect((await s.getRevision('fresh', revs[0]!.id))!.snapshot.de.title).toBe('first');
+  });
+
   it('snapshots the pre-save pair as a revision, newest first, capped at REVISION_CAP (#141)', async () => {
     const s = memoryPageStore();
     await s.save(pair());

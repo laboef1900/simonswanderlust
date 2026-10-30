@@ -62,6 +62,11 @@ there. There is no production deployment yet (CLAUDE.md, Phase 4 pending).
 
 ## #108 — `trustProxy: 1`, lockout before scrypt, per-account limiter on password change
 
+**Proxy-trust portion superseded by [#369](2026-10-27-issue-369-dependency-proxy-trust.md).**
+The numeric-hop guidance and its rollback below are historical, not current operational
+instructions. The current contract validates the immediate address at hop zero and requires
+a new spec for another proxy layer. The authentication-handler history remains unchanged.
+
 ### Defect
 
 `trustProxy: true` trusts every hop, so `req.ip` became the **leftmost** `X-Forwarded-For` entry —

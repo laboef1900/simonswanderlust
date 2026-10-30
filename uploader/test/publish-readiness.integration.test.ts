@@ -1,3 +1,4 @@
+import { TEST_TRUST } from './trusted-proxy-fixture.js';
 import { randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -37,6 +38,7 @@ maybe('renderer-based publication readiness (real PostgreSQL, #334)', () => {
     const queue = createEncodeQueue({ store: media, storageDir: join(root, 'images'), lock: createWorkLock() });
     let builds = 0;
     const app = buildServer({
+      trustProxy: TEST_TRUST,
       storageDir: join(root, 'images'), siteDir: join(root, 'site'), backupDir: join(root, 'mdx'),
       baseUrl: origin, imgHost: 'images.test', users, sessions, posts, media,
       pages: memoryPageStore(), secrets: memorySecretsStore(), encodeQueue: queue,
