@@ -265,6 +265,23 @@ describe('POST /upload', () => {
     expect(b.enqueued).toEqual([key]);
   });
 
+  it.each([
+    { status: 'failed' as const, storedFolder: 'Iceland/South', dropFolder: '', expected: 'Iceland/South' },
+    { status: 'missing' as const, storedFolder: 'Iceland/South', dropFolder: 'Norway', expected: 'Iceland/South' },
+    { status: 'failed' as const, storedFolder: '', dropFolder: 'Norway', expected: 'Norway' },
+  ])('re-uploading a $status photo keeps its curated folder or fills the root', async ({ status, storedFolder, dropFolder, expected }) => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const img = await jpeg();
+    const first = await upload(b, cookie, { key: 'trips/recover/hero', folder: storedFolder }, img);
+    const key = first.json().key as string;
+    await b.media.setStatus(key, status);
+    const recovered = await upload(b, cookie, { key: 'trips/recover/hero', folder: dropFolder }, img);
+    expect(recovered.statusCode).toBe(200);
+    expect(recovered.json()).toMatchObject({ key, status: 'processing', folder: expected });
+    expect((await b.media.get(key))?.folder).toBe(expected);
+  });
+
   it('a duplicate reports the folder that was PERSISTED, not the one a failed best-effort patch asked for', async () => {
     const media = memoryMediaStore({ baseUrl: 'https://img.simonswanderlust.com' });
     const failing: MediaStore = { ...media, patch: async () => { throw new Error('db down'); } };
@@ -452,17 +469,25 @@ describe('POST /upload', () => {
     const b = await buildFullQueue();
     expect((await upload(b, b.cookie, { key: 'trips/full/hero' }, b.img)).statusCode).toBe(429);
     await b.media.setStatus(b.key, status, error ?? undefined);
+    const curated = {
+      folder: 'Iceland/South', title: 'Glacier',
+      alt: { de: 'Gletscher', en: 'Glacier' },
+      caption: { de: 'Am Morgen', en: 'At dawn' }, tags: ['ice'],
+    };
+    await b.media.patch(b.key, curated);
+    const form = { key: 'trips/full/hero', folder: 'Norway' };
 
-    expect((await upload(b, b.cookie, { key: 'trips/full/hero' }, b.img)).statusCode).toBe(429);
-    expect(await b.media.get(b.key)).toMatchObject({ status, error });
+    expect((await upload(b, b.cookie, form, b.img)).statusCode).toBe(429);
+    expect(await b.media.get(b.key)).toMatchObject({ ...curated, status, error });
     expect(b.queue.isActive(b.key)).toBe(false);
 
     await b.release();
-    const again = await upload(b, b.cookie, { key: 'trips/full/hero' }, b.img);
+    const again = await upload(b, b.cookie, form, b.img);
     expect(again.statusCode).toBe(200);
     expect(again.json().duplicate).toBeUndefined();
+    expect(again.json()).toMatchObject({ key: b.key, status: 'processing', folder: curated.folder });
     await b.queue.idle();
-    expect(await b.media.get(b.key)).toMatchObject({ status: 'ready', error: null });
+    expect(await b.media.get(b.key)).toMatchObject({ ...curated, status: 'ready', error: null });
   });
 
   it('a stranded processing row the queue does not hold is settled on a refused re-send and enqueued on a later one', async () => {
