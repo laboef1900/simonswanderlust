@@ -99,7 +99,7 @@ describe('read-only publication observation bounds', () => {
     expect(read).toHaveBeenCalledTimes(1);
     s.refresh.stop();
   });
-  it('invalidates reads on mutation start and completion, renders the receipt projection, then reads once without write replay', async () => {
+  it('rejects pre-action reads, renders the receipt projection, then reads once without write replay', async () => {
     vi.useFakeTimers();
     const old = Promise.withResolvers<unknown>();
     const read = vi.fn().mockImplementationOnce(() => old.promise).mockResolvedValue('fresh draft');
