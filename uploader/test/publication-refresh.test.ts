@@ -4,7 +4,7 @@ import vm from 'node:vm';
 
 interface Refresh {
   start(initial?: boolean): void; stop(): void; refresh(trigger?: string): Promise<void>;
-  beginAction(): number; endAction(refreshAfter?: boolean): void; accept(value: unknown, version?: number): void; invalidate(): void;
+  beginAction(affectsResource?: boolean): number; endAction(refreshAfter?: boolean): void; accept(value: unknown, version?: number): void; invalidate(): void;
 }
 function surface(read: (signal: AbortSignal, publish: (value: unknown) => void) => Promise<unknown>, resource?: () => string) {
   const window = new EventTarget();

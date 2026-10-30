@@ -89,7 +89,7 @@
   ['get', 'patch'].forEach(function (method) {
     var request = client[method];
     client[method] = async function (key) {
-      var version = detailRefresh.beginAction();
+      var version = detailRefresh.beginAction(key === state.detailKey);
       function observe(item) {
         if (key !== state.detailKey) return;
         try { api.assertItem(item, key); }
