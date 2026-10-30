@@ -320,6 +320,7 @@ maybe.each(['split', 'loopback'] as const)('production boot (src/main.ts, Postgr
 
   it('keeps author projection and paginated moderation aligned beyond 500 older comments', async () => {
     const olderKey = `${tk}-older`;
+    const createdIds: string[] = [];
     const login = await fetch(`${base}/login`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ username, password }),
@@ -332,14 +333,19 @@ maybe.each(['split', 'loopback'] as const)('production boot (src/main.ts, Postgr
          SELECT $1, 'de', 'Older reader', 'Older comment', 'approved', '2020-01-01'::timestamptz
          FROM generate_series(1, 505)`, [olderKey],
       );
-      const publicRows = commentsOf(await (await fetch(`${base}/comments?tk=${tk}`)).json());
-      const parent = publicRows.find((row) => row.isAuthor === false)!;
-      const reply = await fetch(`${base}/moderation/comments/${String(parent.id)}/reply`, {
+      const { rows } = await pool.query<{ id: string }>(
+        `INSERT INTO comments (translation_key, locale, name, body, status)
+         VALUES ($1, 'de', 'Integration reader', 'Dedicated parent', 'approved') RETURNING id`, [tk],
+      );
+      const parentId = rows[0]!.id;
+      createdIds.push(parentId);
+      const reply = await fetch(`${base}/moderation/comments/${parentId}/reply`, {
         method: 'POST', headers: { 'content-type': 'application/json', cookie },
         body: JSON.stringify({ body: 'Integrated author reply beyond the old cap.' }),
       });
       expect(reply.status).toBe(201);
       const replyId = (await reply.json() as { id: string }).id;
+      createdIds.push(replyId);
       const visible = commentsOf(await (await fetch(`${base}/comments?tk=${tk}`)).json());
       const author = visible.find((row) => row.id === replyId)!;
       expect(author.isAuthor).toBe(true);
@@ -362,6 +368,7 @@ maybe.each(['split', 'loopback'] as const)('production boot (src/main.ts, Postgr
       expect(commentsOf(await (await fetch(`${base}/comments?tk=${tk}`)).json()).some((row) => row.id === replyId)).toBe(false);
     } finally {
       await pool.query('DELETE FROM comments WHERE translation_key = $1', [olderKey]);
+      await pool.query('DELETE FROM comments WHERE id = ANY($1::uuid[])', [createdIds]);
     }
   });
 
