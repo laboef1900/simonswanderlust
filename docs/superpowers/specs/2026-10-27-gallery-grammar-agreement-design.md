@@ -78,6 +78,21 @@ No migration or automatic content rewrite. Before any later production rollout, 
 
 **Owner approval recorded 2026-10-28:** “Approve server-authoritative analysis.” This authorizes preserving the complete current render grammar, a single Satteri-backed source analysis, and the authenticated non-persisting `/gallery/analyze` bridge with server-dependent visual editing. It does not authorize content conversion, owner-data changes, deployment or merge.
 
+### Current-dev integration (2026-10-30)
+
+The direct Satteri engine is now pinned to `0.10.5`, matching the upgraded
+`@astrojs/markdown-satteri` dependency from #369 rather than retaining a second
+0.9.4 parser. The source-provenance corpus remains the qualification boundary;
+a regression asserts that both callers resolve the same installed engine.
+The historical implementation/runtime evidence below retains its original version.
+
+The merged collapsed-marker typing guard uses its already-analyzed marker edge
+synchronously, without calling the now-async insertion analyzer from CodeMirror's
+`beforeChange`. Its real bundled-CodeMirror regressions now await authoritative
+analysis and retain typing, paste, picker, alt and undo/redo coverage. Page
+normalization awaits analysis before the serialized read/check/write critical
+section; existing slug validation and paired export preflight remain intact.
+
 ## Implementation contract (2026-10-28)
 
 - `site/src/lib/gallery-identity.ts` owns the unchanged sanitized-tree predicate

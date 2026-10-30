@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createRequire } from 'node:module';
 import { analyzeGallerySource } from '../../site/src/lib/gallery-source.js';
 import { renderMarkdown } from '../../site/src/lib/render-markdown.js';
 import { analyzeRenderedBody } from '../../site/src/lib/body-images.js';
@@ -9,6 +10,12 @@ const photo = 'https://i/a';
 const apply = (body: string, edit: { start: number; end: number; text: string }) => body.slice(0, edit.start) + edit.text + body.slice(edit.end);
 
 describe('gallery source provenance and bounded edits', () => {
+  it('uses the same installed Satteri engine as the production Markdown wrapper', () => {
+    const siteRequire = createRequire(new URL('../../site/package.json', import.meta.url));
+    const wrapperRequire = createRequire(siteRequire.resolve('@astrojs/markdown-satteri'));
+    expect(siteRequire.resolve('satteri')).toBe(wrapperRequire.resolve('satteri'));
+  });
+
   it('exposes exact UTF-16 offsets after astral, accented and CJK source', async () => {
     const before = '🗺️ café 日本\r\n\r\n> - ';
     const body = before + `~~~gallery argument\r\n>   ${photo}\r\n>   ~~~\r\n\r\n🦋`;

@@ -12,7 +12,7 @@ import { contentHashKey, storeOriginal, heroSnippet, assertSafeKey } from './sto
 import { deleteMedia, imageUsage, VARIANT_FILE_RE } from './media-files.js';
 import {
   libraryKey, redactForNonAdmin, MediaStoreError, assertSafeFolder,
-  type MediaItem, type MediaQuery, type MediaStatus, type MediaStore,
+  type MediaError, type MediaItem, type MediaQuery, type MediaStatus, type MediaStore,
 } from './media-store.js';
 import { BacklogFullError, type EncodeQueue } from './encode-queue.js';
 import type { WorkLock } from './work-lock.js';
@@ -59,14 +59,19 @@ import type { GpxService } from './gpx-service.js';
 import { renderGpxCopy } from './gpx-copy.js';
 import { ROUTE_ARCHIVE_RE } from './gpx-backup.js';
 import { StorageReadOnlyError } from './storage-owner.js';
+import { IdentityConflictError, type SiteIdentityStore } from './site-identity.js';
+import { IdentityError, neutralIdentity } from '../../site/src/lib/site-identity.js';
+import type { TrustPolicy } from './trusted-proxy.js';
 
 export interface ServerConfig {
+  trustProxy: TrustPolicy['trust'];
   storageDir: string;
   baseUrl: string;
   users: UserStore;
   sessions: SessionStore;
   settings: SettingsStore;
   secrets: SecretsStore;
+  identityStore?: SiteIdentityStore;
   posts: PostStore;
   pages: PageStore;
   imgHost: string;   // Host header that serves image variants (img subdomain)
@@ -171,15 +176,10 @@ export function buildServer(cfg: ServerConfig): AppServer {
   // @fastify/static requires an absolute root; tolerate a relative STORAGE_DIR
   // (e.g. ./data/images from env) by resolving against the process cwd.
   const storageDir = resolve(cfg.storageDir);
-  // @ai-warning: trustProxy makes Fastify read X-Forwarded-* (so req.ip and the
-  // cookie `secure` flag reflect the real client). `trustProxy: 1` trusts exactly
-  // ONE hop — the reverse proxy in front of the container — so req.ip is the
-  // RIGHTMOST X-Forwarded-For entry, the one that proxy appended; any leftmost,
-  // client-supplied entries are ignored. `true` trusted every hop, which made
-  // req.ip (and with it the per-IP auth limiter) spoofable by a client that
-  // rotates the header (#108). A second proxy layer needs `2`, never `true`.
-  // The compose file publishes port 3000 on loopback only, so the host proxy
-  // is the sole ingress and the one hop this trusts.
+  // @ai-warning: validate the immediate socket address AND stop at hop zero.
+  // Never use `true`, a bare hop count, or a hop-only function: they let an
+  // untrusted peer forge req.ip and req.protocol. A second proxy layer needs
+  // a new spec, not a larger number (#369 dependency/proxy-trust spec).
   // @ai-note: http.Server#requestTimeout bounds how long the server waits to
   // fully RECEIVE a request (headers + body) — it does not bound how long a
   // handler then takes to process it (e.g. encoding an upload). Fastify sets
@@ -187,7 +187,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
   // default, so without an explicit value a stalled request would never time
   // out at this layer. 120s is generous for even a large multipart upload
   // over a slow connection while still bounding one that stalls outright.
-  const app = Fastify({ logger: false, trustProxy: 1, requestTimeout: 120_000 });
+  const app = Fastify({ logger: false, trustProxy: cfg.trustProxy, requestTimeout: 120_000 });
   const { users, sessions } = cfg;
   let mutationsClosed = false;
   const activeMutations = new Set<Promise<void>>();
@@ -246,7 +246,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     reply.header('X-Content-Type-Options', 'nosniff');
     const url = req.raw.url ?? '';
     const route = req.routeOptions.url;
-    if (route === '/settings' || route === '/ai-config' || route?.startsWith('/ai-providers')
+    if (route === '/settings' || route?.startsWith('/settings/identity') || route === '/ai-config' || route?.startsWith('/ai-providers')
       || route === '/posts/:tk/publish' || route === '/posts/bulk') reply.header('Cache-Control', 'no-store');
     if (route !== undefined && !PUBLIC_ROUTES[route]) {
       reply.header('X-Frame-Options', 'DENY');
@@ -267,9 +267,8 @@ export function buildServer(cfg: ServerConfig): AppServer {
     // immutable by construction — while `${siteDir}/current` is a symlink a
     // publish repoints, which is exactly why the DOCUMENT must not be cached:
     // it is what points at the new asset names.
-    // @ai-note Set here rather than via the mount's `setHeaders`, which
-    // @fastify/static overwrites with its own cacheControl value (see the
-    // image mount below); an onSend `reply.header` is the last writer.
+    // Apply the fingerprint-specific policy after static serving; the rest of
+    // the blog mount retains its native revalidation policy.
     if (path.startsWith('/_astro/') && reply.statusCode < 400) {
       reply.header('cache-control', 'public, max-age=31536000, immutable');
     }
@@ -344,9 +343,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
   // (wp-images.ts) stay deterministic so re-imports are idempotent, so
   // re-importing a remote image that changed since the first import is the one
   // residual path that can rewrite bytes under an immutable-cached URL —
-  // accepted trade-off. (A custom setHeaders is overwritten by
-  // @fastify/static's own cacheControl, so use the native maxAge + immutable
-  // options instead.)
+  // accepted trade-off. Use the native maxAge + immutable options.
   app.register(fastifyStatic, {
     root: storageDir,
     prefix: '/',
@@ -356,7 +353,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     constraints: { host: cfg.imgHost },
     // Public variants must be readable by the editor on a different origin.
     // Scope CORS to this file mount, never authenticated APIs or private originals.
-    setHeaders: (res) => { res.setHeader('Access-Control-Allow-Origin', '*'); },
+    setHeaders: (reply) => { reply.header('Access-Control-Allow-Origin', '*'); },
     // Only finished variants (`<key>-<width>.<avif|webp|jpeg>`) are web assets.
     // Untouched full-resolution originals (`<key>-orig.<ext>`) live in
     // storageDir so the incremental backup tar captures them, but they are a
@@ -399,6 +396,24 @@ export function buildServer(cfg: ServerConfig): AppServer {
   /** Cap on any `keys[]` batch: an unbounded array is an authenticated
    *  N-round-trip amplifier against the process that also serves the blog. */
   const MAX_BULK_KEYS = 100;
+
+  /**
+   * Move a `processing` row that nothing will encode — its enqueue was refused
+   * or its original could not be written — to `s`, resolving whether this
+   * caller's write landed (#348).
+   *
+   * @ai-warning Call only inside the queue's same-key admission boundary.
+   * The active check and awaited CAS must exclude Upload, Retry and recovery
+   * admission until the rollback lands; CAS alone cannot protect an accepted
+   * job that is still processing. The CAS also preserves a settled encode.
+   */
+  const releaseUnqueued = async (key: string, s: MediaStatus, e?: MediaError): Promise<boolean> => {
+    if (cfg.encodeQueue.isActive(key)) return false;
+    return cfg.media.setStatusIfProcessing(key, s, e).catch((err: unknown) => {
+      console.error(`could not roll back status for ${key}:`, err);
+      return false;
+    });
+  };
 
   /**
    * Single-file upload. The request returns as soon as the untouched ORIGINAL
@@ -497,74 +512,108 @@ export function buildServer(cfg: ServerConfig): AppServer {
     }
     const format = outputFormatForExtension(probe.ext, encoding);
 
-    // Re-uploading identical bytes is the NORMAL case when a folder is dropped
-    // twice, so all three states of an existing row are handled explicitly.
-    const existing = await cfg.media.get(versionedKey);
-    if (existing && existing.status === 'ready') {
-      // Metadata the caller supplied still applies — it is not silently
-      // discarded — but the STORED values win: alt fills only a blank slot,
-      // and the folder only if the photo is still in the root (#135). The
-      // browser always sends the folder that is currently open, so a second
-      // drop of the same camera export must not relocate a curated photo.
-      const fillFolder = folder !== '' && existing.folder === '';
-      let stored = existing;
-      if (alt || title || fillFolder) {
-        // Best-effort on a duplicate — but the response reports what was
-        // PERSISTED, so a failed patch cannot claim a folder the photo is not in.
-        stored = await cfg.media.patch(versionedKey, {
-          ...(title ? { title } : {}), ...(fillFolder ? { folder } : {}),
-          ...(alt ? { alt: { de: existing.alt.de || alt, en: existing.alt.en || alt } } : {}),
-        }).catch(() => existing);
+    return cfg.encodeQueue.withAdmission(versionedKey, async () => {
+      // Read inside the same-key boundary: a preceding refusal may have changed
+      // processing to failed while this request was waiting.
+      const existing = await cfg.media.get(versionedKey);
+      if (existing && existing.status === 'ready') {
+        // Metadata the caller supplied still applies — it is not silently
+        // discarded — but the STORED values win: alt fills only a blank slot,
+        // and the folder only if the photo is still in the root (#135). The
+        // browser always sends the folder that is currently open, so a second
+        // drop of the same camera export must not relocate a curated photo.
+        const fillFolder = folder !== '' && existing.folder === '';
+        let stored = existing;
+        if (alt || title || fillFolder) {
+          // Best-effort on a duplicate — but the response reports what was
+          // PERSISTED, so a failed patch cannot claim a folder the photo is not in.
+          stored = await cfg.media.patch(versionedKey, {
+            ...(title ? { title } : {}), ...(fillFolder ? { folder } : {}),
+            ...(alt ? { alt: { de: existing.alt.de || alt, en: existing.alt.en || alt } } : {}),
+          }).catch(() => existing);
+        }
+        return reply.send({
+          src, key: versionedKey, width: existing.width, height: existing.height,
+          status: existing.status, duplicate: true, folder: stored.folder,
+          ...(existing.format ? { format: existing.format } : {}),
+          snippet: heroSnippet(src, existing.width, existing.height, existing.alt.de || alt, existing.format),
+        });
+      }
+      if (existing && (existing.status === 'processing' ||
+        (existing.status === 'failed' && existing.error === 'queue_full'))) {
+        // #348: processing alone does not prove a job exists. Restore the
+        // original before admitting an orphan left by a crash or old refusal.
+        if (!cfg.encodeQueue.isActive(versionedKey)) {
+          // A backlog refusal never invalidates this photo's curated metadata or
+          // immutable encoding profile. Recover it without a destructive upsert.
+          await cfg.media.setStatus(versionedKey, 'processing');
+          try {
+            await storeOriginal(versionedKey, buf, probe.ext, { storageDir, ...runtime });
+          } catch (e) {
+            await releaseUnqueued(versionedKey, 'failed', 'write_failed');
+            console.error(`could not store the original for ${versionedKey}:`, e);
+            return reply.code(500).send({ error: 'internal server error' });
+          }
+          try {
+            cfg.encodeQueue.enqueue(versionedKey);
+          } catch (e) {
+            if (!(e instanceof BacklogFullError)) throw e;
+            // Hold the boundary until the write lands; subsequent admissions
+            // must re-read this settled status, not a stale processing snapshot.
+            await releaseUnqueued(versionedKey, 'failed', 'queue_full');
+            return reply.code(429).send({ error: e.message });
+          }
+        }
+        return reply.send({
+          src, key: versionedKey, width: existing.width, height: existing.height,
+          status: 'processing', duplicate: true, folder: existing.folder,
+          ...(existing.format ? { format: existing.format } : {}),
+          snippet: heroSnippet(src, existing.width, existing.height, existing.alt.de || alt, existing.format),
+        });
+      }
+
+      const exif = parseExif(probe.exif);
+      // Persist the immutable profile before the original becomes recoverable
+      // from disk. A crash after this point leaves a deterministic processing
+      // row for boot recovery instead of an origin-only orphan that has lost the
+      // setting snapshot.
+      // Recovering identical bytes keeps a curated folder, just like ready duplicates.
+      const stored = await cfg.media.upsert({
+        key: versionedKey, folder: existing?.folder || folder, title,
+        alt: { de: alt, en: alt },
+        width: probe.width, height: probe.height, origBytes: buf.length,
+        status: 'processing', exif, uploadedBy: req.authUser?.id ?? null,
+        ...(format ? { format } : {}),
+        encoding,
+      });
+      try {
+        await storeOriginal(versionedKey, buf, probe.ext, { storageDir, ...runtime });
+      } catch (e) {
+        if (existing) await cfg.media.setStatus(versionedKey, 'failed', 'write_failed').catch(() => {});
+        else await cfg.media.remove(versionedKey).catch(() => {});
+        console.error(`could not store the original for ${versionedKey}:`, e);
+        return reply.code(500).send({ error: 'internal server error' });
+      }
+      // @ai-warning A refused enqueue MUST NOT leave an unqueued processing row
+      // (#348). Restore an existing failure; keep a new photo as failed/queue_full
+      // with its original so Retry, Delete and re-upload remain available.
+      try {
+        cfg.encodeQueue.enqueue(versionedKey);
+      } catch (e) {
+        if (!(e instanceof BacklogFullError)) throw e;
+        await releaseUnqueued(
+          versionedKey,
+          existing ? existing.status : 'failed',
+          existing ? existing.error ?? undefined : 'queue_full',
+        );
+        return reply.code(429).send({ error: e.message });
       }
       return reply.send({
-        src, key: versionedKey, width: existing.width, height: existing.height,
-        status: existing.status, duplicate: true, folder: stored.folder,
-        ...(existing.format ? { format: existing.format } : {}),
-        snippet: heroSnippet(src, existing.width, existing.height, existing.alt.de || alt, existing.format),
+        src, key: versionedKey, width: probe.width, height: probe.height,
+        status: 'processing', folder: stored.folder,
+        ...(format ? { format } : {}),
+        snippet: heroSnippet(src, probe.width, probe.height, alt, format),
       });
-    }
-    if (existing && existing.status === 'processing') {
-      // Do NOT re-enqueue: the job is already in the queue.
-      return reply.send({
-        src, key: versionedKey, width: existing.width, height: existing.height,
-        status: 'processing', duplicate: true, folder: existing.folder,
-        ...(existing.format ? { format: existing.format } : {}),
-        snippet: heroSnippet(src, existing.width, existing.height, alt, existing.format),
-      });
-    }
-
-    const exif = parseExif(probe.exif);
-    // Persist the immutable profile before the original becomes recoverable
-    // from disk. A crash after this point leaves a deterministic processing
-    // row for boot recovery instead of an origin-only orphan that has lost the
-    // setting snapshot.
-    await cfg.media.upsert({
-      key: versionedKey, folder, title,
-      alt: { de: alt, en: alt },
-      width: probe.width, height: probe.height, origBytes: buf.length,
-      status: 'processing', exif, uploadedBy: req.authUser?.id ?? null,
-      ...(format ? { format } : {}),
-      encoding,
-    });
-    try {
-      await storeOriginal(versionedKey, buf, probe.ext, { storageDir, ...runtime });
-    } catch (e) {
-      if (existing) await cfg.media.setStatus(versionedKey, 'failed', 'write_failed').catch(() => {});
-      else await cfg.media.remove(versionedKey).catch(() => {});
-      console.error(`could not store the original for ${versionedKey}:`, e);
-      return reply.code(500).send({ error: 'internal server error' });
-    }
-    try {
-      cfg.encodeQueue.enqueue(versionedKey);
-    } catch (e) {
-      if (e instanceof BacklogFullError) return reply.code(429).send({ error: e.message });
-      throw e;
-    }
-    return reply.send({
-      src, key: versionedKey, width: probe.width, height: probe.height,
-      status: 'processing',
-      ...(format ? { format } : {}),
-      snippet: heroSnippet(src, probe.width, probe.height, alt, format),
     });
   });
 
@@ -702,26 +751,32 @@ export function buildServer(cfg: ServerConfig): AppServer {
   // The flip has to come FIRST despite that, not after a successful enqueue:
   // the queue can start the job immediately, and a fast encode would then
   // write `ready` before our write landed, leaving the row stuck at
-  // `processing` after a perfectly successful encode.
+  // `processing` after a perfectly successful encode. The rollback itself goes
+  // through releaseUnqueued, so it can never undo a concurrent `ready`.
   app.post('/media/retry', { preHandler: requireAuth }, async (req, reply) => {
     const b = (req.body ?? {}) as { keys?: unknown };
     const keys = Array.isArray(b.keys) ? b.keys.map(String).slice(0, MAX_BULK_KEYS) : [];
     let queued = 0;
     for (const key of keys) {
-      const item = await cfg.media.get(key);
-      // `missing` is retryable too: media-sync marks a row missing when its
-      // files vanish, and the retained original may well still be there.
-      if (!item || item.status === 'ready' || item.status === 'processing') continue;
-      await cfg.media.setStatus(key, 'processing');
       try {
-        cfg.encodeQueue.enqueue(key);
+        const admitted = await cfg.encodeQueue.withAdmission(key, async () => {
+          const item = await cfg.media.get(key);
+          // `missing` is retryable too: its retained original may still exist.
+          if (!item || item.status === 'ready' || item.status === 'processing') return false;
+          await cfg.media.setStatus(key, 'processing');
+          try {
+            cfg.encodeQueue.enqueue(key);
+          } catch (e) {
+            await releaseUnqueued(key, item.status, item.error ?? undefined);
+            throw e;
+          }
+          return true;
+        });
+        if (admitted) queued++;
       } catch (e) {
-        await cfg.media.setStatus(key, item.status, item.error ?? undefined)
-          .catch((err) => console.error(`could not restore status for ${key}:`, err));
         if (e instanceof BacklogFullError) return reply.code(429).send({ error: e.message, queued });
         throw e;
       }
-      queued++;
     }
     return reply.send({ ok: true, queued });
   });
@@ -924,6 +979,26 @@ export function buildServer(cfg: ServerConfig): AppServer {
   }
   const KEY_PARTIAL = 'API key change saved, but settings were not saved. Reload settings before retrying.';
   const PROVIDER_NOT_FOUND = { error: 'AI provider not found.' };
+
+  app.get('/settings/identity', { preHandler: requireAdmin }, async (_req, reply) => {
+    if (!cfg.identityStore) return reply.code(503).send({ error: 'Site identity unavailable.' });
+    return { ...cfg.identityStore.get(), locales: ['de', 'en'] };
+  });
+  app.put('/settings/identity', { preHandler: requireAdmin }, async (req, reply) => {
+    if (!cfg.identityStore) return reply.code(503).send({ error: 'Site identity unavailable.' });
+    try {
+      if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) throw new IdentityError('identity');
+      const body = req.body as Record<string, unknown>;
+      if (Object.keys(body).some((key) => key !== 'revision' && key !== 'identity')) throw new IdentityError('identity');
+      if (typeof body.revision !== 'number' || !Number.isInteger(body.revision) || body.revision < 1) throw new IdentityError('revision');
+      const saved = await cfg.identityStore.update(body.revision, body.identity);
+      return { revision: saved.revision, savedAt: saved.savedAt, takesEffect: 'next_build' };
+    } catch (error) {
+      if (error instanceof IdentityError) return reply.code(400).send({ code: error.code, field: error.field, error: error.message });
+      if (error instanceof IdentityConflictError) return reply.code(409).send({ code: error.code });
+      throw error;
+    }
+  });
 
   app.get('/settings', { preHandler: requireAdmin }, async (_req, reply) => settingsOperation(async () => {
     const s = cfg.settings.get();
@@ -1391,14 +1466,17 @@ export function buildServer(cfg: ServerConfig): AppServer {
         .map(([key, value]) => [key.slice('editor.gallery.'.length), value])),
     ]));
     const editorCopy = Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [
-      locale, Object.fromEntries(Object.entries(strings)
+      locale, { siteTitleFallback: strings['site.titleFallback'], ...Object.fromEntries(Object.entries(strings)
         .filter(([key]) => key.startsWith('editor.chrome.'))
-        .map(([key, value]) => [key.slice('editor.chrome.'.length), value])),
+        .map(([key, value]) => [key.slice('editor.chrome.'.length), value])) },
     ]));
+    const { siteName, studioDescriptor, canonicalOrigin } = cfg.identityStore?.get().identity ?? neutralIdentity();
+    reply.header('Cache-Control', 'no-store');
     return reply.type('application/javascript').send(
       `window.EditorImageCopy = ${JSON.stringify(copy)};\n` +
       `window.EditorGalleryCopy = ${JSON.stringify(galleryCopy)};\n` +
       `window.EditorCopy = ${JSON.stringify(editorCopy)};\n` +
+      `window.SiteIdentity = ${JSON.stringify({ siteName, studioDescriptor, canonicalOrigin })};\n` +
       `window.EditorGalleryImageOrigin = ${JSON.stringify(new URL(cfg.baseUrl).origin)};`,
     );
   });
@@ -1801,8 +1879,9 @@ export function buildServer(cfg: ServerConfig): AppServer {
     const pair = await posts.get(tk);
     if (!pair) return reply.code(404).send({ error: 'post not found' });
     if (pair.status !== 'published') return reply.code(409).send({ error: 'post is not published' });
+    let committed: { previousUpdatedAt: Date; updatedAt: Date };
     try {
-      await posts.unpublish(tk);
+      committed = await posts.unpublish(tk);
     } catch (e) {
       if (e instanceof PostError) {
         if (e.code === 'storage_read_only') return readOnly(reply);
@@ -1811,7 +1890,11 @@ export function buildServer(cfg: ServerConfig): AppServer {
       throw e;
     }
     const build = await cfg.builder.build();
-    return reply.send({ unpublished: true, build });
+    // Both tokens belong to this transaction, not a later writer during the build.
+    return reply.send({
+      unpublished: true, build,
+      previousUpdatedAt: committed.previousUpdatedAt, updatedAt: committed.updatedAt,
+    });
   });
 
   // Hard delete (both locale rows), freeing the slugs for reuse. MDX backups in
@@ -1947,7 +2030,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     if (!commentsAdmin) return noStore(reply);
     const body = ((req.body ?? {}) as { body?: unknown }).body;
     try {
-      const created = await commentsAdmin.replyAsAuthor(id, req.authUser?.username ?? 'Author', body);
+      const created = await commentsAdmin.replyAsAuthor(id, cfg.identityStore?.get().identity.authorName || 'Author', body);
       if (!created) return reply.code(404).send({ error: 'comment not found' });
       return reply.code(201).send(created);
     } catch (e) {
@@ -2145,9 +2228,9 @@ export function buildServer(cfg: ServerConfig): AppServer {
       if (e instanceof ImportInsufficientSpaceError) return reply.code(507).send({ error: e.message });
       throw e;
     }
-    // 400 only when the export yielded no groups at all. Every group lands in exactly
-    // one bucket (issue #100), so an all-published or all-rejected export is a job
-    // with an honest summary — a 400 cannot say WHICH groups were rejected and why.
+    // 400 only when there are no reportable units: Polylang groups plus individual
+    // untranslated DE/EN posts (#387). All-published or all-rejected exports are
+    // jobs with honest summaries — a generic 400 would hide each refusal's reason.
     if (prepared.groups === 0) {
       return reply.code(400).send({ error: 'no importable posts found in export' });
     }

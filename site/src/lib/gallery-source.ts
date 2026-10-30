@@ -49,7 +49,7 @@ function physicalLines(source: string, start: number, end: number): PhysicalLine
   return lines;
 }
 
-/** Satteri 0.9.4 positions count Unicode scalar values, NOT UTF-8 or UTF-16.
+/** Satteri positions count Unicode scalar values, NOT UTF-8 or UTF-16.
  * Explicit conversion is pinned by astral/CRLF tests; HTML parser positions are
  * already UTF-16 and must not pass through this conversion a second time. */
 function sourceOffsets(source: string): number[] {

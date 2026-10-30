@@ -2,7 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { galleryFencesToMdx, rewriteOutsideGalleries, unescapeAltText } from './body-content.js';
 import { markdownImages } from './wp-content.js';
-import type { HeroImage, Locale, PostLocale, PostPair } from './posts.js';
+import { checkSlug, type HeroImage, type Locale, type PostLocale, type PostPair } from './posts.js';
 import { validatePublicTrack, type PublicTrack } from '../public/gpx-public-track.js';
 import { analyzeGallerySource } from '../../site/src/lib/gallery-source.js';
 import { galleryDiagnostics } from '../public/gallery-photo-line.js';
@@ -93,6 +93,11 @@ export async function renderPostToMdx(pair: PostPair, locale: Locale, track?: Pu
 }
 
 export async function exportPost(pair: PostPair, baseDir: string, track?: PublicTrack): Promise<string[]> {
+  // Validate the entire pair before mkdir/write: a legacy EN slug must not
+  // leave a fresh DE backup behind, nor overwrite an existing one.
+  for (const locale of ['de', 'en'] as const) {
+    if (pair[locale].slug !== '') checkSlug(pair[locale].slug, locale);
+  }
   const out: string[] = [];
   // Analyze both locales before writing either file: a later source-map failure
   // must not leave one half of a translation pair exported.

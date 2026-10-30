@@ -1,3 +1,4 @@
+import { TEST_TRUST, GATEWAY_TRUST } from './trusted-proxy-fixture.js';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { request as httpRequest } from 'node:http';
@@ -49,7 +50,7 @@ maybe('private GPX API and real PostgreSQL transactions', () => {
     await pool?.end();
     if (owner) { await owner.query(`DROP SCHEMA ${schema} CASCADE`); await owner.end(); }
   });
-  async function fixture(): Promise<Fixture> {
+  async function fixture(trustProxy = TEST_TRUST): Promise<Fixture> {
     const root = await mkdtemp(join(await realpath(tmpdir()), 'gpx-private-'));
     const files = createGpxFiles({ storageDir: join(root, 'images') });
     const pins = new Set<string>();
@@ -60,7 +61,7 @@ maybe('private GPX API and real PostgreSQL transactions', () => {
     const locale = (locale: 'de' | 'en'): PostLocale => ({ locale, slug: `${locale}-${slug}`, title: 'Synthetic story', excerpt: '', country: 'Test', heroImage: { src: '', width: 1, height: 1, alt: '' }, bodyMarkdown: 'Synthetic text only', images: {} });
     const pair = await pgPostStore(pool).upsertDraft({ translationKey: '', status: 'draft', shared: { date: '2026-01-01', countryCode: 'DE', region: 'europe', coordinates: { lat: 1, lng: 2 } }, de: locale('de'), en: locale('en') });
     const users = pgUserStore(pool); const sessions = pgSessionStore(pool);
-    const app = Fastify({ logger: false, trustProxy: 1 });
+    const app = Fastify({ logger: false, trustProxy });
     await app.register(cookie); await app.register(multipart);
     app.decorateRequest('authUser', null);
     registerGpxRoutes(app, { gpx: service, requireAuth: createAuthn(users, sessions).requireAuth });
@@ -159,6 +160,17 @@ maybe('private GPX API and real PostgreSQL transactions', () => {
     request.once('error', missingHost.reject);
     request.end();
     expect(await missingHost.promise).toBe(400);
+  });
+
+  it('accepts HTTPS mutation Origin only from an immediate trusted gateway', async () => {
+    const f = await fixture(GATEWAY_TRUST);
+    const headers = { host: 'journal.test', origin: 'https://journal.test', 'x-forwarded-proto': 'https' };
+    const trusted = await f.app.inject({ method: 'DELETE', url: '/gpx/imports/unknown',
+      remoteAddress: '172.18.0.1', cookies: f.author, headers });
+    expect(trusted.statusCode).toBe(204);
+    const forged = await f.app.inject({ method: 'DELETE', url: '/gpx/imports/unknown',
+      remoteAddress: '172.18.0.3', cookies: f.author, headers });
+    expect(forged.statusCode).toBe(403);
   });
 
   it('admits a real HTTP upload after asynchronous inventory and stages its validated original', async () => {

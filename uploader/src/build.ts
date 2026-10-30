@@ -4,6 +4,9 @@ import { cp, mkdir, rm, rename, symlink, readdir, readlink } from 'node:fs/promi
 import { join } from 'node:path';
 import { createWorkLock, type WorkLock } from './work-lock.js';
 import { assertWorkWritable, cancellableSleep, createWorkCancellation, isWorkWritable, type WorkCancellationOptions } from './work-cancellation.js';
+import type pg from 'pg';
+import { parseIdentitySnapshot } from '../../site/src/lib/site-identity.js';
+import { withBuildSnapshot, writeBuildAssets, type BuildSnapshot } from './build-snapshot.js';
 
 export interface BuildOutcome { ok: boolean; release?: string; error?: string }
 
@@ -33,6 +36,8 @@ export class BuildTimeoutError extends Error {
 
 export interface SiteBuilderOptions extends WorkCancellationOptions {
   applicationName?: string;
+  /** Required for real builds; test-only runBuild callbacks may omit the DB. */
+  pool?: pg.Pool;
   siteAppDir: string;
   releasesRoot: string;
   keep?: number;
@@ -90,10 +95,16 @@ export function runChildBuild(
   cwd: string,
   timeoutMs: number,
   onSpawn?: (child: ChildProcess) => void,
-  opts: WorkCancellationOptions & { applicationName?: string } = {},
+  opts: WorkCancellationOptions & { applicationName?: string; snapshot?: BuildSnapshot } = {},
 ): Promise<void> {
   assertWorkWritable(opts);
-  const env: NodeJS.ProcessEnv = { ...process.env, ASTRO_TELEMETRY_DISABLED: '1' };
+  const env: NodeJS.ProcessEnv = {
+    ...process.env, ASTRO_TELEMETRY_DISABLED: '1',
+    SITE_IDENTITY_JSON: JSON.stringify(opts.snapshot?.identity ?? parseIdentitySnapshot(undefined)),
+  };
+  // Never inherit operator-supplied snapshot identifiers, including empty ones.
+  delete env.SITE_DATABASE_SNAPSHOT;
+  if (opts.snapshot) env.SITE_DATABASE_SNAPSHOT = opts.snapshot.databaseSnapshot;
   if (opts.applicationName) {
     env.PGAPPNAME = opts.applicationName;
     if (env.DATABASE_URL) {
@@ -143,7 +154,7 @@ export function runChildBuild(
 
 /** Spawn `astro build` via plain node — no npx/npm/shell, so the runtime image
  * can stay minimal and non-root. Telemetry is disabled for headless runs. */
-function runAstroBuild(siteAppDir: string, outDir: string, timeoutMs: number, opts: WorkCancellationOptions & { applicationName?: string }): Promise<void> {
+function runAstroBuild(siteAppDir: string, outDir: string, timeoutMs: number, opts: WorkCancellationOptions & { applicationName?: string; snapshot?: BuildSnapshot }): Promise<void> {
   const astroBin = join(siteAppDir, 'node_modules', 'astro', 'bin', 'astro.mjs');
   return runChildBuild(process.execPath, [astroBin, 'build', '--outDir', outDir], siteAppDir, timeoutMs, undefined, opts);
 }
@@ -221,7 +232,6 @@ export function createSiteBuilder(opts: SiteBuilderOptions): SiteBuilder {
   const work = createWorkCancellation(opts);
   const keep = opts.keep ?? 3;
   const timeoutMs = opts.timeoutMs ?? BUILD_TIMEOUT_MS;
-  const runBuild = opts.runBuild ?? ((outDir: string) => runAstroBuild(opts.siteAppDir, outDir, timeoutMs, { ...work, applicationName: opts.applicationName }));
   const lock = opts.lock ?? createWorkLock();
   // @ai-note One-deep coalescing instead of rejecting concurrent builds. The
   // publish route flips the Postgres row BEFORE calling build(), so rejecting
@@ -241,8 +251,20 @@ export function createSiteBuilder(opts: SiteBuilderOptions): SiteBuilder {
       // Exclusive: pauses the encode queue for the duration (see work-lock.ts).
       // Taken INSIDE runOnce so the coalescing above is unaffected — a queued
       // build still waits for the in-flight one, then competes for the lock.
-      const release = await lock.runExclusive(() =>
-        buildAndDeploy({ siteAppDir: opts.siteAppDir, releasesRoot: opts.releasesRoot, keep, runBuild, ...work }));
+      const release = await lock.runExclusive(async () => {
+        const deploy = (snapshot?: BuildSnapshot) => {
+          const buildWork = snapshot ? { ...work, signal: snapshot.signal } : work;
+          const runBuild = async (outDir: string) => {
+            if (opts.runBuild) await opts.runBuild(outDir);
+            else await runAstroBuild(opts.siteAppDir, outDir, timeoutMs, { ...buildWork, applicationName: opts.applicationName, snapshot });
+            if (snapshot) await writeBuildAssets(outDir, snapshot);
+          };
+          return buildAndDeploy({ siteAppDir: opts.siteAppDir, releasesRoot: opts.releasesRoot, keep, runBuild, ...buildWork });
+        };
+        if (opts.pool) return withBuildSnapshot(opts.pool, { timeoutMs, signal: work.signal }, deploy);
+        if (!opts.runBuild) throw new Error('A database pool is required for site builds');
+        return deploy();
+      });
       return { ok: true, release };
     } catch (e) {
       return { ok: false, error: (e as Error).message };
