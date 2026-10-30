@@ -9,6 +9,7 @@ import { insufficientSpaceForImport, type DiskSpace } from './disk.js';
 import type { WorkLock } from './work-lock.js';
 import { normalizeProcessOptions, type ProcessOptions } from './pipeline.js';
 import { assertWorkWritable, cancellableSleep, type WorkCancellationOptions } from './work-cancellation.js';
+import { ui } from '../../site/src/i18n/ui.js';
 
 /** Per-image accounting, so a partial import cannot masquerade as a clean one. */
 export interface ImportImageCounts {
@@ -620,9 +621,9 @@ export interface ImportProgress {
 
 /**
  * A parsed, validated, pre-flighted import that has not fetched anything yet.
- * `groups` counts EVERY group in the export (including those already rejected
- * or skipped as published), so the route can 400 an export with nothing in it
- * before starting a job; `planned` is what `run()` will do.
+ * `groups` counts every Polylang group plus each untranslated published DE/EN item,
+ * including refusals and published skips, so only an empty eligible export is a
+ * 400. `planned` counts accepted pairs only: what `run()` will actually do.
  */
 export interface PreparedImport {
   groups: number;
@@ -650,7 +651,7 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
   let boundary: WorkCancellationOptions = { signal: deps.signal, isWritable: deps.isWritable };
   const assertWritable = () => assertWorkWritable(boundary);
   assertWritable();
-  const { attachments, posts } = parseWxr(xml);
+  const { attachments, posts, untranslated } = parseWxr(xml);
   const log = deps.log ?? console.log;
   const encoding = normalizeProcessOptions(deps.encoding);
   const baseRehost: RehostFn = async (url, key, alt) => {
@@ -749,9 +750,14 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
     }
   };
 
-  // One bucket per outcome (issue #100): every group lands in exactly one, so
-  // imported + updated + skippedPublished + rejected + failed === group count.
-  const summary = { imported: 0, updated: 0, skippedPublished: 0, rejected: 0, failed: 0 };
+  // One bucket per reportable unit (#100, #387): distinct Polylang groups plus
+  // individual untranslated published DE/EN items. Never invent group identities.
+  const summary = { imported: 0, updated: 0, skippedPublished: 0, rejected: untranslated.length, failed: 0 };
+  for (const { slug, locale } of untranslated) {
+    assertWritable();
+    warnings.push(ui.en['import.untranslatedRejected'].replace(/\{(slug|locale)\}/g,
+      (_match, key: string) => key === 'slug' ? slug : locale));
+  }
 
   // Existing posts by slug, ANY locale → the posts using it (idempotency + published-skip).
   //
@@ -930,5 +936,5 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
     return { ...summary, images, warnings: warnings.finish() };
   };
 
-  return { groups: groups.size, planned: progress, run };
+  return { groups: groups.size + untranslated.length, planned: progress, run };
 }

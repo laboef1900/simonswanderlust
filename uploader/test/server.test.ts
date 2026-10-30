@@ -11,7 +11,7 @@ import FormData from 'form-data';
 import { buildServer, type ServerConfig } from '../src/server.js';
 import { rehostImage } from '../src/wp-images.js';
 import { contentHashKey } from '../src/storage.js';
-import { rehostKey, ImportTooLargeError, ImportInsufficientSpaceError, type ImportDeps, type ImportProgress, type ImportSummary, type PreparedImport } from '../src/wp-import.js';
+import { prepareImport, rehostKey, ImportTooLargeError, ImportInsufficientSpaceError, type ImportDeps, type ImportProgress, type ImportSummary, type PreparedImport } from '../src/wp-import.js';
 import { createImportRunner, memoryImportJobStore, type ImportRunner } from '../src/import-jobs.js';
 import { defaultSettings, validate } from '../src/settings.js';
 import type { Settings, SettingsStore } from '../src/settings.js';
@@ -3275,6 +3275,40 @@ describe('WordPress import', () => {
     const res = await b.app.inject({ method: 'POST', url: '/import', headers: { ...form.getHeaders() }, cookies: cookie, payload: form });
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBe('no importable posts found in export');
+  });
+
+  it.each([false, true])('completes a groupless-only export as a rejection-only 202 job (overwrite=%s)', async (overwrite) => {
+    const rehost = vi.fn(async () => ({ src: 'https://img/unexpected', width: 1, height: 1 }));
+    const b = build({ prepareImport: (xml, deps) => prepareImport(xml, { ...deps, rehost }) });
+    const upsert = vi.spyOn(b.posts, 'upsertDraft');
+    const { cookie } = await authed(b);
+    const xml = wxrWith('https://wp.example/must-not-fetch.jpg')
+      .replaceAll('<category domain="post_translations" nicename="impg"><![CDATA[impg]]></category>', '');
+    const res = await postImport(b, cookie, xml, { overwriteDrafts: String(overwrite) });
+    expect(res.statusCode).toBe(202);
+    expect(res.json().planned).toEqual({
+      groups: { total: 0, done: 0 }, images: { planned: 0, hosted: 0, failed: 0 },
+    });
+    await b.importJobs.settle();
+    const status = await b.app.inject({ method: 'GET', url: '/import/status', cookies: cookie });
+    expect(status.statusCode).toBe(200);
+    const job = status.json().job;
+    expect(job).toMatchObject({
+      id: res.json().id, status: 'done',
+      progress: { groups: { total: 0, done: 0 }, images: { planned: 0, hosted: 0, failed: 0 } },
+      summary: {
+        imported: 0, updated: 0, skippedPublished: 0, rejected: 2, failed: 0,
+        images: { total: 0, hosted: 0, failed: 0 },
+        warnings: [
+          'imp-de (de): no translation (untranslated post) — rejected',
+          'imp-en (en): no translation (untranslated post) — rejected',
+        ],
+      },
+    });
+    expect(job.finishedAt).toBeTruthy();
+    expect(rehost).not.toHaveBeenCalled();
+    expect(upsert).not.toHaveBeenCalled();
+    expect(await b.posts.list()).toEqual([]);
   });
 
   // issue #100: a re-run of an export whose posts are all already published is

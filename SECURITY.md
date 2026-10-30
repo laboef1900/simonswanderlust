@@ -677,6 +677,16 @@ fixed "could not be saved (see server logs)", the detail going to stdout. A malf
 400 (`WxrParseError`, fixed message; the parser's offset-and-context detail is logged only), never
 a 500 with a stack.
 
+Untranslated-post accounting (#387) preserves this import boundary: a published post with a
+recognized DE/EN language but no Polylang translation group is counted as a separate rejection
+before any photo fetch or draft write, including in overwrite mode. It never receives a synthetic
+group key or pairs with another groupless item. The existing bounded warning list names the
+export-supplied slug and locale as text (`import.html` uses `textContent`), with no new disclosure
+of server details. Rejection-only exports create ordinary completed jobs with zero planned work;
+empty eligible exports still return 400. Admin authorization, unknown-language exclusions, XML
+limits, slug/path guards, SSRF protection and private-original handling are unchanged. This is
+accounting for the current bilingual importer, not #283's future mode-aware admission policy.
+
 ### A partial import cannot be published (issue #91, 2026-09-06)
 
 A failed re-host leaves the source URL in the draft body. Rendering would then hot-link the old

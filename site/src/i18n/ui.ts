@@ -3,6 +3,7 @@ export type Locale = (typeof locales)[number];
 export const defaultLocale: Locale = 'de';
 
 const de = {
+  'import.untranslatedRejected': '{slug} ({locale}): keine Übersetzung (unübersetzter Beitrag) — abgelehnt',
   'editor.chrome.pickerFolders': 'Ordner',
   'editor.chrome.pickerAllPhotos': 'Alle Fotos',
   'editor.chrome.pickerSubfoldersHelp': 'Unterordner werden mit angezeigt.',
@@ -420,6 +421,7 @@ const de = {
 export type UIKey = keyof typeof de;
 
 const en: Record<UIKey, string> = {
+  'import.untranslatedRejected': '{slug} ({locale}): no translation (untranslated post) — rejected',
   'editor.chrome.pickerFolders': 'Folders',
   'editor.chrome.pickerAllPhotos': 'All photos',
   'editor.chrome.pickerSubfoldersHelp': 'Folder views include subfolders.',
