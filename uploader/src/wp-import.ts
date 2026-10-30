@@ -509,7 +509,7 @@ function applyRehosts(body: string, rehosted: ReadonlyMap<string, RehostResult>,
     for (const { full, alt, url } of markdownImages(text)) {
       const r = rehosted.get(url);
       if (!r) continue;
-      out = out.replaceAll(full, `![${alt}](${r.src})`);
+      out = out.replaceAll(full, () => `![${alt}](${r.src})`);
       record(url, r);
     }
     return out;
