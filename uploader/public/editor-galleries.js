@@ -42,6 +42,58 @@ window.EditorGalleries = (function () {
       await drainAlts();
       await refresh(true);
     });
+    let boundarySelection = null;
+
+    function samePosition(a, b) { return a.line === b.line && a.ch === b.ch; }
+
+    // Collapsed markers still allow a caret at their non-inclusive edges.
+    // Keep author input outside the fence without changing its grammar or
+    // intercepting picker/alt replacements, deletion, undo or redo.
+    cm.on('beforeChange', (_editor, change) => {
+      if (!previews || editing || !change.update
+        || (change.origin !== '+input' && change.origin !== 'paste')
+        || !samePosition(change.from, change.to)) return;
+      const text = change.text.join('\n');
+      if (!text) return;
+      for (const controller of controllers) {
+        const range = controller.marker.find();
+        if (!range) continue;
+        const before = samePosition(change.from, range.from);
+        if (!before && !samePosition(change.from, range.to)) continue;
+        const at = cm.indexFromPos(change.from);
+        let inserted;
+        let cursor;
+        if (before) {
+          // Mirror the block insertion convention: a blank line separates
+          // prose from the gallery, including a paste with its own newlines.
+          const suffix = text.endsWith('\n\n') ? '' : text.endsWith('\n') ? '\n' : '\n\n';
+          inserted = text + suffix;
+          cursor = at + text.length;
+        } else {
+          // The marker supplies the already-analyzed block edge. beforeChange
+          // is synchronous: never call the async source analyzer from here.
+          const following = cm.getValue().slice(at);
+          const suffix = following.startsWith('\n\n') ? '' : following.startsWith('\n') ? '\n' : '\n\n';
+          inserted = '\n\n' + text + suffix;
+          cursor = at + 2 + text.length;
+        }
+        boundarySelection = { end: at + inserted.length, cursor };
+        change.update(change.from, change.to, inserted.split('\n'));
+        return;
+      }
+    });
+    cm.on('change', (_editor, change) => {
+      if (!boundarySelection) return;
+      const end = cm.posFromIndex(boundarySelection.end);
+      const cursor = cm.posFromIndex(boundarySelection.cursor);
+      boundarySelection = null;
+      // Updating the selection after the change records the corrected caret
+      // in its history event; beforeSelectionChange only changes the live view.
+      cm.setSelections(cm.listSelections().map((range) => ({
+        anchor: samePosition(range.anchor, end) ? cursor : range.anchor,
+        head: samePosition(range.head, end) ? cursor : range.head,
+      })), null, { origin: change.origin });
+    });
 
     function previewUrl(photo) {
       const thumbnail = PostsFilter.thumbUrl({ heroSrc: photo.src, heroWidth: photo.width, heroFormat: photo.format });
@@ -326,8 +378,10 @@ window.EditorGalleries = (function () {
             suggestedText.textContent = text;
             suggestion.hidden = false;
             status.textContent = copy.review;
-          } catch {
-            if (controller.alive && version === current && !signal.aborted) status.textContent = copy.failed;
+          } catch (error) {
+            if (!controller.alive || version !== current || signal.aborted) return;
+            // A reply cut off at the token limit needs a different fix than a dead provider (#351).
+            status.textContent = error && error.message === 'Caption response was truncated' ? copy.truncated : copy.failed;
           } finally {
             if (controller.alive && version === current) {
               request = undefined;

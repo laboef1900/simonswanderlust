@@ -2,13 +2,14 @@ import { createHash } from 'node:crypto';
 import { parseWxr, type ParsedPost } from './wxr-parse.js';
 import { htmlToMarkdown, markdownImages } from './wp-content.js';
 import { rehostImage, type RehostResult, type RehostResume } from './wp-images.js';
-import { isSafeSlug, PostError, type ImageDims, type PostLocale, type PostPair, type PostStore, type PostSummary, type StoredPostPair } from './posts.js';
+import { checkSlug, PostError, type ImageDims, type PostLocale, type PostPair, type PostStore, type PostSummary, type StoredPostPair } from './posts.js';
 import { rewriteFences, rewriteOutsideGalleries } from './body-content.js';
 import { FetchError } from './safe-fetch.js';
 import { insufficientSpaceForImport, type DiskSpace } from './disk.js';
 import type { WorkLock } from './work-lock.js';
 import { normalizeProcessOptions, type ProcessOptions } from './pipeline.js';
 import { assertWorkWritable, cancellableSleep, type WorkCancellationOptions } from './work-cancellation.js';
+import { ui } from '../../site/src/i18n/ui.js';
 
 /** Per-image accounting, so a partial import cannot masquerade as a clean one. */
 export interface ImportImageCounts {
@@ -618,9 +619,9 @@ export interface ImportProgress {
 
 /**
  * A parsed, validated, pre-flighted import that has not fetched anything yet.
- * `groups` counts EVERY group in the export (including those already rejected
- * or skipped as published), so the route can 400 an export with nothing in it
- * before starting a job; `planned` is what `run()` will do.
+ * `groups` counts every Polylang group plus each untranslated published DE/EN item,
+ * including refusals and published skips, so only an empty eligible export is a
+ * 400. `planned` counts accepted pairs only: what `run()` will actually do.
  */
 export interface PreparedImport {
   groups: number;
@@ -648,7 +649,7 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
   let boundary: WorkCancellationOptions = { signal: deps.signal, isWritable: deps.isWritable };
   const assertWritable = () => assertWorkWritable(boundary);
   assertWritable();
-  const { attachments, posts } = parseWxr(xml);
+  const { attachments, posts, untranslated } = parseWxr(xml);
   const log = deps.log ?? console.log;
   const encoding = normalizeProcessOptions(deps.encoding);
   const baseRehost: RehostFn = async (url, key, alt) => {
@@ -747,9 +748,14 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
     }
   };
 
-  // One bucket per outcome (issue #100): every group lands in exactly one, so
-  // imported + updated + skippedPublished + rejected + failed === group count.
-  const summary = { imported: 0, updated: 0, skippedPublished: 0, rejected: 0, failed: 0 };
+  // One bucket per reportable unit (#100, #387): distinct Polylang groups plus
+  // individual untranslated published DE/EN items. Never invent group identities.
+  const summary = { imported: 0, updated: 0, skippedPublished: 0, rejected: untranslated.length, failed: 0 };
+  for (const { slug, locale } of untranslated) {
+    assertWritable();
+    warnings.push(ui.en['import.untranslatedRejected'].replace(/\{(slug|locale)\}/g,
+      (_match, key: string) => key === 'slug' ? slug : locale));
+  }
 
   // Existing posts by slug, ANY locale → the posts using it (idempotency + published-skip).
   //
@@ -788,8 +794,12 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
     // @ai-warning: validate slugs at the import boundary BEFORE re-hosting images
     // or writing to the DB — an unsafe slug would otherwise become a storage path
     // segment (traversal) and a live URL.
-    if (!isSafeSlug(de.slug) || !isSafeSlug(en.slug)) {
-      summary.rejected++; warnings.push(`group ${group}: unsafe slug (${de.slug} / ${en.slug}) — rejected`); continue;
+    try {
+      checkSlug(de.slug, 'de');
+      checkSlug(en.slug, 'en');
+    } catch (error) {
+      if (!(error instanceof PostError)) throw error;
+      summary.rejected++; warnings.push(`group ${group}: unsafe slug (${error.message}) — rejected`); continue;
     }
     // Pair identity is the (DE slug, EN slug) tuple as a UNIT: exactly one existing
     // post touches either slug AND it owns both. Binding on a single matching slug
@@ -925,5 +935,5 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
     return { ...summary, images, warnings: warnings.finish() };
   };
 
-  return { groups: groups.size, planned: progress, run };
+  return { groups: groups.size + untranslated.length, planned: progress, run };
 }

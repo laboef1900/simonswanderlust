@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { analyzeRenderedBody, transformBodyImages } from './body-images.js';
 import { escapeMeta } from './gallery-layout.js';
 import { renderMarkdown } from './render-markdown.js';
+import { SHIKI_CSS } from './shiki-classes.js';
 
 const ORIGIN = 'https://img.simonswanderlust.com';
 /** ```gallery survives sanitize as this — see MARKDOWN_OPTIONS in render-markdown.ts. */
@@ -130,6 +131,24 @@ describe('transformBodyImages — sanitization', () => {
     expect(out).not.toContain('evil.example');
     expect(out).toContain('<p>x</p>');
     expect(out).toContain('<span>y</span>');
+  });
+
+  it('keeps real code highlighting beside raw HTML without admitting author styles or handlers', async () => {
+    const html = await renderMarkdown(
+      '<div style="background:url(https://evil.example/pixel)" onclick="alert(1)">Opening</div>\n\n' +
+      '```js\nconst answer = 42;\n```\n\n<script>alert(1)</script>',
+    );
+    const out = transformBodyImages(html, {}, ORIGIN);
+    expect(out).toContain('Opening');
+    expect(out).toContain('astro-code');
+    expect(out).not.toContain('style=');
+    expect(out).not.toContain('onclick');
+    expect(out).not.toContain('<script');
+    expect(out).not.toContain('evil.example');
+    const classes = [...new Set(out.match(/\bsh-[a-z0-9-]+/g))];
+    expect(classes).toContain('sh-bg-24292e');
+    expect(classes.some((cls) => cls.startsWith('sh-c-'))).toBe(true);
+    for (const cls of classes) expect(SHIKI_CSS).toContain(`.${cls}{`);
   });
 });
 
