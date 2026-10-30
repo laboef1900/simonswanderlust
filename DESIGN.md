@@ -668,6 +668,12 @@ heading. Both are gone; see Story card below, and do not reintroduce either.
 - **Route map:** the story's mini-map is the third disclosure, in the same
   dress as Key Facts. It mounts lazily on intersection, which a closed
   disclosure never reports — opening it is what mounts the map.
+  WebGL2 is probed before MapLibre construction and checked again on its real
+  canvas. If either fails, no empty focusable canvas survives: trackless stories
+  retain their localized map link at its natural height; tracked stories hide
+  the empty map slot and retain the published route summary, endpoints, stops
+  and map link. On the full map page, initialization failure hides the entire
+  map wrapper (including its `70vh` allocation), leaving the story-link list.
 - **Story pagination:** chronological links with `80px` square, lazy-loaded
   photo thumbnails and full wrapped titles. A sole link spans the reading
   column; two split from `768px`. No empty placeholder cell, border or shadow;
