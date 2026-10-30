@@ -1,6 +1,9 @@
 export const locales = ['de', 'en'] as const;
 export type Locale = (typeof locales)[number];
 export const defaultLocale: Locale = 'de';
+// ESA requires this source credit; preserve its English wording in both locales.
+export const mapLandcoverAttribution = '© ESA WorldCover project 2020 / Contains modified Copernicus Sentinel data (2020) processed by ESA WorldCover consortium';
+export const mapLandcoverLicense = 'CC BY 4.0';
 
 const de = {
   'editor.chrome.pickerFolders': 'Ordner',
@@ -51,6 +54,23 @@ const de = {
   'editor.chrome.excerptSettingsLink': 'KI-Einstellungen öffnen',
   'editor.chrome.excerptAskAdmin': 'Bitte einen Administrator, die Story-Review-Einstellungen zu prüfen.',
   'editor.chrome.studioName': 'Wanderlust Studio',
+  'editor.chrome.softwareNotices': 'Softwarelizenz und Quellcode',
+  'editor.chrome.thirdPartyNotices': 'Lizenzen von Drittanbietern',
+  'editor.chrome.licenseText': 'GNU AGPL Version 3 — vollständiger Lizenztext',
+  'editor.chrome.rightsNotice': 'Urheberrecht, Inhalts- und Markenrechte',
+  'editor.chrome.upstreamSource': 'Upstream-Quellcode auf GitHub',
+  'editor.chrome.releaseSourceArchive': 'Quellcode dieser Softwareversion herunterladen',
+  'editor.chrome.releaseSourceTree': 'Quellcode dieser Softwareversion ansehen',
+  'editor.chrome.sourceRecorded': 'Die Versionslinks verweisen auf den beim Image-Build aufgezeichneten vollständigen Git-Commit. Abhängigkeitsquellen und Prüfgrenzen stehen im Inventar und in den Artefaktnachweisen.',
+  'editor.chrome.sourceUnknown': 'Für diesen lokalen oder nicht versionierten Build ist kein exakter Quellcode-Stand aufgezeichnet. Der Upstream-Link ist kein Quellcode-Angebot für diese Installation.',
+  'editor.chrome.dependencyInventory': 'Abhängigkeitsinventar',
+  'editor.chrome.licenseEvidence': 'Lizenzquellen und Prüfgrenzen',
+  'editor.chrome.imageEvidence': 'Geprüfte Container-Artefakte und Quellen',
+  'editor.chrome.noticeGaps': 'Noch zu prüfende Pakethinweise',
+  'editor.chrome.softwareSummary': 'Wanderlust Studio — Copyright 2026 Simon und Mitwirkende. Die Software darf gemäß AGPL-3.0-only weitergegeben und verändert werden, ohne Gewährleistung im gesetzlich zulässigen Umfang. Geschichten, Fotos und Marken sind davon ausgenommen.',
+  'editor.chrome.sourceCaveat': 'Der Upstream-Link bezeichnet das Originalprojekt, nicht automatisch den Quellcode einer veränderten Installation. Betreiber veränderter Netzwerkversionen müssen deren zugehörigen Quellcode kostenlos anbieten.',
+  'map.landcoverAttribution': mapLandcoverAttribution,
+  'map.landcoverLicense': mapLandcoverLicense,
   'editor.chrome.studioDescriptor': 'Simons Reisetagebuch',
   'editor.chrome.postsAll': 'Alle Beiträge',
   'editor.chrome.postsDrafts': 'Entwürfe',
@@ -434,6 +454,23 @@ const en: Record<UIKey, string> = {
   'editor.chrome.excerptSettingsLink': 'Open AI settings',
   'editor.chrome.excerptAskAdmin': 'Ask an administrator to check the Story Review settings.',
   'editor.chrome.studioName': 'Wanderlust Studio',
+  'editor.chrome.softwareNotices': 'Software license and source',
+  'editor.chrome.thirdPartyNotices': 'Third-party notices',
+  'editor.chrome.licenseText': 'GNU AGPL version 3 — full license text',
+  'editor.chrome.rightsNotice': 'Copyright, content and brand rights',
+  'editor.chrome.upstreamSource': 'Upstream source on GitHub',
+  'editor.chrome.releaseSourceArchive': 'Download this software version’s source',
+  'editor.chrome.releaseSourceTree': 'Browse this software version’s source',
+  'editor.chrome.sourceRecorded': 'Version links identify the full Git commit recorded at image build time. Dependency source directions and review limitations are in the inventory and artifact evidence.',
+  'editor.chrome.sourceUnknown': 'No exact source revision is recorded for this local or unversioned build. The upstream link is not a source offer for this installation.',
+  'editor.chrome.dependencyInventory': 'Dependency inventory',
+  'editor.chrome.licenseEvidence': 'License sources and review limitations',
+  'editor.chrome.imageEvidence': 'Inspected container artifacts and sources',
+  'editor.chrome.noticeGaps': 'Package notices requiring review',
+  'editor.chrome.softwareSummary': 'Wanderlust Studio — Copyright 2026 Simon and contributors. You may redistribute and modify the software under AGPL-3.0-only, without warranty to the extent permitted by law. Stories, photos and brands are excluded from this grant.',
+  'editor.chrome.sourceCaveat': 'The upstream link identifies the original project, not necessarily the source of a modified installation. Operators of modified network versions must offer their version’s Corresponding Source at no charge.',
+  'map.landcoverAttribution': mapLandcoverAttribution,
+  'map.landcoverLicense': mapLandcoverLicense,
   'editor.chrome.studioDescriptor': 'Simon’s travel journal',
   'editor.chrome.postsAll': 'All posts',
   'editor.chrome.postsDrafts': 'Drafts',

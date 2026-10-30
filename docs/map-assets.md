@@ -10,8 +10,10 @@ The map renders a **Protomaps planet PMTiles file** (`basemap.pmtiles`) and glyp
 > `mapfetch` stage that downloads a whole-world **z0–8** slice (~524 MB) plus the
 > Noto Sans glyph fonts at build time and copies them to `/map-assets`, so the
 > released image is **self-contained** — `docker compose pull && docker compose up -d`
-> serves the map with **zero provisioning**. The source planet build and zoom are
-> pinned via Dockerfile ARGs (`PROTOMAPS_BUILD`, `MAP_MAXZOOM`, `PMTILES_VERSION`).
+> serves the map with **zero provisioning**. `PROTOMAPS_BUILD=auto` selects a
+> recent available planet and records `/map/BASEMAP_BUILD`; `MAP_MAXZOOM` and
+> `PMTILES_VERSION` control extraction. `GLYPHS_REVISION` pins the font archive
+> and is recorded at `/map/GLYPHS_REVISION`; `/map/fonts/OFL.txt` carries its license.
 > If the assets are ever absent, the map degrades to a text/link fallback (the
 > Astro build never depends on them).
 
@@ -54,10 +56,34 @@ z9 ≈ 2 GB).
    for f in "Noto Sans Regular" "Noto Sans Medium" "Noto Sans Italic"; do
      cp -R "/tmp/pm-assets/fonts/$f" "<MAP_ASSETS_DIR>/fonts/"
    done
+   cp /tmp/pm-assets/fonts/OFL.txt "<MAP_ASSETS_DIR>/fonts/OFL.txt"
+   git -C /tmp/pm-assets rev-parse HEAD > "<MAP_ASSETS_DIR>/GLYPHS_REVISION"
    ```
 
    The result is `<MAP_ASSETS_DIR>/basemap.pmtiles` + `<MAP_ASSETS_DIR>/fonts/<stack>/<range>.pbf`,
    served at `/map/basemap.pmtiles` and `/map/fonts/<stack>/<range>.pbf`.
+
+### Attribution and distribution
+
+Keep the linked OpenStreetMap credit in public full/mini maps and the admin
+context map. Custom basemaps must carry their own applicable source attribution.
+Retain the full font notice with copied glyphs; a font directory alone is not
+the readable OFL notice. Preserve the chosen planet build, source revision and
+any transformation/provenance details when redistributing a slice.
+
+The public light theme displays landcover and now carries the required **2020**
+ESA WorldCover credit and CC-BY-4.0 link. The source year is backed by inspected
+0.17.1 amd64/arm64 artifacts (`BASEMAP_BUILD=20261026`, Protomaps 4.15.2),
+the matching Protomaps profile's Daylight input, and Daylight's primary source
+documentation. It is not derived from the app release date. Daylight remaps,
+denoises, smooths and vectorizes ESA data; Protomaps tiles it and this image
+extracts a low-zoom slice. Recheck that lineage when changing basemap inputs.
+See [image evidence](third-party-image-evidence.json), the
+[approved rights decision](superpowers/specs/2026-10-27-software-content-brand-rights-design.md)
+and [third-party evidence](third-party-evidence.json). The inspected historical
+images lack a readable glyph OFL notice; new packaging does not retroactively
+correct their bytes or certify old-image compliance.
+
 
 ## Deployment Setup
 
