@@ -318,6 +318,53 @@ maybe.each(['split', 'loopback'] as const)('production boot (src/main.ts, Postgr
     }
   });
 
+  it('keeps author projection and paginated moderation aligned beyond 500 older comments', async () => {
+    const olderKey = `${tk}-older`;
+    const login = await fetch(`${base}/login`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    expect(login.status).toBe(200);
+    const cookie = (login.headers.get('set-cookie') ?? '').split(';')[0]!;
+    try {
+      await pool.query(
+        `INSERT INTO comments (translation_key, locale, name, body, status, created_at)
+         SELECT $1, 'de', 'Older reader', 'Older comment', 'approved', '2020-01-01'::timestamptz
+         FROM generate_series(1, 505)`, [olderKey],
+      );
+      const publicRows = commentsOf(await (await fetch(`${base}/comments?tk=${tk}`)).json());
+      const parent = publicRows.find((row) => row.isAuthor === false)!;
+      const reply = await fetch(`${base}/moderation/comments/${String(parent.id)}/reply`, {
+        method: 'POST', headers: { 'content-type': 'application/json', cookie },
+        body: JSON.stringify({ body: 'Integrated author reply beyond the old cap.' }),
+      });
+      expect(reply.status).toBe(201);
+      const replyId = (await reply.json() as { id: string }).id;
+      const visible = commentsOf(await (await fetch(`${base}/comments?tk=${tk}`)).json());
+      const author = visible.find((row) => row.id === replyId)!;
+      expect(author.isAuthor).toBe(true);
+      expect(Object.keys(author).sort()).toEqual(['authorName', 'body', 'createdAt', 'id', 'isAuthor', 'postedLocale']);
+      const ids: unknown[] = [];
+      for (let offset = 0; ; offset += 50) {
+        const response = await fetch(`${base}/moderation/comments?status=approved&offset=${offset}`, { headers: { cookie } });
+        expect(response.status).toBe(200);
+        expect(response.headers.get('cache-control')).toBe('no-store');
+        const page = await response.json() as { comments: { id: string }[]; hasMore: boolean };
+        expect(page.comments.length).toBeLessThanOrEqual(50);
+        ids.push(...page.comments.map((row) => row.id));
+        if (!page.hasMore) break;
+        expect(offset).toBeLessThan(1000);
+      }
+      expect(ids.indexOf(replyId)).toBeGreaterThanOrEqual(505);
+      expect(new Set(ids).size).toBe(ids.length);
+      const removed = await fetch(`${base}/moderation/comments/${replyId}`, { method: 'DELETE', headers: { cookie } });
+      expect(removed.status).toBe(200);
+      expect(commentsOf(await (await fetch(`${base}/comments?tk=${tk}`)).json()).some((row) => row.id === replyId)).toBe(false);
+    } finally {
+      await pool.query('DELETE FROM comments WHERE translation_key = $1', [olderKey]);
+    }
+  });
+
   it('migrated a legacy settings file and the shared key to the provider registry before listening', async () => {
     expect(bootLog).toContain('settings: migrated AI settings to the provider registry (2 providers)');
     expect(bootLog).not.toContain('boot-legacy-fixture');
