@@ -50,10 +50,15 @@ mental model carry over unchanged.
 - A save never rebuilds the site unless it was stored; a conflict rebuilds nothing.
 - The snapshot and both locale writes commit together or not at all (pg: one transaction).
 - At most `REVISION_CAP` revisions per key; the first save of a key produces no revision.
-- `updatedAt` is monotonic per key: any accepted save strictly advances it (pg: `now()` inside
-  the transaction is later than the `updated_at` the stale check read).
-- Residual, accepted as for posts: the read → compare → write is not serialized, so two saves
-  racing inside one millisecond can both pass the check; the loser's state is in its revision.
+- `updatedAt` is monotonic per key at the API's millisecond precision: an accepted save
+  takes the greater of the current clock and the previous token plus one millisecond.
+  A waiting transaction or a backwards clock cannot reuse an accepted token.
+- The read, stale check, predecessor snapshot, and both locale writes are serialized per
+  page key. Postgres takes a transaction advisory lock even for an absent key, then row
+  locks for existing locales; the response is read inside that transaction. Of two saves
+  echoing the same existing version, only one succeeds, and the conflict adds no revision.
+  Token-less scripted saves still overwrite deliberately, but snapshot their actual
+  immediate predecessor. Revision time is the snapshot's clock time, not transaction start.
 
 ## Misuse cases
 

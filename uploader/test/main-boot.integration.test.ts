@@ -82,7 +82,7 @@ maybe('production boot (src/main.ts, Postgres)', () => {
     }));
     const port = await freePort();
     base = `http://localhost:${port}`;
-    const { ENCRYPTION_KEY: _unused, ...env } = process.env;
+    const { ENCRYPTION_KEY: _unused, TRUSTED_PROXY: _proxyUnused, ...env } = process.env;
     child = spawn(process.execPath, ['--import', 'tsx', 'src/main.ts'], {
       cwd: new URL('..', import.meta.url),
       env: {
@@ -124,6 +124,40 @@ maybe('production boot (src/main.ts, Postgres)', () => {
     await pool?.query("DELETE FROM app_secrets WHERE key IN ('ai_api_key', 'ai_provider_key:openrouter')");
     await pool?.end();
     if (dir) await rm(dir, { recursive: true, force: true });
+  });
+
+  it('refuses an unknown trust policy before acquiring storage ownership', async () => {
+    const refused = spawn(process.execPath, ['--import', 'tsx', 'src/main.ts'], {
+      cwd: new URL('..', import.meta.url),
+      env: { ...process.env, DATABASE_URL: url!, TRUSTED_PROXY: 'bogus' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stderr = '';
+    refused.stderr!.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+    try {
+      const [code, signal] = await once(refused, 'close', { signal: AbortSignal.timeout(10_000) });
+      expect(signal).toBeNull();
+      expect(code).not.toBe(0);
+      expect(stderr.trim()).toBe('TRUSTED_PROXY must be loopback or docker-gateway when set.');
+    } finally {
+      if (refused.exitCode === null && refused.signalCode === null) {
+        const exited = once(refused, 'close');
+        refused.kill('SIGKILL');
+        await exited;
+      }
+    }
+  });
+
+  it('preserves HTTPS from a real TCP loopback proxy when TRUSTED_PROXY is unset', async () => {
+    const endpoint = new URL('/login', base);
+    endpoint.hostname = '127.0.0.1';
+    const login = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-forwarded-proto': 'https' },
+      body: JSON.stringify({ username, password }),
+    });
+    expect(login.status).toBe(200);
+    expect(login.headers.get('set-cookie')).toMatch(/;\s*Secure(?:;|$)/i);
   });
 
   it('a reader comment lands in the admin moderation queue, and approving it makes it public', async () => {

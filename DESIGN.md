@@ -914,6 +914,9 @@ and the `<dialog>`s appended to `<body>` share one set:
   Rebuild. `.btn-new` is the accent command link (New post, New trip). Form actions sit in
   one `.form-actions` row, primary first; dense rows (bulk bars, folder actions,
   revisions, comment moderation) use the small height.
+- **Confirmations** require fresh consent for each opening. Escape, Cancel, and a
+  result-less `close()` never reuse an earlier acceptance; a typed confirmation also
+  requires the current prompt's exact token.
 - **Sections** inside the white workspace are flat: stacked `.card`s divide by a hairline
   (`--line`), never as cards inside the workspace card. Simple form pages (Users, Import)
   keep fields at a `34rem` measure.
