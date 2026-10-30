@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Settings · Simon's Wanderlust</title>
+    <title>Settings</title>
     <link rel="stylesheet" href="/admin/admin.css" />
   </head>
   <body class="settings-page">
@@ -17,6 +17,7 @@
         <button type="button" role="tab" id="tabbtn-ai-models" aria-controls="panel-ai-models" aria-selected="true" data-tab="ai-models">AI models</button>
         <button type="button" role="tab" id="tabbtn-images" aria-controls="panel-images" aria-selected="false" tabindex="-1" data-tab="images">Images</button>
         <button type="button" role="tab" id="tabbtn-comments" aria-controls="panel-comments" aria-selected="false" tabindex="-1" data-tab="comments">Comments</button>
+        <button type="button" role="tab" id="tabbtn-identity" aria-controls="panel-identity" aria-selected="false" tabindex="-1" data-tab="identity"></button>
         <button type="button" role="tab" id="tabbtn-site" aria-controls="panel-site" aria-selected="false" tabindex="-1" data-tab="site">Site &amp; backups</button>
       </div>
       <div class="settings-sections">
@@ -273,6 +274,43 @@
       </section>
       </section>
 
+      <section class="settings-panel" id="panel-identity" role="tabpanel" aria-labelledby="tabbtn-identity" hidden>
+        <section class="card">
+          <h2 id="identityHeading" class="card-heading"></h2>
+          <p id="identityIntro" class="muted"></p>
+          <p id="identityTiming" class="muted"></p>
+          <form id="identityForm" aria-describedby="identityTiming identityOptional">
+            <fieldset id="identityFields" disabled>
+              <p id="identityOptional" class="muted"></p>
+              <div class="settings-field-pair">
+                <div>
+                  <label id="identitySiteNameLabel" for="identitySiteName"></label>
+                  <input id="identitySiteName" type="text" data-identity-max-length="80" />
+                </div>
+                <div>
+                  <label id="identityAuthorNameLabel" for="identityAuthorName"></label>
+                  <input id="identityAuthorName" type="text" data-identity-max-length="80" />
+                </div>
+              </div>
+              <div id="identityLocalized"></div>
+              <h3 id="identitySocialHeading" class="section-label"></h3>
+              <p id="identitySocialHelp" class="muted"></p>
+              <p id="identitySocialEmpty" class="muted"></p>
+              <ol id="identitySocialLinks" class="identity-social-links"></ol>
+              <button id="identityAddLink" type="button" class="btn-secondary"></button>
+              <div class="form-actions">
+                <button id="identitySave" type="submit"></button>
+              </div>
+            </fieldset>
+          </form>
+          <div class="form-actions">
+            <button id="identityReload" type="button" class="btn-secondary"></button>
+            <button id="identityRebuild" type="button" class="btn-primary"></button>
+          </div>
+          <p id="identityStatus" class="page-status" role="status" tabindex="-1"></p>
+        </section>
+      </section>
+
       <section class="settings-panel" id="panel-site" role="tabpanel" aria-labelledby="tabbtn-site" hidden>
       <section class="card" id="siteSettings" aria-labelledby="siteSettingsHeading">
         <h2 class="card-heading" id="siteSettingsHeading"></h2>
@@ -349,6 +387,7 @@
     <script src="/admin/admin-confirm.js"></script>
     <script src="/admin/llm.js"></script>
     <script src="/admin/tabs.js"></script>
+    <script src="/admin/settings-identity.js"></script>
     <script>
       const $ = (id) => document.getElementById(id);
       const copy = EditorCopy.en;
@@ -365,13 +404,14 @@
         captionMaxTokensLabel: 'captionMaxTokensLabel', captionMaxTokensHelp: 'captionMaxTokensHelp',
       })) $(id).textContent = copy[key];
       $('settingsTabs').setAttribute('aria-label', copy.settingsNav);
+      $('tabbtn-identity').textContent = copy.identityTab;
 
       // ---- tabs: the active one is mirrored in the URL hash ------------------
-      const TABS = { 'ai-models': 'AI models', images: 'Images', comments: 'Comments', site: 'Site & backups' };
+      const TABS = { 'ai-models': 'AI models', images: 'Images', comments: 'Comments', identity: copy.identityTab, site: 'Site & backups' };
 
       function showTabTitle(name) {
         $('settingsTabTitle').textContent = ' · ' + TABS[name];
-        document.title = 'Settings · ' + TABS[name] + ' · Simon’s Wanderlust';
+        Auth.setPageTitle('Settings · ' + TABS[name]);
       }
 
       const settingsTabs = Tabs.wire($('settingsTabs'), {
@@ -1452,6 +1492,7 @@
         const s = await Auth.ensureAuthed({ admin: true });
         if (!s) return;
         Auth.renderHeader(s);
+        SettingsIdentity.init();
         await loadBackups();
         await init();
       })();

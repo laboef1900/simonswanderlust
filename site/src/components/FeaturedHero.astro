@@ -3,6 +3,7 @@ import RemoteImage from './RemoteImage.astro';
 import { useTranslations } from '../i18n/ui';
 import { coordsLabel, dateLabel, entryLabel } from '../lib/format';
 import { heroAltOf, localeOf, pathOf, type Trip } from '../lib/trips';
+import { identityTagline } from '../lib/build-identity';
 
 interface Props {
   trip: Trip;
@@ -81,7 +82,7 @@ const HERO_SIZES = '(max-width: 639px) 100vw, max(100vw, min(120vh, 1080px), 720
           Visually hidden, not removed: it is the page's only <h1> (see the
           @ai-note above). The wordmark in the header already names the site.
         */}
-        <h1 class="sr-only">{t('site.tagline')}</h1>
+        <h1 class="sr-only">{identityTagline(locale)}</h1>
         {/*
           One link, not two. The whole entry is the target — a 44px text link
           under a headline the visitor already read is a second chance to miss —
