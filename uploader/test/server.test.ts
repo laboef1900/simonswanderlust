@@ -1,3 +1,4 @@
+import { TEST_TRUST, GATEWAY_TRUST } from './trusted-proxy-fixture.js';
 import { publishBody, publishTokens } from './publish-tokens.js';
 import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { mkdtemp, mkdir, readdir, writeFile } from 'node:fs/promises';
@@ -105,6 +106,7 @@ function build(extra: Partial<ServerConfig> = {}): Built {
   const importJobs = (extra.importJobs as ImportRunner) ?? createImportRunner({ store: memoryImportJobStore(), log: () => {} });
   const pages = (extra.pages as PageStore) ?? memoryPageStore();
   const built = buildServer({
+    trustProxy: TEST_TRUST,
     storageDir: dir, baseUrl: 'https://img.simonswanderlust.com',
     users, sessions, settings: fakeStore(), secrets: memorySecretsStore(),
     posts, media, encodeQueue, importJobs, pages,
@@ -298,7 +300,9 @@ describe('POST /upload', () => {
     expect(existsSync(join(dir, `${key}-orig.jpg`))).toBe(true);
     const img = { host: 'img.simonswanderlust.com' };
     // The lossy variant is public...
-    expect((await b.app.inject({ method: 'GET', url: `/${key}-640.webp`, headers: img })).statusCode).toBe(200);
+    const variant = await b.app.inject({ method: 'GET', url: `/${key}-640.webp`, headers: img });
+    expect(variant.statusCode).toBe(200);
+    expect(variant.headers['access-control-allow-origin']).toBe('*');
     // ...but the full-resolution original is not downloadable.
     expect((await b.app.inject({ method: 'GET', url: `/${key}-orig.jpg`, headers: img })).statusCode).toBe(404);
     // ...and neither is a crash-leftover temp of it (#118: storage.ts writes
@@ -307,6 +311,18 @@ describe('POST /upload', () => {
     await writeFile(join(dir, `${key}-1280.webp.part-0a1b2c3d`), 'half a variant');
     expect((await b.app.inject({ method: 'GET', url: `/${key}-orig.jpg.part-0a1b2c3d`, headers: img })).statusCode).toBe(404);
     expect((await b.app.inject({ method: 'GET', url: `/${key}-1280.webp.part-0a1b2c3d`, headers: img })).statusCode).toBe(404);
+    for (const suffix of ['-orig.jpg', '-orig.jpg.part-0a1b2c3d', '-1280.webp.part-0a1b2c3d']) {
+      const privateBytes = readFileSync(join(dir, `${key}${suffix}`));
+      for (const prefix of ['//', '/./', '/x/../', '/x/%2e%2e/']) {
+        const url = `${prefix}${key}${suffix}`;
+        const denied = await b.app.inject({ method: 'GET', url, headers: img });
+        // Static 10 rejects ambiguous path syntax with 403 before allowedPath;
+        // canonical private files still 404 above. Either refusal protects the
+        // boundary, but a redirect, success or server error must never pass.
+        expect([403, 404], url).toContain(denied.statusCode);
+        expect(denied.rawPayload.includes(privateBytes), url).toBe(false);
+      }
+    }
   });
 
   it('returns immediately with status "processing" and enqueues the encode', async () => {
@@ -753,7 +769,7 @@ describe('media library', () => {
 describe('buildServer config', () => {
   it('boots with a relative storageDir (resolves it to absolute)', async () => {
     const rel = relative(process.cwd(), dir);
-    const srv = buildServer({ storageDir: rel, baseUrl: 'https://img.simonswanderlust.com', users: memoryUserStore(), sessions: memorySessionStore(), settings: fakeStore(), secrets: memorySecretsStore(), posts: memoryPostStore(), pages: memoryPageStore(), media: memoryMediaStore({ baseUrl: 'https://img.simonswanderlust.com' }), encodeQueue: stubQueue().queue, imgHost: 'img.simonswanderlust.com', siteDir: join(dir, 'site'), builder: stubBuilder().builder, backupDir: dir + '/backup', dbBackup: stubBackup().backup, dbCheck: async () => {} });
+    const srv = buildServer({ trustProxy: TEST_TRUST, storageDir: rel, baseUrl: 'https://img.simonswanderlust.com', users: memoryUserStore(), sessions: memorySessionStore(), settings: fakeStore(), secrets: memorySecretsStore(), posts: memoryPostStore(), pages: memoryPageStore(), media: memoryMediaStore({ baseUrl: 'https://img.simonswanderlust.com' }), encodeQueue: stubQueue().queue, imgHost: 'img.simonswanderlust.com', siteDir: join(dir, 'site'), builder: stubBuilder().builder, backupDir: dir + '/backup', dbBackup: stubBackup().backup, dbCheck: async () => {} });
     await expect(srv.ready()).resolves.toBeDefined();
     await srv.close();
   });
@@ -1508,7 +1524,7 @@ describe('auth endpoints', () => {
   });
 
   // Login attempts with a proxy-appended client address, so one test can play
-  // several sources (trustProxy: 1 keys on the RIGHTMOST X-Forwarded-For entry).
+  // several sources (an immediate trusted loopback peer preserves the RIGHTMOST entry).
   const loginFrom = (b: Built, ip: string, payload: Record<string, unknown>) => b.app.inject({
     method: 'POST', url: '/login',
     headers: { 'content-type': 'application/json', 'x-forwarded-for': ip },
@@ -1617,14 +1633,12 @@ describe('auth endpoints', () => {
   });
 
   it('per-IP limiter keys on the proxy-appended address, not a client-supplied X-Forwarded-For entry', async () => {
-    // trustProxy: 1 trusts only the socket hop (the reverse proxy), so req.ip is
-    // the RIGHTMOST X-Forwarded-For entry — the one the proxy appended. With
-    // `true` (#108) req.ip was the LEFTMOST, client-supplied entry, and rotating
-    // it opened a fresh bucket per request. This test fails on that regression.
-    const b = build({ loginLimiter: fixedWindowLimiter({ max: 1, windowMs: 60_000 }) });
+    // Even when the client supplies a leftmost entry, only the immediate
+    // allow-listed gateway is trusted; the rightmost client gets the bucket.
+    const b = build({ trustProxy: GATEWAY_TRUST, loginLimiter: fixedWindowLimiter({ max: 1, windowMs: 60_000 }) });
     await b.users.create({ username: 'simon', password: 'password123456', isAdmin: false });
     const login = (xff: string) => b.app.inject({
-      method: 'POST', url: '/login',
+      method: 'POST', url: '/login', remoteAddress: '172.18.0.1',
       headers: { 'content-type': 'application/json', 'x-forwarded-for': xff },
       payload: { username: 'simon', password: 'bad' },
     });
@@ -1633,6 +1647,51 @@ describe('auth endpoints', () => {
     expect((await login('10.0.0.2, 198.51.100.7')).statusCode).toBe(429);
     // A different proxy-appended client gets its own bucket.
     expect((await login('10.0.0.3, 203.0.113.9')).statusCode).toBe(401);
+  });
+
+  it('ignores rotating forwarded addresses from a co-tenant container', async () => {
+    const b = build({ trustProxy: GATEWAY_TRUST, loginLimiter: fixedWindowLimiter({ max: 1, windowMs: 60_000 }) });
+    const login = (xff: string) => b.app.inject({
+      method: 'POST', url: '/login', remoteAddress: '172.18.0.3',
+      headers: { 'x-forwarded-for': xff },
+      payload: { username: 'missing', password: 'wrongpassword' },
+    });
+    expect((await login('198.51.100.7')).statusCode).toBe(401);
+    expect((await login('203.0.113.9')).statusCode).toBe(429);
+  });
+
+  it('stops after one hop even when the rightmost forwarded address is itself trusted', async () => {
+    const b = build({ trustProxy: GATEWAY_TRUST, loginLimiter: fixedWindowLimiter({ max: 1, windowMs: 60_000 }) });
+    const first = await b.app.inject({
+      method: 'POST', url: '/login', remoteAddress: '172.18.0.1',
+      headers: { 'x-forwarded-for': '203.0.113.9, 172.18.0.1' },
+      payload: { username: 'missing', password: 'wrongpassword' },
+    });
+    expect(first.statusCode).toBe(401);
+    const direct = await b.app.inject({
+      method: 'POST', url: '/login', remoteAddress: '172.18.0.1',
+      payload: { username: 'missing', password: 'wrongpassword' },
+    });
+    expect(direct.statusCode).toBe(429);
+  });
+
+  it.each([
+    { peer: '172.18.0.1', proto: 'https', secure: true },
+    { peer: '172.18.0.1', proto: undefined, secure: false },
+    { peer: '172.18.0.3', proto: 'https', secure: false },
+  ])('sets Secure on setup and login only for a trusted HTTPS proxy ($peer, $proto)', async ({ peer, proto, secure }) => {
+    const b = build({ trustProxy: GATEWAY_TRUST });
+    const payload = { username: 'proxy-admin', password: 'password123456' };
+    for (const url of ['/setup', '/login']) {
+      const response = await b.app.inject({
+        method: 'POST', url, remoteAddress: peer,
+        headers: proto ? { 'x-forwarded-proto': proto } : {},
+        payload,
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['set-cookie']).toMatch(/sid=/);
+      expect(/;\s*Secure(?:;|$)/i.test(String(response.headers['set-cookie']))).toBe(secure);
+    }
   });
 
   it('locked account is refused before password verification (no scrypt for a locked account)', async () => {

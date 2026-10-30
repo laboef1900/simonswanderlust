@@ -1,3 +1,4 @@
+import { TEST_TRUST } from './trusted-proxy-fixture.js';
 import { describe, expect, it, beforeEach } from 'vitest';
 import { mkdtemp, mkdir, writeFile, symlink, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -77,6 +78,7 @@ function build(extra: Partial<ServerConfig> = {}) {
   const builder: SiteBuilder = { build: async () => ({ ok: true, release: 'r' }), hasRelease, quiesce: async () => {} };
   const backupDir = join(dir, 'backup');
   return buildServer({
+    trustProxy: TEST_TRUST,
     storageDir: join(dir, 'images'), baseUrl: `https://${IMG}`, imgHost: IMG,
     siteDir, mapDir: join(dir, 'map'),
     users: memoryUserStore(), sessions: memorySessionStore(), posts: memoryPostStore(),
