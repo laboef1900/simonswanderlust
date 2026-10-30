@@ -304,8 +304,10 @@ name the affected stories. Important details:
   validation (or a half-created pair with only one locale row) is listed by name in the status
   box with its reason; everything else goes through. Failed stories remain selected for retry;
   successfully processed stories are deselected.
-- **Bulk delete asks you to type `DELETE`.** There is no undo — revisions are per-save snapshots
-  of a post, so deleting the post takes them with it.
+- **Bulk delete asks you to type `DELETE`.** Type the exact token and press Enter, or click
+  **Delete**. Enter with a mismatched token keeps the confirmation open; Escape or Cancel
+  dismisses it without deleting. There is no undo — revisions are per-save snapshots of a
+  post, so deleting the post takes them with it.
 
 ### Export / backup
 
