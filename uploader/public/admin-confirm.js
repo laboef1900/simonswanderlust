@@ -75,6 +75,14 @@ window.AdminConfirm = (function () {
       typedInput.id = 'adminConfirmTyped';
       typedInput.type = 'text';
       typedInput.autocomplete = 'off';
+      typedInput.addEventListener('keydown', function (event) {
+        if (event.key !== 'Enter' || event.isComposing) return;
+        // The form's first submit button is Cancel; never use its implicit submit.
+        event.preventDefault();
+        if (typedInput.value !== typed) return;
+        dlg.returnValue = 'ok';
+        dlg.close();
+      });
       extra.appendChild(lab);
       extra.appendChild(typedInput);
     }
@@ -86,6 +94,9 @@ window.AdminConfirm = (function () {
         resolve(true);
       }
       dlg.addEventListener('close', onClose);
+      // Escape and close() without a result preserve returnValue in Firefox
+      // and Safari. Each ask must start cancelled, never reuse a prior consent.
+      dlg.returnValue = '';
       dlg.showModal();
       if (typedInput) typedInput.focus();
       else dlg.querySelector('#adminConfirmOk').focus();
