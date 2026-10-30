@@ -11,6 +11,7 @@ import { createMediaSync, createReconciler, isCompleteSet, walkStorageKeys } fro
 import { memoryMediaStore } from '../src/media-store.js';
 import { createWorkLock } from '../src/work-lock.js';
 import type * as DiskModule from '../src/disk.js';
+import { identityDumpRow } from './site-identity-fixture.js';
 import type * as FsModule from 'node:fs';
 import type * as FsPromisesModule from 'node:fs/promises';
 
@@ -55,7 +56,10 @@ vi.mock('node:fs', async (original) => {
 
 const db: Connectable = {
   query: async () => ({ rows: [] }),
-  connect: async () => ({ query: async () => ({ rows: [] }), release() {} }),
+  connect: async () => ({
+    query: async (sql: string) => ({ rows: sql.includes('FROM site_identity ORDER') ? [identityDumpRow()] : [] }),
+    release() {},
+  }),
 };
 let root: string;
 let storage: string;
