@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Post Editor · Simon's Wanderlust</title>
+    <title>Post Editor</title>
     <link rel="stylesheet" href="/admin/admin.css" />
     <link rel="stylesheet" href="/admin/editor-gpx.css" />
     <link rel="stylesheet" href="/admin/gpx-map.css" />
@@ -547,6 +547,7 @@
       const galleryEditors = {};
 
       // ---- slugify ----
+      const MAX_SLUG_BYTES = 251; // ASCII only; parity tested against posts.ts.
       function slugify(str) {
         return str
           .toLowerCase()
@@ -556,6 +557,8 @@
           .replace(/[^a-z0-9]+/g, '-')
           .replace(/^-+|-+$/g, '')
           .replace(/-{2,}/g, '-')
+          .slice(0, MAX_SLUG_BYTES)
+          .replace(/-+$/, '')
           || 'untitled';
       }
 
@@ -1378,10 +1381,11 @@
       // on401 routes a session-expiry through DraftGuard (stash draft + ?next=) instead
       // of a raw redirect, matching every other 401 handler in this editor.
       const suggestOn401 = () => guard.redirectToLogin();
-      AltSuggest.wire({ button: $('deHeroSuggest'), fileInput: $('deHeroFile'), altInput: $('deHeroAlt'), statusEl: $('deHeroStatus'), lang: 'de', on401: suggestOn401 });
-      AltSuggest.wire({ button: $('enHeroSuggest'), fileInput: $('enHeroFile'), altInput: $('enHeroAlt'), statusEl: $('enHeroStatus'), lang: 'en', on401: suggestOn401 });
-      AltSuggest.wire({ button: $('deBodyImgSuggest'), fileInput: $('deBodyImgFile'), altInput: $('deBodyImgAlt'), statusEl: $('deBodyImgStatus'), lang: 'de', on401: suggestOn401 });
-      AltSuggest.wire({ button: $('enBodyImgSuggest'), fileInput: $('enBodyImgFile'), altInput: $('enBodyImgAlt'), statusEl: $('enBodyImgStatus'), lang: 'en', on401: suggestOn401 });
+      const truncatedText = editorCopy.altSuggestTruncated;
+      AltSuggest.wire({ button: $('deHeroSuggest'), fileInput: $('deHeroFile'), altInput: $('deHeroAlt'), statusEl: $('deHeroStatus'), lang: 'de', on401: suggestOn401, truncatedText });
+      AltSuggest.wire({ button: $('enHeroSuggest'), fileInput: $('enHeroFile'), altInput: $('enHeroAlt'), statusEl: $('enHeroStatus'), lang: 'en', on401: suggestOn401, truncatedText });
+      AltSuggest.wire({ button: $('deBodyImgSuggest'), fileInput: $('deBodyImgFile'), altInput: $('deBodyImgAlt'), statusEl: $('deBodyImgStatus'), lang: 'de', on401: suggestOn401, truncatedText });
+      AltSuggest.wire({ button: $('enBodyImgSuggest'), fileInput: $('enBodyImgFile'), altInput: $('enBodyImgAlt'), statusEl: $('enBodyImgStatus'), lang: 'en', on401: suggestOn401, truncatedText });
 
       // ---- assemble PostPair payload ----
       // Deliberately no `status` or `scheduledAt`: the store decides status
@@ -1900,6 +1904,11 @@
           const body = await res.json().catch(() => ({}));
           if (!res.ok) { showErr('Unpublish failed: ' + (body.error || res.status)); setStatus(''); return; }
           isPublished = false;
+          // Unpublish is an emergency brake even from a stale tab. Advancing
+          // its save token is safe only if no unseen edit preceded the brake.
+          if (body.previousUpdatedAt === loadedUpdatedAt && body.updatedAt) {
+            loadedUpdatedAt = body.updatedAt;
+          }
           $('slugFieldDe').disabled = false;
           $('slugFieldEn').disabled = false;
           setStatus('Unpublished "' + title + '".');
