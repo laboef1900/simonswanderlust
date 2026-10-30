@@ -4,7 +4,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { SESSION_COOKIE } from './authn.js';
 import { normalizeProcessOptions, processImage, type ProcessOptions } from './pipeline.js';
 import { contentHashKey, storeVariants, type StorageOptions, type StoredImage } from './storage.js';
-import { BACKUP_FILE_RE, BackupError, dumpDatabase, readDump, resolveBackupDir, restoreDatabase, type Dump } from './backup.js';
+import { BACKUP_FILE_RE, BackupError, dumpDatabase, readDump, resolveBackupDir, restoreDatabase, validateIdentityAssets, IDENTITY_DUMP_VERSION, type Dump } from './backup.js';
 import { passwordPolicyViolation, type UserStore } from './users.js';
 import type { SessionStore } from './sessions.js';
 import { createSettingsStore, defaultSettings } from './settings.js';
@@ -52,7 +52,7 @@ function describeDatabase(databaseUrl: string): string {
   }
 }
 
-const RESTORE_TABLES = ['users', 'posts', 'pages', 'media', 'media_folders', 'comments', 'post_routes'] as const;
+const RESTORE_TABLES = ['users', 'posts', 'pages', 'media', 'media_folders', 'comments', 'post_routes', 'site_identity', 'site_identity_assets'] as const;
 type RowCounts = Record<(typeof RESTORE_TABLES)[number], number>;
 
 /** `users 3, posts 12, …` — the same shape for the dump and for the live rows,
@@ -96,6 +96,7 @@ async function restoreMain(args: string[]): Promise<void> {
   let dump: Dump;
   try {
     dump = readDump(file);
+    await validateIdentityAssets(dump);
     await verifyRouteArchive(file, dump.routeArchive, dump.tables.post_routes ?? []);
   } catch (e) {
     const reason = e instanceof BackupError ? e.message : `cannot read dump (${e instanceof Error ? e.message : String(e)})`;
@@ -108,6 +109,8 @@ async function restoreMain(args: string[]): Promise<void> {
     media_folders: dump.tables.media_folders?.length ?? 0,
     comments: dump.tables.comments?.length ?? 0,
     post_routes: dump.tables.post_routes?.length ?? 0,
+    site_identity: dump.version < IDENTITY_DUMP_VERSION ? 1 : dump.tables.site_identity!.length,
+    site_identity_assets: dump.tables.site_identity_assets?.length ?? 0,
   };
   const { createPool } = await import('./db.js');
   let owner: StorageOwner | undefined;
@@ -135,6 +138,9 @@ async function restoreMain(args: string[]): Promise<void> {
       ? 'app_secrets preserved: absent from dump.'
       : `app_secrets: replace ${Number((await pool.query('SELECT count(*) AS n FROM app_secrets')).rows[0].n)} live rows with ${dump.tables.app_secrets.length} encrypted rows from dump.`);
     console.log('Encrypted credentials require their original master key; reconcile settings.json before using remote AI.');
+    console.log(dump.version < IDENTITY_DUMP_VERSION
+      ? 'identity: will restore the legacy brand (dump predates identity), keep the live canonical origin if set, and remove identity assets.'
+      : 'identity: will replace the complete stored identity and assets, including retained locale values.');
     const recovery = routeRecoverySummary(dump.routeArchive);
     console.log(`Private routes: ${dumpCounts.post_routes}; originals: ${recovery.status} ` +
       `(present ${recovery.present}, missing ${recovery.missing}, corrupt ${recovery.corrupt}, unreadable ${recovery.unreadable}, oversized ${recovery.oversized}).`);
@@ -157,6 +163,7 @@ async function restoreMain(args: string[]): Promise<void> {
     try {
       preDump = resolve(backupDir, await dumpDatabase(pool, backupDir, new Date(), { routeFiles, isWritable: owner.isWritable }));
       const undo = readDump(preDump);
+      await validateIdentityAssets(undo);
       await verifyRouteArchive(preDump, undo.routeArchive, undo.tables.post_routes ?? []);
     } catch (e) {
       console.error(`pre-restore dump into ${backupDir} failed (${e instanceof Error ? e.message : String(e)}); restore aborted, nothing was changed.`);
@@ -167,6 +174,9 @@ async function restoreMain(args: string[]): Promise<void> {
     const counts = await restoreDatabase(pool, file, { routeFiles, assertOwner });
     console.log(`restored ${counts.users} users, ${counts.posts} posts, ${counts.pages} pages, ${counts.media} media rows, ${counts.comments} comments, and ${counts.routes} private routes (all sessions invalidated).`);
     console.log(counts.appSecrets === null ? 'app_secrets preserved.' : `restored ${counts.appSecrets} encrypted app_secrets rows.`);
+    console.log(dump.version < IDENTITY_DUMP_VERSION
+      ? 'identity: restored legacy brand (dump predates identity). Review Settings → Site identity'
+      : 'identity: restored stored identity and assets. Public output updates at the next rebuild.');
     console.log(`to undo: restore --yes ${preDump}`);
     console.log('Restart the app with the same data/settings configuration, then rebuild through /admin/settings.html → \"Rebuild site now\".');
   } catch (e) {
