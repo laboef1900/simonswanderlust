@@ -206,12 +206,18 @@ describe('memoryPostStore', () => {
     expect((await s.get(created.translationKey))?.shared.stops).toBeUndefined();
   });
 
-  it('unpublish flips a published pair back to draft', async () => {
+  it('unpublish returns its new token for the next save without acknowledging later writes', async () => {
     const s = memoryPostStore();
     const c = await s.upsertDraft(pair());
-    await s.publish(c.translationKey, await publishTokens(s, c.translationKey));
-    await s.unpublish(c.translationKey);
-    expect((await s.get(c.translationKey))?.status).toBe('draft');
+    const published = await s.publish(c.translationKey, await publishTokens(s, c.translationKey));
+    const unpublished = await s.unpublish(c.translationKey);
+    expect(unpublished.previousUpdatedAt).toEqual(published.updatedAt);
+    expect(unpublished.updatedAt.getTime()).toBeGreaterThan(published.updatedAt.getTime());
+    expect(await s.get(c.translationKey)).toMatchObject({ status: 'draft', updatedAt: unpublished.updatedAt });
+    const saved = await s.upsertDraft({ ...c, de: { ...c.de, title: 'After unpublish' } }, unpublished.updatedAt);
+    expect(saved.de.title).toBe('After unpublish');
+    expect(saved.updatedAt.getTime()).toBeGreaterThan(unpublished.updatedAt.getTime());
+    await expect(s.upsertDraft(c, unpublished.updatedAt)).rejects.toMatchObject({ code: 'conflict' });
   });
 
   it('unpublish unlocks the slugs again (publish → unpublish → rename allowed)', async () => {

@@ -683,12 +683,22 @@ On the server: pull the GHCR image directly (no `dhi.io` login needed there — 
 `IMAGE_TAG` in `.env`, then `docker compose pull && docker compose up -d`. Cutting a release = bump
 the `IMAGE_TAG` defaults (`docker-compose.yml`, `uploader/.env.example`), commit, tag, push the tag.
 
+**Native codec updates (#347):** record the current image digest before an owner-controlled
+upgrade, then release and deploy a newly built image; changing `package-lock.json` or running
+Rebuild site does not replace loaded codecs. The verified sharp 0.35.5 candidate uses libheif
+1.23.5, librsvg 2.63.2 and libvips 8.18.7 in both trees on both supported Linux architectures.
+The previous digest is diagnostic/recovery evidence, **not** authorization to restore vulnerable
+codecs: #347 recovery is roll-forward only. No schema/data migration or re-encoding is required;
+the existing originals, variants and static releases remain intact. Release/deployment is a
+separate owner action, not part of the dependency PR.
+
 ## Configuration (environment)
 
 | Var | Used by | Purpose |
 | :-- | :-- | :-- |
 | `DATABASE_URL` | app | Postgres connection (content + auth) |
 | `ENCRYPTION_KEY` | app | Optional 64-hex master key for encrypted AI credentials; unset permits local workflows, malformed values refuse boot; escrow separately |
+| `TRUSTED_PROXY` | app / compose literal | Unset or `loopback`: loopback peers only. Compose sets `docker-gateway`: also trust the single discovered IPv4 default gateway, at hop zero only. Empty/unknown values or failed gateway discovery refuse boot. Not an `.env` setting; changing bridge/proxy topology requires a new trust spec. |
 | `PUBLIC_BASE_URL` | app | Public base for image URLs (e.g. `https://img.simonswanderlust.com`) |
 | `IMG_HOST` | app | Hostname routed to the image-variant static handler (defaults to the host of `PUBLIC_BASE_URL`) |
 | `SITE_APP_DIR` | app | Path to the Astro project the builder spawns (`/app/site`) |
@@ -708,6 +718,13 @@ the `IMAGE_TAG` defaults (`docker-compose.yml`, `uploader/.env.example`), commit
 - **Public, authenticated:** the admin app (`/admin/`) and its API — session-cookie gated, with
   admin-only operations (publishing, user management, rebuild, backups).
 - **Internal only:** Postgres is not exposed to the internet (no published port).
+- **Immediate proxy peer:** the shipped bridge topology permits one host TLS proxy. The app
+  validates the socket address before accepting forwarded IP/protocol and stops at hop zero;
+  it never trusts the whole bridge network. The host must preserve `Host`, overwrite the
+  forwarded scheme, and put its accepted client at the rightmost XFF position. See
+  [Transport, headers & proxy](SECURITY.md#transport-headers--proxy) for the accepted
+  host-process residual, measured Docker Desktop TCP evidence and the remaining target-VPS
+  loopback/real-client verification gate.
 
 Both public and admin traffic now terminate in the **same process**, which is a deliberate,
 accepted trade-off for the WordPress-style topology (see [Security posture — accepted

@@ -202,8 +202,8 @@ ASVS L1 exception record: `docs/superpowers/specs/2026-09-14-comments-design.md`
 - **Hold-for-moderation.** Every accepted comment is `pending`; nothing is public until an admin
   approves it on `/admin/comments.html` (`requireAdmin`, see below). Deletion is erasure.
 - **Rate limit:** 5 `POST`s per address per 15 minutes plus a process-wide 200 per hour, keyed on
-  `req.ip` under `trustProxy: 1` — never on the reader-chosen name, which would let anyone DoS a
-  name. See *Rate limiting* for why these maps are separate from the login limiter.
+  `req.ip` under the address-validated, immediate-peer policy below — never on the reader-chosen
+  name, which would let anyone DoS a name. See *Rate limiting* for the separate limiter maps.
 - **Nothing on the public comment path logs a comment field** — not the name, body, honeypot
   value or translation key (spec invariant 11). A store failure is caught in the route and logged
   as the driver message only, because the global error handler logs `req.url`, which on `GET`
@@ -294,9 +294,11 @@ A per-client-IP fixed-window limiter throttles the password-verifying endpoints 
 unauthenticated `/login` and `/setup`, plus the authenticated `POST /users/me/password` — to slow
 brute-force attempts: **10 requests per address per 15 minutes**. All three share the same per-IP
 bucket, so failed current-password guesses also count against login attempts from that IP. The
-per-IP key is `req.ip` derived under `trustProxy: 1`: the address the single trusted reverse
-proxy appended to `X-Forwarded-For`; client-supplied (leftmost) entries are ignored, so rotating
-the header does not open a fresh bucket.
+per-IP key is `req.ip`: only an allow-listed immediate socket peer may supply forwarding headers.
+For that peer, the rightmost `X-Forwarded-For` entry is the client; the walk stops after one hop,
+even if that entry is itself a trusted address. For any other peer, its socket address is the key.
+Rotating client-supplied leftmost entries or sending forged headers directly from another
+container does not open a fresh bucket.
 
 `/login` additionally keeps a **per-account failure budget across all sources** — the defence
 against a guess spread over many addresses, which the per-IP bucket cannot see — and checks it
@@ -352,6 +354,25 @@ multiple replicas, limits would be counted per replica.)
   8, and the app sets an explicit `requestTimeout` (120 s) — @fastify/multipart's parser never
   consumes the body itself, so without these an authenticated caller could stream an effectively
   unbounded request. (`uploader/src/server.ts`)
+
+### Native image decoders
+
+Image decoding uses sharp's prebuilt libvips in the app image. The #347 candidate DHI builds
+were exercised on Linux ARM64 (native) and AMD64 (emulated): both application trees loaded
+sharp **0.35.5**, libheif **1.23.5**, librsvg **2.63.2** and libvips **8.18.7**. Both DHI Node
+executables were measured as PIE (`ELF e_type = DYN`) on glibc 2.41; this is hardening evidence,
+not a substitute for patched decoders. See the [approved codec specification](docs/superpowers/specs/2026-10-27-issue-347-sharp-codec-upgrade.md)
+for advisory references and verification.
+
+Changing a lockfile or rebuilding the static blog does not patch a running container. Shipping
+this fix requires a new release image and an owner-controlled redeployment. Recovery is
+**roll forward only** while retaining the patched codec floors: restoring sharp 0.35.3/0.35.4
+would reopen vulnerable decoding, including boot/rescan of retained originals. Preserve data;
+do not re-import or bulk re-encode as a dependency rollback.
+
+The metadata allow-list below, private-original restrictions, SVG original naming, accepted
+formats, and upload/import/preview authorization are unchanged. Benign JPEG, AVIF and SVG
+runtime checks retained those contracts, including EXIF-free previews and zero GPS variants.
 
 ### Published image metadata (allow-list)
 
@@ -766,16 +787,38 @@ preview even though the live site would load it.
   intentionally omitted on the admin pages because they use inline scripts; a strict policy would
   need nonces. The one exception is `GET /posts/:tk/preview`, which renders author markup and has
   no scripts — see *Output sanitization*.)
-- The app sets `trustProxy: 1` (exactly one trusted hop), so it reads `X-Forwarded-*` as set by
-  that one reverse proxy for the client IP (rate limiting) and the cookie `Secure` flag. **It must
-  run behind a TLS-terminating reverse proxy that sets `X-Forwarded-Proto`**; the compose file
-  publishes port 3000 on `127.0.0.1` only, so the host proxy is the sole ingress. A second proxy
-  layer needs the hop count raised to `2` — never `true`, which trusts client-supplied entries.
-- **The proxy must forward the original, verbatim `Host` header for both domains**
-  (`simonswanderlust.com` and `img.simonswanderlust.com`) — nginx: `proxy_set_header Host $host;`.
-  Image-vs-blog/admin routing is a single Fastify process that dispatches on the `Host` header
-  (`IMG_HOST`); a proxy that rewrites `Host` (e.g. nginx's default `$proxy_host` behavior) breaks
-  every image URL by routing image requests into the blog/admin handler instead.
+- **Proxy trust validates the immediate peer's address and hop zero**, never `true`, a bare hop
+  count or a hop-only function. `TRUSTED_PROXY` unset or `loopback` trusts only `127.0.0.0/8`
+  and `::1` (including mapped IPv4). Compose sets the literal `TRUSTED_PROXY: docker-gateway`:
+  loopback plus the single IPv4 default gateway discovered from `/proc/net/route`, not the
+  bridge subnet or RFC1918 ranges. Empty/unknown modes and unreadable, missing or ambiguous
+  gateway discovery refuse boot; there is no silent loopback fallback.
+- **Supported public topology: one host-level TLS proxy, no CDN or second proxy hop.**
+  Compose publishes `127.0.0.1:3000` only. Container traffic from the host can arrive as the
+  bridge gateway rather than loopback, which is why the gateway is trusted. Other bridge
+  containers retain their own untrusted addresses. `docker-gateway` is valid only for this
+  bridge topology; changing `networks`/`network_mode`, adding a proxy container or adding a
+  CDN requires a new trust spec, not a broader allow-list or larger hop count.
+- **The proxy must preserve the original, verbatim `Host` for both domains**, overwrite
+  `X-Forwarded-Proto` with its own scheme, and append or overwrite `X-Forwarded-For` so its
+  rightmost entry is the client it accepted. For nginx, use `proxy_set_header Host $http_host;`,
+  `proxy_set_header X-Forwarded-Proto $scheme;`, and
+  `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`.
+  Routing and GPX Origin checks use raw `Host`, never `X-Forwarded-Host`. Rewriting `Host`
+  breaks image-domain routing; missing XFF collapses clients into one limiter bucket.
+- **Accepted residual: the host is the trust boundary.** A host-local process can forge
+  forwarding headers through the trusted gateway. A co-tenant container cannot. Trusted HTTPS
+  forwarding controls `Secure` cookies and GPX Origin matching; untrusted forwarded protocol
+  is ignored. Local plain HTTP intentionally does not set `Secure`.
+- **Verification boundary (#369):** an ARM64 production-image TCP probe in Docker Desktop's
+  Linux VM observed a host-network TLS proxy arriving as gateway `172.31.0.1`, two bridge
+  clients retaining independent limiter buckets, direct-container spoof refusal, HTTPS-only
+  `Secure` cookies, and trusted/untrusted GPX Origin acceptance/refusal. An internal bridge
+  without a default route refused boot. This is not a production/VPS rehearsal: that proxy
+  connected directly to the app bridge IP, not through published loopback DNAT. Before DNS
+  cutover, measure the target server's peer and proxy configuration and repeat independent
+  limiter checks from two external networks. See the
+  [#369 spec](docs/superpowers/specs/2026-10-27-issue-369-dependency-proxy-trust.md).
 
 ## Secrets
 

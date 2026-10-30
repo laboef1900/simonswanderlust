@@ -213,6 +213,17 @@ Gallery descriptions are the exception: alt text and captions for photos in the 
 library use the current library values on the next rebuild, without republishing each
 article. This does not publish any draft text or change gallery order.
 
+**More actions → Unpublish** returns both languages to draft and rebuilds the site.
+The previous release remains visible until that rebuild succeeds; if it fails, the
+old live pages remain until a successful rebuild. After your own successful unpublish,
+you can edit and **Save draft** in the same tab without reloading, provided nobody
+else saved since the version you loaded. The editor adopts the unpublish's new
+concurrency token only when its transaction-captured predecessor matches the
+editor's current token. Unpublish still removes the story when your form is stale,
+but a save made elsewhere before unpublish or while its rebuild is running still
+produces the normal conflict dialog on your next save rather than overwriting it.
+Choose **Cancel** there to keep your unsaved edits on screen for copying.
+
 ### Import and trim a private GPX route
 
 Open **Story details → GPX route → Import GPX** and choose a local `.gpx` file
@@ -293,8 +304,10 @@ name the affected stories. Important details:
   validation (or a half-created pair with only one locale row) is listed by name in the status
   box with its reason; everything else goes through. Failed stories remain selected for retry;
   successfully processed stories are deselected.
-- **Bulk delete asks you to type `DELETE`.** There is no undo — revisions are per-save snapshots
-  of a post, so deleting the post takes them with it.
+- **Bulk delete asks you to type `DELETE`.** Type the exact token and press Enter, or click
+  **Delete**. Enter with a mismatched token keeps the confirmation open; Escape or Cancel
+  dismisses it without deleting. There is no undo — revisions are per-save snapshots of a
+  post, so deleting the post takes them with it.
 
 ### Export / backup
 
