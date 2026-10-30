@@ -101,13 +101,19 @@ Unpublish. The save indicator distinguishes **Not saved yet**, **Unsaved changes
 leaves edits unsaved; edits typed while a save is running still need another save.
 Browser recovery copies do not mean the draft has been saved to the server.
 
-**When a save response is lost:** keep the tab open. Story and registered page editors make one bounded
-read to check whether that exact account's save landed; **Check again** performs another
-read, never a replay. A confirmed save advances only its captured snapshot: text typed
-while waiting stays dirty. If another writer changed the stored version, compare the
-local form, attempted snapshots and stored content before explicitly choosing **Use stored**.
-That choice preserves a separate local recovery copy first. Missing or unavailable evidence
-stays Unknown; it does not prove the original request failed.
+**When a save response is lost:** keep the tab open. The story editor and every page editor
+(About, Contact, Privacy and Legal) make one bounded read to check whether that exact account's
+save landed; **Check again** performs another read, never a replay. A confirmed save advances
+only its captured snapshot: text typed while waiting stays dirty. If another writer changed
+the stored version, compare the local form, attempted snapshots and stored content. You can
+open the latest version/revisions in another tab, keep editing locally, load the stored
+version, or explicitly use your copy against that stored base and then save. Loading or
+rebasing preserves a separate complete recovery record first; if browser storage cannot
+preserve it, replacement is refused with a browser-storage warning. The latest inputs remain
+in the open tab but have not gained a new recovery copy; free storage or copy the text before
+leaving. A restored copy keeps its original base, not the token of the newly loaded page.
+A missing or corrupt base requires explicit comparison/rebase.
+Missing or unavailable receipt evidence stays Unknown; it does not prove the request failed.
 
 **A different account in another tab:** the form keeps its original owner and pauses.
 Sign in in a second tab, then explicitly resume as that same account. Signing in/focusing
@@ -121,6 +127,46 @@ other mode's unsent text.
 
 Old unscoped copies have no trustworthy owner and are not shown or adopted by any account,
 including admins. Browser-profile access can still expose local copies on a shared device.
+
+**Offline is information, not a queue.** The banner warns that Save, Preview and Publish
+will not reach the server when the browser reports offline. Editing and local stashing
+continue. A connection indicator is not server evidence: request results remain authoritative.
+Coming online or focusing the tab never sends a write. There is no offline saving, service
+worker, background sync or automatic replay.
+
+**Media details and AI saves:** each changed field carries the canonical value originally
+read. A changed field refuses the entire patch; unrelated fields do not conflict. Compare
+the current stored values before choosing **Use mine** or **Use stored**. Fill-empty AI
+expects empty fields; overwrite expects the last-read values. After a lost response the
+app reads the item once and compares each field (intended value, previous value, or a
+different value). Mixed results stay visible; neither a check nor AI automatically retries.
+An incompatible server response cannot mark the form saved.
+
+**Local recovery privacy and limits**
+
+- Save server drafts before upgrading. Unknown-owner legacy records remain unchanged and
+  are never previewed, downloaded, imported or attributed by the app, even for admins.
+  The original author/device custodian may privately back up the browser profile, inspect
+  and export the exact legacy record using browser tools, and manually copy their own text
+  into an authenticated editor. Only dispose of individually identified records after
+  backup/export; upgrading, logout and session expiry never delete them.
+- Browser recovery contains plain-text form content, image URLs/dimensions and non-secret
+  owner/resource/base/attempt/context/record/generation metadata with attempted snapshots.
+  It contains no passwords, session tokens, AI keys, executable actions or file queue.
+- Clearing site data, cleanup tools, profile resets and browser storage eviction (including
+  WebKit's inactivity policy) can remove copies without warning. Private windows discard
+  storage on close and may refuse it. localStorage has only a few MB per origin; quota
+  failure can stop stash updates. Keep a separate trusted backup for irreplaceable work.
+- Copies are not encrypted, synced between devices or backed up by the server. Device loss
+  or theft can lose or expose them. Account-scoped recovery prevents app disclosure, not
+  direct access by someone sharing the browser profile. Logout always keeps drafts; use
+  separate trusted profiles.
+- Selected photos exist only in the open page. Closing, reloading, crashing or discarding a
+  background tab loses unfinished transfers and their in-memory IDs. Select files again
+  explicitly; reselection is a new upload and has no receipt-level deduplication promise
+  across year/encoding-profile changes. Completed uploads are retained on the server.
+- A local stash is never proof of a server save. Only an acknowledgement or successful
+  server check establishes what is stored.
 
 Alt-text warnings start as a compact, collapsed **Alt-text review** disclosure
 above the story, within the writing column. Expand it to see photos grouped by

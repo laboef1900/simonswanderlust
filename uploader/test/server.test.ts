@@ -773,16 +773,70 @@ describe('media library', () => {
     const b = buildEncoding();
     const author = await authed(b, { isAdmin: false, username: 'author' });
     const { storedKey } = await put(b, author.cookie, 'trips/edit/hero');
+    const before = (await b.app.inject({ method: 'GET', url: `/media/items/${storedKey}`, cookies: author.cookie })).json();
     const res = await b.app.inject({
       method: 'PATCH', url: `/media/items/${storedKey}`, cookies: author.cookie,
       headers: { 'content-type': 'application/json' },
-      payload: { title: 'Sonnenaufgang', alt: { de: 'DE alt', en: 'EN alt' }, caption: { de: 'Tag 3' }, tags: ['island', 'island', ' '] },
+      payload: { conditional: { version: 1,
+        patch: { title: 'Sonnenaufgang', alt: { de: 'DE alt', en: 'EN alt' }, caption: { de: 'Tag 3' }, tags: ['island', 'island', ' '] },
+        expect: { title: before.title, alt: before.alt, caption: { de: before.caption.de }, tags: before.tags },
+      } },
     });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({
       title: 'Sonnenaufgang', alt: { de: 'DE alt', en: 'EN alt' }, caption: { de: 'Tag 3' },
-      tags: ['island'],
+      tags: ['island'], conditionalVersion: 1, uploadedBy: null,
     });
+  });
+
+  it('conditional media writes reject malformed and legacy envelopes without changing metadata or folders', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const before = await b.media.upsert({
+      key: 'conditional', status: 'ready', width: 8, height: 6, origBytes: 1, uploadedBy: null,
+      exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null },
+    });
+    const valid = { version: 1, patch: { title: 'new' }, expect: { title: '' } };
+    for (const payload of [
+      {}, { title: 'legacy' }, { conditional: valid, title: 'legacy' },
+      { conditional: { ...valid, version: 2 } },
+      { conditional: { ...valid, extra: true } },
+      { conditional: { version: 1, patch: { title: 'new' } } },
+      { conditional: { ...valid, expect: {} } },
+      { conditional: { ...valid, expect: { title: '', folder: '' } } },
+      { conditional: { ...valid, patch: { alt: { de: 'new' } }, expect: { alt: { en: '' } } } },
+      { conditional: { ...valid, patch: { title: 7 } } },
+      { conditional: { ...valid, patch: { folder: 'New/Folder', status: 'ready' }, expect: { folder: '' } } },
+      { conditional: { version: 1, patch: {}, expect: {} } },
+    ]) {
+      const response = await b.app.inject({ method: 'PATCH', url: '/media/items/conditional', cookies: cookie, payload });
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toEqual({ error: 'invalid_media_conditional' });
+      expect(await b.media.get('conditional')).toEqual(before);
+      expect(await b.media.folders()).toEqual([]);
+    }
+  });
+
+  it('conditional media conflict redacts current for authors, preserves admin visibility and distinguishes missing', async () => {
+    const b = build();
+    await b.media.upsert({
+      key: 'conditional', title: 'stored', status: 'ready', width: 8, height: 6, origBytes: 1, uploadedBy: 'u1',
+      exif: { takenAt: null, camera: null, lens: null, lat: 1.5, lng: 2.5 },
+    });
+    const author = await authed(b, { isAdmin: false, username: 'author' });
+    const admin = await authed(b);
+    const payload = { conditional: { version: 1, patch: { title: 'mine', folder: 'New/Folder' }, expect: { title: 'old', folder: '' } } };
+    for (const [cookies, isAdmin] of [[author.cookie, false], [admin.cookie, true]] as const) {
+      const response = await b.app.inject({ method: 'PATCH', url: '/media/items/conditional', cookies, payload });
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({ error: 'media_changed', current: {
+        title: 'stored', folder: '', uploadedBy: isAdmin ? 'u1' : null,
+        exif: { lat: isAdmin ? 1.5 : null, lng: isAdmin ? 2.5 : null },
+      } });
+    }
+    expect(await b.media.folders()).toEqual([]);
+    expect((await b.app.inject({ method: 'PATCH', url: '/media/items/missing', cookies: author.cookie, payload })).statusCode).toBe(404);
+    expect((await b.app.inject({ method: 'PATCH', url: '/media/items/conditional', payload })).statusCode).toBe(401);
   });
 
   it('DELETE /media/items/* is admin-only: 401 unauthenticated, 403 for authors', async () => {
@@ -3834,7 +3888,8 @@ describe('GET /posts/:tk/preview', () => {
       const patched = await b.app.inject({
         method: 'PATCH', url: '/media/items/trips/gal/lib', cookies: cookie,
         headers: { 'content-type': 'application/json' },
-        payload: { alt: { de: '' }, caption: { de: '' } },
+        payload: { conditional: { version: 1, patch: { alt: { de: '' }, caption: { de: '' } },
+          expect: { alt: { de: 'Bibliothek DE' }, caption: { de: 'Text DE' } } } },
       });
       expect(patched.statusCode).toBe(200);
       const after = await preview('de');
