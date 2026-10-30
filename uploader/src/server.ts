@@ -50,7 +50,7 @@ import { commentAuthorityOrigin, commentOrigin, registerPublicComments } from '.
 import { BACKUP_FILE_RE, IMAGES_ARCHIVE_RE, type DbBackup } from './backup.js';
 import { legacyRedirect } from './redirects.js';
 import { compressionHook } from './compress.js';
-import { CommentError, isCommentStatus, UUID_RE as COMMENT_ID_RE, type CommentAdminStore } from './comments-admin.js';
+import { CommentError, isCommentStatus, isModerationOffset, UUID_RE as COMMENT_ID_RE, type CommentAdminStore } from './comments-admin.js';
 import { ui } from '../../site/src/i18n/ui.js';
 import { createGeocoder, GeocodingError } from './geocoding.js';
 import { registerGpxRoutes } from './gpx-routes.js';
@@ -1967,16 +1967,6 @@ export function buildServer(cfg: ServerConfig): AppServer {
       commentsEnabled: cfg.commentsEnabled ?? (() => cfg.settings.get().commentsEnabled === true),
       ipLimiter: cfg.commentIpLimiter ?? fresh.ip,
       globalLimiter: cfg.commentGlobalLimiter ?? fresh.global,
-      // Author replies (#205) are `approved` + `is_author`; the public store's
-      // shape has no flag, so the id set comes from the admin store's approved
-      // list — a read of approved rows only, never pending ones.
-      ...(cfg.commentsAdmin ? {
-        isAuthorIds: async (tk: string) => new Set(
-          (await cfg.commentsAdmin!.list('approved'))
-            .filter((c) => c.translationKey === tk && c.isAuthor)
-            .map((c) => c.id),
-        ),
-      } : {}),
     });
   }
 
@@ -1995,10 +1985,16 @@ export function buildServer(cfg: ServerConfig): AppServer {
   const noStore = (reply: FastifyReply) => { void reply.code(503).send({ error: 'comments are not available' }); };
 
   app.get('/moderation/comments', { preHandler: requireAdmin }, async (req, reply) => {
-    const status = (req.query as { status?: string }).status ?? 'pending';
+    reply.header('cache-control', 'no-store');
+    const query = req.query as { status?: unknown; offset?: unknown };
+    const status = query.status ?? 'pending';
     if (!isCommentStatus(status)) return reply.code(400).send({ error: 'status must be pending or approved' });
+    const rawOffset = query.offset ?? '0';
+    if (typeof rawOffset !== 'string' || !/^[0-9]+$/.test(rawOffset) || !isModerationOffset(Number(rawOffset))) {
+      return reply.code(400).send({ error: 'invalid pagination' });
+    }
     if (!commentsAdmin) return noStore(reply);
-    return reply.header('cache-control', 'no-store').send({ comments: await commentsAdmin.list(status) });
+    return reply.send(await commentsAdmin.list(status, Number(rawOffset)));
   });
 
   app.post('/moderation/comments/:id/status', { preHandler: requireAdmin }, async (req, reply) => {

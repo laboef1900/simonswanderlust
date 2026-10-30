@@ -148,6 +148,7 @@ function loadPage(file: string, extraGlobals: Record<string, unknown>, scripts: 
     document: Object.assign(element(), {
       referrer: '',
       title: '',
+      documentElement: { lang: /<html\b[^>]*lang="([^"]+)"/.exec(html)?.[1] ?? 'en' },
       getElementById: (id: string): Element | null => (ids.has(id) ? el(id) : null),
       createElement: () => element(),
     }),
@@ -511,8 +512,8 @@ describe('comments.html moderation view', () => {
     ok: boolean;
     json(): Promise<unknown>;
   }
-  const response = (data: unknown = {}): CommentResponse => ({
-    status: 200, ok: true, json: async () => data,
+  const response = (data: Record<string, unknown> = {}): CommentResponse => ({
+    status: 200, ok: true, json: async () => 'comments' in data ? { hasMore: false, ...data } : data,
   });
   function commentsPage(fetch: (url: string, options: { method: string; body?: string }) => Promise<unknown>) {
     const page = loadPage('public/comments.html', { fetch });
@@ -530,11 +531,19 @@ describe('comments.html moderation view', () => {
           this.selectionDirection = direction;
         },
       });
-      node.focus = () => { doc.activeElement = node; };
+      node.focus = () => { if (!node.disabled) doc.activeElement = node; };
       return node;
     };
     page.el('statusFilter').focus = () => { doc.activeElement = page.el('statusFilter'); };
+    for (const id of ['previousPage', 'nextPage', 'pageIndicator']) {
+      page.el(id).focus = () => { if (!page.el(id).disabled) doc.activeElement = page.el(id); };
+    }
     page.el('statusFilter').value = 'pending';
+    const list = page.el('list');
+    list.replaceChildren = () => {
+      if (list.contains(doc.activeElement)) doc.activeElement = doc.body;
+      list.children.length = 0;
+    };
     const load = vm.runInContext('load', page.ctx) as () => Promise<void>;
     const row = (id: string) => {
       const node = page.el('list').children.find((child) => child.children[0]?.children[0]?.textContent === id);
@@ -559,16 +568,17 @@ describe('comments.html moderation view', () => {
     return { ...page, doc, load, row, type };
   }
 
-  it('keeps A’s latest draft and selection while approving B and awaiting the list', async () => {
+  it('keeps A’s latest draft and selection while approving B, then clears actions during refresh', async () => {
     const refresh = Promise.withResolvers<CommentResponse>();
     const loading = Promise.withResolvers<void>();
+    const mutation = Promise.withResolvers<CommentResponse>();
     let reads = 0;
     const fetch = vi.fn(async (_url: string, options: { method: string }) => {
       if (options.method === 'GET') {
         if (++reads === 2) { loading.resolve(); return refresh.promise; }
         return response({ comments: [comment('A'), comment('B')] });
       }
-      return response();
+      return mutation.promise;
     });
     const page = commentsPage(fetch);
     await page.load();
@@ -576,10 +586,13 @@ describe('comments.html moderation view', () => {
     const approve = page.row('B').action('Approve');
     approve.focus();
     const pending = approve.click();
-    await loading.promise;
     const ta = await page.type('A', 'Thanks Anna, the hike was');
     ta.focus();
     ta.setSelectionRange(7, 11, 'backward');
+    mutation.resolve(response());
+    await loading.promise;
+    expect(page.el('list').children).toHaveLength(0);
+    expect(page.el('list').getAttribute('aria-busy')).toBe('true');
     refresh.resolve(response({ comments: [comment('A')] }));
     await pending;
     expect(fetch).toHaveBeenCalledWith('/moderation/comments/B/status', expect.objectContaining({
@@ -594,7 +607,7 @@ describe('comments.html moderation view', () => {
 
   it('keeps hidden drafts across views and does not steal focus from the filter', async () => {
     const page = commentsPage(async (url) => response({
-      comments: url.endsWith('approved') ? [] : [comment('A')],
+      comments: new URL(url, 'http://localhost').searchParams.get('status') === 'approved' ? [] : [comment('A')],
     }));
     await page.load();
     await page.type('A', 'Unsent reply');
@@ -666,7 +679,7 @@ describe('comments.html moderation view', () => {
         posted.push(String(options.body));
         return posted.length === 1 ? sent.promise : response();
       }
-      return response({ comments: url.endsWith('approved') ? [] : [comment('A'), comment('B')] });
+      return response({ comments: new URL(url, 'http://localhost').searchParams.get('status') === 'approved' ? [] : [comment('A'), comment('B')] });
     });
     await page.load();
     await page.type('A', 'Publish only once');
@@ -705,7 +718,7 @@ describe('comments.html moderation view', () => {
     await page.type('A', 'Published once');
     await page.row('A').form.fire('submit');
     expect(page.el('out').textContent).toContain('Could not load comments: Failed to fetch');
-    expect(page.row('A').ta.value).toBe('');
+    expect(page.el('list').children).toHaveLength(0);
     await page.load();
     expect(page.row('A').ta.value).toBe('');
   });
@@ -760,20 +773,434 @@ describe('comments.html moderation view', () => {
     expect(page.doc.activeElement).toBe(page.el('statusFilter'));
   });
 
+  it('clears obsolete rows and actions immediately and retains drafts after a failed filter refresh', async () => {
+    const failed = Promise.withResolvers<CommentResponse>();
+    const page = commentsPage(async (url) => new URL(url, 'http://localhost').searchParams.get('status') === 'approved'
+      ? failed.promise : response({ comments: [comment('A')] }));
+    await page.load();
+    await page.type('A', 'Unsent through failure');
+    page.el('statusFilter').focus();
+    page.el('statusFilter').value = 'approved';
+    const refresh = page.el('statusFilter').fire('change');
+    expect(page.el('list').children).toHaveLength(0);
+    expect(page.el('out').textContent).toBe('Loading approved comments…');
+    expect(page.el('list').getAttribute('aria-busy')).toBe('true');
+    failed.reject(NETWORK_DOWN);
+    await refresh;
+    expect(page.el('list').children).toHaveLength(0);
+    expect(page.el('out').textContent).toBe('Could not load comments: Failed to fetch');
+    expect(page.el('list').getAttribute('aria-busy')).toBe('false');
+    page.el('statusFilter').value = 'pending';
+    await page.load();
+    expect(page.row('A').ta.value).toBe('Unsent through failure');
+    expect(page.doc.activeElement).toBe(page.el('statusFilter'));
+  });
+
+  it.each(['success', 'failure'] as const)('ignores an obsolete list %s after the newest view has rendered', async (outcome) => {
+    const old = Promise.withResolvers<CommentResponse>();
+    const newest = Promise.withResolvers<CommentResponse>();
+    let reads = 0;
+    const page = commentsPage(async () => ++reads === 1 ? old.promise : newest.promise);
+    const previous = page.load();
+    page.el('statusFilter').value = 'approved';
+    page.el('statusFilter').focus();
+    const current = page.load();
+    newest.resolve(response({ comments: [{ ...comment('Newest'), status: 'approved' }] }));
+    await current;
+    if (outcome === 'success') old.resolve(response({ comments: [comment('Obsolete')] }));
+    else old.reject(NETWORK_DOWN);
+    await previous;
+    expect(page.el('list').children).toHaveLength(1);
+    expect(page.row('Newest').action('Unapprove')).toBeDefined();
+    expect(page.el('out').textContent).toBe('');
+    expect(page.el('list').getAttribute('aria-busy')).toBe('false');
+    expect(page.doc.activeElement).toBe(page.el('statusFilter'));
+  });
+
+  it('keeps the newest loading state when an obsolete request fails first', async () => {
+    const old = Promise.withResolvers<CommentResponse>();
+    const newest = Promise.withResolvers<CommentResponse>();
+    let reads = 0;
+    const page = commentsPage(async () => ++reads === 1 ? old.promise : newest.promise);
+    const previous = page.load();
+    page.el('statusFilter').value = 'approved';
+    const current = page.load();
+    old.reject(NETWORK_DOWN);
+    await previous;
+    expect(page.el('out').textContent).toBe('Loading approved comments…');
+    expect(page.el('list').getAttribute('aria-busy')).toBe('true');
+    newest.resolve(response({ comments: [] }));
+    await current;
+    expect(page.el('out').textContent).toBe('No approved comments.');
+    expect(page.el('list').getAttribute('aria-busy')).toBe('false');
+  });
+
+  it.each(['approve', 'reply'] as const)('does not let a late %s completion replace the newer filter view or status', async (action) => {
+    const mutation = Promise.withResolvers<CommentResponse>();
+    const fetch = vi.fn(async (url: string, options: { method: string }) => options.method === 'POST'
+      ? mutation.promise : response({ comments: new URL(url, 'http://localhost').searchParams.get('status') === 'approved' ? [] : [comment('A')] }));
+    const page = commentsPage(fetch);
+    await page.load();
+    await page.type('A', 'Sent reply');
+    const pending = action === 'reply' ? page.row('A').form.fire('submit') : page.row('A').action('Approve').click();
+    page.el('statusFilter').value = 'approved';
+    page.el('statusFilter').focus();
+    await page.load();
+    mutation.resolve(response());
+    await pending;
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(page.el('list').children).toHaveLength(0);
+    expect(page.el('out').textContent).toBe('No approved comments.');
+    expect(page.doc.activeElement).toBe(page.el('statusFilter'));
+    page.el('statusFilter').value = 'pending';
+    await page.load();
+    expect(page.row('A').ta.value).toBe(action === 'reply' ? '' : 'Sent reply');
+  });
+
+  it.each(['approve', 'delete', 'reply'] as const)('refreshes both concurrent %s completions in the same filter', async (action) => {
+    const mutations = { A: Promise.withResolvers<CommentResponse>(), B: Promise.withResolvers<CommentResponse>() };
+    let stored = [comment('A'), comment('B')];
+    if (action === 'reply') stored = stored.map((c) => ({ ...c, status: 'approved' }));
+    const page = commentsPage(async (url, options) => {
+      if (options.method === 'GET') return response({ comments: [...stored] });
+      const id = url.includes('/A') ? 'A' : 'B';
+      await mutations[id].promise;
+      if (action === 'reply') stored.push({ ...comment('Reply-' + id), status: 'approved', isAuthor: true });
+      else stored = stored.filter((c) => c.id !== id);
+      return response();
+    });
+    if (action === 'reply') page.el('statusFilter').value = 'approved';
+    await page.load();
+    await page.type('A', 'Reply to A');
+    await page.type('B', 'Reply to B');
+    const start = (id: string) => action === 'reply'
+      ? page.row(id).form.fire('submit')
+      : page.row(id).action(action === 'approve' ? 'Approve' : 'Delete').click();
+    const first = start('A');
+    const second = start('B');
+    mutations.A.resolve(response());
+    await first;
+    expect(page.row('B')).toBeDefined();
+    mutations.B.resolve(response());
+    await second;
+    const names = page.el('list').children.map((row) => row.children[0]?.children[0]?.textContent);
+    expect(names).toEqual(action === 'reply' ? ['A', 'B', 'Reply-A', 'Reply-B'] : []);
+  });
+
+  it.each([
+    ['approve', 'reply'], ['approve', 'filter'], ['approve', 'filter-then-body'],
+    ['reply', 'reply'], ['reply', 'filter'], ['reply', 'filter-then-body'],
+  ] as const)('preserves the latest focus across overlapping %s refreshes unless navigation supersedes it: %s', async (action, destination) => {
+    const mutations = { A: Promise.withResolvers<CommentResponse>(), B: Promise.withResolvers<CommentResponse>() };
+    const firstRefresh = Promise.withResolvers<CommentResponse>();
+    const refreshStarted = Promise.withResolvers<void>();
+    let stored = [comment('A'), comment('B'), comment('C')];
+    let reads = 0;
+    const page = commentsPage(async (url, options) => {
+      if (options.method === 'GET') {
+        if (++reads === 2) { refreshStarted.resolve(); return firstRefresh.promise; }
+        return response({ comments: [...stored] });
+      }
+      const id = url.includes('/A') ? 'A' : 'B';
+      await mutations[id].promise;
+      if (action === 'approve') stored = stored.filter((c) => c.id !== id);
+      return response();
+    });
+    await page.load();
+    await page.type('A', 'Reply to A');
+    await page.type('B', 'Reply to B');
+    const start = (id: string) => {
+      const row = page.row(id);
+      (action === 'reply' ? row.send : row.action('Approve')).focus();
+      return action === 'reply' ? row.form.fire('submit') : row.action('Approve').click();
+    };
+    const first = start('A');
+    const second = start('B');
+    const draft = await page.type('C', 'Keep this unsent reply');
+    draft.focus();
+    draft.setSelectionRange(5, 9, 'backward');
+    mutations.A.resolve(response());
+    await refreshStarted.promise;
+    expect(page.doc.activeElement).toBe(page.doc.body);
+    if (destination !== 'reply') {
+      page.el('statusFilter').focus();
+      await page.doc.fire('focusin');
+      if (destination === 'filter-then-body') page.doc.activeElement = page.doc.body;
+    }
+    mutations.B.resolve(response());
+    await second;
+    firstRefresh.resolve(response({ comments: [comment('B'), comment('C')] }));
+    await first;
+    expect(page.row('C').ta.value).toBe('Keep this unsent reply');
+    expect(page.el('list').children.map((row) => row.children[0]?.children[0]?.textContent))
+      .toEqual(action === 'reply' ? ['A', 'B', 'C'] : ['C']);
+    if (destination === 'reply') {
+      expect(page.doc.activeElement).toBe(page.row('C').ta);
+      expect([page.row('C').ta.selectionStart, page.row('C').ta.selectionEnd, page.row('C').ta.selectionDirection]).toEqual([5, 9, 'backward']);
+    } else {
+      expect(page.doc.activeElement).toBe(destination === 'filter' ? page.el('statusFilter') : page.doc.body);
+    }
+  });
+
+  it('keeps a newer same-comment reply locked when an older refresh finishes', async () => {
+    const oldRefresh = Promise.withResolvers<CommentResponse>();
+    const oldRefreshStarted = Promise.withResolvers<void>();
+    const newReply = Promise.withResolvers<CommentResponse>();
+    const newReplyStarted = Promise.withResolvers<void>();
+    const bodies: string[] = [];
+    let reads = 0;
+    const page = commentsPage(async (url, options) => {
+      if (options.method === 'GET') {
+        if (++reads === 2) { oldRefreshStarted.resolve(); return oldRefresh.promise; }
+        return response({ comments: url.endsWith('approved') ? [] : [comment('A')] });
+      }
+      bodies.push(JSON.parse(options.body!).body);
+      if (bodies.length === 2) { newReplyStarted.resolve(); return newReply.promise; }
+      return response();
+    });
+    await page.load();
+    await page.type('A', 'First reply');
+    const first = page.row('A').form.fire('submit');
+    await oldRefreshStarted.promise;
+    page.el('statusFilter').value = 'approved';
+    await page.load();
+    page.el('statusFilter').value = 'pending';
+    await page.load();
+    await page.type('A', 'Second reply');
+    const second = page.row('A').form.fire('submit');
+    await newReplyStarted.promise;
+    oldRefresh.resolve(response({ comments: [comment('A')] }));
+    await first;
+    expect(page.row('A').send.disabled).toBe(true);
+    await page.row('A').form.fire('submit');
+    expect(bodies).toEqual(['First reply', 'Second reply']);
+    newReply.resolve(response());
+    await second;
+    expect(page.row('A').send.disabled).toBe(false);
+    expect(page.row('A').ta.value).toBe('');
+  });
+
+  it.each(['approve', 'reply'] as const)('suppresses a late %s failure while the newer filter is loading', async (action) => {
+    const mutation = Promise.withResolvers<CommentResponse>();
+    const refresh = Promise.withResolvers<CommentResponse>();
+    const page = commentsPage(async (url, options) => options.method === 'POST'
+      ? mutation.promise : new URL(url, 'http://localhost').searchParams.get('status') === 'approved' ? refresh.promise : response({ comments: [comment('A')] }));
+    await page.load();
+    await page.type('A', 'Unsent after failure');
+    const pending = action === 'reply' ? page.row('A').form.fire('submit') : page.row('A').action('Approve').click();
+    page.el('statusFilter').value = 'approved';
+    const current = page.load();
+    mutation.reject(NETWORK_DOWN);
+    await pending;
+    expect(page.el('out').textContent).toBe('Loading approved comments…');
+    expect(page.el('list').getAttribute('aria-busy')).toBe('true');
+    refresh.resolve(response({ comments: [] }));
+    await current;
+    page.el('statusFilter').value = 'pending';
+    await page.load();
+    expect(page.row('A').ta.value).toBe('Unsent after failure');
+    expect(page.row('A').send.disabled).toBe(false);
+  });
+
   it('switching the view clears the previous view\'s empty-state message', async () => {
     const approved = {
       id: 'c1', name: 'Reader', isAuthor: false, translationKey: 'tk1', locale: 'de',
       createdAt: '2026-09-29T04:56:50Z', status: 'approved', body: 'Hallo',
     };
-    const { el } = loadPage('public/comments.html', {
-      fetch: async () => ({ status: 200, ok: true, json: async () => ({ comments: [approved] }) }),
-    });
+    const { el } = commentsPage(async () => response({ comments: [approved] }));
     el('out').textContent = 'No pending comments.';
     el('statusFilter').value = 'approved';
     await el('statusFilter').fire('change');
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(el('list').children).toHaveLength(1);
     expect(el('out').textContent).toBe('');
+  });
+
+  it('traverses beyond 500 approved rows in both directions, preserving drafts and navigation focus', async () => {
+    const stored = Array.from({ length: 551 }, (_, i) => ({ ...comment(String(i)), status: 'approved' }));
+    const page = commentsPage(async (url) => {
+      const offset = Number(new URL(url, 'http://localhost').searchParams.get('offset'));
+      return response({ comments: stored.slice(offset, offset + 50), hasMore: offset + 50 < stored.length });
+    });
+    page.el('statusFilter').value = 'approved';
+    await page.load();
+    expect(page.row('0').action('Unapprove')).toBeDefined();
+    expect(page.el('previousPage').disabled).toBe(true);
+    await page.type('0', 'Keep this across all pages');
+    for (let n = 2; n <= 12; n++) {
+      await page.el('nextPage').click();
+      expect(page.el('pageIndicator').textContent).toBe(`Page ${n}`);
+      expect(page.doc.activeElement).toBe(page.el('pageIndicator'));
+      expect(page.el('list').children.length).toBeLessThanOrEqual(50);
+    }
+    expect(page.row('550').action('Delete')).toBeDefined();
+    expect(page.el('nextPage').disabled).toBe(true);
+    for (let n = 11; n >= 1; n--) await page.el('previousPage').click();
+    expect(page.row('0').ta.value).toBe('Keep this across all pages');
+    expect(page.el('pageIndicator').textContent).toBe('Page 1');
+    expect(page.el('previousPage').disabled).toBe(true);
+  });
+
+  it.each(['Approve', 'Unapprove', 'Delete', 'Spam', 'Reply'])('resets to page one after %s without skipping a shifted boundary row', async (action) => {
+    const status = action === 'Unapprove' ? 'approved' : 'pending';
+    let stored = Array.from({ length: 101 }, (_, i) => ({ ...comment(String(i)), status }));
+    const requests: number[] = [];
+    const page = commentsPage(async (url, options) => {
+      if (options.method !== 'GET') {
+        if (action !== 'Reply') stored = stored.filter((c) => c.id !== '50');
+        return response();
+      }
+      const offset = Number(new URL(url, 'http://localhost').searchParams.get('offset'));
+      requests.push(offset);
+      return response({ comments: stored.slice(offset, offset + 50), hasMore: offset + 50 < stored.length });
+    });
+    page.el('statusFilter').value = status;
+    await page.load();
+    await page.type('0', 'Still writing on page one');
+    await page.el('nextPage').click();
+    if (action === 'Reply') {
+      await page.type('50', 'Publish this reply');
+      await page.row('50').form.fire('submit');
+    } else await page.row('50').action(action).click();
+    expect(requests).toEqual([0, 50, 0]);
+    expect(page.row('0').ta.value).toBe('Still writing on page one');
+    expect(page.el('pageIndicator').textContent).toBe('Page 1');
+    await page.el('nextPage').click();
+    expect(page.row(action === 'Reply' ? '50' : '51')).toBeDefined();
+    if (action === 'Reply') expect(page.row('50').ta.value).toBe('');
+  });
+
+  it.each(['Delete', 'Spam'])('a cancelled %s leaves the current page and drafts untouched without a request', async (action) => {
+    const fetch = vi.fn(async (url: string) => {
+      const offset = Number(new URL(url, 'http://localhost').searchParams.get('offset'));
+      return response({ comments: [comment(offset ? 'B' : 'A')], hasMore: !offset });
+    });
+    const page = commentsPage(fetch);
+    page.ctx.AdminConfirm = { ask: async () => false };
+    await page.load();
+    await page.el('nextPage').click();
+    await page.type('B', 'Keep this');
+    await page.row('B').action(action).click();
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(page.row('B').ta.value).toBe('Keep this');
+    expect(page.el('pageIndicator').textContent).toBe('Page 2');
+  });
+
+  it('keeps Previous usable when another moderator empties the last page and resets on filter change', async () => {
+    const fetch = vi.fn(async (url: string) => {
+      const offset = Number(new URL(url, 'http://localhost').searchParams.get('offset'));
+      return response({ comments: offset ? [] : [comment('A')], hasMore: !offset });
+    });
+    const page = commentsPage(fetch);
+    await page.load();
+    await page.el('nextPage').click();
+    expect(page.el('out').textContent).toBe(EDITOR_COPY.commentsEmptyPage);
+    expect(page.el('nextPage').disabled).toBe(true);
+    expect(page.el('previousPage').disabled).toBe(false);
+    await page.el('previousPage').click();
+    expect(page.row('A')).toBeDefined();
+    await page.el('nextPage').click();
+    page.el('statusFilter').value = 'approved';
+    await page.el('statusFilter').fire('change');
+    expect(fetch).toHaveBeenLastCalledWith('/moderation/comments?status=approved&offset=0', expect.objectContaining({ method: 'GET' }));
+    expect(page.el('pageIndicator').textContent).toBe('Page 1');
+  });
+
+  it('disables stale navigation and actions during a failed page request; reselecting the filter recovers', async () => {
+    const pending = Promise.withResolvers<CommentResponse>();
+    const page = commentsPage(async (url) => url.includes('offset=50')
+      ? pending.promise : response({ comments: [comment('A')], hasMore: true }));
+    await page.load();
+    await page.type('A', 'Survives a failed page');
+    const next = page.el('nextPage').click();
+    expect(page.el('previousPage').disabled).toBe(true);
+    expect(page.el('nextPage').disabled).toBe(true);
+    expect(page.el('list').children).toHaveLength(0);
+    pending.resolve({ status: 400, ok: false, json: async () => ({ error: 'invalid pagination' }) });
+    await next;
+    expect(page.el('out').textContent).toBe(EDITOR_COPY.commentsPaginationError);
+    expect(page.el('previousPage').disabled).toBe(true);
+    expect(page.el('nextPage').disabled).toBe(true);
+    await page.el('statusFilter').fire('change');
+    expect(page.row('A').ta.value).toBe('Survives a failed page');
+    expect(page.el('nextPage').disabled).toBe(false);
+  });
+
+  it.each(['success', 'failure'])('ignores an obsolete offset response (%s) after returning to the same status at page one', async (outcome) => {
+    const old = Promise.withResolvers<CommentResponse>();
+    const page = commentsPage(async (url) => url.includes('offset=50')
+      ? old.promise : response({ comments: [comment('A')], hasMore: true }));
+    await page.load();
+    const next = page.el('nextPage').click();
+    await page.el('statusFilter').fire('change');
+    if (outcome === 'success') old.resolve(response({ comments: [comment('Obsolete')], hasMore: false }));
+    else old.reject(NETWORK_DOWN);
+    await next;
+    expect(page.row('A')).toBeDefined();
+    expect(page.el('pageIndicator').textContent).toBe('Page 1');
+    expect(page.el('nextPage').disabled).toBe(false);
+    expect(page.el('previousPage').disabled).toBe(true);
+    expect(page.el('out').textContent).toBe('');
+  });
+
+  it.each(['Approve', 'Reply'])('a late %s completion cannot reset a newly selected page', async (action) => {
+    const mutation = Promise.withResolvers<CommentResponse>();
+    const fetch = vi.fn(async (url: string, options: { method: string }) => {
+      if (options.method !== 'GET') return mutation.promise;
+      const offset = Number(new URL(url, 'http://localhost').searchParams.get('offset'));
+      return response({ comments: [comment(offset ? 'B' : 'A')], hasMore: !offset });
+    });
+    const page = commentsPage(fetch);
+    await page.load();
+    await page.type('A', 'My reply');
+    const saving = action === 'Reply' ? page.row('A').form.fire('submit') : page.row('A').action('Approve').click();
+    await page.el('nextPage').click();
+    mutation.resolve(response());
+    await saving;
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(page.row('B')).toBeDefined();
+    expect(page.el('pageIndicator').textContent).toBe('Page 2');
+  });
+
+  it('uses the localized immediate-public-read deletion warning with the target reader name', async () => {
+    const ask = vi.fn(async () => false);
+    const page = commentsPage(async () => response({ comments: [{ ...comment('Reader <name>'), status: 'approved' }] }));
+    page.ctx.AdminConfirm = { ask };
+    await page.load();
+    await page.row('Reader <name>').action('Delete').click();
+    expect(ask).toHaveBeenCalledWith(expect.objectContaining({
+      body: EDITOR_COPY.commentsDeleteApprovedBody!.replace('{name}', 'Reader <name>'),
+      danger: true,
+    }));
+  });
+
+  it('refreshes each concurrent page-two mutation even after the first resets pagination', async () => {
+    const mutations = { '50': Promise.withResolvers<CommentResponse>(), '51': Promise.withResolvers<CommentResponse>() };
+    let stored = Array.from({ length: 52 }, (_, i) => comment(String(i)));
+    const offsets: number[] = [];
+    const page = commentsPage(async (url, options) => {
+      if (options.method !== 'GET') {
+        const id = url.includes('/50/') ? '50' : '51';
+        await mutations[id].promise;
+        stored = stored.filter((c) => c.id !== id);
+        return response();
+      }
+      const offset = Number(new URL(url, 'http://localhost').searchParams.get('offset'));
+      offsets.push(offset);
+      return response({ comments: stored.slice(offset, offset + 50), hasMore: offset + 50 < stored.length });
+    });
+    await page.load();
+    await page.el('nextPage').click();
+    const first = page.row('50').action('Approve').click();
+    const second = page.row('51').action('Approve').click();
+    mutations['50'].resolve(response());
+    await first;
+    expect(page.el('pageIndicator').textContent).toBe('Page 1');
+    expect(page.el('nextPage').disabled).toBe(false);
+    mutations['51'].resolve(response());
+    await second;
+    expect(offsets).toEqual([0, 50, 0, 0]);
+    expect(page.el('nextPage').disabled).toBe(true);
   });
 });
 
