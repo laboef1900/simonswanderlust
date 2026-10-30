@@ -23,9 +23,6 @@ export const COMMENT_STATUSES: readonly CommentStatus[] = ['pending', 'approved'
 export const isCommentStatus = (v: unknown): v is CommentStatus =>
   typeof v === 'string' && (COMMENT_STATUSES as readonly string[]).includes(v);
 
-/** Display name of the blog's author on `replyAsAuthor` rows (spec M6). */
-export const AUTHOR_NAME = 'Simon';
-
 export const NAME_MAX = 80;
 export const BODY_MAX = 2000;
 export const EMAIL_MAX = 254;
@@ -85,7 +82,7 @@ export interface CommentStore {
   setStatus(id: string, status: CommentStatus): Promise<boolean>;
   approve(id: string): Promise<boolean>;
   /** Inserts an `approved`, `is_author` sibling in the post's thread. */
-  replyAsAuthor(input: { translationKey: string; body: string; postedLocale?: Locale }): Promise<Comment>;
+  replyAsAuthor(input: { translationKey: string; body: string; postedLocale?: Locale }, authorName: string): Promise<Comment>;
   remove(id: string): Promise<boolean>;
   /** Delete-with-post: every row of the thread. Returns the number removed. */
   removeByTranslationKey(translationKey: string): Promise<number>;
@@ -193,11 +190,11 @@ export function memoryCommentStore(): CommentStore & { all(): Comment[]; removeF
       return true;
     },
     approve(id) { return store.setStatus(id, 'approved'); },
-    async replyAsAuthor(input) {
+    async replyAsAuthor(input, authorName) {
       const row = {
         id: randomUUID(), translationKey: cleanKey(input.translationKey),
         locale: input.postedLocale === undefined ? 'de' as const : cleanLocale(input.postedLocale),
-        name: AUTHOR_NAME, email: null, body: cleanBody(input.body),
+        name: cleanName(authorName || 'Author'), email: null, body: cleanBody(input.body),
         status: 'approved' as const, isAuthor: true, createdAt: new Date(), seq: seq++,
       };
       rows.push(row);
@@ -272,14 +269,14 @@ export function pgCommentStore(pool: DbPool): CommentStore {
       return (res.rowCount ?? 0) > 0;
     },
     approve(id) { return store.setStatus(id, 'approved'); },
-    async replyAsAuthor(input) {
+    async replyAsAuthor(input, authorName) {
       const tk = cleanKey(input.translationKey);
       const locale = input.postedLocale === undefined ? 'de' : cleanLocale(input.postedLocale);
       const body = cleanBody(input.body);
       const { rows } = await pool.query<Row>(
         `INSERT INTO comments (id, translation_key, locale, name, email, body, status, is_author, sender_hash)
          VALUES ($1,$2,$3,$4,NULL,$5,'approved',true,NULL) RETURNING ${ROW_COLS}`,
-        [randomUUID(), tk, locale, AUTHOR_NAME, body],
+        [randomUUID(), tk, locale, cleanName(authorName || 'Author'), body],
       );
       return fromRow(rows[0]!);
     },
