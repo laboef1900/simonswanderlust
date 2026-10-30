@@ -1495,6 +1495,41 @@ describe('Media publication impact and bounded refresh', () => {
     expect(page.el('dImpact').querySelectorAll('a')).toEqual([]);
   });
 
+  it.each([false, true])('keeps the save projection when an obsolete comparison settles first (failed read: %s)', async (failed) => {
+    const response = (body: unknown, status = 200) => Promise.resolve({ status, ok: status === 200, json: async () => body });
+    const older = Promise.withResolvers<unknown>();
+    const saving = Promise.withResolvers<unknown>();
+    const original = { ...item('a'), impact, livePending: unchanged };
+    const competing = { ...original, caption: { de: 'Competing caption', en: '' } };
+    const fresh = { ...competing, caption: { de: 'My caption', en: '' }, conditionalVersion: 1,
+      impact: { availability: 'available' as const, published: [story('fresh')], drafts: [], newerDrafts: [] },
+      usedIn: [{ kind: 'post' as const, key: 'fresh', title: 'Fresh story' }],
+      changedDescriptions: { ...unchanged, de: { alt: false, caption: true } },
+      livePending: { ...unchanged, de: { alt: false, caption: true } } };
+    let reads = 0, writes = 0;
+    const page = loadPage({ request: (url, init) => {
+      if (url !== '/media/items/a') return;
+      if (init?.method === 'PATCH') return ++writes === 1
+        ? response({ error: 'media_changed', current: competing }, 409) : saving.promise;
+      return ++reads === 1 ? response(original) : older.promise;
+    } });
+    await open(page, original);
+    page.el('dCapDe').value = 'My caption'; page.el('detail').dispatch('input');
+    page.el('dSave').click(); await page.flush();
+    page.el('dCheckStored').click(); await page.flush();
+    page.el('dUseMine').click(); await page.flush();
+    if (failed) older.reject(new Error('Comparison connection lost'));
+    else older.resolve(await response(competing));
+    await page.flush();
+    page.rows.set('a', fresh); saving.resolve(await response(fresh)); await page.flush();
+    expect(page.el('dImpact').querySelectorAll('a').map(link => link.href)).toEqual(['/admin/editor.html?tk=fresh']);
+    expect(page.el('dCapDe').value).toBe('My caption');
+    expect(page.el('dUnsaved').hidden).toBe(true);
+    expect(page.el('dCompare').textContent).toBe('');
+    expect(reads).toBe(2);
+    expect(writes).toBe(2);
+  });
+
   it('resumes read-only detail observations after explicit same-owner reauthentication without replacing dirty inputs', async () => {
     let expired = false, reads = 0;
     const photo = { ...item('a', 'base'), impact, livePending: unchanged };
