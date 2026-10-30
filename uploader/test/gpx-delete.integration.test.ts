@@ -1,3 +1,5 @@
+import { seedSiteIdentity } from '../src/site-identity.js';
+import { TEST_TRUST } from './trusted-proxy-fixture.js';
 import { publishTokens } from './publish-tokens.js';
 import { createPublicTrackWorker, type PublicTrackWorker } from '../src/gpx-public-worker.js';
 import { randomUUID } from 'node:crypto';
@@ -56,6 +58,7 @@ maybe('private GPX post deletion and durable cleanup', () => {
     const media = memoryMediaStore({ baseUrl: 'https://images.test' });
     queue = createEncodeQueue({ store: media, storageDir: join(root, 'images'), lock: createWorkLock() });
     app = buildServer({
+      trustProxy: TEST_TRUST,
       storageDir: join(root, 'images'), baseUrl: 'https://images.test', imgHost: 'images.test',
       siteDir: join(root, 'site'), backupDir,
       users: pgUserStore(pool), sessions: pgSessionStore(pool), posts,
@@ -73,6 +76,7 @@ maybe('private GPX post deletion and durable cleanup', () => {
     await observer.query(`CREATE SCHEMA ${schema}`);
     pool = new pg.Pool({ connectionString: url, options: `-c search_path=${schema}` });
     await ensureSchema(pool);
+    await seedSiteIdentity(pool);
     root = await mkdtemp(join(await realpath(tmpdir()), 'gpx-delete-'));
     backupDir = join(root, 'backup', 'db');
     for (const dir of ['images', 'site', 'backup/db']) await mkdir(join(root, dir), { recursive: true });

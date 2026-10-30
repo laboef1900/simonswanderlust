@@ -7,6 +7,7 @@ import { useTranslations, type Locale, type UIKey } from '../../i18n/ui';
 import { countLabel } from '../../i18n/count';
 import { regionPath, regionsIndexPath, type Region } from '../../lib/paths';
 import { byLocale, liveRegions } from '../../lib/trips';
+import { identityTagline } from '../../lib/build-identity';
 
 interface Props {
   locale: Locale;
@@ -31,7 +32,7 @@ const alternates = !region
     : undefined;
 ---
 
-<Base title={title} description={`${title} – ${t('site.tagline')}`} locale={locale} alternates={alternates}>
+<Base title={title} description={`${title} – ${identityTagline(locale)}`} locale={locale} alternates={alternates}>
   <section class="border-b border-navy/10 bg-canvas py-10">
     <div class="mx-auto max-w-6xl px-5">
       <div class="flex flex-wrap items-end justify-between gap-4">
