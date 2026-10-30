@@ -244,7 +244,7 @@ describe('transformBodyImages — sanitization', () => {
       '<div style="background:url(https://evil.example/pixel)" onclick="alert(1)">Opening</div>\n\n' +
       '```js\nconst answer = 42;\n```\n\n<script>alert(1)</script>',
     );
-    const out = transformBodyImages(html, {}, ORIGIN);
+    const out = await transformBodyImages(html, {}, ORIGIN);
     expect(out).toContain('Opening');
     expect(out).toContain('astro-code');
     expect(out).not.toContain('style=');
