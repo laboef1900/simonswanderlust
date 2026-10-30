@@ -24,8 +24,10 @@ window.AltSuggest = (function () {
     return config;
   }
 
+  // truncatedText: the caller's localized token-limit hint (EditorCopy
+  // `altSuggestTruncated`), shown when the reply was cut off at the limit (#351).
   function wire(opts) {
-    const { button, fileInput, altInput, statusEl, lang, hintEl, on401 } = opts;
+    const { button, fileInput, altInput, statusEl, lang, hintEl, on401, truncatedText } = opts;
     if (!button) return;
     if (!fileInput || !altInput) return;
     const say = (msg) => { if (statusEl) statusEl.textContent = msg; };
@@ -51,6 +53,11 @@ window.AltSuggest = (function () {
         if (hintEl) hintEl.textContent = lang === 'de' ? 'EN: ' + c.altEn : 'DE: ' + c.altDe;
         say('Suggested — review and edit as needed.');
       } catch (e) {
+        // A truncated reply is a token-limit problem, not a connection one (#351).
+        if (e && e.message === 'Caption response was truncated') {
+          say(truncatedText);
+          return;
+        }
         const why = LLM.mixedContentWarning(cfg.captionBaseUrl, location.protocol);
         say('Could not generate alt text. ' + (why || 'Check the provider, shared key, vision model and browser CORS access.') +
           ' Fill in the alt text manually.');
