@@ -492,7 +492,8 @@ carry a `DEFAULT`, or the `ALTER` fails on populated tables.
 ## Backups & disaster recovery
 
 Full recovery needs the **Postgres content** (`users`, `posts`, `pages`, `media`,
-`media_folders`, `app_secrets`, `comments`, `post_routes` in current v10 dumps), the
+`media_folders`, `app_secrets`, `comments`, `post_routes`, `site_identity` and
+`site_identity_assets` in current v11 dumps), the
 **`/data` files** (image originals + variants, private GPX originals, settings, site releases,
 MDX exports and backups), and **separately escrowed configuration/key material**. A logical
 dump is not a copy of `/data`: retain its manifest-paired private route archive, the complete
