@@ -23,8 +23,11 @@ const db = vi.hoisted(() => ({
 vi.mock('pg', () => ({
   default: {
     Pool: class {
+      async connect() { return this; }
+      release() {}
       async query(sql: string): Promise<{ rows: Record<string, unknown>[] }> {
         db.sql.push(sql);
+        if (!/^\s*SELECT\b/.test(sql)) return { rows: [] };
         if (/\bFROM media\b/.test(sql)) return { rows: db.media };
         let rows = db.rows;
         if (/status\s*=\s*'published'/.test(sql)) rows = rows.filter((r) => r.status === 'published');
@@ -180,6 +183,7 @@ describe('postgresTripsLoader load()', () => {
   // post must NEVER reach the store — only the published_snapshot content may.
   it('builds only from published snapshots; diverged working copies and snapshot-less rows stay dark', async () => {
     vi.stubEnv('DATABASE_URL', 'postgres://mocked/never-dialed');
+    vi.stubEnv('SITE_DATABASE_SNAPSHOT', '00000003-0000000A-1');
     const snapshot = {
       translation_key: 'lima-2025', locale: 'de', slug: 'lima-reise', title: 'Lima (live)',
       date: '2025-05-01', country: 'Peru', country_code: 'PE', region: 'south-america',
@@ -205,6 +209,11 @@ describe('postgresTripsLoader load()', () => {
     expect(entry?.body).toBe('LIVE body');
     expect(entry?.rendered?.html).toContain('LIVE body');
     expect(entry?.rendered?.html).not.toContain('WORKING-EDIT');
+    expect(db.sql.slice(0, 2)).toEqual([
+      'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY',
+      "SET TRANSACTION SNAPSHOT '00000003-0000000A-1'",
+    ]);
+    expect(db.sql.at(-1)).toBe('COMMIT');
   });
   it('keeps the published track through draft replacement and detachment, and never fills a legacy snapshot', async () => {
     vi.stubEnv('DATABASE_URL', 'postgres://mocked/never-dialed');
