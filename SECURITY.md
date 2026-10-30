@@ -202,14 +202,54 @@ ASVS L1 exception record: `docs/superpowers/specs/2026-09-14-comments-design.md`
 - **Hold-for-moderation.** Every accepted comment is `pending`; nothing is public until an admin
   approves it on `/admin/comments.html` (`requireAdmin`, see below). Deletion is erasure.
 - **Rate limit:** 5 `POST`s per address per 15 minutes plus a process-wide 200 per hour, keyed on
-  `req.ip` under `trustProxy: 1` — never on the reader-chosen name, which would let anyone DoS a
-  name. See *Rate limiting* for why these maps are separate from the login limiter.
+  `req.ip` under the address-validated, immediate-peer policy below — never on the reader-chosen
+  name, which would let anyone DoS a name. See *Rate limiting* for the separate limiter maps.
 - **Nothing on the public comment path logs a comment field** — not the name, body, honeypot
   value or translation key (spec invariant 11). A store failure is caught in the route and logged
   as the driver message only, because the global error handler logs `req.url`, which on `GET`
   carries the key. The client still gets the sanitized 500.
+- **Author reply identity (#274):** new admin replies store the cached site-identity
+  `authorName`, falling back to the literal `Author` when empty. The login username is never
+  used as the public display name. Existing comment rows keep their historical names.
 - **Not done by design:** no `workLock`, no rebuild (comments are runtime, never baked), no
   `safeFetch` or any outbound call, no markdown/HTML, no `parentId`.
+
+### Site identity
+
+The [owner-approved contract](docs/superpowers/specs/2026-10-27-issue-273-site-identity-design.md)
+is implemented in stages. **#274** adds admin-only, `no-store` `GET`/`PUT /settings/identity`,
+revision-conflict protection, text/social settings, boot seeding and shared build snapshots.
+Identity lives in Postgres with content; operational settings remain in `settings.json`.
+
+- `site/src/lib/site-identity.ts` is the shared validator for saves, stored rows, builds and
+  restores. Names/localized text use NFC, reject any `\p{C}` before trimming, then enforce field caps.
+  Every retained DE/EN map is checked, including inactive values; unknown locale keys and malformed
+  maps are refused. No missing locale is filled with another locale's text.
+- Social links are bounded (six), `https:` only, without credentials, whitespace/control
+  characters, IP literals or loopback destinations. Labels are plain text. Rendered links use
+  escaped text/attribute interpolation and `rel="noopener noreferrer"`, never raw HTML.
+- Identity reaches HTML/JSON-LD/RSS through escaping serializers; admin consumers use
+  `textContent`. The unauthenticated copy script exposes only site name, the localized studio
+  descriptor and reserved canonical origin, never author identity, social links or credentials.
+- Runtime identity reads use a boot-loaded cache refreshed on successful saves, not a
+  per-request DB lookup. The build captures identity, assets and content in one exported
+  PostgreSQL snapshot under the exclusive lock; child loaders import it before reading.
+  Malformed snapshots fail closed, preserving the live release. Builder-set internal env
+  values override inherited ones. The exporter is bounded by the build deadline and released.
+- Fresh databases seed neutral; evidence of a pre-existing user/post seeds legacy once.
+  Neither seed sets `saved_at`; a later boot never overwrites a saved or neutral identity.
+- Restore treats a dump as untrusted. v11 requires both tables, valid singleton metadata,
+  full-field validation, canonical base64 assets, unique roles and complete favicon groups.
+  The shared asset validator checks SHA-256, ≤256 KiB, PNG format, role dimensions and full
+  pixel decode, and refuses embedded EXIF/XMP/IPTC/ICC. The CLI and direct restore perform
+  decoding before mutation. Recovered bytes are never repaired or silently skipped.
+
+**Not implemented by #274:** logo/favicon upload routes and rendering (#275); canonical-origin
+editing, topology checks, comment-Origin switching, noindex/robots and outbound headers (#276).
+Canonical values currently receive serialized-origin shape validation only. The comment Origin
+source documented above is unchanged by #274; #319/#276 own replacing its image-origin fallback.
+Do not infer these future controls from the reserved columns/snapshot fields. Gallery image
+allow-listing, existing upload limits and EXIF policy are unchanged.
 
 ### Media metadata redaction
 
@@ -230,8 +270,9 @@ time are kept — they are useful and carry no location.
 able to run — see `uploader/src/disk.ts`. A full `/data` otherwise fails mid-pipeline and can
 leave a partial variant set with no complete record. The incremental images archive — the
 largest single writer on the volume — applies the same reserve on its way in (#113): it refuses
-when its estimated size would not leave that room, and its temp file never survives a failed or
-interrupted run, so the backup feature cannot fill the disk it shares with the site. Free space
+when its estimated size would not leave that room. Failed output is removed only after its
+writer settles; exit cleanup is best-effort and SIGKILL leftovers are swept on the next run.
+An unlink failure is logged for the next sweep, not reported as a successful archive. Free space
 is also reported on `/health` — **only to an admin session** (#132): the route itself is public
 because the compose healthcheck polls it without a cookie, but `free`/`total` for `/data` would
 let anyone on the internet watch the volume fill up and time a disk-exhaustion attempt against
@@ -248,6 +289,15 @@ clock rollback, foreign nested mounts and arbitrary network filesystems are outs
 timestamp protocol. Legacy, missing or corrupt cutoff provenance forces a full archive with
 the existing reserve, retaining old archives rather than guessing from filenames. Admin-only
 backup access, private original/EXIF handling, storage ownership and key guards are unchanged.
+
+Writer settlement was reconfirmed for #430 (2026-10-28): an owned tar pack and Node destination
+pipeline await destination open/write/close before failure cleanup or successful activation.
+Cancellation cannot activate the archive or advance its cutoff, and backup quiescence waits
+for that settlement before storage ownership is released. Tar may finish admitted **read-only**
+input work after its pack is destroyed; pipeline error listeners remain installed and the closed
+destination cannot receive further bytes. This does not claim every private tar input descriptor
+has closed at rejection. Prior completed archives, originals, dumps and route companions are
+not failure-cleanup targets. Authorization, restore validation and persisted formats are unchanged.
 
 `POST /import` has the same precondition (issue #94), with the same 507 and the same reserve, but
 sized from a **count** rather than a byte total — a WXR declares URLs, not sizes — using the
@@ -284,9 +334,11 @@ A per-client-IP fixed-window limiter throttles the password-verifying endpoints 
 unauthenticated `/login` and `/setup`, plus the authenticated `POST /users/me/password` — to slow
 brute-force attempts: **10 requests per address per 15 minutes**. All three share the same per-IP
 bucket, so failed current-password guesses also count against login attempts from that IP. The
-per-IP key is `req.ip` derived under `trustProxy: 1`: the address the single trusted reverse
-proxy appended to `X-Forwarded-For`; client-supplied (leftmost) entries are ignored, so rotating
-the header does not open a fresh bucket.
+per-IP key is `req.ip`: only an allow-listed immediate socket peer may supply forwarding headers.
+For that peer, the rightmost `X-Forwarded-For` entry is the client; the walk stops after one hop,
+even if that entry is itself a trusted address. For any other peer, its socket address is the key.
+Rotating client-supplied leftmost entries or sending forged headers directly from another
+container does not open a fresh bucket.
 
 `/login` additionally keeps a **per-account failure budget across all sources** — the defence
 against a guess spread over many addresses, which the per-IP bucket cannot see — and checks it
@@ -332,8 +384,20 @@ multiple replicas, limits would be counted per replica.)
   write, so a refused upload leaves no orphan original for the reconcile to adopt.
 - **Media text fields** (`title`, `alt`, `caption`) strip `\p{C}` before the length cap, like tags
   and EXIF strings, so a NUL can never reach Postgres `text` (which rejects it with a 500).
-- **Imported slugs** are validated at the WordPress-import boundary; a group with an unsafe slug is
-  skipped with a warning and never reaches the database, the storage path, or the MDX export.
+- **Story slugs** retain the ASCII grammar `[a-z0-9][a-z0-9-]*` and are bounded to
+  **251 bytes**, leaving four bytes for the `.mdx` export extension. HTTP draft validation
+  and both stores' shared normalization boundary reject excessive nonempty values before
+  writing; errors name the locale field, limit and byte count, not the submitted slug.
+  The empty draft sentinel remains allowed. Single/bulk publish validation requires both
+  bounded nonempty slugs, including legacy loaded rows, before publishing or building.
+  MDX export validates both filenames before writing either locale. No filename encoding,
+  slug rewriting, schema migration, or authorization/confirmation relaxation is involved.
+- **Imported slugs** use the same story-slug check in preflight; an unsafe group is counted
+  as `rejected` with a bounded diagnostic before image fetches or database writes.
+  The owner-approved #353 rollout requires a read-only inventory of **working and published
+  snapshot** slugs, including imported drafts. Any over-bound value blocks activation on
+  that installation; it is not renamed, unpublished, omitted, or repaired automatically.
+  See `uploader/scripts/slug-length-inventory.sql` and the approved slug-length spec.
 - **Coordinates** are bounded on publish (`lat ∈ [-90,90]`, `lng ∈ [-180,180]`, finite).
 - **SQL** is parameterized throughout (`pg` placeholders) — no string-built queries.
 - **Uploads** — `POST /upload` is capped at one file per request (`files: 1`); a second file in the
@@ -342,6 +406,25 @@ multiple replicas, limits would be counted per replica.)
   8, and the app sets an explicit `requestTimeout` (120 s) — @fastify/multipart's parser never
   consumes the body itself, so without these an authenticated caller could stream an effectively
   unbounded request. (`uploader/src/server.ts`)
+
+### Native image decoders
+
+Image decoding uses sharp's prebuilt libvips in the app image. The #347 candidate DHI builds
+were exercised on Linux ARM64 (native) and AMD64 (emulated): both application trees loaded
+sharp **0.35.5**, libheif **1.23.5**, librsvg **2.63.2** and libvips **8.18.7**. Both DHI Node
+executables were measured as PIE (`ELF e_type = DYN`) on glibc 2.41; this is hardening evidence,
+not a substitute for patched decoders. See the [approved codec specification](docs/superpowers/specs/2026-10-27-issue-347-sharp-codec-upgrade.md)
+for advisory references and verification.
+
+Changing a lockfile or rebuilding the static blog does not patch a running container. Shipping
+this fix requires a new release image and an owner-controlled redeployment. Recovery is
+**roll forward only** while retaining the patched codec floors: restoring sharp 0.35.3/0.35.4
+would reopen vulnerable decoding, including boot/rescan of retained originals. Preserve data;
+do not re-import or bulk re-encode as a dependency rollback.
+
+The metadata allow-list below, private-original restrictions, SVG original naming, accepted
+formats, and upload/import/preview authorization are unchanged. Benign JPEG, AVIF and SVG
+runtime checks retained those contracts, including EXIF-free previews and zero GPS variants.
 
 ### Published image metadata (allow-list)
 
@@ -594,6 +677,16 @@ fixed "could not be saved (see server logs)", the detail going to stdout. A malf
 400 (`WxrParseError`, fixed message; the parser's offset-and-context detail is logged only), never
 a 500 with a stack.
 
+Untranslated-post accounting (#387) preserves this import boundary: a published post with a
+recognized DE/EN language but no Polylang translation group is counted as a separate rejection
+before any photo fetch or draft write, including in overwrite mode. It never receives a synthetic
+group key or pairs with another groupless item. The existing bounded warning list names the
+export-supplied slug and locale as text (`import.html` uses `textContent`), with no new disclosure
+of server details. Rejection-only exports create ordinary completed jobs with zero planned work;
+empty eligible exports still return 400. Admin authorization, unknown-language exclusions, XML
+limits, slug/path guards, SSRF protection and private-original handling are unchanged. This is
+accounting for the current bilingual importer, not #283's future mode-aware admission policy.
+
 ### A partial import cannot be published (issue #91, 2026-09-06)
 
 A failed re-host leaves the source URL in the draft body. Rendering would then hot-link the old
@@ -677,8 +770,8 @@ text, the configured image origin, and a known `ready` media item. Single and bu
 apply the same checks. Working and published title references both participate in media usage
 and deletion protection, so replacing a draft banner cannot orphan the live banner.
 Existing upload authorization, EXIF filtering and preview CSP remain unchanged. The
-`/admin/editor-image-copy.js` asset contains only public DE/EN interface strings, never
-post data or credentials. Schema and v9 backup recovery are documented in the
+`/admin/editor-image-copy.js` asset contains public DE/EN interface strings and the restricted
+`window.SiteIdentity` chrome subset described above, never post data or credentials. Schema and v9 backup recovery are documented in the
 [approved title-image spec](docs/superpowers/specs/2026-10-16-story-title-image-design.md).
 
 > We deliberately use a maintained, allow-list sanitizer rather than hand-rolled escaping — the
@@ -763,16 +856,38 @@ preview even though the live site would load it.
   intentionally omitted on the admin pages because they use inline scripts; a strict policy would
   need nonces. The one exception is `GET /posts/:tk/preview`, which renders author markup and has
   no scripts — see *Output sanitization*.)
-- The app sets `trustProxy: 1` (exactly one trusted hop), so it reads `X-Forwarded-*` as set by
-  that one reverse proxy for the client IP (rate limiting) and the cookie `Secure` flag. **It must
-  run behind a TLS-terminating reverse proxy that sets `X-Forwarded-Proto`**; the compose file
-  publishes port 3000 on `127.0.0.1` only, so the host proxy is the sole ingress. A second proxy
-  layer needs the hop count raised to `2` — never `true`, which trusts client-supplied entries.
-- **The proxy must forward the original, verbatim `Host` header for both domains**
-  (`simonswanderlust.com` and `img.simonswanderlust.com`) — nginx: `proxy_set_header Host $host;`.
-  Image-vs-blog/admin routing is a single Fastify process that dispatches on the `Host` header
-  (`IMG_HOST`); a proxy that rewrites `Host` (e.g. nginx's default `$proxy_host` behavior) breaks
-  every image URL by routing image requests into the blog/admin handler instead.
+- **Proxy trust validates the immediate peer's address and hop zero**, never `true`, a bare hop
+  count or a hop-only function. `TRUSTED_PROXY` unset or `loopback` trusts only `127.0.0.0/8`
+  and `::1` (including mapped IPv4). Compose sets the literal `TRUSTED_PROXY: docker-gateway`:
+  loopback plus the single IPv4 default gateway discovered from `/proc/net/route`, not the
+  bridge subnet or RFC1918 ranges. Empty/unknown modes and unreadable, missing or ambiguous
+  gateway discovery refuse boot; there is no silent loopback fallback.
+- **Supported public topology: one host-level TLS proxy, no CDN or second proxy hop.**
+  Compose publishes `127.0.0.1:3000` only. Container traffic from the host can arrive as the
+  bridge gateway rather than loopback, which is why the gateway is trusted. Other bridge
+  containers retain their own untrusted addresses. `docker-gateway` is valid only for this
+  bridge topology; changing `networks`/`network_mode`, adding a proxy container or adding a
+  CDN requires a new trust spec, not a broader allow-list or larger hop count.
+- **The proxy must preserve the original, verbatim `Host` for both domains**, overwrite
+  `X-Forwarded-Proto` with its own scheme, and append or overwrite `X-Forwarded-For` so its
+  rightmost entry is the client it accepted. For nginx, use `proxy_set_header Host $http_host;`,
+  `proxy_set_header X-Forwarded-Proto $scheme;`, and
+  `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`.
+  Routing and GPX Origin checks use raw `Host`, never `X-Forwarded-Host`. Rewriting `Host`
+  breaks image-domain routing; missing XFF collapses clients into one limiter bucket.
+- **Accepted residual: the host is the trust boundary.** A host-local process can forge
+  forwarding headers through the trusted gateway. A co-tenant container cannot. Trusted HTTPS
+  forwarding controls `Secure` cookies and GPX Origin matching; untrusted forwarded protocol
+  is ignored. Local plain HTTP intentionally does not set `Secure`.
+- **Verification boundary (#369):** an ARM64 production-image TCP probe in Docker Desktop's
+  Linux VM observed a host-network TLS proxy arriving as gateway `172.31.0.1`, two bridge
+  clients retaining independent limiter buckets, direct-container spoof refusal, HTTPS-only
+  `Secure` cookies, and trusted/untrusted GPX Origin acceptance/refusal. An internal bridge
+  without a default route refused boot. This is not a production/VPS rehearsal: that proxy
+  connected directly to the app bridge IP, not through published loopback DNAT. Before DNS
+  cutover, measure the target server's peer and proxy configuration and repeat independent
+  limiter checks from two external networks. See the
+  [#369 spec](docs/superpowers/specs/2026-10-27-issue-369-dependency-proxy-trust.md).
 
 ## Secrets
 
@@ -887,6 +1002,13 @@ deliberate trade-off, not an oversight:
   logical dumps do not capture the settings file. A lost master key requires reissuing
   the provider credential, not bypassing encryption. Removing a row does not revoke the
   key externally or remove copies in old backups.
+- Version 11 (`IDENTITY_DUMP_VERSION`) adds `site_identity` and `site_identity_assets` to the
+  same snapshot and restore transaction. Missing identity tables in identity-capable formats
+  are corruption. Invalid metadata, retained localized text, social URLs or asset bytes refuse
+  the whole restore before replacement. Supported older formats restore the legacy brand,
+  unset `saved_at`, clear assets and keep the live canonical origin if set; otherwise they use
+  the legacy origin. The CLI announces the legacy recovery and includes live identity/assets
+  in the verified undo set. Restart loads the restored cache; public output waits for Rebuild.
 - Image archives (`/data/backup/db/images-*.tar`) contain no password hashes — only the already
   publicly served image files — but their download route stays behind the same admin gate and
   strict filename validation as the dumps.
