@@ -355,6 +355,8 @@
   // (see detailReplaceable).
   function renderDetail() {
     if (state.detailDirty) return;
+    var item = state.items.filter(function (i) { return i.key === state.detailKey; })[0];
+    if (!item) state.detailKey = null;
     var selectionChanged = state.observedKey !== state.detailKey;
     if (selectionChanged) {
       detailRefresh.beginAction();
@@ -364,7 +366,6 @@
     }
     var panel = $('detail');
     panel.innerHTML = '';
-    var item = state.items.filter(function (i) { return i.key === state.detailKey; })[0];
     // A suggestion belongs to the photo it was asked for: once the panel shows
     // another photo (or none), the request is abandoned, never applied, and
     // the offers it left under fields are dropped.
