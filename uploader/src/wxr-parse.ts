@@ -4,7 +4,11 @@ export interface ParsedPost {
   group: string; locale: 'de' | 'en'; slug: string; title: string;
   date: string; excerpt: string; contentHtml: string; thumbnailId: string | null;
 }
-export interface ParsedWxr { attachments: Map<string, string>; posts: ParsedPost[] }
+export interface ParsedWxr {
+  attachments: Map<string, string>;
+  posts: ParsedPost[];
+  untranslated: { locale: 'de' | 'en'; slug: string }[];
+}
 
 type Node = Record<string, unknown>;
 const cd = (v: unknown): string => {
@@ -38,6 +42,7 @@ export function parseWxr(xml: string): ParsedWxr {
   const items = arr(doc.rss?.channel?.item) as Node[];
   const attachments = new Map<string, string>();
   const posts: ParsedPost[] = [];
+  const untranslated: ParsedWxr['untranslated'] = [];
   for (const it of items) {
     const type = cd(it['wp:post_type']);
     if (type === 'attachment') {
@@ -49,7 +54,11 @@ export function parseWxr(xml: string): ParsedWxr {
     const cats = arr(it.category) as Node[];
     const lang = cats.find((c) => c['@_domain'] === 'language')?.['@_nicename'] as string | undefined;
     const group = cats.find((c) => c['@_domain'] === 'post_translations')?.['@_nicename'] as string | undefined;
-    if ((lang !== 'de' && lang !== 'en') || !group) continue;
+    if (lang !== 'de' && lang !== 'en') continue;
+    if (!group) {
+      untranslated.push({ locale: lang, slug: cd(it['wp:post_name']) });
+      continue;
+    }
     const metas = arr(it['wp:postmeta']) as Node[];
     const thumb = metas.find((m) => cd(m['wp:meta_key']) === '_thumbnail_id');
     posts.push({
@@ -59,5 +68,5 @@ export function parseWxr(xml: string): ParsedWxr {
       thumbnailId: thumb ? cd(thumb['wp:meta_value']) : null,
     });
   }
-  return { attachments, posts };
+  return { attachments, posts, untranslated };
 }
