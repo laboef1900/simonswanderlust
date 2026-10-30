@@ -3,6 +3,20 @@ export type Locale = (typeof locales)[number];
 export const defaultLocale: Locale = 'de';
 
 const de = {
+  'editor.chrome.usersReload': 'Benutzerliste neu laden',
+  'editor.chrome.usersLoading': 'Benutzer werden geladen…',
+  'editor.chrome.usersLoaded': 'Benutzerliste geladen: {count} Konten.',
+  'editor.chrome.usersLoadFailed': 'Benutzer konnten nicht geladen werden (HTTP {status}). Lade die Benutzerliste erneut.',
+  'editor.chrome.usersLoadNetworkFailed': 'Benutzer konnten nicht geladen werden. Prüfe die Verbindung und lade die Benutzerliste erneut.',
+  'editor.chrome.usersAddRequired': 'Gib einen Benutzernamen und ein Passwort ein.',
+  'editor.chrome.usersAdding': 'Benutzer wird hinzugefügt…',
+  'editor.chrome.usersAdded': 'Benutzer hinzugefügt.',
+  'editor.chrome.usersAddNetworkFailed': 'Das Hinzufügen konnte nicht bestätigt werden. Prüfe die Verbindung und lade die Benutzerliste neu, bevor du es erneut versuchst. Deine Eingaben bleiben erhalten.',
+  'editor.chrome.usersActionFailed': 'Aktion fehlgeschlagen (HTTP {status}). Prüfe deine Eingaben und versuche es erneut.',
+  'editor.chrome.usersPasswordRequired': 'Gib dein aktuelles und dein neues Passwort ein.',
+  'editor.chrome.usersPasswordChanging': 'Passwort wird geändert…',
+  'editor.chrome.usersPasswordChanged': 'Passwort geändert. Deine anderen Sitzungen wurden abgemeldet.',
+  'editor.chrome.usersPasswordNetworkFailed': 'Die Passwortänderung konnte nicht bestätigt werden. Prüfe die Verbindung und versuche es erneut. Deine Eingaben bleiben erhalten.',
   'editor.chrome.pickerFolders': 'Ordner',
   'editor.chrome.pickerAllPhotos': 'Alle Fotos',
   'editor.chrome.pickerSubfoldersHelp': 'Unterordner werden mit angezeigt.',
@@ -375,6 +389,20 @@ const de = {
 export type UIKey = keyof typeof de;
 
 const en: Record<UIKey, string> = {
+  'editor.chrome.usersReload': 'Reload users',
+  'editor.chrome.usersLoading': 'Loading users…',
+  'editor.chrome.usersLoaded': 'User list loaded: {count} accounts.',
+  'editor.chrome.usersLoadFailed': 'Could not load users (HTTP {status}). Reload the user list to try again.',
+  'editor.chrome.usersLoadNetworkFailed': 'Could not load users. Check your connection and reload the user list.',
+  'editor.chrome.usersAddRequired': 'Enter a username and password.',
+  'editor.chrome.usersAdding': 'Adding user…',
+  'editor.chrome.usersAdded': 'User added.',
+  'editor.chrome.usersAddNetworkFailed': 'Could not confirm whether the user was added. Check your connection and reload the user list before trying again. Your entries have been kept.',
+  'editor.chrome.usersActionFailed': 'Action failed (HTTP {status}). Check your entries and try again.',
+  'editor.chrome.usersPasswordRequired': 'Enter your current and new password.',
+  'editor.chrome.usersPasswordChanging': 'Changing password…',
+  'editor.chrome.usersPasswordChanged': 'Password changed. Your other sessions were logged out.',
+  'editor.chrome.usersPasswordNetworkFailed': 'Could not confirm whether your password changed. Check your connection and try again. Your entries have been kept.',
   'editor.chrome.pickerFolders': 'Folders',
   'editor.chrome.pickerAllPhotos': 'All photos',
   'editor.chrome.pickerSubfoldersHelp': 'Folder views include subfolders.',

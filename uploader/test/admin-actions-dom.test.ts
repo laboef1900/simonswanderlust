@@ -124,6 +124,13 @@ function loadPage(file: string, extraGlobals: Record<string, unknown>, scripts: 
   };
   // ARIA tabs carry their state in markup that tabs.js reads; mirror just that.
   const attr = (tag: string, name: string): string | undefined => new RegExp(`\\s${name}="([^"]*)"`).exec(tag)?.[1];
+  for (const [tag] of markup.matchAll(/<[a-z]+\b[^>]*\bid="[^"]+"[^>]*>/g)) {
+    const node = el(attr(tag, 'id')!);
+    for (const name of ['role', 'aria-describedby']) {
+      const value = attr(tag, name);
+      if (value) node.attrs[name] = value;
+    }
+  }
   const tabs = [...markup.matchAll(/<button\b[^>]*\brole="tab"[^>]*>/g)].map(([tag]) => {
     const tab = el(attr(tag, 'id')!);
     tab.dataset.tab = attr(tag, 'data-tab') ?? '';
@@ -196,6 +203,169 @@ function loadPosts(extraGlobals: Record<string, unknown> = {}) {
 }
 
 const post = { translationKey: 'tk1', titleDe: 'Bukarest', slugDe: 'bukarest', slugEn: 'bucharest', status: 'published' };
+
+describe('users.html failure recovery', () => {
+  const user = { id: 2, username: 'author2', isAdmin: false };
+
+  it.each(['http', 'network'] as const)('recovers the user list after a %s failure without clearing form entries', async (failure) => {
+    const pending = Promise.withResolvers<Response>();
+    const fetcher = vi.fn()
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValueOnce(Response.json([user]))
+      .mockResolvedValueOnce(Response.json({ error: 'unavailable' }, { status: 500 }))
+      .mockResolvedValueOnce(Response.json([]));
+    const { el } = loadPage('public/users.html', { fetch: fetcher });
+    el('username').value = 'unsaved-author';
+    el('password').value = 'unsaved-password';
+    const loading = el('reloadUsers').click();
+    expect(el('reloadUsers').disabled).toBe(true);
+    await el('reloadUsers').click();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    if (failure === 'http') pending.resolve(Response.json({ error: 'unavailable' }, { status: 500 }));
+    else pending.reject(NETWORK_DOWN);
+    await loading;
+    expect(el('list').children).toHaveLength(0);
+    expect(el('reloadUsers').disabled).toBe(false);
+
+    await el('reloadUsers').click();
+    expect(el('list').children.map((row) => row.children[0]?.textContent)).toEqual([user.username]);
+    // A failed refresh must not retain actionable rows from an obsolete list.
+    await el('reloadUsers').click();
+    expect(el('list').children).toHaveLength(0);
+    expect(el('listout').textContent).toBe(ui.en['editor.chrome.usersLoadFailed'].replace('{status}', '500'));
+    await el('reloadUsers').click();
+    expect(el('list').children).toHaveLength(0);
+    expect(el('username').value).toBe('unsaved-author');
+    expect(el('password').value).toBe('unsaved-password');
+  });
+
+  it('refreshes after Add even while an older user list is pending', async () => {
+    const stale = Promise.withResolvers<Response>();
+    const fresh = Promise.withResolvers<Response>();
+    const fetcher = vi.fn()
+      .mockReturnValueOnce(stale.promise)
+      .mockResolvedValueOnce(Response.json(user, { status: 201 }))
+      .mockReturnValueOnce(fresh.promise);
+    const { el } = loadPage('public/users.html', { fetch: fetcher });
+    const oldLoad = el('reloadUsers').click();
+    el('username').value = user.username;
+    el('password').value = 'fixture-new-password';
+    const add = el('addForm').fire('submit');
+    await Promise.resolve();
+    await Promise.resolve();
+    stale.resolve(Response.json([]));
+    await oldLoad;
+    expect(el('reloadUsers').disabled).toBe(true);
+    expect(el('listout').textContent).toBe(ui.en['editor.chrome.usersLoading']);
+    fresh.resolve(Response.json([user]));
+    await add;
+    expect(el('list').children.map((row) => row.children[0]?.textContent)).toEqual([user.username]);
+    expect(el('reloadUsers').disabled).toBe(false);
+  });
+
+  it('does not restore a removed account when an older reload completes last', async () => {
+    const deletion = Promise.withResolvers<Response>();
+    const stale = Promise.withResolvers<Response>();
+    const deletionStarted = Promise.withResolvers<void>();
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(Response.json([user]))
+      .mockImplementationOnce(() => { deletionStarted.resolve(); return deletion.promise; })
+      .mockReturnValueOnce(stale.promise)
+      .mockResolvedValueOnce(Response.json([]));
+    const { el } = loadPage('public/users.html', { fetch: fetcher });
+    await el('reloadUsers').click();
+    const remove = el('list').children[0]!.children[2]!.click();
+    await deletionStarted.promise;
+    const oldLoad = el('reloadUsers').click();
+    deletion.resolve(new Response(null, { status: 204 }));
+    await remove;
+    // The successful mutation's fresh read must finish independently of the old GET.
+    for (let index = 0; index < 12; index++) await Promise.resolve();
+    expect(el('listout').textContent).toBe(ui.en['editor.chrome.usersLoaded'].replace('{count}', '0'));
+    stale.resolve(Response.json([user]));
+    await oldLoad;
+    expect(el('list').children).toHaveLength(0);
+    expect(el('listout').textContent).toBe(ui.en['editor.chrome.usersLoaded'].replace('{count}', '0'));
+  });
+
+  const actions = [
+    { form: 'addForm', button: 'add', status: 'out',
+      fields: [['username', 'author2'], ['password', 'fixture-new-password']] },
+    { form: 'pwForm', button: 'changepw', status: 'pwout',
+      fields: [['curpw', 'fixture-current-password'], ['newpw', 'fixture-new-password']] },
+  ] as const;
+
+  it.each(actions)('$form preserves entries on rejection, prevents duplicate submission, and permits a successful retry', async (action) => {
+    const pending = Promise.withResolvers<Response>();
+    const fetcher = vi.fn()
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValueOnce(Response.json({ ok: true }))
+      .mockResolvedValueOnce(Response.json([user]));
+    const logger = { log: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const { el } = loadPage('public/users.html', { fetch: fetcher, console: logger });
+    for (const [id, value] of action.fields) el(id).value = value;
+    el('isAdmin').checked = true;
+    const submitting = el(action.form).fire('submit');
+    expect(el(action.button).disabled).toBe(true);
+    await el(action.form).fire('submit');
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    pending.reject(new Error('Transport failed: ' + action.fields.map(([, value]) => value).join(' ')));
+    await submitting;
+    expect(el(action.button).disabled).toBe(false);
+    for (const [id, value] of action.fields) {
+      expect(el(id).value).toBe(value);
+      if (id !== 'username') expect(el(action.status).textContent).not.toContain(value);
+    }
+    expect(el('isAdmin').checked).toBe(true);
+    for (const log of Object.values(logger)) expect(log).not.toHaveBeenCalled();
+
+    await el(action.form).fire('submit');
+    expect(el(action.button).disabled).toBe(false);
+    for (const [id] of action.fields) expect(el(id).value).toBe('');
+    if (action.form === 'addForm') {
+      expect(el('isAdmin').checked).toBe(false);
+      expect(el('list').children[0]?.children[0]?.textContent).toBe(user.username);
+    }
+  });
+
+  it.each(actions)('$form keeps entries after an HTTP refusal and retains newer edits when a retry succeeds', async (action) => {
+    const pending = Promise.withResolvers<Response>();
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValueOnce(Response.json([user]));
+    const { el } = loadPage('public/users.html', { fetch: fetcher });
+    for (const [id, value] of action.fields) el(id).value = value;
+    await el(action.form).fire('submit');
+    expect(el(action.button).disabled).toBe(false);
+    for (const [id, value] of action.fields) expect(el(id).value).toBe(value);
+
+    const retry = el(action.form).fire('submit');
+    for (const [id] of action.fields) el(id).value = 'newer-unsaved-entry';
+    pending.resolve(Response.json({ ok: true }));
+    await retry;
+    expect(el(action.button).disabled).toBe(false);
+    for (const [id] of action.fields) expect(el(id).value).toBe('newer-unsaved-entry');
+  });
+
+  it('keeps confirmed account creation separate from a failed list refresh', async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(Response.json({ ok: true }, { status: 201 }))
+      .mockResolvedValueOnce(Response.json({ error: 'unavailable' }, { status: 500 }))
+      .mockResolvedValueOnce(Response.json([user]));
+    const { el } = loadPage('public/users.html', { fetch: fetcher });
+    el('username').value = user.username;
+    el('password').value = 'fixture-new-password';
+    await el('addForm').fire('submit');
+    expect(el('username').value).toBe('');
+    expect(el('password').value).toBe('');
+    expect(el('add').disabled).toBe(false);
+    expect(el('reloadUsers').disabled).toBe(false);
+    await el('reloadUsers').click();
+    expect(el('list').children[0]?.children[0]?.textContent).toBe(user.username);
+    expect(fetcher.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
+  });
+});
 
 describe('posts.html actions survive a dropped connection', () => {
   it('deletePost re-enables the row button and names the failure', async () => {
