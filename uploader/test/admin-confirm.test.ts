@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { editorDocument, type EditorElement } from './editor-dom-harness.js';
+import { editorDocument, EditorEvent, type EditorElement } from './editor-dom-harness.js';
 
 const src = readFileSync('public/admin-confirm.js', 'utf8');
 
@@ -121,6 +121,25 @@ describe('AdminConfirm.ask native dialog', () => {
     const confirmedAgain = api.ask({ title: 'Publish?' });
     close('ok');
     await expect(confirmedAgain).resolves.toBe(true);
+  });
+
+  it('confirms a matching typed token with Enter, but not a mismatch or composition', async () => {
+    const { api, dom, dialog } = nativeDialog();
+    const accepted = api.ask({ title: 'Delete two trips?', typed: 'DELETE' });
+    const input = dom.document.getElementById('adminConfirmTyped')!;
+    for (const token of ['', 'delete', 'DELETE ']) {
+      input.value = token;
+      const event = input.fire('keydown', { key: 'Enter' });
+      expect(event.defaultPrevented).toBe(true);
+      expect(dialog().open).toBe(true);
+    }
+    input.value = 'DELETE';
+    input.dispatchEvent(new EditorEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true, cancelable: true }));
+    expect(dialog().open).toBe(true);
+    input.fire('keydown', { key: 'Enter' });
+    expect(dialog().open).toBe(false);
+    dom.flushDialogEvents();
+    await expect(accepted).resolves.toBe(true);
   });
 
   it('requires fresh consent and the token on each typed confirmation', async () => {
