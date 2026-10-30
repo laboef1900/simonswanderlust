@@ -1,11 +1,11 @@
 import { publishTokens } from './publish-tokens.js';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
-import { importWxr, prepareImport, rehostKey, ImportTooLargeError, ImportInsufficientSpaceError, DEFAULT_MAX_IMAGES, type ImportDeps } from '../src/wp-import.js';
+import { importWxr, prepareImport, rehostKey, ImportTooLargeError, ImportInsufficientSpaceError, DEFAULT_MAX_IMAGES, WARNING_CAP, type ImportDeps } from '../src/wp-import.js';
 import { memoryPostStore, PostError, type PostStore } from '../src/posts.js';
 import { createRehostResume, rehostImage, type RehostResult } from '../src/wp-images.js';
 import { FetchError, type LookupFn } from '../src/safe-fetch.js';
@@ -31,7 +31,7 @@ ${items}
 </rss>`;
 
 const item = (loc: 'de' | 'en', slug: string, group: string, html: string): string => `  <item>
-    <title>${slug}</title>
+    <title><![CDATA[${slug}]]></title>
     <wp:post_name><![CDATA[${slug}]]></wp:post_name>
     <wp:post_type><![CDATA[post]]></wp:post_type>
     <wp:status><![CDATA[publish]]></wp:status>
@@ -107,6 +107,28 @@ const run = (
 });
 
 describe('importWxr', () => {
+  it.each(['de', 'en'] as const)('bounds %s slugs in preflight without changing accepted imported URLs', async (locale) => {
+    for (const length of [250, 251, 252, 8192]) {
+      const store = memoryPostStore();
+      const h = harness();
+      const slug = 'a'.repeat(length);
+      const de = locale === 'de' ? slug : 'short-de';
+      const en = locale === 'en' ? slug : 'short-en';
+      const content = length > 251 ? imgs('https://wp.example/must-not-fetch.jpg') : '<p>Imported story</p>';
+      const summary = await run(pairOf('bounded', de, en, content), h, {}, store);
+      if (length <= 251) {
+        expect(summary).toMatchObject({ imported: 1, rejected: 0, failed: 0 });
+        expect((await store.list())[0]).toMatchObject({ slugDe: de, slugEn: en });
+      } else {
+        expect(summary).toMatchObject({ imported: 0, updated: 0, rejected: 1, failed: 0 });
+        expect(summary.warnings.join(' ')).toContain(`${locale}.slug must be at most 251 ASCII bytes (received ${length})`);
+        expect(summary.warnings.join(' ')).not.toContain(slug);
+        expect(await store.list()).toEqual([]);
+      }
+      expect(h.calls).toEqual([]);
+    }
+  });
+
   it.each([false, true])('does not resurrect a matched draft deleted after preparation (overwrite=%s)', async (overwriteDrafts) => {
     const store = memoryPostStore();
     const body = pairOf('g', 'de-a', 'en-a', '<p>original</p>');
@@ -1071,6 +1093,73 @@ describe('importWxr reporting', () => {
     expect(s.images.failed).toBe(240);
     expect(s.warnings.length).toBeLessThanOrEqual(201);
     expect(s.warnings[s.warnings.length - 1]).toMatch(/and \d+ more/);
+  });
+
+  it('accounts for a real pair, a groupless story and an incomplete group exactly once each', async () => {
+    const store = memoryPostStore();
+    const h = harness();
+    const prepared = await prepareImport(wxr([
+      item('de', 'de-1', 'g1', '<p>a</p>'),
+      item('en', 'en-1', 'g1', '<p>a</p>'),
+      item('de', 'nur-deutsch', '', imgs('https://wp/untranslated.jpg')),
+      item('de', 'halb-de', 'g2', imgs('https://wp/incomplete.jpg')),
+    ].join('\n')), { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: h.rehost, log: () => {} });
+    expect(prepared.groups).toBe(3);
+    expect(prepared.planned).toEqual({
+      groups: { total: 1, done: 0 }, images: { planned: 0, hosted: 0, failed: 0 },
+    });
+    const s = await prepared.run();
+    expect(s).toMatchObject({ imported: 1, updated: 0, skippedPublished: 0, rejected: 2, failed: 0 });
+    expect(s.imported + s.updated + s.skippedPublished + s.rejected + s.failed).toBe(prepared.groups);
+    expect(s.warnings).toEqual(expect.arrayContaining([
+      expect.stringContaining('nur-deutsch (de):'),
+      expect.stringContaining('missing en translation (halb-de)'),
+    ]));
+    expect(h.calls).toEqual([]);
+    expect((await store.list()).map((p) => p.slugDe)).toEqual(['de-1']);
+  });
+
+  it.each([false, true])('never pairs or writes groupless items, even with shared slugs and overwriteDrafts=%s', async (overwriteDrafts) => {
+    const store = memoryPostStore();
+    const upsert = vi.spyOn(store, 'upsertDraft');
+    const rehost = vi.fn(stubRehost);
+    const slug = '<b>{locale}$&</b>';
+    const body = wxr([
+      item('de', 'g1', '', imgs('https://wp/a.jpg')),
+      item('en', 'g1', '', imgs('https://wp/b.jpg')),
+      item('de', 'g1', '', '<p>duplicate XML item</p>'),
+      item('en', slug, '', '<p>literal warning text</p>'),
+      item('de', 'incomplete', 'g1', '<p>must not acquire a groupless partner</p>'),
+    ].join('\n'));
+    const prepared = await prepareImport(body, {
+      postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost, overwriteDrafts, log: () => {},
+    });
+    expect(prepared.groups).toBe(5);
+    expect(prepared.planned).toEqual({
+      groups: { total: 0, done: 0 }, images: { planned: 0, hosted: 0, failed: 0 },
+    });
+    const s = await prepared.run();
+    expect(s).toMatchObject({
+      imported: 0, updated: 0, skippedPublished: 0, rejected: 5, failed: 0,
+      images: { total: 0, hosted: 0, failed: 0 },
+    });
+    expect(s.warnings).toHaveLength(5);
+    expect(s.warnings.filter((w) => w.startsWith('g1 (de):'))).toHaveLength(2);
+    expect(s.warnings).toContain(`${slug} (en): no translation (untranslated post) — rejected`);
+    expect(rehost).not.toHaveBeenCalled();
+    expect(upsert).not.toHaveBeenCalled();
+    expect(await store.list()).toEqual([]);
+  });
+
+  it('caps untranslated warnings without dropping rejected units from the summary', async () => {
+    const count = WARNING_CAP + 17;
+    const h = harness();
+    const s = await run(wxr(Array.from({ length: count }, (_, i) =>
+      item(i % 2 ? 'en' : 'de', `untranslated-${i}`, '', imgs('https://wp/no-fetch.jpg'))).join('\n')), h);
+    expect(s).toMatchObject({ imported: 0, updated: 0, skippedPublished: 0, rejected: count, failed: 0 });
+    expect(s.warnings).toHaveLength(WARNING_CAP + 1);
+    expect(s.warnings.at(-1)).toBe('…and 17 more (see server logs)');
+    expect(h.calls).toEqual([]);
   });
 
   // issue #100: one bucket per outcome. "Already published" is a success, a
