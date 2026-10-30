@@ -43,11 +43,19 @@ daily period 25 h, so the run walks around the clock.
 
 ### 1. Temp files never outlive a failed run
 
-`archiveImages` registers a synchronous `process.on('exit')` listener that unlinks the temp
-while the tar is streaming, removes the temp in a `catch` before rethrowing, and deregisters
-the listener in `finally`. This covers every in-process failure and every path through
-`process.exit()` — including `docker stop`'s SIGTERM, whose shutdown sequence
-(`close → drain → end → exit(0)`) does not wait for a running archive. Only SIGKILL escapes it.
+`archiveImages` registers a synchronous `process.on('exit')` listener for best-effort temp
+cleanup and deregisters it in `finally`. The #430 correction (2026-10-28) replaces tar's
+file-convenience promise: it can reject on a pack error while destination opening is still
+pending, allowing the path to reappear after an early unlink. An explicit tar `Pack` and Node
+`WriteStream` pipeline now owns output completion, and separately awaits destination `close`
+on both success and failure before cleanup/rejection or rename. The original failure is retained
+even if unlink fails; that cleanup failure is logged for the next sweep.
+
+Normal shutdown/quiescence waits for admitted writer settlement; cancellation is rechecked before
+activation, so neither an archive nor its cutoff can be published after lease loss. SIGKILL
+cannot run JavaScript cleanup. Destroying the pack also does not promise closure of every private
+tar input descriptor: admitted read-only input callbacks may continue, but cannot feed the closed
+destination or recreate the temp, and pipeline error listeners remain installed.
 
 For SIGKILL (and any pre-fix leftovers), `sweepTempFiles(dir)` removes stale temps. It runs at
 the start of every `runNow()` — so the next attempt reclaims the previous crash's space before
@@ -118,8 +126,8 @@ is still caught up on the next tick or boot.
 
 ## Invariants
 
-- No file matching `*.<pid>.tmp` remains in the backup directory after `runNow()` resolves, in
-  this process or — after the next boot or run — from a killed one.
+- A settled failed writer cannot recreate its temporary output after cleanup. Unlink failure or
+  process termination can leave a temp for the next boot/run sweep; prior archives remain intact.
 - The archive never starts when the estimate would leave the volume below the upload reserve.
 - `lastImagesArchiveAt` advances only after `archiveImages` resolves (existing); with no
   archive on disk, or no usable state, the cutoff comes from disk, never from a guess (new).
@@ -153,3 +161,19 @@ recovered cutoff is persisted only as the ordinary `lastImagesArchiveAt` after a
 - Consecutive-second stamps → the earliest stamp of the run.
 - `POST /backups` → 409 while running; `GET /backups` reports `running`.
 - `isBackupDue` window semantics (day boundary, Monday-anchored week).
+
+### #430 writer-settlement proof (2026-10-28)
+
+Disposable-file runtime smoke used real tar packing, Node file streams and tar extraction:
+selected-file ENOENT while destination open was gated, then a gated close, kept rejection pending
+until closure and preserved the exact source error. No temp survived; the prior archive/cutoff
+survived; a successful backup-service retry extracted byte-identical synthetic contents.
+Lease cancellation during a gated real write/close held `quiesce()` pending and activated no
+archive or cutoff. A separate output-open fault with a gated real input lstat showed one
+read-only input read after archive rejection; that input descriptor subsequently closed, with
+zero destination writes, unhandled exceptions or recreated temps. This is deliberately not a
+universal input-FD closure claim.
+
+Sanitized local evidence: `.issue-runtime/archive-stream-settlement-smoke.json` and
+`.issue-runtime/archive-pending-input-smoke.json`. Automated suites, typechecks, independent
+review and exact-head CI remain integration-owner gates; this runtime proof does not replace them.

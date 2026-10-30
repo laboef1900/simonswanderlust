@@ -35,7 +35,7 @@ describe('ui dictionaries', () => {
    * other proper nouns that must NOT be translated. Everything else that is
    * byte-identical in both locales is almost certainly an untranslated copy/paste.
    */
-  const IDENTICAL_ON_PURPOSE: readonly UIKey[] = ['site.title', 'editor.chrome.studioName'];
+  const IDENTICAL_ON_PURPOSE: readonly UIKey[] = ['editor.chrome.studioName'];
 
   it('flags untranslated values (identical in DE and EN) outside the allow-list', () => {
     const identical = (Object.keys(ui[defaultLocale]) as UIKey[]).filter(
@@ -107,9 +107,9 @@ function looksLikeProse(literal: string): boolean {
  * THE TRADEOFF. Requiring two words and a lowercase letter is what keeps the
  * false-positive rate at zero on this tree, and it is also the limit of the
  * guard. It cannot catch (verified, not assumed):
- *   - Single-word copy: `<p>Willkommen</p>` passes, because `Instagram ↗`
- *     (Footer.astro) and `Simon` (AboutPage.astro) are legitimate one-word text
- *     nodes and nothing distinguishes a proper noun from a one-word sentence.
+ *   - Single-word copy: `<p>Willkommen</p>` passes, just as a proper name or
+ *     a social platform label would. Nothing distinguishes a proper noun from
+ *     a one-word sentence without knowing its meaning.
  *     Umlauts are the one exception — `<p>Ausrüstung</p>` IS caught.
  *   - ALL-CAPS copy: this repo uppercases via the CSS `uppercase` class, so caps
  *     in the source is already a smell, but `<p>KEINE DATEN</p>` slips through.
@@ -344,8 +344,6 @@ describe('no hardcoded bilingual copy in templates', () => {
     // has gone blind and the guard above is no longer proving anything.
     const all = files.flatMap((file) => renderedText(readFileSync(file, 'utf8')));
     const texts = all.map((hit) => hit.text.trim());
-    expect(texts).toContain('Instagram ↗'); // Footer.astro
-    expect(texts).toContain('Simon'); // AboutPage.astro
     expect(texts).toContain('404'); // 404.astro — proves pages/ is really parsed
     expect(all.length).toBeGreaterThan(10);
   });

@@ -1,3 +1,4 @@
+import { seedSiteIdentity } from '../src/site-identity.js';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -19,6 +20,7 @@ maybe('encrypted secrets and current backups (Postgres)', () => {
   beforeAll(async () => {
     pool = createPool(url as string);
     await ensureSchema(pool);
+    await seedSiteIdentity(pool);
     dir = await mkdtemp(join(tmpdir(), 'secrets-int-'));
   });
   beforeEach(async () => { await pool.query('DELETE FROM app_secrets'); });
