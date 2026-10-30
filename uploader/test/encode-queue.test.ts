@@ -284,6 +284,83 @@ describe('createEncodeQueue', () => {
     expect(await store.get('done')).toMatchObject({ status: 'ready' });
   });
 
+  it('finishes admitted recovery work when reading a later row fails', async () => {
+    const { store, queue } = setup();
+    await seed(store, ['x', 'y']);
+    const get = store.get.bind(store);
+    store.get = async (key) => {
+      if (key === 'y') throw new Error('lookup unavailable');
+      return get(key);
+    };
+    await expect(queue.recover()).rejects.toThrow('lookup unavailable');
+    await tick();
+    expect(await get('x')).toMatchObject({ status: 'ready', variantBytes: 123 });
+    expect(await get('y')).toMatchObject({ status: 'processing' });
+    await queue.idle();
+  });
+
+  it('recovery waits for same-key rollback and discards its stale processing snapshot', async () => {
+    const store = memoryMediaStore({ baseUrl: BASE });
+    await seed(store, ['orphan']);
+    const rollbackEntered = deferred();
+    const landRollback = deferred();
+    const listed = deferred();
+    const started: string[] = [];
+    const queue = createEncodeQueue({
+      store: {
+        ...store,
+        list: async (query) => {
+          const snapshot = await store.list(query);
+          listed.resolve();
+          return snapshot;
+        },
+      },
+      storageDir: '/nonexistent', lock: createWorkLock(),
+      encodeOne: async (key) => { started.push(key); return { bytes: 1 }; },
+      log: () => {},
+    });
+    const rollback = queue.withAdmission('orphan', async () => {
+      rollbackEntered.resolve();
+      await landRollback.promise;
+      await store.setStatusIfProcessing('orphan', 'failed', 'queue_full');
+    });
+    await rollbackEntered.promise;
+    const recovery = queue.recover();
+    await listed.promise;
+    // Serialization is per key, not a queue-wide lock.
+    await queue.withAdmission('unrelated', async () => {
+      expect(queue.isActive('orphan')).toBe(false);
+    });
+    landRollback.resolve();
+    await rollback;
+    expect(await recovery).toBe(0);
+    await queue.idle();
+    expect(started).toEqual([]);
+    expect(await store.get('orphan')).toMatchObject({ status: 'failed', error: 'queue_full' });
+    // A later genuine processing row still participates in crash recovery.
+    await store.setStatus('orphan', 'processing');
+    expect(await queue.recover()).toBe(1);
+    await queue.idle();
+    expect(started).toEqual(['orphan']);
+    expect(await store.get('orphan')).toMatchObject({ status: 'ready' });
+  });
+
+  it('releases same-key admission after a refused operation so the next request can proceed', async () => {
+    const { store, queue } = setup();
+    await seed(store, ['a']);
+    await expect(queue.withAdmission('a', async () => {
+      await store.setStatusIfProcessing('a', 'failed', 'queue_full');
+      throw new BacklogFullError();
+    })).rejects.toBeInstanceOf(BacklogFullError);
+    await queue.withAdmission('a', async () => {
+      expect(await store.get('a')).toMatchObject({ status: 'failed', error: 'queue_full' });
+      await store.setStatus('a', 'processing');
+      queue.enqueue('a');
+    });
+    await queue.idle();
+    expect(await store.get('a')).toMatchObject({ status: 'ready' });
+  });
+
   it('uses each row snapshot during recovery instead of mutable global settings', async () => {
     const store = memoryMediaStore({ baseUrl: BASE });
     await store.upsert({

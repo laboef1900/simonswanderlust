@@ -1,3 +1,4 @@
+import { TEST_TRUST } from './trusted-proxy-fixture.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -167,7 +168,13 @@ function loadPage(file: string, extraGlobals: Record<string, unknown>, scripts: 
     console,
     confirm: () => true,
     prompt: () => 'DELETE',
-    Auth: { ensureAuthed: async () => null, renderHeader() {} },
+    Auth: {
+      ensureAuthed: async () => null, renderHeader() {},
+      setPageTitle(page: string) {
+        const document = ctx.document;
+        if (document && typeof document === 'object' && 'title' in document) document.title = page + ' · Travel journal';
+      },
+    },
     EditorCopy: { en: EDITOR_COPY },
     AdminConfirm: { ask: async () => true, liveUrls: () => ({ de: '', en: '' }), urlsPlain: () => '' },
     ...extraGlobals,
@@ -194,6 +201,29 @@ function loadPosts(extraGlobals: Record<string, unknown> = {}) {
     ...extraGlobals,
   });
 }
+
+describe('import.html rejection accounting', () => {
+  it('shows a rejection-only completed summary and renders HTML-like slugs only as text', () => {
+    const { ctx, el } = loadPage('public/import.html', {});
+    const warning = '<img src=x onerror=alert(1)> (de): no translation (untranslated post) — rejected';
+    const renderFinished = vm.runInContext('renderFinished', ctx) as (job: unknown) => void;
+    renderFinished({
+      status: 'done',
+      summary: {
+        imported: 0, updated: 0, skippedPublished: 0, rejected: 1, failed: 0,
+        images: { total: 0, hosted: 0, failed: 0 }, warnings: [warning],
+      },
+    });
+    expect(el('results').style.display).toBe('');
+    expect(el('counts').textContent).toContain('Rejected: 1');
+    expect(el('importRejected').style.display).toBe('');
+    expect(el('importRejected').textContent).toContain('1 post group(s)');
+    expect(el('warnings').children).toHaveLength(1);
+    expect(el('warnings').children[0]!.textContent).toBe(warning);
+    expect(el('warnings').children[0]!.innerHTML).toBe('');
+    expect(el('warnings').children[0]!.children).toEqual([]);
+  });
+});
 
 const post = { translationKey: 'tk1', titleDe: 'Bukarest', slugDe: 'bukarest', slugEn: 'bucharest', status: 'published' };
 
@@ -472,6 +502,264 @@ describe('posts.html selection, recovery and disclosures', () => {
 });
 
 describe('comments.html moderation view', () => {
+  const comment = (id: string) => ({
+    id, name: id, isAuthor: false, translationKey: 'tk1', locale: 'de',
+    createdAt: '2026-09-29T04:56:50Z', status: 'pending', body: 'Hallo',
+  });
+  interface CommentResponse {
+    status: number;
+    ok: boolean;
+    json(): Promise<unknown>;
+  }
+  const response = (data: unknown = {}): CommentResponse => ({
+    status: 200, ok: true, json: async () => data,
+  });
+  function commentsPage(fetch: (url: string, options: { method: string; body?: string }) => Promise<unknown>) {
+    const page = loadPage('public/comments.html', { fetch });
+    const doc = page.ctx.document as Element & {
+      body: Element; activeElement: Element; createElement: () => Element;
+    };
+    doc.body = element();
+    doc.activeElement = doc.body;
+    doc.createElement = () => {
+      const node = Object.assign(element(), {
+        selectionStart: 0, selectionEnd: 0, selectionDirection: 'none',
+        setSelectionRange(start: number, end: number, direction: string) {
+          this.selectionStart = start;
+          this.selectionEnd = end;
+          this.selectionDirection = direction;
+        },
+      });
+      node.focus = () => { doc.activeElement = node; };
+      return node;
+    };
+    page.el('statusFilter').focus = () => { doc.activeElement = page.el('statusFilter'); };
+    page.el('statusFilter').value = 'pending';
+    const load = vm.runInContext('load', page.ctx) as () => Promise<void>;
+    const row = (id: string) => {
+      const node = page.el('list').children.find((child) => child.children[0]?.children[0]?.textContent === id);
+      if (!node) throw new Error('Missing comment ' + id);
+      const form = node.children.find((child) => child.className === 'comment-reply');
+      if (!form) throw new Error('Missing reply form ' + id);
+      const ta = form.children[0] as Element & {
+        selectionStart: number; selectionEnd: number; selectionDirection: string;
+        setSelectionRange(start: number, end: number, direction: string): void;
+      };
+      const send = form.children[1];
+      const actions = node.children.find((child) => child.className === 'comment-actions');
+      if (!ta || !send || !actions) throw new Error('Missing comment controls ' + id);
+      return { form, ta, send, action: (label: string) => actions.children.find((child) => child.textContent === label)! };
+    };
+    const type = async (id: string, text: string) => {
+      const { ta } = row(id);
+      ta.value = text;
+      await ta.fire('input');
+      return ta;
+    };
+    return { ...page, doc, load, row, type };
+  }
+
+  it('keeps A’s latest draft and selection while approving B and awaiting the list', async () => {
+    const refresh = Promise.withResolvers<CommentResponse>();
+    const loading = Promise.withResolvers<void>();
+    let reads = 0;
+    const fetch = vi.fn(async (_url: string, options: { method: string }) => {
+      if (options.method === 'GET') {
+        if (++reads === 2) { loading.resolve(); return refresh.promise; }
+        return response({ comments: [comment('A'), comment('B')] });
+      }
+      return response();
+    });
+    const page = commentsPage(fetch);
+    await page.load();
+    await page.type('A', 'Thanks Anna,');
+    const approve = page.row('B').action('Approve');
+    approve.focus();
+    const pending = approve.click();
+    await loading.promise;
+    const ta = await page.type('A', 'Thanks Anna, the hike was');
+    ta.focus();
+    ta.setSelectionRange(7, 11, 'backward');
+    refresh.resolve(response({ comments: [comment('A')] }));
+    await pending;
+    expect(fetch).toHaveBeenCalledWith('/moderation/comments/B/status', expect.objectContaining({
+      method: 'POST', body: JSON.stringify({ status: 'approved' }),
+    }));
+    expect(page.row('A').ta.value).toBe('Thanks Anna, the hike was');
+    expect(page.doc.activeElement).toBe(page.row('A').ta);
+    expect(page.row('A').ta.selectionStart).toBe(7);
+    expect(page.row('A').ta.selectionEnd).toBe(11);
+    expect(page.row('A').ta.selectionDirection).toBe('backward');
+  });
+
+  it('keeps hidden drafts across views and does not steal focus from the filter', async () => {
+    const page = commentsPage(async (url) => response({
+      comments: url.endsWith('approved') ? [] : [comment('A')],
+    }));
+    await page.load();
+    await page.type('A', 'Unsent reply');
+    page.el('statusFilter').value = 'approved';
+    page.el('statusFilter').focus();
+    await page.load();
+    expect(page.el('list').children).toHaveLength(0);
+    page.el('statusFilter').value = 'pending';
+    await page.load();
+    expect(page.row('A').ta.value).toBe('Unsent reply');
+    expect(page.doc.activeElement).toBe(page.el('statusFilter'));
+  });
+
+  it('sends B unchanged, clears only its successful reply, and never restores it on reload', async () => {
+    const fetch = vi.fn(async (_url: string, options: { method: string }) =>
+      response(options.method === 'GET' ? { comments: [comment('A'), comment('B')] } : {}));
+    const page = commentsPage(fetch);
+    await page.load();
+    await page.type('A', 'Still writing');
+    await page.type('B', ' Ready to publish ');
+    page.row('B').send.focus();
+    await page.row('B').form.fire('submit');
+    expect(fetch).toHaveBeenCalledWith('/moderation/comments/B/reply', expect.objectContaining({
+      method: 'POST', body: JSON.stringify({ body: ' Ready to publish ' }),
+    }));
+    expect(page.row('B').ta.value).toBe('');
+    expect(page.doc.activeElement).toBe(page.row('B').send);
+    await page.load();
+    expect(page.row('B').ta.value).toBe('');
+    expect(page.row('A').ta.value).toBe('Still writing');
+  });
+
+  it('retains failed replies and re-enables submit', async () => {
+    const page = commentsPage(async (_url, options) => {
+      if (options.method === 'POST') throw NETWORK_DOWN;
+      return response({ comments: [comment('A')] });
+    });
+    await page.load();
+    await page.type('A', 'Please keep this');
+    await page.row('A').form.fire('submit');
+    expect(page.row('A').send.disabled).toBe(false);
+    await page.load();
+    expect(page.row('A').ta.value).toBe('Please keep this');
+  });
+
+  it('retains edits made during a successful reply request, even across an intervening reload', async () => {
+    const sent = Promise.withResolvers<CommentResponse>();
+    const page = commentsPage(async (_url, options) => options.method === 'POST'
+      ? sent.promise : response({ comments: [comment('A')] }));
+    await page.load();
+    await page.type('A', 'First reply');
+    const pending = page.row('A').form.fire('submit');
+    await page.load();
+    const ta = await page.type('A', 'Second reply in progress');
+    ta.focus();
+    ta.setSelectionRange(5, 5, 'none');
+    sent.resolve(response());
+    await pending;
+    expect(page.row('A').ta.value).toBe('Second reply in progress');
+    expect(page.doc.activeElement).toBe(page.row('A').ta);
+    expect(page.row('A').ta.selectionStart).toBe(5);
+  });
+
+  it.each(['success', 'failure'] as const)('keeps recreated replies single-flight and releases the visible control after %s', async (outcome) => {
+    const sent = Promise.withResolvers<CommentResponse>();
+    const posted: string[] = [];
+    const page = commentsPage(async (url, options) => {
+      if (url.endsWith('/reply')) {
+        posted.push(String(options.body));
+        return posted.length === 1 ? sent.promise : response();
+      }
+      return response({ comments: url.endsWith('approved') ? [] : [comment('A'), comment('B')] });
+    });
+    await page.load();
+    await page.type('A', 'Publish only once');
+    page.row('A').send.focus();
+    const pending = page.row('A').form.fire('submit');
+    page.doc.activeElement = page.doc.body;
+    await page.row('B').action('Approve').click();
+    expect(page.row('A').send.disabled).toBe(true);
+    page.el('statusFilter').value = 'approved';
+    await page.load();
+    page.el('statusFilter').value = 'pending';
+    await page.load();
+    expect(page.row('A').ta.value).toBe('Publish only once');
+    expect(page.row('A').send.disabled).toBe(true);
+    await page.row('A').form.fire('submit');
+    expect(posted).toHaveLength(1);
+    await page.type('A', 'Newer unsent text');
+    if (outcome === 'success') sent.resolve(response());
+    else sent.reject(NETWORK_DOWN);
+    await pending;
+    expect(page.row('A').send.disabled).toBe(false);
+    expect(page.row('A').ta.value).toBe('Newer unsent text');
+    await page.row('A').form.fire('submit');
+    const bodies: unknown[] = posted.map((body) => JSON.parse(body));
+    expect(bodies).toEqual([{ body: 'Publish only once' }, { body: 'Newer unsent text' }]);
+    expect(page.row('A').ta.value).toBe('');
+  });
+
+  it('does not resurrect a sent draft when the follow-up list request fails', async () => {
+    let reads = 0;
+    const page = commentsPage(async (_url, options) => {
+      if (options.method === 'GET' && ++reads === 2) throw NETWORK_DOWN;
+      return response({ comments: [comment('A')] });
+    });
+    await page.load();
+    await page.type('A', 'Published once');
+    await page.row('A').form.fire('submit');
+    expect(page.el('out').textContent).toContain('Could not load comments: Failed to fetch');
+    expect(page.row('A').ta.value).toBe('');
+    await page.load();
+    expect(page.row('A').ta.value).toBe('');
+  });
+
+  it('does not clear a reply when the request redirects an expired session to login', async () => {
+    const page = commentsPage(async (_url, options) => options.method === 'POST'
+      ? { ...response(), status: 401, ok: false }
+      : response({ comments: [comment('A')] }));
+    await page.load();
+    await page.type('A', 'Not published');
+    await page.row('A').form.fire('submit');
+    expect(page.ctx.location).toEqual(expect.objectContaining({ href: '/login' }));
+    expect(page.row('A').ta.value).toBe('Not published');
+    expect(page.el('out').textContent).not.toBe('Reply published.');
+  });
+
+  it.each(['Delete', 'Spam'])('clears only the successfully %s-deleted draft', async (action) => {
+    const page = commentsPage(async () => response({ comments: [comment('A'), comment('B')] }));
+    await page.load();
+    await page.type('A', 'Keep A');
+    await page.type('B', 'Remove B');
+    await page.row('B').action(action).click();
+    // Return B again to prove its draft was removed, not merely hidden.
+    expect(page.row('A').ta.value).toBe('Keep A');
+    expect(page.row('B').ta.value).toBe('');
+  });
+
+  it.each(['cancelled', 'failed'])('keeps the draft after a %s deletion', async (outcome) => {
+    const page = commentsPage(async (_url, options) => {
+      if (options.method === 'DELETE') throw NETWORK_DOWN;
+      return response({ comments: [comment('A')] });
+    });
+    if (outcome === 'cancelled') page.ctx.AdminConfirm = { ask: async () => false };
+    await page.load();
+    await page.type('A', 'Keep A');
+    await page.row('A').action('Delete').click();
+    if (outcome === 'failed') expect(page.el('out').textContent).toContain('Failed: Failed to fetch');
+    await page.load();
+    expect(page.row('A').ta.value).toBe('Keep A');
+  });
+
+  it('moves focus to the view filter when the focused action’s row disappears', async () => {
+    let removed = false;
+    const page = commentsPage(async (_url, options) => {
+      if (options.method === 'POST') removed = true;
+      return response({ comments: removed ? [] : [comment('A')] });
+    });
+    await page.load();
+    const approve = page.row('A').action('Approve');
+    approve.focus();
+    await approve.click();
+    expect(page.doc.activeElement).toBe(page.el('statusFilter'));
+  });
+
   it('switching the view clears the previous view\'s empty-state message', async () => {
     const approved = {
       id: 'c1', name: 'Reader', isAuthor: false, translationKey: 'tk1', locale: 'de',
@@ -781,7 +1069,7 @@ async function apiPage(initial: SettingsResponse, opts: {
 const calls = (requests: ApiRequest[]) => requests.map((r) => r.method + ' ' + r.url);
 
 describe('settings.html tabs', () => {
-  const PANELS = ['panel-ai-models', 'panel-images', 'panel-comments', 'panel-site'];
+  const PANELS = ['panel-ai-models', 'panel-images', 'panel-comments', 'panel-identity', 'panel-site'];
 
   function tabsPage(hash = '', narrow = false) {
     const replaced: string[] = [];
@@ -813,6 +1101,16 @@ describe('settings.html tabs', () => {
     expect(t.title()).toBe(' · Comments');
     expect(t.el('tabbtn-comments').tabIndex).toBe(0);
     expect(t.el('tabbtn-ai-models').tabIndex).toBe(-1);
+  });
+
+  it('opens the identity deep link and includes it in keyboard navigation', async () => {
+    const t = tabsPage('#identity');
+    expect(t.visible()).toEqual(['panel-identity']);
+    expect(t.el('tabbtn-identity').tabIndex).toBe(0);
+    expect(t.title()).toBe(' · ' + EDITOR_COPY.identityTab);
+    await t.el('tabbtn-identity').fire('keydown', { key: 'ArrowUp' });
+    expect(t.visible()).toEqual(['panel-comments']);
+    expect(t.replaced).toEqual(['#comments']);
   });
 
   it('a vertical index moves with Up/Down, Home/End, and mirrors the tab in the hash and title', async () => {
@@ -1952,6 +2250,7 @@ describe('settings.html against the real settings and provider routes', () => {
     const queue = createEncodeQueue({ store: media, storageDir: dir, lock: createWorkLock() });
     const unavailable = async (): Promise<never> => { throw new Error('Not part of this settings test'); };
     const app = buildServer({
+      trustProxy: TEST_TRUST,
       storageDir: dir, baseUrl: 'https://images.example', imgHost: 'images.example', siteDir: join(dir, 'site'),
       users, sessions, secrets, settings, media, encodeQueue: queue,
       posts: memoryPostStore(), pages: memoryPageStore(),
