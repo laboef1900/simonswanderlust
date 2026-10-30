@@ -1175,3 +1175,32 @@ The same integrated stack moves database-backed mixed test files into the existi
 serialized integration project. No assertions or production bootstrap checks were
 weakened. Normal uploader project scheduling passed all152files/3,661tests and the full
 six-step check at this source; CI run `40981244277` passed separately.
+
+### Cross-photo action isolation
+
+A further complete-PR review found that title-only bulk AI work on B could invalidate
+selected photo A's pending Save projection. Item GET/PATCH wrappers now advance the
+observation generation only for the selected resource. Every action still contributes
+to pending-read suppression; same-resource actions and selection changes retain their
+fences. Both consumer regressions failed with A's old authorized story link before the
+repair, then passed with the fresh link. All 81 Media DOM/observer cases passed.
+
+Actual `2347b7a` qualification exercised the real all-view, title-only AI dialog while A's
+caption Save acknowledgement was held: B's conditional GET remained pending in one case,
+and B's GET/PATCH had settled in the other. Both immediately showed A's fresh authorized
+story link/count, changed descriptions and DE live pending state. Each case made one
+A PATCH, zero rescue A GETs, one B GET and one B PATCH; clean-save probes made no request.
+B changed title only. Manual Refresh preserved A, and selecting B showed B's own state.
+
+A genuine scheduled 30-second observation tick crossed a 6.594-second held B GET without
+background requests. An initial 32-second hold exceeded the native 15-second GET deadline
+and produced the expected AI failure; that attempt is retained, not passed off as a
+success or fixed by disabling deadlines. The successful scenario instead aligned its
+short hold with the real observer tick.
+
+The loopback provider returned deterministic fixture details, not model inference.
+Product requests, PostgreSQL, Publish/rebuild and served DE/EN gallery output were real.
+Settled desktop/mobile screenshots and HTTP/SQL agreement are retained. Logout, zero
+sessions, closed tabs/interceptions and closed app/provider ports completed the run;
+owned fixtures remain. Normal uploader scheduling passed 152 files / 3,663 tests, the site
+suite passed 36 files / 507 tests, and all six local checks passed at this code head.
