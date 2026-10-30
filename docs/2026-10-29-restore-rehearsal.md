@@ -6,10 +6,12 @@ restore semantics, remove volumes, deploy, or qualify an upgrade/downgrade.
 
 ## Recovery contract
 
-Current dump **v10** contains `users`, `posts`, `pages`, `media`, `media_folders`,
-`app_secrets`, `comments` and `post_routes`. It does not contain settings.json, image files,
-sessions, or the encryption master key. Private route originals accompany the dump in its
-manifest-named route archive; never substitute an archive based on a similar timestamp.
+Current dump **v11** contains `users`, `posts`, `pages`, `media`, `media_folders`,
+`app_secrets`, `comments`, `post_routes`, `site_identity` and `site_identity_assets`.
+It does not contain settings.json, image files, sessions, or the encryption master key.
+Private route originals accompany the dump in its manifest-named route archive; never
+substitute an archive based on a similar timestamp. The v10 evidence below remains historical,
+not evidence of an identity-capable native image rehearsal.
 Image recovery requires the full base plus all subsequent incremental archives, oldest-first.
 Static releases are rebuilt explicitly after restoration; a successful database restore alone
 does not prove a working blog.
@@ -222,7 +224,9 @@ schemas derived only from `TEST_DATABASE_URL`, private temporary directories and
 integration project because ownership is database-wide. Its fixture has **one** media item,
 not the manual drill's three. It checks restored users/roles, closed setup, rescan, media
 metadata/redaction, variant bytes and original-image refusal, both locale gallery previews,
-comments, private route recovery/access, and missing/wrong-key behavior.
+comments (including the retained author display name), private route recovery/access, and
+missing/wrong-key behavior. Loopback app fixtures explicitly ignore inherited Docker proxy
+mode; this does not qualify the production proxy topology.
 
 The suite deliberately has no usable `SITE_APP_DIR`: preview rendering is not an Astro build
 or browser proof. The manual locked runtime above supplies the actual rebuild and rendered-page
