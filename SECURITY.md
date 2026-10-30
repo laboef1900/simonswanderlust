@@ -288,6 +288,16 @@ per-IP key is `req.ip` derived under `trustProxy: 1`: the address the single tru
 proxy appended to `X-Forwarded-For`; client-supplied (leftmost) entries are ignored, so rotating
 the header does not open a fresh bucket.
 
+The async rate-limit preHandler **returns the Fastify refusal reply** (#372), rather than
+merely calling `send`: a pending asynchronous `onSend` hook must not allow later preHandlers
+or the login, setup or password-change handler to continue behind a client-visible 429.
+The account-lock refusal in `/login` follows the same return contract. Budgets, keys and
+authentication checks are unchanged. On 2026-10-27, real loopback HTTP requests against
+`buildServer` with PostgreSQL user/session stores verified unchanged persisted users,
+password hashes and sessions after refusals, both with the normal hook chain and an explicitly
+injected asynchronous send delay. This is a conditional hook-composition fixture, not evidence
+of a production exploit; see the #372 design spec's runtime verification record.
+
 `/login` additionally keeps a **per-account failure budget across all sources** — the defence
 against a guess spread over many addresses, which the per-IP bucket cannot see — and checks it
 *before* running scrypt, so a locked account costs no hashing work. The budget is **100 failures
