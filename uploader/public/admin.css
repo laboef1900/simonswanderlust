@@ -1849,6 +1849,12 @@ body.settings-page .muted { max-width: 70ch; overflow-wrap: anywhere; }
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 0 1rem;
 }
+#identityFields { min-width: 0; margin: 0; padding: 0; border: 0; }
+#identityLocalized { margin-top: 1rem; }
+.identity-social-links { margin: 1rem 0; padding-left: 1.5rem; }
+.identity-social-links > li { padding: 0.75rem 0; border-top: 1px solid var(--line); }
+.identity-social-links .form-actions { margin-top: 0.5rem; }
+#identityStatus { overflow-wrap: anywhere; }
 /* A section heading with its one command at the right (Providers + Add). */
 .settings-section-head {
   display: flex;
