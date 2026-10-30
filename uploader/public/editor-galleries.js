@@ -248,8 +248,10 @@ window.EditorGalleries = (function () {
             suggestedText.textContent = text;
             suggestion.hidden = false;
             status.textContent = copy.review;
-          } catch {
-            if (controller.alive && version === current && !signal.aborted) status.textContent = copy.failed;
+          } catch (error) {
+            if (!controller.alive || version !== current || signal.aborted) return;
+            // A reply cut off at the token limit needs a different fix than a dead provider (#351).
+            status.textContent = error && error.message === 'Caption response was truncated' ? copy.truncated : copy.failed;
           } finally {
             if (controller.alive && version === current) {
               request = undefined;

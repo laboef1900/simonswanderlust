@@ -1515,6 +1515,29 @@ describe('inline gallery editing', () => {
     expect(field.value).toBe('My current edit');
   });
 
+  // #351: a reply cut off at the token limit names that limit; other failures keep the general hint.
+  it('shows the token-limit hint for a truncated suggestion and leaves the alt text untouched', async () => {
+    let failure = new Error('Caption response was truncated');
+    const h = loadEditor({ fetch: mediaNetwork([]), caption: () => Promise.reject(failure) });
+    h.api.populateForm(pairWithGallery());
+    await settleAll();
+    // The gallery-level lookup line shares `.editor-gallery__status`; read the photo card's own.
+    const card = h.document.querySelector('.editor-gallery__photo')!;
+    const field = card.querySelector('.editor-gallery__alt')!;
+    const status = card.querySelector('.editor-gallery__status')!;
+    const suggest = card.querySelector('.editor-gallery__suggest')!;
+    suggest.click();
+    await settle();
+    expect(status.textContent).toBe(ui.de['editor.gallery.truncated']);
+    expect(field.value).toBe('Original');
+    expect(card.querySelector('.editor-gallery__suggestion')!.hidden).toBe(true);
+    failure = new Error('Caption request failed. Check the provider, API key, vision model and browser CORS access.');
+    suggest.click();
+    await settle();
+    expect(status.textContent).toBe(ui.de['editor.gallery.failed']);
+    expect(field.value).toBe('Original');
+  });
+
   it('shows current Media alt and caption per locale read-only, links to Media, and never edits the article', async () => {
     const row = mediaRow('photo', { de: 'Neu aus der Mediathek', en: 'Fresh from Media' }, { de: '', en: 'Morning light' });
     const h = loadEditor({ fetch: mediaNetwork([row]) });
