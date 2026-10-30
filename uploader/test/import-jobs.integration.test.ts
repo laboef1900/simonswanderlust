@@ -1,7 +1,8 @@
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 import { createPool, ensureSchema, type DbPool } from '../src/db.js';
 import { createImportRunner, pgImportJobStore, IMPORT_JOB_HISTORY, type ImportJob } from '../src/import-jobs.js';
-import type { ImportSummary } from '../src/wp-import.js';
+import { prepareImport, type ImportSummary } from '../src/wp-import.js';
+import { memoryPostStore } from '../src/posts.js';
 
 const url = process.env.TEST_DATABASE_URL;
 const maybe = url ? describe : describe.skip;
@@ -36,6 +37,39 @@ maybe('pgImportJobStore (integration)', () => {
     const done = await store.latest();
     expect(done).toMatchObject({ id, status: 'done', summary: OK, finishedAt: '2026-09-05T10:05:00.000Z' });
     expect(done!.updatedAt >= done!.startedAt).toBe(true);
+  });
+
+  it('persists a real untranslated-only import summary with zero planned work across runner recreation', async () => {
+    const posts = memoryPostStore();
+    const prepared = await prepareImport(`<rss><channel><item>
+      <wp:post_type>post</wp:post_type><wp:status>publish</wp:status>
+      <wp:post_name>nur-deutsch</wp:post_name>
+      <category domain="language" nicename="de"/>
+      <content:encoded><![CDATA[<img src="https://wp.example/no-fetch.jpg">]]></content:encoded>
+    </item></channel></rss>`, {
+      postStore: posts, storageDir: '/unused', baseUrl: 'https://img.example',
+      rehost: async () => { throw new Error('untranslated images must not be fetched'); },
+      log: () => {},
+    });
+    expect(prepared.groups).toBe(1);
+    const store = pgImportJobStore(pool);
+    const runner = createImportRunner({ store, log: () => {} });
+    const started = await runner.start({ startedBy: 'simon', planned: prepared.planned, run: prepared.run });
+    await runner.settle();
+    const restarted = createImportRunner({ store: pgImportJobStore(pool), log: () => {} });
+    expect(await restarted.recover()).toBe(0);
+    const persisted = await restarted.latest();
+    expect(persisted).toMatchObject({
+      id: started.id, status: 'done',
+      progress: { groups: { total: 0, done: 0 }, images: { planned: 0, hosted: 0, failed: 0 } },
+      summary: {
+        imported: 0, updated: 0, skippedPublished: 0, rejected: 1, failed: 0,
+        images: { total: 0, hosted: 0, failed: 0 },
+        warnings: ['nur-deutsch (de): no translation (untranslated post) — rejected'],
+      },
+    });
+    expect(persisted?.finishedAt).toBeTruthy();
+    expect(await posts.list()).toEqual([]);
   });
 
   it('latest() is the most recently STARTED job, not the most recently written', async () => {

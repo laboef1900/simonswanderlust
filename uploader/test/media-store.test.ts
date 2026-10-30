@@ -295,6 +295,19 @@ describe('memoryMediaStore', () => {
     expect((await s.get('k'))?.error).toBeNull();
   });
 
+  // #348: the rollback of a refused enqueue must never undo a settled row.
+  it('setStatusIfProcessing writes only while the row is still processing', async () => {
+    const s = store();
+    await add(s, 'k', { status: 'processing' });
+    expect(await s.setStatusIfProcessing('k', 'failed', 'queue_full')).toBe(true);
+    expect(await s.get('k')).toMatchObject({ status: 'failed', error: 'queue_full' });
+    expect(await s.setStatusIfProcessing('k', 'missing')).toBe(false);
+    await s.setStatus('k', 'ready');
+    expect(await s.setStatusIfProcessing('k', 'failed', 'queue_full')).toBe(false);
+    expect(await s.get('k')).toMatchObject({ status: 'ready', error: null });
+    expect(await s.setStatusIfProcessing('ghost', 'failed', 'queue_full')).toBe(false);
+  });
+
   // This is the query encodeQueue.recover() re-seeds the backlog from — the
   // only reader of `status = 'processing'`, since claimNextProcessing() (which
   // duplicated it, unused, on both stores) was removed.
