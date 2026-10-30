@@ -9,6 +9,7 @@ import { useTranslations, type Locale } from '../i18n/ui';
 import { imageOrigin, largestVariant } from '../lib/images';
 import { PROD_SITE, type SeoImage } from '../lib/seo';
 import { SHIKI_CSS } from '../lib/shiki-classes';
+import { identitySiteName } from '../lib/build-identity';
 
 interface Props {
   title: string;
@@ -53,14 +54,14 @@ const shikiStyle = `<style>${SHIKI_CSS}</style>`;
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{title} – {t('site.title')}</title>
+    <title>{title} – {identitySiteName(locale)}</title>
     <meta name="description" content={description} />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link
       rel="alternate"
       type="application/rss+xml"
       href={locale === 'en' ? '/en/rss.xml' : '/rss.xml'}
-      title={t('site.title')}
+      title={identitySiteName(locale)}
     />
     <link rel="canonical" href={canonical} />
     <link rel="preconnect" href={imgOrigin} />
@@ -74,7 +75,7 @@ const shikiStyle = `<style>${SHIKI_CSS}</style>`;
         </>
       )
     }
-    <meta property="og:site_name" content={t('site.title')} />
+    <meta property="og:site_name" content={identitySiteName(locale)} />
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
     <meta property="og:type" content={ogType} />
