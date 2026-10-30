@@ -2,6 +2,19 @@
 // redirect to /login (carrying a ?next= return URL back to the current page).
 // The session cookie is sent automatically (same-origin).
 window.Auth = (function () {
+  function identityName() {
+    const locale = document.documentElement?.lang === 'de' ? 'de' : 'en';
+    return window.SiteIdentity?.siteName || EditorCopy[locale].siteTitleFallback;
+  }
+  function identityDescriptor() {
+    const locale = document.documentElement?.lang === 'de' ? 'de' : 'en';
+    return window.SiteIdentity?.studioDescriptor?.[locale] || identityName();
+  }
+  function setPageTitle(page) {
+    document.title = page + ' · ' + identityName();
+  }
+  setPageTitle(document.title || '');
+
   async function status() {
     const r = await fetch('/auth/status');
     return r.json();
@@ -189,14 +202,14 @@ window.Auth = (function () {
     const copy = EditorCopy.en;
     shell.querySelector('.cms-brand-mark').textContent = copy.studioName.charAt(0);
     shell.querySelector('.cms-brand-title').textContent = copy.studioName;
-    shell.querySelector('.cms-masthead-right > .cms-brand-sub').textContent = copy.studioDescriptor;
+    shell.querySelector('.cms-masthead-right > .cms-brand-sub').textContent = identityDescriptor();
     const legal = document.createElement('a');
     legal.href = '/admin/legal/en.html';
     legal.className = 'cms-btn-ghost';
     legal.textContent = copy.softwareNotices;
     shell.querySelector('.cms-sidebar-footer').prepend(legal);
 
-    // Username is the one user-controlled string in this shell; set as text
+    // User-controlled strings are set as text
     // and as an attribute value AFTER the parse so it can never be markup (#131).
     const accountTrigger = shell.querySelector('.cms-account-menu__trigger');
     accountTrigger.setAttribute('aria-label', 'Account menu for ' + s.username);
@@ -287,5 +300,5 @@ window.Auth = (function () {
     });
   }
 
-  return { status, ensureAuthed, logout, renderHeader };
+  return { status, ensureAuthed, logout, renderHeader, setPageTitle, identityDescriptor };
 })();

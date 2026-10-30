@@ -54,6 +54,7 @@ function stubBackup(): DbBackup {
 }
 
 const queue: EncodeQueue = {
+  withAdmission: (_key, operation) => operation(),
   enqueue: () => { throw new BacklogFullError(); },
   isActive: () => false,
   recover: async () => 0,

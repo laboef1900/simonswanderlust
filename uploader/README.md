@@ -248,6 +248,14 @@ storage key, not per variant file. Bulk drag-and-drop upload, virtual folders (a
 table; moving a photo re-labels it, it does not move bytes on disk), search, and per-item alt text
 that the gallery picker reuses.
 
+Re-uploading the same file preserves its existing non-root folder, including when recovering
+a `failed` or `missing` photo, even if the recovery attempt is refused by a full queue.
+A ready photo or a failed/missing photo being re-created may adopt the upload's selected
+folder only while still in the root; the upload response reports the stored folder.
+Processing and `queue_full` recovery retain all stored metadata, including a root folder.
+Other recovery keeps existing title, alt, caption and tags when the upload supplies no
+replacement metadata.
+
 The shared image picker in `public/media-picker.js` exposes read-only folder navigation
 for title images, heroes, and galleries. It uses `MediaApi.folderTree`, the Media page's
 folder styles, and the existing `/media/folders` endpoint. Folder views include descendants;
@@ -266,6 +274,39 @@ flagging rows whose files have vanished, and demoting a `ready` row whose varian
 longer complete for its original's width — and then `encodeQueue.recover()` re-seeds the queue
 from `status = 'processing'`). Variant and original files are written atomically (temp +
 rename), so a crash never leaves a truncated file under a final name.
+
+The Media grid refreshes automatically when uploads complete, with a 200 ms debounce for
+bursts. **Clear finished** is not needed to show the accepted photos; queue entries stay
+visible until cleared. Refreshes retain the current folder, search, status filter, sort and
+page, so a photo outside that query will not appear there. Selections still in view and
+unsaved detail edits survive the refresh; switching to another photo still asks before
+discarding edits. Keyboard focus stays on the same visible photo even if its sort position
+changes. The refresh preserves whichever photo is focused when the response is rendered,
+not when the request started, and does not pull focus away from search, upload, folder,
+queue or detail controls. A focused detail field keeps its caret and selection even before
+the first edit; explicit **Save details** still refreshes the saved values and clears the
+unsaved state. If an automatic completion refresh overtakes an explicit Save or folder
+change, the winning response still completes that explicit update rather than retaining
+an old detail baseline or folder navigation. Arrow and Space navigation continue from the
+restored photo.
+The queue's **done** means the upload was accepted, not that encoding has
+finished: the grid displays the status returned by the server, including **processing**.
+This is a completion-triggered refresh, not continuous polling for encoding progress.
+
+The backlog admits at most 200 waiting jobs, in addition to the two running jobs. When an
+upload receives **429** because that backlog is full, a new photo keeps its original as
+`failed` / `queue_full`, not stranded `processing`; an existing photo's prior status/error is
+restored unless another request already admitted or completed its job. Once capacity returns,
+**Retry** or re-uploading the same bytes encodes the retained photo. Re-upload also repairs an
+older orphan `processing` row by enqueueing it when no active job owns the key (#348).
+Upload, Retry, and boot/rescan recovery serialize admission and refusal rollback for the
+same key, including the awaited status write. Recovery re-reads the row after waiting rather
+than admitting a stale `processing` snapshot. Re-uploading a `queue_full` photo changes only
+its status and restores its original; curated folder, localized descriptions, title, tags,
+and the saved encoding profile are retained even across repeated refusals.
+Recovery starts each admitted job immediately, so a later candidate's database read failure
+does not strand earlier admissions. The rescan still reports the error; already admitted
+photos finish independently, while remaining `processing` photos can recover on a later rescan.
 
 Three consequences worth knowing:
 
@@ -298,6 +339,18 @@ routes behind it (`GET /moderation/comments`, `POST /moderation/comments/:id/sta
 `DELETE /moderation/comments/:id`, `POST /moderation/comments/:id/reply`) are all
 `requireAdmin`: unauthenticated callers get 401, authors 403, and a non-UUID id is a 400.
 Approving does not rebuild the site — comments are runtime data, never baked by `astro build`.
+
+Unsent author replies stay in memory, keyed by comment ID, while this page is open.
+Only one reply can be sending per comment ID: its submit button stays disabled even
+when filtering or moderation recreates the row, and becomes available again after
+success or failure so a later intentional reply or retry is possible.
+Moderation actions and switching between Pending and Approved preserve other replies;
+hidden rows recover their own draft when shown again. A successful reply clears only
+the submitted text, preserving newer edits made while it was sending; failed replies
+keep their input. List refreshes restore the active row control and textarea selection
+when that row remains visible, or focus the status filter when it disappears. Drafts
+are not saved to browser storage or the server: navigating away or reloading the page
+discards them.
 
 ## Galleries
 
@@ -356,6 +409,13 @@ photo-details limit before returning any metadata. A higher ceiling permits more
 and may increase provider charges and latency; the chosen model must support it.
 This does not toggle thinking or change the separate caption timeout. Existing settings
 files without the field use 8,000; saved values survive restart.
+
+Alt-text suggestions discard case-insensitive `<think>…</think>` blocks, including
+an unfinished block through the end of the reply. A `finish_reason: "length"` reply
+is refused even if it contains valid-looking caption JSON. Hero/body fields and
+hosted-gallery alt text retain their existing value on refusal; the token-limit
+hint names **Maximum output tokens** rather than suggesting a connection problem.
+Gallery suggestions still require explicit acceptance before changing Markdown.
 
 Non-secret settings (`aiProviders`, `aiDefaultProviderId`, `captionProviderId`, `lmModel`,
 `captionTimeoutMs`, `captionMaxTokens`, `captionMaxEdge`, `captionPrompt`) live in settings.json.
@@ -585,6 +645,12 @@ Edits made during an in-flight save remain dirty until a later save includes the
 Failed saves and cancelled URL-change confirmations retain the unsaved form.
 A browser recovery stash is not a server save, and saving a published post's draft
 does not change its live version.
+Restoring a local draft retains the saved-version token it was edited against.
+A stale restore gets a conflict rather than overwriting a newer server version.
+An existing post's stash without a usable version can be restored for copying, but
+cannot be saved: copy the needed text, reload, and decline the restore to return to
+the saved version. If the post has since been published, its current live slugs are
+kept. A failed restore keeps its original stash and blocks saving the partial form.
 
 ## Alt-text audit (advisory)
 
