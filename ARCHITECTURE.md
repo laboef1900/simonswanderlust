@@ -760,10 +760,10 @@ docker compose up -d
    (**Settings → Rebuild site now**, or `POST /rebuild`), then rescan and verify restored content
    before reopening ingress. On failure keep the app stopped and preserve recovery evidence.
 
-Current v10 dumps cover `users`, `posts`, `pages`, `media`, `media_folders`, `app_secrets`,
-`comments` and `post_routes`, plus manifest-paired private originals. See
-[Database dumps](#database-dumps) for version-specific absent-field behavior: old dumps are
-not equivalent to v10. `settings.json` is external; sessions are never restored and every
+Current v11 dumps cover `users`, `posts`, `pages`, `media`, `media_folders`, `app_secrets`,
+`comments`, `post_routes`, `site_identity` and `site_identity_assets`, plus manifest-paired
+private originals. See [Database dumps](#database-dumps) for version-specific absent-field
+behavior: old dumps are not equivalent to v11. `settings.json` is external; sessions are never restored and every
 login is invalidated. Prefer the `pg_dump`/`psql` path above as primary for full database
 fidelity; neither database format replaces image/private-file recovery or settings/key escrow.
 
