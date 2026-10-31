@@ -31,28 +31,58 @@ window.AltSuggest = (function () {
     if (!button) return;
     if (!fileInput || !altInput) return;
     const say = (msg) => { if (statusEl) statusEl.textContent = msg; };
+    // The request object is the per-wire ownership token. A new click replaces
+    // it without disabling the button; cancellation alone cannot stop a reply
+    // which has already settled (or a programmatic file clear after Insert).
+    let active;
+    const cancel = () => {
+      if (!active) return;
+      active.controller.abort();
+      if (active.config) active.config.captionApiKey = null;
+      active = undefined;
+      say('');
+    };
+    fileInput.addEventListener('change', cancel);
+    altInput.addEventListener('input', cancel);
     button.addEventListener('click', async () => {
+      cancel();
       const file = fileInput.files && fileInput.files[0];
       if (!file) { say('Pick a photo first.'); return; }
+      const valueAtClick = altInput.value;
+      const request = { controller: new AbortController(), config: null };
+      const signal = request.controller.signal;
+      active = request;
+      const current = () => active === request && !signal.aborted &&
+        fileInput.files[0] === file && altInput.value === valueAtClick;
       let cfg;
       try {
-        cfg = await loadConfig(on401);
-      } catch (e) {
-        say('Could not load AI settings: ' + e.message);
-        return;
-      }
-      say('Asking the selected alt-text model…');
-      try {
-        const prep = await LLM.prepImage(file, cfg.captionMaxEdge);
+        cfg = await loadConfig(() => {
+          if (!current()) return;
+          if (on401) on401(); else location.href = '/login';
+        }, signal);
+        request.config = cfg;
+        if (!current()) return;
+        say('Asking the selected alt-text model…');
+        const prep = await LLM.prepImage(file, cfg.captionMaxEdge, signal);
+        if (!current()) return;
         const c = await LLM.caption(cfg.captionBaseUrl, cfg.lmModel, cfg.captionPrompt, prep.dataUrl,
-          cfg.captionTimeoutMs, cfg.captionMaxTokens, undefined, cfg.captionApiKey);
+          cfg.captionTimeoutMs, cfg.captionMaxTokens, signal, cfg.captionApiKey);
+        if (!current()) return;
         altInput.value = lang === 'de' ? c.altDe : c.altEn;
+        if (hintEl) hintEl.textContent = lang === 'de' ? 'EN: ' + c.altEn : 'DE: ' + c.altDe;
+        say('Suggested — review and edit as needed.');
+        // Release ownership before input: this is our accepted result, not a
+        // manual edit cancelling the request. Listeners may start another one.
+        active = undefined;
         // Programmatic .value assignment fires no input event — dispatch one so
         // the editor's DraftGuard marks the form dirty.
         altInput.dispatchEvent(new Event('input', { bubbles: true }));
-        if (hintEl) hintEl.textContent = lang === 'de' ? 'EN: ' + c.altEn : 'DE: ' + c.altDe;
-        say('Suggested — review and edit as needed.');
       } catch (e) {
+        if (!current()) return;
+        if (!cfg) {
+          say('Could not load AI settings: ' + e.message);
+          return;
+        }
         // A truncated reply is a token-limit problem, not a connection one (#351).
         if (e && e.message === 'Caption response was truncated') {
           say(truncatedText);
@@ -62,7 +92,8 @@ window.AltSuggest = (function () {
         say('Could not generate alt text. ' + (why || 'Check the provider, shared key, vision model and browser CORS access.') +
           ' Fill in the alt text manually.');
       } finally {
-        cfg.captionApiKey = null;
+        if (cfg) cfg.captionApiKey = null;
+        if (active === request) active = undefined;
       }
     });
   }
