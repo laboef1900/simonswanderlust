@@ -1024,3 +1024,29 @@ Reports and synthetic fixtures remain in the gitignored execution ledger. Final 
 downstream combined-source qualification are separate gates. Public routing belongs to #285,
 canonical origins to #276, and the page registry/navigation to #288/#289; this record does not
 claim those dependent stacks are merge-ready or authorize production changes.
+
+## 22. #284 current-dev integration (2026-11-01)
+
+Merged onto `dev` 65b110d (dump v11 → this change's v12). Decisions taken while
+integrating, each pinned by an updated or retained test:
+
+- **Namespace rollout (D2.6).** The read-only reverse-collision query ran against the
+  owner-confirmed content target on 2026-10-31: no story (working or published
+  snapshot) or page holds any reserved or newly proposed segment in DE-primary or
+  EN-primary mode. `dev` meanwhile gained the top-level `POST /gallery/analyze` route
+  (#354); the route-equality test therefore reserves `gallery` in `APP_SEGMENTS`, and the
+  same read-only query found no holder.
+- **Untranslated WXR items (#387).** In bilingual mode an item with a language but no
+  translation group stays an individually reported `untranslated` rejection; only an
+  item with no language at all is `no language`. Single-language mode still keys untagged
+  items by WordPress id. A group holding the primary imports primary-only.
+- **Publication body gate (#375).** The rendered-body analysis runs once per requested
+  locale on the reviewed pair before any mutation (H1 → 400, foreign images → 409). Under
+  the language lock only media readiness is re-read; the publish tokens prove the locked
+  pair is the analyzed one.
+- **Page saves (#344).** The Postgres store takes the shared language row first, then the
+  page's advisory lock, then reads; the memory store serializes saves on the language
+  queue. Saves of a language-limited payload return only the sent locales' gallery
+  warnings and leave the other locale's advisory state unchanged.
+- **Drafts.** Gallery normalization runs inside the post-pair lock, because a disabled
+  locale keeps the stored row read under that lock; its slug is not re-validated.
