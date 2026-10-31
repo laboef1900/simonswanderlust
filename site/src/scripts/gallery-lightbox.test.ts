@@ -257,6 +257,12 @@ describe('initGalleries — lightbox', () => {
     'keeps the lightbox open when clicking %s',
     (selector) => {
       mountJustified(2);
+      // The thumbnail exists only for an already-decoded grid candidate.
+      Object.defineProperties(photos()[0]!.querySelector('img')!, {
+        currentSrc: { value: 'https://img.test/p0-640.webp' },
+        complete: { value: true },
+        naturalWidth: { value: 640 },
+      });
       initGalleries(document, labels);
       click(photos()[0]!);
       click(dialog()!.querySelector(selector)!);
