@@ -1,7 +1,7 @@
 import { setImmediate } from 'node:timers/promises';
 import { describe, expect, it } from 'vitest';
 import { analyzeRenderedBody, transformBodyImages } from './body-images.js';
-import { escapeMeta } from './gallery-layout.js';
+import { escapeMeta } from '../../../uploader/public/gallery-photo-line.js';
 import { renderMarkdown } from './render-markdown.js';
 import { SHIKI_CSS } from './shiki-classes.js';
 
@@ -61,6 +61,23 @@ describe('gallery-local caption controls', () => {
     expect(captions(out)).toEqual(['Library caption']);
     // No library row: inherit falls back to the stored caption.
     expect(captions((await transformBodyImages(fence(src), stored, ORIGIN)))).toEqual(['Stored caption']);
+  });
+
+  it('applies no partial override from an invalid line but keeps existing photo and library precedence', async () => {
+    for (const suffix of [
+      'caption-override="Partial" | capton="bad"',
+      'caption-override="raw | caption-override="suffix"',
+      'alt = "invalid" | caption-override=""',
+    ]) {
+      const body = ['~~~gallery extra', `${src} | ${suffix}`, '~~~'].join('\n');
+      const out = await transformBodyImages(await renderMarkdown(body), stored, ORIGIN, library);
+      expect(captions(out)).toEqual(['Library caption']);
+      expect(out).toContain('alt="Library alt"');
+      expect(out).not.toContain('Partial');
+    }
+    const repaired = ['~~~gallery', `${src} | caption-override="quote &quot; and pipe &#124;"`, '~~~'].join('\n');
+    const out = await transformBodyImages(await renderMarkdown(repaired), stored, ORIGIN, library);
+    expect(captions(out)).toEqual(['quote " and pipe |']);
   });
 
   it('hides every caption of a #captions: hidden gallery, overrides included, and only that gallery', async () => {

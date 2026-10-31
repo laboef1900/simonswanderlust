@@ -764,6 +764,28 @@ describe('importWxr re-run merge', () => {
     expect(healed.en.images[SRC('de-1', src)]).toEqual({ width: 100, height: 80, alt: 'Evening' });
   });
 
+  it('substitutes only the URL of malformed metadata, retaining its suffix and never fetching caption-like images', async () => {
+    const store = memoryPostStore();
+    const { h, nextRun } = flaky('g2.jpg');
+    await run(export1, h, {}, store);
+    const tk = (await store.list())[0]!.translationKey;
+    const p = (await store.get(tk))!;
+    const src = 'https://wp/g2.jpg';
+    const suffix = '  | 640x400 | alt="ignored" | capton="![caption](https://caption-only/never.jpg) <BodyImage src=&quot;https://body-only/never&quot; />"  ';
+    const body = `Intro 🦋\r\n\r\n> ~~~gallery extra\r\n>   ${src}${suffix}\r\n> ~~~\r\n`;
+    await store.upsertDraft({ ...p, de: { ...p.de, bodyMarkdown: body } });
+    expect((await store.get(tk))!.de.bodyMarkdown).toBe(body);
+    nextRun();
+    h.calls.length = 0;
+    const result = await run(export1, h, { maxImages: 4 }, store);
+    expect(result.updated).toBe(1);
+    expect(h.calls).toEqual(['https://wp/a.jpg', 'https://wp/b.jpg', 'https://wp/g1.jpg', src]);
+    const saved = (await store.get(tk))!;
+    expect(saved.de.bodyMarkdown).toBe(body.replace(src, SRC('de-1', src)));
+    expect(saved.de.images[SRC('de-1', src)]).toEqual({ width: 100, height: 80 });
+    expect(saved.en).toEqual(p.en);
+  });
+
   // Gallery-local captions (2026-10-19): only a gallery line's URL field is
   // re-hosted. Caption text that reads like an inline image of a WordPress
   // photo this run re-hosts is the author's, and must come back unchanged.

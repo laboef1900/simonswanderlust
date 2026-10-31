@@ -2092,9 +2092,9 @@ export function buildServer(cfg: ServerConfig): AppServer {
       if (Number.isNaN(baseUpdatedAt.getTime())) return reply.code(400).send({ error: 'invalid updatedAt' });
     }
     try {
-      const saved = await cfg.pages.save(pair, baseUpdatedAt);
+      const { galleryWarnings, ...saved } = await cfg.pages.save(pair, baseUpdatedAt);
       const build = await cfg.builder.build();
-      return reply.send({ saved, build });
+      return reply.send({ saved, build, galleryWarnings });
     } catch (e) {
       if (e instanceof PageError) {
         // A stale-tab 409 carries `code` so the page can offer a reload; a

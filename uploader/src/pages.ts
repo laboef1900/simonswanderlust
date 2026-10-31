@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { DbClient, DbPool } from './db.js';
 import { imagesMapError, normalizeGalleryFences, type ImageMeta } from './body-content.js';
 import { REVISION_CAP } from './posts.js';
+import type { GalleryWarning } from '../public/gallery-photo-line.js';
 
 export type Locale = 'de' | 'en';
 /** See `body-content.ts` — the single source of truth for this shape. */
@@ -14,6 +15,8 @@ export interface PagePair { key: string; de: PageContent; en: PageContent }
  * for optimistic concurrency (issue #141) — the same contract posts have.
  */
 export interface StoredPagePair extends PagePair { updatedAt: Date | null }
+/** Transient diagnostics from the submitted bodies, excluded from get/revisions. */
+export interface SavedPagePair extends StoredPagePair { galleryWarnings: GalleryWarning[] }
 /** Pre-save snapshot in the PUT-payload shape, so a restore round-trips through the editor. */
 export type PageRevisionSnapshot = Pick<PagePair, 'de' | 'en'>;
 export interface PageRevisionSummary { id: string; savedAt: Date; titleDe: string }
@@ -60,14 +63,17 @@ export function validatePagePair(pair: PagePair): void {
  * canonical bare-URL fence. Runs inside `save()` in BOTH stores (after
  * `validatePagePair`), so it is the single chokepoint for page writes.
  */
-async function pageWithDefaults(pair: PagePair): Promise<PagePair> {
-  const fill = async (c: PageContent): Promise<PageContent> => {
+async function pageWithDefaults(pair: PagePair): Promise<{ pair: PagePair; galleryWarnings: GalleryWarning[] }> {
+  const galleryWarnings: GalleryWarning[] = [];
+  const fill = async (c: PageContent, locale: Locale): Promise<PageContent> => {
     const images = c.images ?? {};
     if (typeof c.bodyMarkdown !== 'string') return { ...c, images };
     const n = await normalizeGalleryFences(c.bodyMarkdown, images);
+    galleryWarnings.push(...n.galleryWarnings.map((warning) => ({ ...warning, locale })));
     return { ...c, bodyMarkdown: n.bodyMarkdown, images: n.images };
   };
-  return { ...pair, de: await fill(pair.de), en: await fill(pair.en) };
+  const normalized = { key: pair.key, de: await fill(pair.de, 'de'), en: await fill(pair.en, 'en') };
+  return { pair: normalized, galleryWarnings };
 }
 
 export interface PageStore {
@@ -83,7 +89,7 @@ export interface PageStore {
    * write are one atomic step, every accepted save strictly advances
    * `updatedAt`, and the returned pair is THIS save's state and token.
    */
-  save(pair: PagePair, baseUpdatedAt?: Date): Promise<StoredPagePair>;
+  save(pair: PagePair, baseUpdatedAt?: Date): Promise<SavedPagePair>;
   /** All page keys that have ever been saved (either locale), sorted. */
   keys(): Promise<string[]>;
   /** Revision summaries for a page, newest first (at most REVISION_CAP). */
@@ -111,7 +117,7 @@ export function memoryPageStore(): PageStore {
     },
     async save(pair, baseUpdatedAt) {
       validatePagePair(pair);
-      const normalized = await pageWithDefaults(pair);
+      const { pair: normalized, galleryWarnings } = await pageWithDefaults(pair);
       const existing = read(pair.key);
       assertPageNotStale(existing.updatedAt, baseUpdatedAt);
       if (existing.updatedAt) {
@@ -127,7 +133,7 @@ export function memoryPageStore(): PageStore {
       // tick — the pg store computes the same GREATEST under its lock.
       const prev = existing.updatedAt?.getTime() ?? 0;
       updatedAtByKey.set(pair.key, new Date(Math.max(Date.now(), prev + 1)));
-      return read(pair.key);
+      return { ...read(pair.key), galleryWarnings };
     },
     async keys() {
       // Stored keys are `${key}:${locale}` and page keys cannot contain ':'.
@@ -167,7 +173,7 @@ export function pgPageStore(pool: DbPool): PageStore {
     get: (key) => readPage(pool, key),
     async save(pair, baseUpdatedAt) {
       validatePagePair(pair);
-      const normalized = await pageWithDefaults(pair);
+      const { pair: normalized, galleryWarnings } = await pageWithDefaults(pair);
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
@@ -223,7 +229,7 @@ export function pgPageStore(pool: DbPool): PageStore {
         // This save's state and token, not a later writer's post-COMMIT read.
         const saved = await readPage(client, pair.key);
         await client.query('COMMIT');
-        return saved;
+        return { ...saved, galleryWarnings };
       } catch (e) {
         await client.query('ROLLBACK').catch(() => {});
         throw e;

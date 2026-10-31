@@ -4,6 +4,8 @@ import { galleryFencesToMdx, rewriteOutsideGalleries, unescapeAltText } from './
 import { markdownImages } from './wp-content.js';
 import { checkSlug, type HeroImage, type Locale, type PostLocale, type PostPair } from './posts.js';
 import { validatePublicTrack, type PublicTrack } from '../public/gpx-public-track.js';
+import { analyzeGallerySource } from '../../site/src/lib/gallery-source.js';
+import { galleryDiagnostics } from '../public/gallery-photo-line.js';
 
 // YAML single-quoted scalar: a literal quote is escaped by doubling it ('' ),
 // never with a backslash. Mirrors storage.ts so exported MDX re-parses cleanly.
@@ -80,7 +82,13 @@ export async function renderPostToMdx(pair: PostPair, locale: Locale, track?: Pu
     lines.push('keyFacts:');
     for (const [k, v] of Object.entries(p.keyFacts)) lines.push(`  ${q(k)}: ${q(v)}`);
   }
-  lines.push('---', '', (await bodyToMdx(p)).trim(), '');
+  const body = await bodyToMdx(p);
+  // Trimming an unterminated gallery's last invalid photo line would destroy
+  // retained whitespace. Invalid source is an opaque backup payload, not a
+  // candidate for export's otherwise unchanged outer-whitespace convention.
+  const invalid = galleryDiagnostics(await analyzeGallerySource(body)).length > 0;
+  lines.push('---', '', invalid ? body : body.trim());
+  if (!invalid) lines.push('');
   return lines.join('\n');
 }
 

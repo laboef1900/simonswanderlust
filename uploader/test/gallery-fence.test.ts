@@ -1,32 +1,21 @@
 import { describe, expect, it, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { normalizeGalleryFences, galleryFencesToMdx } from '../src/body-content.js';
 import { analyzeGallerySource, type GalleryAnalysis, type GalleryBlock } from '../../site/src/lib/gallery-source.js';
 import { resolve } from 'node:path';
+import { browserScript, galleryCodecBindings } from './gallery-browser-module.js';
+import { escapeMeta, unescapeMeta, readCaptionOverride } from '../public/gallery-photo-line.js';
 // Cross-tree, exactly as preview.ts imports the render pipeline: the renderer's
 // directive reader is the authority the picker's copy is measured against.
 import {
   DEFAULT_GALLERY_MODE,
   GALLERY_MODES,
-  escapeMeta,
-  readCaptionOverride,
   readCaptionsVisible,
   readLayoutMode,
-  unescapeMeta,
 } from '../../site/src/lib/gallery-layout.js';
 
-// gallery-fence.js is a plain browser IIFE (window.GalleryFence) holding the
-// gallery picker's pure serialize/parse logic. Run it in a vm sandbox — same
-// precedent as posts-filter.js — so the behaviour is covered without a browser.
-//
-// @ai-warning The escape rule is implemented TWICE: here in browser JS and in
-// `site/src/lib/gallery-layout.ts` as `escapeMeta`/`unescapeMeta`. They are not
-// importable from one another (browser IIFE vs. an ESM module in a different
-// tsconfig), so the parity tests below are the ONLY thing keeping them in step.
-// A silent divergence corrupts alt text and captions containing `|`, a newline
-// or a quote — and does so on save, where the author cannot see it happen.
-const src = readFileSync('public/gallery-fence.js', 'utf8');
+// Exercise browser serialization against the real shared ESM codec in a VM.
+const src = browserScript('gallery-fence.js');
 
 interface PickedItem {
   src: string;
@@ -38,6 +27,9 @@ interface PickedItem {
   fromPost?: boolean;
 }
 interface ParsedLine {
+  valid?: false;
+  raw?: string;
+  diagnostic?: { field: string; reason: string; offset: number };
   src: string;
   width?: number;
   height?: number;
@@ -53,7 +45,7 @@ interface Edit {
   end: number;
   cursor: number;
   replaced: boolean;
-  blocked?: 'unterminated';
+  blocked?: 'unterminated' | 'invalid_metadata';
 }
 interface Insertion {
   text: string;
@@ -97,6 +89,7 @@ function load(transport?: typeof fetch): Api {
   const windowStub: { GalleryFence?: Api } = {};
   vm.runInNewContext(src, {
     window: windowStub, AbortController, setTimeout, clearTimeout,
+    ...galleryCodecBindings,
     fetch: transport ?? (async (_url: string, init: RequestInit) => {
       const { bodyMarkdown } = JSON.parse(String(init.body));
       return { ok: true, json: () => analyzeGallerySource(bodyMarkdown) };
@@ -937,5 +930,57 @@ describe('gallery analysis request lifetime', () => {
     expect((await old).bodyMarkdown).toBe('old');
     expect(current.bodyMarkdown).toBe('~~~gallery\nhttps://i/a\n~~~');
     expect(current.blocks[0]?.isGallery).toBe(true);
+  });
+});
+
+describe('atomic malformed photo lines in browser editing', () => {
+  const probes = [
+    'caption="The \\"Old\\" Bridge"',
+    'caption="Rom | Tag 2"',
+    'capton="typo"',
+    'alt = "spaces"',
+    "alt='single quote'",
+    'caption-override="broken',
+    'caption-override="valid" | unknown="no"',
+    'caption="raw | alt="valid-looking suffix"',
+    'format="png"',
+    '0x100',
+  ];
+  it.each(probes)('preserves all bytes and exposes no partial metadata for %s', async (field) => {
+    const line = '  https://i/a | 10x20 | alt="before" | ' + field + '  \r';
+    expect(G.parse(line).lines).toEqual([expect.objectContaining({
+      valid: false, raw: line, src: 'https://i/a', diagnostic: expect.any(Object),
+    })]);
+    const photo = G.parse(line).lines[0]!;
+    expect(photo.width).toBeUndefined();
+    expect(photo.alt).toBeUndefined();
+    expect(photo.captionOverride).toBeUndefined();
+    expect(G.withAlt(line, 'https://i/a', 'replacement')).toBe(line);
+    const body = '> ~~~gallery extra\r\n> ' + line + '\n> ~~~';
+    expect(await G.altEdit(body, 'https://i/a', 'replacement')).toEqual([]);
+    const removal = await G.replaceFenceAt(body, body.indexOf('https://'), '');
+    expect(removal.blocked).toBe('invalid_metadata');
+    expect(apply(body, removal)).toBe(body);
+  });
+
+  it('edits valid occurrences only and leaves invalid duplicates byte-identical', async () => {
+    const bad = 'https://i/a | 10x20 | caption="raw | delimiter"';
+    const body = '> ~~~gallery\n> ' + bad + '\n> https://i/a | 10x20 | alt="old"\n> ~~~';
+    let result = body;
+    for (const edit of await G.altEdit(body, 'https://i/a', 'new | "alt"')) {
+      result = result.slice(0, edit.start) + edit.text + result.slice(edit.end);
+    }
+    expect(result).toContain('> ' + bad + '\n');
+    expect(result).toContain('alt="new &#124; &quot;alt&quot;"');
+  });
+
+  it('restores visual editing after only the invalid syntax is repaired', async () => {
+    const body = '~~~gallery extra\nhttps://i/a | 10x20 | caption="Rom &#124; Tag 2"\nhttps://i/b\n~~~';
+    const out = await G.replaceFenceAt(body, body.indexOf('https://'), G.serialize([
+      { src: 'https://i/a', width: 10, height: 20 },
+      { src: 'https://i/b', width: 20, height: 10 },
+    ], 'de'));
+    expect(out.blocked).toBeUndefined();
+    expect(apply(body, out)).toContain('https://i/b');
   });
 });

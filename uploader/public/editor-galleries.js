@@ -461,11 +461,16 @@ window.EditorGalleries = (function () {
       if (version !== refreshVersion || body !== cm.getValue() || !previews) return;
       analysisSnapshot = analysis;
       if (!altFailed) {
-        analysisStatus.textContent = '';
+        const warnings = GalleryFence.galleryWarnings(analysis, locale);
+        analysisStatus.textContent = warnings.length
+          ? copy.metadataBlocked + ' ' + warnings.map((warning) => GalleryMetadataWarnings.label(warning, copy)).join('; ') + '. ' + copy.metadataSyntax
+          : '';
         analysisRetry.hidden = true;
       }
       cm.operation(() => {
-        const blocks = analysis.blocks.filter((block) => block.isGallery && !block.unterminated);
+        // Never collapse malformed source behind a partial visual interpretation.
+        const blocks = analysis.blocks.filter((block) => block.isGallery && !block.unterminated
+          && !GalleryFence.parse(block.content).lines.some((line) => line.valid === false));
         const old = controllers;
         const next = [];
         blocks.forEach((block, index) => {

@@ -8,7 +8,9 @@ import { editorDocument, EditorElement, EditorEvent } from './editor-dom-harness
 import { ui } from '../../site/src/i18n/ui.js';
 import { normalizeGalleryFences } from '../src/body-content.js';
 import { analyzeGallerySource } from '../../site/src/lib/gallery-source.js';
-import { readCaptionOverride, readCaptionsVisible } from '../../site/src/lib/gallery-layout.js';
+import { readCaptionsVisible } from '../../site/src/lib/gallery-layout.js';
+import { readCaptionOverride, galleryWarnings } from '../public/gallery-photo-line.js';
+import { browserScript, galleryCodecBindings } from './gallery-browser-module.js';
 import { REGIONS } from '../src/db.js';
 import type { AltAudit } from '../src/alt-audit.js';
 import { publishTokens } from './publish-tokens.js';
@@ -22,7 +24,7 @@ beforeAll(async () => { await analyzeGallerySource(''); });
 // checks let #105 through (an input was removed while the JS still read it);
 // this is the only kind of test that catches a script/markup drift.
 const html = readFileSync('public/editor.html', 'utf8');
-const scriptStart = html.lastIndexOf('<script>');
+const scriptStart = html.lastIndexOf('<script type="module">');
 const script = html.slice(html.indexOf("'use strict'", scriptStart), html.lastIndexOf('</script>'));
 const markup = html.slice(0, scriptStart);
 
@@ -129,6 +131,7 @@ function loadEditor(options: EditorOptions = {}) {
       on: (event: string, callback: () => void) => { if (event === 'change' || event === 'changes') this.changes.push(callback); },
       refresh() {},
       getValue: () => this.text,
+      getLine: (line: number) => this.text.split('\n')[line] ?? '',
       setValue: (value: string) => { this.value(value); },
       getInputField: () => this.input,
       setCursor: (position: { line: number; ch: number }) => { this.cursor = position; },
@@ -190,6 +193,7 @@ function loadEditor(options: EditorOptions = {}) {
   }
   const editors: EasyMDE[] = [];
   const ctx: Record<string, unknown> = {
+    ...galleryCodecBindings,
     document: dom.document,
     location: { search: options.search ?? '', pathname: '/admin/editor.html', href: 'http://localhost/admin/editor.html' + (options.search ?? ''), origin: 'http://localhost' },
     history: { replaceState() {} },
@@ -294,8 +298,8 @@ function loadEditor(options: EditorOptions = {}) {
     guard.redirectToLogin = () => { redirects += 1; redirect(); };
     return guard;
   };
-  for (const file of ['waypoint-lookup.js', 'posts-filter.js', 'editor-title-image.js', 'gallery-fence.js', 'media-api.js', 'gallery-library.js', 'editor-galleries.js', 'editor-linter.js', 'llm.js', 'editor-excerpt.js', 'country-centers.js', 'country-coordinates.js', 'tabs.js', 'editor-review.js', 'editor-inspector.js']) {
-    vm.runInContext(readFileSync('public/' + file, 'utf8'), ctx, {
+  for (const file of ['waypoint-lookup.js', 'posts-filter.js', 'editor-title-image.js', 'gallery-fence.js', 'gallery-metadata-warnings.js', 'media-api.js', 'gallery-library.js', 'editor-galleries.js', 'editor-linter.js', 'llm.js', 'editor-excerpt.js', 'country-centers.js', 'country-coordinates.js', 'tabs.js', 'editor-review.js', 'editor-inspector.js']) {
+    vm.runInContext(browserScript(file), ctx, {
       filename: resolve('public/' + file),
       importModuleDynamically: vm.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER,
     });
@@ -564,7 +568,10 @@ describe('serialized writes in the real editor', () => {
     await settle();
     expect(h.requests.filter(({ options }) => options.method === 'PUT' || options.method === 'POST')
       .map(({ url }) => url)).toEqual(['/posts/tk1']);
-    expect(await posts.get('tk1')).toEqual(foreign);
+    // The save response adds its gallery warnings; the stored pair does not carry them.
+    const { galleryWarnings, ...foreignStored } = foreign;
+    expect(galleryWarnings).toEqual([]);
+    expect(await posts.get('tk1')).toEqual(foreignStored);
     expect(h.el('deTitle').value).toBe('Foreign DE');
     expect(h.el('enTitle').value).toBe('Foreign EN');
     expect(h.editors.map((editor) => editor.value())).toEqual(['Foreign German body', 'Foreign English body']);
@@ -2883,6 +2890,138 @@ describe('editor region select', () => {
     const select = /<select id="fmRegion">([\s\S]*?)<\/select>/.exec(markup)?.[1] ?? '';
     const values = [...select.matchAll(/<option value="([^"]*)"/g)].map((m) => m[1]);
     expect(values).toEqual(['', ...REGIONS]);
+  });
+});
+
+describe('lossless gallery metadata warning flow', () => {
+  const malformed = 'https://img/photo | 900x600 | alt="Lake" | capton="<img src=x onerror=alert(1)>"';
+  const source = '<BodyImage\n  src="https://img/intro"\n  width={900}\n  height={600}\n/>\n\n> - ~~~gallery extra\n>   ' + malformed + '\n>   ~~~';
+  const drain = async () => { for (let i = 0; i < 12; i++) await settle(); };
+  function pair() {
+    const value = fullPair();
+    value.de.bodyMarkdown = source;
+    value.en.bodyMarkdown = source.replace('Lake', 'English lake');
+    return value;
+  }
+  async function saved(payload: Omit<PostPair, 'status'>) {
+    return { ...payload, translationKey: 'tk1', galleryWarnings: [
+      ...galleryWarnings(await analyzeGallerySource(payload.de.bodyMarkdown), 'de'),
+      ...galleryWarnings(await analyzeGallerySource(payload.en.bodyMarkdown), 'en'),
+    ] };
+  }
+  function warningButton(h: { el(id: string): Element }, locale: 'de' | 'en') {
+    const button = h.el('galleryMetadataWarnings').querySelectorAll('button')
+      .find((node) => node.textContent.startsWith(locale.toUpperCase() + ':'));
+    if (!button) throw new Error('Missing localized gallery warning action');
+    return button;
+  }
+
+  it('reopens both locales with advisory diagnostics, raw source and no lossy picker update', async () => {
+    const h = loadEditor();
+    h.api.populateForm(pair());
+    await drain();
+    const root = h.el('galleryMetadataWarnings');
+    expect(root.hidden).toBe(false);
+    expect(root.textContent).toContain(ui.de['editor.gallery.metadataAdvisory']);
+    expect(root.textContent).toContain(ui.en['editor.gallery.metadataAdvisory']);
+    expect(root.querySelectorAll('img')).toHaveLength(0);
+    expect(h.document.querySelectorAll('.editor-gallery')).toHaveLength(0);
+    h.editors[0]!.codemirror.setCursor({ line: 7, ch: 10 });
+    h.el('deGallery').click();
+    await drain();
+    expect(h.galleryPickers).toHaveLength(0);
+    expect(h.el('deBodyImgStatus').textContent).toContain(ui.de['editor.gallery.metadataBlocked']);
+    expect(required(h.el('deBodyImgStatus'), 'code').textContent).toContain(malformed);
+    expect(h.el('deBodyImgStatus').querySelectorAll('img')).toHaveLength(0);
+    expect(h.editors[0]!.value()).toBe(source);
+    expect(h.editors[0]!.undoHistory).toEqual([]);
+    warningButton(h, 'en').click();
+    await drain();
+    expect(h.el('tabbtn-en').getAttribute('aria-selected')).toBe('true');
+    expect(h.editors[1]!.selection?.from.line).toBe(7);
+    expect(h.document.activeElement).toBe(h.editors[1]!.input);
+  });
+
+  it('keeps saved warnings through failed saves and clears them only after a clean successful save', async () => {
+    let fail = false;
+    const h = loadEditor({ fetch: async (_url, init) => {
+      if (init?.method === 'POST' || init?.method === 'PUT') {
+        return fail ? response({ error: 'write refused' }, 409)
+          : response(await saved(JSON.parse(String(init.body))));
+      }
+      return response([]);
+    } });
+    h.api.populateForm(pair());
+    expect(await h.api.doSaveDraft()).toBe(true);
+    const root = h.el('galleryMetadataWarnings');
+    expect(root.textContent).toContain(ui.de['editor.gallery.metadataSaved']);
+    expect(root.textContent).toContain(ui.en['editor.gallery.metadataSaved']);
+    expect(root.textContent).toContain('&quot;');
+    const previous = root.textContent;
+    fail = true;
+    expect(await h.api.doSaveDraft()).toBe(false);
+    expect(root.textContent).toBe(previous);
+    h.editors.forEach((editor) => editor.value('## Repaired\nNo invalid gallery.'));
+    fail = false;
+    expect(await h.api.doSaveDraft()).toBe(true);
+    expect(root.hidden).toBe(true);
+    expect(root.textContent).toBe('');
+  });
+
+  it('reanalyzes newer text typed during save and keeps source and undo intact when focusing', async () => {
+    const pending = Promise.withResolvers<Response>();
+    let captured: Omit<PostPair, 'status'> | undefined;
+    const h = loadEditor({ fetch: async (_url, init) => {
+      if (init?.method === 'POST') { captured = JSON.parse(String(init.body)); return pending.promise; }
+      return response([]);
+    } });
+    h.api.populateForm(pair());
+    const saving = h.api.doSaveDraft();
+    await drain();
+    const editor = h.editors[0]!;
+    editor.codemirror.replaceRange('New paragraph\n\n', { line: 0, ch: 0 }, { line: 0, ch: 0 });
+    const newer = editor.value();
+    const undo = [...editor.undoHistory];
+    pending.resolve(response(await saved(captured!)));
+    expect(await saving).toBe(true);
+    warningButton(h, 'de').click();
+    await drain();
+    expect(editor.selection?.from).toEqual({ line: 9, ch: newer.split('\n')[9]!.indexOf('capton=') });
+    expect(editor.value()).toBe(newer);
+    expect(editor.undoHistory).toEqual(undo);
+    editor.codemirror.undo();
+    expect(editor.value()).toBe(source);
+  });
+
+  it('never jumps to stale coordinates after repair or while current-source analysis is pending', async () => {
+    let hold = false;
+    const pending = Promise.withResolvers<Response>();
+    const h = loadEditor({
+      galleryFetch: async (_url, init) => {
+        const body = JSON.parse(String(init?.body)).bodyMarkdown as string;
+        return hold ? pending.promise : response(await analyzeGallerySource(body));
+      },
+      fetch: async (_url, init) => init?.method === 'POST'
+        ? response(await saved(JSON.parse(String(init.body)))) : response([]),
+    });
+    h.api.populateForm(pair());
+    expect(await h.api.doSaveDraft()).toBe(true);
+    const editor = h.editors[0]!;
+    editor.value('New prefix\n' + source);
+    hold = true;
+    warningButton(h, 'de').click();
+    await settle();
+    editor.value('Now entirely repaired');
+    pending.resolve(response(await analyzeGallerySource('New prefix\n' + source)));
+    await drain();
+    expect(editor.selection).toBeNull();
+    expect(editor.focusCalls).toBe(0);
+    hold = false;
+    warningButton(h, 'de').click();
+    await drain();
+    expect(editor.selection).toBeNull();
+    expect(h.el('galleryMetadataWarnings').textContent).toContain(ui.de['editor.gallery.metadataCurrent']);
+    expect(editor.value()).toBe('Now entirely repaired');
   });
 });
 

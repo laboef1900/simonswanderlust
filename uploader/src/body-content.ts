@@ -12,17 +12,14 @@
  *   `#captions:` directive, whose readers live in the site tree.
  */
 
-// Cross-tree on purpose, like preview.ts: the renderer must read a photo
-// line's gallery-local caption with exactly the rule the save normalizer and
-// exporter use, so the one reader (and its escaping) lives beside the
-// renderer's other fence readers.
+// One complete photo-line grammar, shared with the unbundled editor and renderer.
 import {
-  CAPTION_OVERRIDE_FIELD_RE,
   MAX_GALLERY_TEXT,
   escapeMeta,
-  readCaptionOverride,
-  unescapeMeta,
-} from '../../site/src/lib/gallery-layout.js';
+  parsePhotoLine,
+  galleryDiagnostics,
+  type GalleryDiagnostic,
+} from '../public/gallery-photo-line.js';
 import { analyzeGallerySource } from '../../site/src/lib/gallery-source.js';
 import { applyGalleryEdits, galleryLineEdits } from '../public/gallery-source-edits.js';
 
@@ -182,8 +179,6 @@ export async function rewriteOutsideGalleries(
   return parts.join('');
 }
 
-const DIMS_RE = /^(\d{1,6})x(\d{1,6})$/;
-const ATTR_RE = /^(alt|caption|format)="([^"]*)"$/;
 
 /**
  * Save-time normalization of gallery fences, the exact inverse of
@@ -197,9 +192,9 @@ const ATTR_RE = /^(alt|caption|format)="([^"]*)"$/;
  * exists (#75): the editor exposes no field for `images` metadata, so the
  * author types it on the line and this lifts it.
  *
- * A line whose metadata cannot be resolved to valid dimensions (bad `WxH` and
- * no existing entry for that URL) is left **untouched** rather than stripped —
- * never destroy what the author typed.
+ * Any unrecognized field makes the entire line immutable and contributes no
+ * metadata. Unresolved dimensions likewise preserve the author's source.
+ * Diagnostics refer to the original input, before any source edits.
  *
  * @ai-warning A `caption-override="…"` field is the ONE piece of line metadata
  * that is NOT lifted: it belongs to this occurrence of the photo in this
@@ -211,36 +206,14 @@ const ATTR_RE = /^(alt|caption|format)="([^"]*)"$/;
 export async function normalizeGalleryFences(
   bodyMarkdown: string,
   images: Record<string, ImageMeta>,
-): Promise<{ bodyMarkdown: string; images: Record<string, ImageMeta> }> {
+): Promise<{ bodyMarkdown: string; images: Record<string, ImageMeta>; galleryWarnings: GalleryDiagnostic[] }> {
+  const analysis = await analyzeGallerySource(bodyMarkdown);
+  const warnings = galleryDiagnostics(analysis);
   const merged: Record<string, ImageMeta> = { ...images };
-  const normalized = await rewriteFences(bodyMarkdown, (line) => {
-    const fields = line.split('|').map((f) => f.trim());
-    const src = fields[0] ?? '';
-    if (src === '') return line;
-    if (fields.length === 1) return line; // already normalized — nothing to lift
-    let width: number | undefined;
-    let height: number | undefined;
-    let alt: string | undefined;
-    let caption: string | undefined;
-    let format: 'jpeg' | undefined;
-    let invalidFormat = false;
-    for (const field of fields.slice(1)) {
-      const dims = DIMS_RE.exec(field);
-      if (dims) {
-        width = Number(dims[1]);
-        height = Number(dims[2]);
-        continue;
-      }
-      const attr = ATTR_RE.exec(field);
-      if (attr) {
-        const value = unescapeMeta(attr[2] ?? '').slice(0, MAX_TEXT);
-        if (attr[1] === 'alt') alt = value;
-        else if (attr[1] === 'caption') caption = value;
-        else if (value === 'jpeg') format = value;
-        else invalidFormat = true;
-      }
-    }
-    if (invalidFormat) return line;
+  const rewrite = (line: string): string => {
+    const record = parsePhotoLine(line);
+    if (!record.valid || record.src === '' || record.fields.length === 0) return line;
+    const { src, width, height, alt, caption, format, captionOverride } = record;
     const existing = merged[src];
     const w = width ?? existing?.width ?? 0;
     const hgt = height ?? existing?.height ?? 0;
@@ -256,10 +229,13 @@ export async function normalizeGalleryFences(
         ? { caption }
         : existing?.caption !== undefined ? { caption: existing.caption } : {}),
     };
-    const override = readCaptionOverride(line);
-    return override === undefined ? src : `${src} | caption-override="${escapeMeta(override)}"`;
-  });
-  return { bodyMarkdown: normalized, images: merged };
+    return captionOverride === undefined ? src : `${src} | caption-override="${escapeMeta(captionOverride)}"`;
+  };
+  const edits = analysis.blocks.filter((block) => block.isGallery).flatMap((block) =>
+    block.lines.filter((line) => line.text.trim() !== '' && !line.text.trim().startsWith('#'))
+      .flatMap((line) => galleryLineEdits(line, rewrite(line.text))),
+  );
+  return { bodyMarkdown: applyGalleryEdits(bodyMarkdown, edits), images: merged, galleryWarnings: warnings };
 }
 
 /**
@@ -276,18 +252,17 @@ export async function galleryFencesToMdx(
   images: Record<string, ImageMeta>,
 ): Promise<string> {
   return rewriteFences(bodyMarkdown, (line) => {
-    const fields = line.split('|').map((f) => f.trim());
-    // Anything beyond a gallery-local caption means the line already carries
-    // its metadata (an unresolvable line the normalizer kept verbatim).
-    if (fields.slice(1).some((f) => !CAPTION_OVERRIDE_FIELD_RE.test(f))) return line;
-    const src = fields[0] ?? '';
+    const record = parsePhotoLine(line);
+    // Invalid source is opaque; resolved metadata must never "repair" it.
+    if (!record.valid || record.fields.some((field) => field.name !== 'caption-override')) return line;
+    const { src } = record;
     const meta = images[src];
     if (!meta) return line;
     const parts = [src, `${meta.width}x${meta.height}`];
     if (meta.format === 'jpeg') parts.push('format="jpeg"');
     if (meta.alt != null) parts.push(`alt="${escapeMeta(meta.alt)}"`);
     if (meta.caption != null) parts.push(`caption="${escapeMeta(meta.caption)}"`);
-    const override = readCaptionOverride(line);
+    const override = record.captionOverride;
     if (override !== undefined) parts.push(`caption-override="${escapeMeta(override)}"`);
     return parts.join(' | ');
   });

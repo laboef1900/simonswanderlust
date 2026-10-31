@@ -2,13 +2,14 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
 import * as geometry from '../public/gpx-geometry.js';
+import { browserScript, galleryCodecBindings } from './gallery-browser-module.js';
 import * as publicTrack from '../public/gpx-public-track.js';
 import { editorDocument, EditorElement, EditorEvent } from './editor-dom-harness.js';
 import { ui } from '../../site/src/i18n/ui.js';
 import { memoryPostStore, type PostPair } from '../src/posts.js';
 
 const html = readFileSync('public/editor.html', 'utf8');
-const markup = html.slice(0, html.lastIndexOf('<script>'));
+const markup = html.slice(0, html.lastIndexOf('<script type="module">'));
 const script = readFileSync('public/editor-gpx.js', 'utf8');
 const preview = {
   importId: 'a'.repeat(64), expiresAt: '2026-10-24T12:00:00.000Z',
@@ -229,6 +230,7 @@ function fullEditor(candidate: typeof preview, fetchOverride?: SetupOptions['fet
       .filter(([key]) => key.startsWith(prefix)).map(([key, value]) => [key.slice(prefix.length), value])),
   ]));
   const context: Record<string, unknown> = {
+    ...galleryCodecBindings,
     document: dom.document,
     location: { search: options.tk ? '?tk=' + options.tk : '', pathname: '/admin/editor.html', href: 'http://localhost/admin/editor.html' + (options.tk ? '?tk=' + options.tk : ''), origin: 'http://localhost' },
     history: { replaceState() {} },
@@ -282,17 +284,17 @@ function fullEditor(candidate: typeof preview, fetchOverride?: SetupOptions['fet
   context.window = context;
   vm.createContext(context);
   for (const file of ['draft-guard.js', 'waypoint-lookup.js', 'posts-filter.js', 'editor-title-image.js',
-    'gallery-fence.js', 'media-api.js', 'gallery-library.js', 'editor-galleries.js', 'editor-linter.js',
+    'gallery-fence.js', 'gallery-metadata-warnings.js', 'media-api.js', 'gallery-library.js', 'editor-galleries.js', 'editor-linter.js',
     'llm.js', 'editor-excerpt.js', 'country-centers.js', 'country-coordinates.js', 'tabs.js',
     'editor-review.js', 'editor-inspector.js', 'editor-gpx.js']) {
-    vm.runInContext(readFileSync('public/' + file, 'utf8'), context, { filename: file });
+    vm.runInContext(browserScript(file), context, { filename: file });
   }
   // Supply the real shared geometry module through the controller's dependency
   // seam: Node's VM cannot resolve the browser-only /admin module URL.
   const controller = context.GpxEditor as { wire(host: Record<string, unknown>): unknown };
   const wire = controller.wire;
   controller.wire = (host) => wire({ ...host, loadGeometry: async () => browserGeometry, loadPublicTrack: async () => browserPublicTrack });
-  const inline = html.slice(html.indexOf("'use strict'", html.lastIndexOf('<script>')), html.lastIndexOf('</script>'));
+  const inline = html.slice(html.indexOf("'use strict'", html.lastIndexOf('<script type="module">')), html.lastIndexOf('</script>'));
   vm.runInContext(inline, context, { filename: 'editor.html' });
   const editor = vm.runInContext('({ buildPayload, loadPost, doSaveDraft, guard, gpxEditor, deMDE, addStopRow })', context) as {
     buildPayload(): Omit<PostPair, 'status'> & { updatedAt?: string };

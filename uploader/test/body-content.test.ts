@@ -4,7 +4,7 @@ import {
   heroImageError, escapeAltText, unescapeAltText, imageMarkdown,
   type ImageMeta,
 } from '../src/body-content.js';
-import { escapeMeta, unescapeMeta } from '../../site/src/lib/gallery-layout.js';
+import { escapeMeta, unescapeMeta } from '../public/gallery-photo-line.js';
 import type { ImageDims } from '../../site/src/lib/body-images.js';
 
 const A = 'https://img.example.com/trips/x/a-1a2b3c4d';

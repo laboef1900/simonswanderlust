@@ -584,12 +584,23 @@ https://img.simonswanderlust.com/trips/rhodes-2021/b-9f8e7d6c | 2000x3000 | alt=
 ```
 ````
 
-The `| WIDTHxHEIGHT | alt="…" | caption="…"` metadata is **lifted into the post's images map on
-save**, and the line is rewritten to the bare URL — so you type it once, and re-saving does not
-duplicate it. Only dimensions are required; alt and caption are optional (a photo with no
-caption just gets no `<figcaption>`). Characters that would break the format — `|`, `"`, `<`,
-`>`, `&` and newlines — are escaped automatically on export (`&#124;`, `&quot;`, …) and decoded
-on save, so you can write them literally.
+Valid `| WIDTHxHEIGHT | alt="…" | caption="…"` metadata is **lifted into the post's images map
+on save**, and the line becomes a bare URL. Dimensions are required unless already recorded;
+alt and caption are optional. The picker and export escape values automatically. When editing
+Markdown by hand, use `&quot;` for a quote and `&#124;` for a pipe inside a double-quoted value,
+for example `caption="He said &quot;hello&quot; &#124; sunset"`. Backslash-escaped quotes (`\"`)
+and literal `|` inside a value are **not** supported syntax.
+
+If any field is malformed or unknown, the **whole photo line is saved unchanged**, and none
+of its metadata is applied. A persistent warning names the language and source location;
+select it to find the current problem, repair the syntax and save again. Other valid lines
+still normalize. The warning returns when reopening the draft. The affected gallery remains
+editable as Markdown, but visual picker/inline-alt updates cannot overwrite its invalid line.
+Export preserves that line rather than guessing a repair.
+
+This is a successful save, **not** a new publication block. Malformed captions can remain
+missing on the published page, including immediately after an About-page save/rebuild.
+Existing Media descriptions and previously stored metadata retain their usual precedence.
 
 Two things silently drop a photo from the grid, both deliberate:
 

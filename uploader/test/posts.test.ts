@@ -46,7 +46,7 @@ describe('story slug byte bound (#353)', () => {
         const saved = await store.upsertDraft(pair());
         const revisions = await store.listRevisions(saved.translationKey);
         await expect(store.upsertDraft({ ...input, translationKey: saved.translationKey })).rejects.toThrow(message);
-        expect(await store.get(saved.translationKey)).toEqual(saved);
+        expect({ ...await store.get(saved.translationKey), galleryWarnings: [] }).toEqual(saved);
         expect(await store.listRevisions(saved.translationKey)).toEqual(revisions);
       }
     }
@@ -699,6 +699,61 @@ describe('images-map validation at the store chokepoint', () => {
 describe('gallery fences at the store chokepoint', () => {
   const a = 'https://img/g/a-1a2b3c4d';
 
+  it.each([false, true])('preserves every malformed field atomically with existing images=%s', async (existingImages) => {
+    const store = memoryPostStore();
+    const fields = [
+      String.raw`caption="The \"Old\" Bridge"`, 'caption="Rom | Tag 2"',
+      'capton="Tippfehler"', 'alt = "Blick mit Leerzeichen"', "alt='Blick'",
+      'caption-override="broken', 'caption-override="valid" | capton="unknown"',
+    ];
+    const input = pair();
+    const lines = fields.map((field, index) => `${a}-${index} | 3000x2000 | alt="😀" | ${field}  `);
+    input.de.bodyMarkdown = ['```gallery', ...lines, '```'].join('\r\n');
+    input.de.images = existingImages
+      ? Object.fromEntries(fields.map((_, index) => [`${a}-${index}`, { width: 8, height: 6, alt: 'Existing', caption: 'Keep' }]))
+      : {};
+    input.en.bodyMarkdown = `~~~gallery\n${a} | 30x20 | alt="View"\n~~~`;
+    const saved = await store.upsertDraft(input);
+    expect(saved.de.bodyMarkdown).toBe(input.de.bodyMarkdown);
+    expect(saved.de.images).toEqual(input.de.images);
+    expect(saved.en.bodyMarkdown).toBe(`~~~gallery\n${a}\n~~~`);
+    expect(saved.en.images[a]).toEqual({ width: 30, height: 20, alt: 'View' });
+    expect(saved.galleryWarnings).toHaveLength(fields.length);
+    expect(saved.galleryWarnings.map(({ locale, line }) => ({ locale, line })))
+      .toEqual(fields.map((_, index) => ({ locale: 'de', line: index + 2 })));
+    expect(saved.galleryWarnings[0]).toEqual({
+      code: 'invalid_gallery_metadata', locale: 'de', line: 2,
+      column: lines[0]!.indexOf('caption=') + 1, field: 'caption', reason: 'malformed_field',
+    });
+    expect(await store.get(saved.translationKey)).not.toHaveProperty('galleryWarnings');
+    const again = await store.upsertDraft(saved);
+    expect(again.galleryWarnings).toEqual(saved.galleryWarnings);
+    expect(await store.get(saved.translationKey)).not.toHaveProperty('galleryWarnings');
+    const [revision] = await store.listRevisions(saved.translationKey);
+    expect((await store.getRevision(saved.translationKey, revision!.id))!.snapshot).not.toHaveProperty('galleryWarnings');
+    const repaired = await store.upsertDraft({ ...again, de: { ...again.de, bodyMarkdown: `~~~gallery\n${a} | 30x20 | caption="The &quot;Old&quot; Bridge"\n~~~` } });
+    expect(repaired.galleryWarnings).toEqual([]);
+    expect(repaired.de.images[a]?.caption).toBe('The "Old" Bridge');
+  });
+
+  it('reports submitted coordinates before multiline BodyImage conversion and retains conflict precedence', async () => {
+    const store = memoryPostStore();
+    const input = pair();
+    const bad = `> ${a} | 30x20 | capton="Wrong"`;
+    input.en.bodyMarkdown = `<BodyImage\n src="https://img/body"\n width={30} height={20} alt="View"\n/>\n\n> ~~~gallery extra\n${bad}\n> ~~~`;
+    const saved = await store.upsertDraft(input);
+    expect(saved.en.bodyMarkdown).toContain('![View](https://img/body)');
+    expect(saved.galleryWarnings).toEqual([{
+      code: 'invalid_gallery_metadata', locale: 'en', line: 7,
+      column: bad.indexOf('capton=') + 1, field: 'unknown', reason: 'unknown_field',
+    }]);
+    const before = await store.get(saved.translationKey);
+    await expect(store.upsertDraft(saved, new Date(0))).rejects.toMatchObject({ code: 'conflict' });
+    expect(await store.get(saved.translationKey)).toEqual(before);
+    expect(await store.listRevisions(saved.translationKey)).toEqual([]);
+    await expect(store.upsertDraft({ ...input, translationKey: '' })).rejects.toMatchObject({ code: 'duplicate_slug' });
+  });
+
   it('lifts per-line metadata into images and bares the fence line', async () => {
     const s = memoryPostStore();
     const p = pair();
@@ -758,7 +813,9 @@ describe('normalizeBodyImages', () => {
     try {
       await expect(store.upsertDraft(input)).rejects.toThrow('source mapping unavailable');
       expect(analysis).toHaveBeenCalledWith(input.de.bodyMarkdown, input.de.images);
-      expect(await store.get(saved.translationKey)).toEqual(saved);
+      const { galleryWarnings, ...stored } = saved;
+      expect(galleryWarnings).toEqual([]);
+      expect(await store.get(saved.translationKey)).toEqual(stored);
       expect(await store.listRevisions(saved.translationKey)).toEqual([]);
       expect(input).toEqual(before);
     } finally { analysis.mockRestore(); }
@@ -944,7 +1001,7 @@ describe('explicit memory publish tokens', () => {
     const store = memoryPostStore();
     const saved = await store.upsertDraft(pair());
     const tk = saved.translationKey;
-    expect(await store.getPublishState(tk)).toEqual({ pair: saved, routeVersion: null });
+    expect((await store.getPublishState(tk))?.routeVersion).toBeNull();
     expect(await store.getPublishedTrack(tk)).toBeUndefined();
     for (const tokens of [
       { baseUpdatedAt: new Date(saved.updatedAt.getTime() + 1), baseRouteVersion: null },

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { heroImageError, imageMarkdown, imagesMapError, normalizeGalleryFences, rewriteOutsideGalleries, type ImageMeta } from './body-content.js';
+import type { GalleryWarning, GalleryDiagnostic } from '../public/gallery-photo-line.js';
 import { lockPostPair, touchPostPair } from './post-pair-lock.js';
 import { safePairHash, type GpxFiles } from './gpx-files.js';
 import { enqueueRouteCleanup } from './gpx-store.js';
@@ -86,6 +87,8 @@ export interface PostPair {
  * which the editor echoes back on save for optimistic concurrency (issue #28).
  */
 export interface StoredPostPair extends PostPair { hasUnpublishedChanges: boolean; updatedAt: Date }
+/** Diagnostics belong to this save's submitted bodies, never to stored content. */
+export interface SavedPostPair extends StoredPostPair { galleryWarnings: GalleryWarning[] }
 /** Whole-pair snapshot of the working copy just BEFORE a save overwrote it (issue #28). */
 export type RevisionSnapshot = Pick<PostPair, 'status' | 'shared' | 'de' | 'en'>;
 export interface RevisionSummary {
@@ -169,7 +172,7 @@ export interface PostStore {
    * Omitting it skips the check (new posts, WP importer). Every overwrite of
    * an existing pair first snapshots the pre-save state into the revisions.
    */
-  upsertDraft(pair: PostPair, baseUpdatedAt?: Date): Promise<StoredPostPair>;
+  upsertDraft(pair: PostPair, baseUpdatedAt?: Date): Promise<SavedPostPair>;
   publish(translationKey: string, tokens: PublishTokens): Promise<{ updatedAt: Date }>;
   /** Flip a pair back to draft (the "emergency brake" — the live site drops it on the next build). */
   unpublish(translationKey: string): Promise<{ previousUpdatedAt: Date; updatedAt: Date }>;
@@ -411,7 +414,7 @@ const PLACEHOLDER_REGION = 'europe';
 export async function normalizeBodyImages(
   bodyMarkdown: string,
   images: Record<string, ImageDims>,
-): Promise<{ bodyMarkdown: string; images: Record<string, ImageDims> }> {
+): Promise<{ bodyMarkdown: string; images: Record<string, ImageDims>; galleryWarnings: GalleryDiagnostic[] }> {
   // Gallery fences first: a ```gallery line may carry `| WxH | alt="…"`
   // metadata that belongs in the images map (see body-content.ts). Its output
   // contains no <BodyImage> tags, so the two passes are independent.
@@ -448,7 +451,7 @@ export async function normalizeBodyImages(
     }
     return imageMarkdown(alt, src);
   }));
-  return { bodyMarkdown: normalized, images: merged };
+  return { bodyMarkdown: normalized, images: merged, galleryWarnings: gal.galleryWarnings };
 }
 
 /**
@@ -470,7 +473,8 @@ export async function normalizeBodyImages(
  * post's `images` map unchecked. See body-content.ts `imagesMapError` for why
  * an unchecked map is an XSS vector rather than a tidiness problem.
  */
-async function draftWithDefaults(pair: PostPair): Promise<PostPair> {
+async function draftWithDefaults(pair: PostPair): Promise<{ pair: PostPair; galleryWarnings: GalleryWarning[] }> {
+  const galleryWarnings: GalleryWarning[] = [];
   // The locale is passed in rather than read off `l`: a partial draft payload
   // can omit `locale` at runtime despite the TS type, and the error message
   // must still name which side failed.
@@ -498,11 +502,13 @@ async function draftWithDefaults(pair: PostPair): Promise<PostPair> {
       images: l.images ?? {},
     };
     const n = await normalizeBodyImages(filled.bodyMarkdown, filled.images);
+    galleryWarnings.push(...n.galleryWarnings.map((warning) => ({ ...warning, locale })));
     return { ...filled, bodyMarkdown: n.bodyMarkdown, images: n.images };
   };
   const s = pair.shared;
-  return {
-    ...pair,
+  const normalized: PostPair = {
+    translationKey: pair.translationKey,
+    status: pair.status,
     shared: {
       ...s,
       date: s.date || new Date().toISOString().slice(0, 10),
@@ -519,6 +525,7 @@ async function draftWithDefaults(pair: PostPair): Promise<PostPair> {
     de: await fillLocale(pair.de, 'de'),
     en: await fillLocale(pair.en, 'en'),
   };
+  return { pair: normalized, galleryWarnings };
 }
 
 /**
@@ -596,7 +603,8 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
       return withPair(key, async () => {
         // Reserve save order before asynchronous analysis; a later Publish must
         // not overtake this edit. Both locales still normalize before any write.
-        pair = await draftWithDefaults(pair);
+        const normalized = await draftWithDefaults(pair);
+        pair = normalized.pair;
         const existing = byKey.get(key);
         if (!existing && baseUpdatedAt) throw new PostError('post not found', 'not_found');
         if (existing) assertNotStale(existing.updatedAt, baseUpdatedAt);
@@ -623,7 +631,7 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
           hasUnpublishedChanges: status === 'published',
         };
         byKey.set(key, stored);
-        return structuredClone(stored);
+        return { ...structuredClone(stored), galleryWarnings: normalized.galleryWarnings };
       });
     },
     async publish(tk, tokens) {
@@ -917,7 +925,8 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
       }));
     },
     async upsertDraft(pair, baseUpdatedAt) {
-      pair = await draftWithDefaults(pair);
+      const normalized = await draftWithDefaults(pair);
+      pair = normalized.pair;
       const tk = pair.translationKey || randomUUID();
       writable();
       const client = await pool.connect();
@@ -960,7 +969,7 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
         if (!saved) throw new PostError('failed to save post');
         writable();
         await client.query('COMMIT');
-        return saved;
+        return { ...saved, galleryWarnings: normalized.galleryWarnings };
       } catch (e) {
         await client.query('ROLLBACK').catch(() => {});
         if (isSlugCollision(e)) throw new PostError('slug already in use', 'duplicate_slug');

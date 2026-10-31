@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { describe, expect, it } from 'vitest';
 import { analyzeGallerySource } from '../../site/src/lib/gallery-source.js';
+import { browserScript, galleryCodecBindings } from './gallery-browser-module.js';
+import { ui } from '../../site/src/i18n/ui.js';
 
 type Status = 'pass' | 'warn';
 interface Finding {
@@ -13,6 +15,7 @@ interface Finding {
 interface Findings { status: Status; findings: Finding[]; count?: number }
 interface LengthCheck { status: Status; count: number; message?: string }
 interface Story {
+  locale?: 'de' | 'en';
   title?: string;
   excerpt?: string;
   markdown?: string;
@@ -36,17 +39,24 @@ interface Api {
   lintAltText(input: Pick<Story, 'heroSrc' | 'heroAlt' | 'markdown' | 'galleryAlt'>): Promise<Findings>;
   lintInternalLinks(markdown?: string): Promise<Findings>;
   lintStory(input?: Story): Promise<StoryResult>;
+  lintGalleryMetadata(input: Story): Promise<Findings>;
   findImage(markdown: string, src: string): Promise<{ start: number; end: number; line: number } | null>;
 }
 
 // The transport returns real source analysis, never a second gallery classifier.
-const windowStub: { EditorLinter?: Api } = {};
-const sandbox = vm.createContext({ window: windowStub, AbortController, setTimeout, clearTimeout,
+const windowStub: { EditorLinter?: Api; EditorGalleryCopy: Record<string, Record<string, string>> } = {
+  EditorGalleryCopy: Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [
+    locale, Object.fromEntries(Object.entries(strings).filter(([key]) => key.startsWith('editor.gallery.'))
+      .map(([key, value]) => [key.slice('editor.gallery.'.length), value])),
+  ])),
+};
+const sandbox = vm.createContext({ window: windowStub, ...galleryCodecBindings, AbortController, setTimeout, clearTimeout,
   fetch: async (_url: string, init: RequestInit) => ({
     ok: true, json: () => analyzeGallerySource(JSON.parse(String(init.body)).bodyMarkdown),
   }),
 });
-vm.runInContext(readFileSync('public/gallery-fence.js', 'utf8'), sandbox);
+vm.runInContext(browserScript('gallery-fence.js'), sandbox);
+vm.runInContext(browserScript('gallery-metadata-warnings.js'), sandbox);
 vm.runInContext(readFileSync('public/editor-linter.js', 'utf8'), sandbox);
 if (!windowStub.EditorLinter) throw new Error('EditorLinter was not exported');
 const L = windowStub.EditorLinter;
@@ -264,5 +274,23 @@ describe('authoritative gallery quick checks', () => {
     expect(locations(await L.lintAltText({ markdown }))).toEqual([
       { code: 'missing-alt', target: 'gallery', line },
     ]);
+  });
+});
+
+describe('localized gallery metadata advisories', () => {
+  it.each(['de', 'en'] as const)('reports original UTF-16 coordinates in %s without echoing malformed source as markup', async (locale) => {
+    const line = '>   https://i/a | 10x20 | capton="<img src=x>"';
+    const markdown = '🧭\n\n> - ~~~gallery extra\n' + line + '\n>   ~~~';
+    const result = await L.lintGalleryMetadata({ locale, markdown });
+    expect(result.status).toBe('warn');
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]).toMatchObject({
+      code: 'invalid_gallery_metadata', line: 4, column: line.indexOf('capton') + 1, target: 'gallery',
+    });
+    expect(result.findings[0]!.message).toContain(ui[locale]['editor.gallery.metadataAdvisory']);
+    expect(result.findings[0]!.message).toContain('&quot;');
+    expect(result.findings[0]!.message).not.toContain('<img');
+    const repaired = markdown.replace('capton=', 'caption=');
+    expect((await L.lintGalleryMetadata({ locale, markdown: repaired })).findings).toEqual([]);
   });
 });

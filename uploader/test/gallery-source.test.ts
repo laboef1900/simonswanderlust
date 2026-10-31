@@ -104,6 +104,7 @@ describe('gallery source provenance and bounded edits', () => {
     expect(saved).toEqual({
       bodyMarkdown: body.replace(metadata, ''),
       images: { [photo]: { width: 20, height: 10, alt: 'Lake' } },
+      galleryWarnings: [],
     });
     expect(analyzeRenderedBody(await renderMarkdown(saved.bodyMarkdown)).galleryLines).toEqual([photo]);
     expect(await normalizeGalleryFences(await galleryFencesToMdx(saved.bodyMarkdown, saved.images), {})).toEqual(saved);

@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { setImmediate } from 'node:timers/promises';
 import { ui } from '../../site/src/i18n/ui.js';
 import { memoryMediaStore, type MediaQuery, type MediaStore, type NewMediaItem } from '../src/media-store.js';
 import { normalizeGalleryFences, type ImageMeta } from '../src/body-content.js';
 import { editorDocument } from './editor-dom-harness.js';
+import { browserScript, galleryCodecBindings } from './gallery-browser-module.js';
 
 const scripts = ['media-api', 'picker-selection', 'media-picker', 'gallery-library', 'gallery-fence']
-  .map((name) => readFileSync('public/' + name + '.js', 'utf8'));
+  .map((name) => browserScript(name + '.js'));
 const copy = Object.fromEntries(Object.entries(ui.en)
   .filter(([key]) => key.startsWith('editor.chrome.'))
   .map(([key, value]) => [key.slice('editor.chrome.'.length), value]));
@@ -97,6 +97,7 @@ function openPicker(store: MediaStore, options: PageOptions = {}) {
     return options.list ? options.list(url, result) : result;
   };
   const ctx: Record<string, unknown> = {
+    ...galleryCodecBindings,
     document: dom.document, EditorCopy: { en: copy }, fetch: fetcher, URL,
     matchMedia: () => ({ matches: options.compact ?? false }),
     location: { href: '' },

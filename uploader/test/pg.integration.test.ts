@@ -601,6 +601,42 @@ maybe('pgPostStore revisions + optimistic concurrency (integration)', () => {
   });
   afterAll(async () => { await pool.end(); });
 
+  it('returns transient warnings for all issue probes while retaining both locale rows and conflict/write failures', async () => {
+    const store = pgPostStore(pool);
+    const input = base(`metadata-${randomUUID()}`);
+    const fields = [String.raw`caption="The \"Old\" Bridge"`, 'caption="Rom | Tag 2"', 'capton="Tippfehler"', 'alt = "Blick"', "alt='Blick'", 'caption-override="broken'];
+    const src = 'https://i/metadata';
+    const lines = fields.map((field, index) => `${src}-${index} | 3000x2000 | alt="😀" | ${field}  `);
+    const body = ['~~~gallery extra', ...lines, '~~~'].join('\r\n');
+    input.de.bodyMarkdown = body;
+    input.en.bodyMarkdown = body;
+    input.en.images = Object.fromEntries(fields.map((_, index) => [`${src}-${index}`, { width: 8, height: 6, caption: 'Keep' }]));
+    const saved = await store.upsertDraft(input);
+    try {
+      expect(saved.de.bodyMarkdown).toBe(body);
+      expect(saved.en.bodyMarkdown).toBe(body);
+      expect(saved.de.images).toEqual({});
+      expect(saved.en.images).toEqual(input.en.images);
+      expect(saved.galleryWarnings).toHaveLength(fields.length * 2);
+      expect(saved.galleryWarnings[0]).toEqual({
+        code: 'invalid_gallery_metadata', locale: 'de', line: 2,
+        column: lines[0]!.indexOf('caption=') + 1, field: 'caption', reason: 'malformed_field',
+      });
+      expect(saved.galleryWarnings[fields.length]?.locale).toBe('en');
+      expect(await store.get(saved.translationKey)).not.toHaveProperty('galleryWarnings');
+      const again = await store.upsertDraft(saved, saved.updatedAt);
+      expect(again.galleryWarnings).toEqual(saved.galleryWarnings);
+      const before = await store.get(saved.translationKey);
+      await expect(store.upsertDraft(saved, new Date(0))).rejects.toMatchObject({ code: 'conflict' });
+      await expect(pgPostStore(pool, { isWritable: () => false }).upsertDraft(saved)).rejects.toMatchObject({ code: 'storage_read_only' });
+      // PostgreSQL rejects NUL in text after the first locale write.
+      await expect(store.upsertDraft({ ...again, de: { ...again.de, title: 'Must roll back' }, en: { ...again.en, title: '\u0000' } })).rejects.toBeDefined();
+      expect(await store.get(saved.translationKey)).toEqual(before);
+      const [revision] = await store.listRevisions(saved.translationKey);
+      expect((await store.getRevision(saved.translationKey, revision!.id))!.snapshot).not.toHaveProperty('galleryWarnings');
+    } finally { await store.remove(saved.translationKey); }
+  });
+
   it('normalizes direct-import galleries and refuses a later locale analysis failure without writes', async () => {
     const store = pgPostStore(pool);
     const input = base(`gallery-${randomUUID()}`);
@@ -620,7 +656,9 @@ maybe('pgPostStore revisions + optimistic concurrency (integration)', () => {
     });
     try {
       await expect(store.upsertDraft(edit, saved.updatedAt)).rejects.toThrow('source mapping unavailable');
-      expect(await store.get(saved.translationKey)).toEqual(saved);
+      const { galleryWarnings, ...stored } = saved;
+      expect(galleryWarnings).toEqual([]);
+      expect(await store.get(saved.translationKey)).toEqual(stored);
       expect(await store.listRevisions(saved.translationKey)).toEqual([]);
     } finally { analysis.mockRestore(); }
   });

@@ -5,6 +5,7 @@ import { ui } from '../../site/src/i18n/ui.js';
 import vm from 'node:vm';
 import { resolve } from 'node:path';
 import { analyzeGallerySource } from '../../site/src/lib/gallery-source.js';
+import { browserScript, galleryCodecBindings } from './gallery-browser-module.js';
 
 // Use the bundle copied by copy-easymde.mjs, not the separately installed
 // codemirror package: EasyMDE ships its own CodeMirror version. Happy DOM is
@@ -49,8 +50,9 @@ async function editor(body: string): Promise<GalleryEditor> {
   window.document.body.innerHTML = '<textarea></textarea><button id="toggle" type="button"></button>';
   window.eval(easyMDE);
   const fenceWindow: { GalleryFence?: FenceApi } = {};
-  vm.runInNewContext(readFileSync('public/gallery-fence.js', 'utf8'), {
+  vm.runInNewContext(browserScript('gallery-fence.js'), {
     window: fenceWindow, AbortController, setTimeout, clearTimeout,
+    ...galleryCodecBindings,
     fetch: async (_url: string, init: RequestInit) => ({
       ok: true,
       json: () => analyzeGallerySource(JSON.parse(String(init.body)).bodyMarkdown),

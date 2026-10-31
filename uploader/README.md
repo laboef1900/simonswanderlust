@@ -390,8 +390,13 @@ An externally emptied page keeps Previous available.
 Several photos render as one grid from a fenced ```` ```gallery ```` block, one image URL per line.
 Authors get it from **"Insert / edit gallery"** on either locale tab, which opens the library in
 multi-select mode with an ordering strip; the button writes exactly the text a person would type by
-hand. Per-line `| WxH | alt="…" | caption="…"` metadata is lifted into the post's `images` map at
-the store chokepoint (`normalizeGalleryFences`), leaving the body as bare URLs.
+hand. Valid per-line `| WxH | alt="…" | caption="…"` metadata is lifted into the post's
+`images` map at the store chokepoint (`normalizeGalleryFences`), leaving bare URLs.
+If any field is malformed, the whole line is saved unchanged without applying any
+of its metadata. Successful post/page saves return transient `galleryWarnings`;
+the editor shows a persistent repair link. This is not a new Publish refusal, and
+preserved malformed captions may remain invisible. Hand-written quotes and pipes
+use `&quot;` and `&#124;`, not `\"` or a literal `|` inside the quoted value.
 
 Gallery identity is server-authoritative (`site/src/lib/gallery-source.ts`), using
 the actual Satteri parser features and shared sanitized render predicate. Tildes,

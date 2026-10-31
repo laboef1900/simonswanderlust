@@ -514,12 +514,16 @@ async function applyRehosts(body: string, rehosted: ReadonlyMap<string, RehostRe
     return out;
   });
   return rewriteFences(body, (line) => {
-    const fields = line.split('|').map((f) => f.trim());
-    const url = fields[0] ?? '';
+    // Replace only the actual URL token. The suffix may be intentionally
+    // retained invalid metadata; trimming/reconstructing it would lose bytes.
+    const separator = line.indexOf('|');
+    const head = separator < 0 ? line : line.slice(0, separator);
+    const url = head.trim();
     const r = rehosted.get(url);
     if (!r) return line; // fetch failed — keep the original so nothing is lost
     record(url, r);
-    return [r.src, `${r.width}x${r.height}`, ...fields.slice(1)].join(' | ');
+    const start = head.length - head.trimStart().length;
+    return line.slice(0, start) + r.src + line.slice(start + url.length);
   });
 }
 

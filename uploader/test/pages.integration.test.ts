@@ -21,6 +21,42 @@ maybe('pgPageStore (Postgres)', () => {
   beforeAll(async () => { pool = createPool(url as string); await ensureSchema(pool); });
   afterAll(async () => { await pool.end(); });
 
+  it('keeps malformed metadata lossless and diagnostics transient in real page saves', async () => {
+    const store = pgPageStore(pool);
+    const input = about('Metadata');
+    input.key = 'gallery-metadata';
+    const fields = [String.raw`caption="The \"Old\" Bridge"`, 'caption="Rom | Tag 2"', 'capton="Tippfehler"', 'alt = "Blick"', "alt='Blick'", 'caption-override="broken'];
+    const src = 'https://img/metadata';
+    const lines = fields.map((field, index) => `> ${src}-${index} | 3000x2000 | alt="😀" | ${field}  `);
+    const body = ['> ~~~gallery extra', ...lines, '> ~~~'].join('\r\n');
+    input.de.bodyMarkdown = body;
+    input.en.bodyMarkdown = body;
+    input.en.images = Object.fromEntries(fields.map((_, index) => [`${src}-${index}`, { width: 8, height: 6, caption: 'Keep' }]));
+    try {
+      const saved = await store.save(input);
+      expect(saved.de).toEqual(input.de);
+      expect(saved.en).toEqual(input.en);
+      expect(saved.galleryWarnings).toHaveLength(fields.length * 2);
+      expect(saved.galleryWarnings[0]).toEqual({
+        code: 'invalid_gallery_metadata', locale: 'de', line: 2,
+        column: lines[0]!.indexOf('caption=') + 1, field: 'caption', reason: 'malformed_field',
+      });
+      expect(saved.galleryWarnings[fields.length]?.locale).toBe('en');
+      expect(await store.get(input.key)).not.toHaveProperty('galleryWarnings');
+      const again = await store.save(saved, saved.updatedAt!);
+      expect(again.galleryWarnings).toEqual(saved.galleryWarnings);
+      const before = await store.get(input.key);
+      await expect(store.save(saved, new Date(0))).rejects.toMatchObject({ code: 'conflict' });
+      await expect(store.save({ ...again, de: { ...again.de, title: 'Must roll back' }, en: { ...again.en, title: null as never } })).rejects.toBeDefined();
+      expect(await store.get(input.key)).toEqual(before);
+      const [revision] = await store.listRevisions(input.key);
+      expect((await store.getRevision(input.key, revision!.id))!.snapshot).not.toHaveProperty('galleryWarnings');
+    } finally {
+      await pool.query('DELETE FROM page_revisions WHERE key=$1', [input.key]);
+      await pool.query('DELETE FROM pages WHERE key=$1', [input.key]);
+    }
+  });
+
   it('normalizes both gallery locales and never commits half a page when analysis fails', async () => {
     const store = pgPageStore(pool);
     const src = 'https://img/gallery';
@@ -43,7 +79,9 @@ maybe('pgPageStore (Postgres)', () => {
       });
       try {
         await expect(store.save(edit, saved.updatedAt!)).rejects.toThrow('source mapping unavailable');
-        expect(await store.get(saved.key)).toEqual(saved);
+        const { galleryWarnings, ...stored } = saved;
+        expect(galleryWarnings).toEqual([]);
+        expect(await store.get(saved.key)).toEqual(stored);
         expect(await store.listRevisions(saved.key)).toEqual(revisions);
       } finally { analysis.mockRestore(); }
     } finally {
@@ -210,7 +248,8 @@ maybe('pgPageStore serializes saves of one page (Postgres, #344)', () => {
     const stored = await store.get(key);
     expect(stored.de.title).toBe('TAB-A');
     // The response is this save's own state and token.
-    expect(a.value).toEqual(stored);
+    // The response is the stored state plus this save's (empty) gallery warnings.
+    expect(a.value).toEqual({ ...stored, galleryWarnings: [] });
     expect(a.value.updatedAt!.getTime()).toBeGreaterThan(base.updatedAt!.getTime());
     await rowTokens(key, a.value.updatedAt!);
     // The true predecessor, snapshotted once; the refused save left no trace.
@@ -233,7 +272,8 @@ maybe('pgPageStore serializes saves of one page (Postgres, #344)', () => {
     if (!a.ok) throw a.error;
     const stored = await store.get(key);
     expect(stored.de.title).toBe('NEW-A');
-    expect(a.value).toEqual(stored);
+    // The response is the stored state plus this save's (empty) gallery warnings.
+    expect(a.value).toEqual({ ...stored, galleryWarnings: [] });
     await rowTokens(key, a.value.updatedAt!);
     expect(await store.listRevisions(key)).toEqual([]);
   }, 20_000);
@@ -250,7 +290,7 @@ maybe('pgPageStore serializes saves of one page (Postgres, #344)', () => {
     expect(a.value.de.title).toBe('FIRST');
     expect(b.value.de.title).toBe('SECOND');
     expect(b.value.updatedAt!.getTime()).toBeGreaterThan(a.value.updatedAt!.getTime());
-    expect(await store.get(key)).toEqual(b.value);
+    expect({ ...await store.get(key), galleryWarnings: [] }).toEqual(b.value);
     await rowTokens(key, b.value.updatedAt!);
     const revs = await store.listRevisions(key);
     expect(revs.map((r) => r.titleDe)).toEqual(['FIRST']);

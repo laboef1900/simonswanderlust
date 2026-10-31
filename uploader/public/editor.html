@@ -69,6 +69,7 @@
       <div class="editor-workspace" id="editorWorkspace">
         <div class="editor-canvas editor-writing-surface" id="editorWritingSurface">
           <!-- Advisory checks stay with the manuscript and never gate Publish. -->
+          <div id="galleryMetadataWarnings" class="notice-warn" hidden></div>
           <details id="altAudit" class="notice-warn alt-audit" hidden>
             <summary><span id="altAuditSummary" role="status"></span></summary>
             <p id="altAuditHelp"></p>
@@ -504,7 +505,6 @@
     <script src="/admin/media-api.js"></script>
     <script src="/admin/picker-selection.js"></script>
     <script src="/admin/media-picker.js"></script>
-    <script src="/admin/gallery-fence.js"></script>
     <script src="/admin/editor-linter.js"></script>
     <script src="/admin/editor-review.js"></script>
     <script src="/admin/editor-excerpt.js"></script>
@@ -521,7 +521,9 @@
     <script src="/admin/waypoint-lookup.js"></script>
     <script src="/admin/gallery-library.js"></script>
     <script src="/admin/editor-galleries.js"></script>
-    <script>
+    <script src="/admin/gallery-metadata-warnings.js"></script>
+    <script type="module">
+      import './gallery-fence.js';
       'use strict';
       const $ = (id) => document.getElementById(id);
       const editorCopy = EditorCopy.en;
@@ -739,6 +741,13 @@
         onChange: activateLocale,
       });
       syncInspectorLocale(activeTab);
+      const galleryMetadataWarnings = GalleryMetadataWarnings.create({
+        root: $('galleryMetadataWarnings'),
+        editors: { de: deMDE.codemirror, en: enMDE.codemirror },
+        activate: (locale) => { tabsApi.select(locale); activateLocale(locale); },
+        reveal: (locale, line) => galleryEditors[locale].revealLine(line),
+        onUnauthed: () => guard.redirectToLogin(),
+      });
 
       // ---- slug derivation from locale titles ----
       // @ai-warning Golden Rule 2 (SEO slug contract). A slug is derived from
@@ -796,7 +805,7 @@
             inspectorApi.close();
             const cm = (locale === 'en' ? enMDE : deMDE).codemirror;
             galleryEditors[locale].revealLine(finding.line - 1);
-            cm.setCursor({ line: finding.line - 1, ch: 0 });
+            cm.setCursor({ line: finding.line - 1, ch: (finding.column || 1) - 1 });
             cm.focus();
           }
         },
@@ -1191,6 +1200,17 @@
         // so the save cannot fall back to this older copy (gallery-fence.js).
         const images = locale === 'de' ? deImages : enImages;
         const status = $(locale + 'BodyImgStatus');
+        if (current.lines.some((line) => line.valid === false)) {
+          status.textContent = EditorGalleryCopy[locale].metadataBlocked + ' ' + EditorGalleryCopy[locale].metadataSyntax;
+          galleryEditors[locale].revealLine(cm.posFromIndex(existing.start).line);
+          const raw = document.createElement('code');
+          raw.style.display = 'block';
+          raw.style.whiteSpace = 'pre-wrap';
+          raw.textContent = body.slice(existing.start, existing.end);
+          status.appendChild(raw);
+          await galleryMetadataWarnings.reopen(locale);
+          return;
+        }
         const postMeta = {};
         current.lines.forEach((line) => {
           const stored = images[line.src] || {};
@@ -1289,6 +1309,11 @@
             }
             if (out.blocked === 'unterminated') {
               status.textContent = EditorGalleryCopy[locale].unterminated;
+              return;
+            }
+            if (out.blocked === 'invalid_metadata') {
+              status.textContent = EditorGalleryCopy[locale].metadataBlocked;
+              await galleryMetadataWarnings.reopen(locale);
               return;
             }
             if (out.start === out.end && out.text === '') return;
@@ -1905,6 +1930,7 @@
           $('pageTitle').textContent = 'Edit post';
         }
         guard.markClean(snap);
+        galleryMetadataWarnings.saved(body.galleryWarnings, payload);
         if (body.updatedAt) loadedUpdatedAt = body.updatedAt;
         loadedSlugs.de = (body.de && body.de.slug) || '';
         loadedSlugs.en = (body.en && body.en.slug) || '';
@@ -2105,6 +2131,7 @@
         try { mde.value(data.bodyMarkdown || ''); }
         finally { populatingBody = false; }
         galleryEditors[loc].refresh();
+        void galleryMetadataWarnings.reopen(loc);
       }
 
       // Fills the whole form from a PostPair-shaped object (or a {shared,de,en}
