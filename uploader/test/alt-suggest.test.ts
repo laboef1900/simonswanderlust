@@ -11,17 +11,17 @@ describe('local alt text remains separate from remote review credentials', () =>
     const fetch = vi.fn(async () => ({ status, ok: status === 200, json: async () => config }));
     const caption = vi.fn(async () => ({ altDe: 'Ein Berg', altEn: 'A mountain' }));
     const prepImage = vi.fn(async () => ({ dataUrl: 'data:image/jpeg;base64,fixture' }));
-    const ctx = { window: {}, fetch, location: { href: '', protocol: 'http:' }, Event, LLM: { caption, prepImage } };
+    const ctx = { window: {}, fetch, location: { href: '', protocol: 'http:' }, Event, AbortController, LLM: { caption, prepImage } };
     vm.createContext(ctx);
     vm.runInContext(script, ctx);
     const listeners: (() => Promise<void>)[] = [];
-    const altInput = { value: '', dispatchEvent: vi.fn() };
+    const altInput = { value: '', dispatchEvent: vi.fn(), addEventListener: vi.fn() };
     const statusEl = { textContent: '' };
     const on401 = vi.fn();
     const api = ctx.window as { AltSuggest: { wire(options: unknown): void } };
     api.AltSuggest.wire({
       button: { addEventListener: (_name: string, listener: () => Promise<void>) => listeners.push(listener) },
-      fileInput: { files: [{}] }, altInput, statusEl, on401, lang: 'de',
+      fileInput: { files: [{}], addEventListener: vi.fn() }, altInput, statusEl, on401, lang: 'de',
     });
     return { config, fetch, caption, prepImage, altInput, on401, statusEl, click: () => listeners[0]!() };
   }
@@ -40,6 +40,207 @@ describe('local alt text remains separate from remote review credentials', () =>
     expect(page.prepImage).not.toHaveBeenCalled();
     expect(page.caption).not.toHaveBeenCalled();
     expect(page.altInput.value).toBe('');
+  });
+});
+
+describe('local-file caption request ownership', () => {
+  type Caption = { altDe: string; altEn: string };
+  type CaptionConfig = { captionProvider: string; captionBaseUrl: string; captionApiKey: string | null;
+    lmModel: string; captionPrompt: string; captionTimeoutMs: number; captionMaxTokens: number; captionMaxEdge: number };
+  type ConfigResponse = { status: number; ok: boolean; json(): Promise<CaptionConfig> };
+  const oldReply = { altDe: 'Eine Tram', altEn: 'A tram' };
+  const newReply = { altDe: 'Ein Wal', altEn: 'A whale' };
+  const dataUrl = 'data:image/jpeg;base64,fixture';
+
+  function setup(lang: 'de' | 'en' = 'en') {
+    const configs: CaptionConfig[] = [];
+    const fetch = vi.fn(async (_url: string, _options: RequestInit) => {
+      const config: CaptionConfig = { captionProvider: 'openrouter', captionBaseUrl: 'https://provider.example/v1',
+        captionApiKey: 'fixture-key-' + configs.length, lmModel: 'vision', captionPrompt: 'describe',
+        captionTimeoutMs: 5000, captionMaxTokens: 256, captionMaxEdge: 768 };
+      configs.push(config);
+      return { status: 200, ok: true, json: async () => config };
+    });
+    const replies: PromiseWithResolvers<Caption>[] = [];
+    const caption = vi.fn((_url: string, _model: string, _prompt: string, _data: string,
+      _timeout: number, _tokens: number, _signal: AbortSignal, _key: string) => {
+      // Intentionally ignores abort: ownership must also reject already-settled
+      // replies and providers that complete despite cancellation.
+      const reply = Promise.withResolvers<Caption>();
+      replies.push(reply);
+      return reply.promise;
+    });
+    const prepImage = vi.fn(async (_file: File, _edge: number, _signal: AbortSignal) => ({ dataUrl }));
+    const ctx = { window: {}, fetch, location: { href: '', protocol: 'http:' }, Event, AbortController,
+      LLM: { caption, prepImage, mixedContentWarning: () => '' } };
+    vm.createContext(ctx);
+    vm.runInContext(script, ctx);
+    const fileInput = Object.assign(new EventTarget(), { files: [new File(['tram'], 'photo.jpg')] });
+    const altInput = Object.assign(new EventTarget(), { value: 'author text' });
+    const inputEvents = vi.fn();
+    altInput.addEventListener('input', inputEvents);
+    const statusEl = { textContent: '' };
+    const hintEl = { textContent: '' };
+    const on401 = vi.fn();
+    let click: () => Promise<void> = async () => {};
+    const button = { disabled: false,
+      addEventListener: (_name: string, listener: () => Promise<void>) => { click = listener; } };
+    const api = ctx.window as { AltSuggest: { wire(options: unknown): void } };
+    api.AltSuggest.wire({ button, fileInput, altInput, statusEl, hintEl, lang, on401,
+      truncatedText: ui[lang]['editor.chrome.altSuggestTruncated'] });
+    return { click: () => click(), button, fileInput, altInput, inputEvents, statusEl, hintEl,
+      configs, fetch, caption, prepImage, replies, on401,
+      signal: (index = 0) => caption.mock.calls[index]![6] };
+  }
+
+  it.each(['de', 'en'] as const)('applies an ordinary %s reply once and releases only its request-local key', async (lang) => {
+    const page = setup(lang);
+    const pending = page.click();
+    await vi.waitFor(() => expect(page.caption).toHaveBeenCalledOnce());
+    expect(page.fetch.mock.calls[0]![1]).toEqual({ signal: page.signal(), cache: 'no-store' });
+    expect(page.prepImage).toHaveBeenCalledWith(page.fileInput.files[0], 768, page.signal());
+    expect(page.caption.mock.calls[0]![7]).toBe('fixture-key-0');
+    page.replies[0]!.resolve(oldReply);
+    await pending;
+    expect(page.altInput.value).toBe(lang === 'de' ? oldReply.altDe : oldReply.altEn);
+    expect(page.hintEl.textContent).toBe(lang === 'de' ? 'EN: A tram' : 'DE: Eine Tram');
+    expect(page.inputEvents).toHaveBeenCalledOnce();
+    expect(page.inputEvents.mock.calls[0]![0]).toMatchObject({ type: 'input', bubbles: true });
+    expect(page.statusEl.textContent).toBe('Suggested — review and edit as needed.');
+    expect(page.configs[0]!.captionApiKey).toBeNull();
+    expect(page.signal().aborted).toBe(false);
+  });
+
+  it.each(['photo', 'manual alt'] as const)('aborts on a %s change and drops the eventual reply', async (change) => {
+    const page = setup();
+    const pending = page.click();
+    await vi.waitFor(() => expect(page.caption).toHaveBeenCalledOnce());
+    if (change === 'photo') {
+      // Same filename is not identity.
+      page.fileInput.files = [new File(['whale'], 'photo.jpg')];
+      page.fileInput.dispatchEvent(new Event('change'));
+    } else {
+      page.altInput.value = 'My description';
+      page.altInput.dispatchEvent(new Event('input'));
+      page.inputEvents.mockClear();
+    }
+    expect(page.signal().aborted).toBe(true);
+    expect(page.configs[0]!.captionApiKey).toBeNull();
+    page.replies[0]!.resolve(oldReply);
+    await pending;
+    expect(page.altInput.value).toBe(change === 'photo' ? 'author text' : 'My description');
+    expect(page.inputEvents).not.toHaveBeenCalled();
+    expect(page.hintEl.textContent).toBe('');
+    expect(page.statusEl.textContent).toBe('');
+  });
+
+  it.each(['insert-clear', 'next-photo', 'programmatic-alt'] as const)('guards %s even without input/change events', async (change) => {
+    const page = setup();
+    const pending = page.click();
+    await vi.waitFor(() => expect(page.caption).toHaveBeenCalledOnce());
+    if (change === 'programmatic-alt') {
+      page.altInput.value = 'My description';
+    } else {
+      page.fileInput.files = change === 'insert-clear' ? [] : [new File(['whale'], 'photo.jpg')];
+      page.altInput.value = change === 'insert-clear' ? '' : 'author text';
+    }
+    const expected = page.altInput.value;
+    page.statusEl.textContent = 'Inserted: photo';
+    page.replies[0]!.resolve(oldReply);
+    await pending;
+    expect(page.altInput.value).toBe(expected);
+    expect(page.inputEvents).not.toHaveBeenCalled();
+    expect(page.statusEl.textContent).toBe('Inserted: photo');
+    expect(page.hintEl.textContent).toBe('');
+    expect(page.configs[0]!.captionApiKey).toBeNull();
+  });
+
+  it('replaces a pending request on another click and accepts only the newest reverse-order completion', async () => {
+    const page = setup();
+    const first = page.click();
+    await vi.waitFor(() => expect(page.caption).toHaveBeenCalledTimes(1));
+    expect(page.button.disabled).toBe(false);
+    const second = page.click();
+    expect(page.signal().aborted).toBe(true);
+    await vi.waitFor(() => expect(page.caption).toHaveBeenCalledTimes(2));
+    expect(page.signal(1).aborted).toBe(false);
+    page.replies[1]!.resolve(newReply);
+    await second;
+    page.replies[0]!.resolve(oldReply);
+    await first;
+    expect(page.altInput.value).toBe('A whale');
+    expect(page.hintEl.textContent).toBe('DE: Ein Wal');
+    expect(page.inputEvents).toHaveBeenCalledOnce();
+    expect(page.statusEl.textContent).toBe('Suggested — review and edit as needed.');
+    expect(page.configs.map(config => config.captionApiKey)).toEqual([null, null]);
+  });
+
+  it.each(['success', 'failure', 'truncation'] as const)('keeps the newer status, key and cancellation owner after stale %s/finally', async (outcome) => {
+    const page = setup();
+    const first = page.click();
+    await vi.waitFor(() => expect(page.caption).toHaveBeenCalledTimes(1));
+    const second = page.click();
+    await vi.waitFor(() => expect(page.caption).toHaveBeenCalledTimes(2));
+    if (outcome === 'success') page.replies[0]!.resolve(oldReply);
+    else page.replies[0]!.reject(new Error(outcome === 'truncation' ? 'Caption response was truncated' : 'Provider failed'));
+    await first;
+    expect(page.statusEl.textContent).toBe('Asking the selected alt-text model…');
+    expect(page.configs[1]!.captionApiKey).toBe('fixture-key-1');
+    expect(page.inputEvents).not.toHaveBeenCalled();
+    page.altInput.value = 'Manual whale';
+    page.altInput.dispatchEvent(new Event('input'));
+    page.inputEvents.mockClear();
+    expect(page.signal(1).aborted).toBe(true);
+    expect(page.configs[1]!.captionApiKey).toBeNull();
+    page.replies[1]!.resolve(newReply);
+    await second;
+    expect(page.altInput.value).toBe('Manual whale');
+    expect(page.inputEvents).not.toHaveBeenCalled();
+    expect(page.statusEl.textContent).toBe('');
+  });
+
+  it('cancels during image preparation and never sends the superseded image to a model', async () => {
+    const page = setup();
+    const preparation = Promise.withResolvers<{ dataUrl: string }>();
+    page.prepImage.mockReturnValueOnce(preparation.promise);
+    const first = page.click();
+    await vi.waitFor(() => expect(page.prepImage).toHaveBeenCalledOnce());
+    const signal = page.prepImage.mock.calls[0]![2];
+    const second = page.click();
+    expect(signal.aborted).toBe(true);
+    await vi.waitFor(() => expect(page.caption).toHaveBeenCalledOnce());
+    preparation.resolve({ dataUrl: 'superseded' });
+    await first;
+    expect(page.caption).toHaveBeenCalledOnce();
+    expect(page.configs[1]!.captionApiKey).toBe('fixture-key-1');
+    page.replies[0]!.resolve(newReply);
+    await second;
+    expect(page.altInput.value).toBe('A whale');
+  });
+
+  it.each(['success', 'failure', 'unauthorized'] as const)('ignores stale config %s and keeps the replacement request alive', async (outcome) => {
+    const page = setup();
+    const configResponse = Promise.withResolvers<ConfigResponse>();
+    page.fetch.mockReturnValueOnce(configResponse.promise);
+    const first = page.click();
+    const signal = page.fetch.mock.calls[0]![1].signal;
+    const second = page.click();
+    expect(signal?.aborted).toBe(true);
+    await vi.waitFor(() => expect(page.caption).toHaveBeenCalledOnce());
+    const staleConfig = { ...page.configs[0]!, captionApiKey: 'old-config-key' };
+    if (outcome === 'failure') configResponse.reject(new Error('Config unavailable'));
+    else configResponse.resolve({ status: outcome === 'unauthorized' ? 401 : 200,
+      ok: outcome !== 'unauthorized', json: async () => staleConfig });
+    await first;
+    expect(page.on401).not.toHaveBeenCalled();
+    expect(page.caption).toHaveBeenCalledOnce();
+    expect(page.statusEl.textContent).toBe('Asking the selected alt-text model…');
+    expect(page.configs[0]!.captionApiKey).toBe('fixture-key-0');
+    if (outcome === 'success') expect(staleConfig.captionApiKey).toBeNull();
+    page.replies[0]!.resolve(newReply);
+    await second;
+    expect(page.altInput.value).toBe('A whale');
+    expect(page.inputEvents).toHaveBeenCalledOnce();
   });
 });
 
@@ -70,12 +271,12 @@ describe('alt suggestion with a reasoning model', () => {
   async function suggest(content: string, finishReason: string) {
     const { altSuggest, fetch } = load(content, finishReason);
     let click: () => Promise<void> = async () => {};
-    const altInput = { value: 'author text', dispatchEvent: vi.fn() };
+    const altInput = { value: 'author text', dispatchEvent: vi.fn(), addEventListener: vi.fn() };
     const statusEl = { textContent: '' };
     // editor.html passes the same dictionary entry.
     altSuggest.wire({
       button: { addEventListener: (_name: string, listener: () => Promise<void>) => { click = listener; } },
-      fileInput: { files: [{}] }, altInput, statusEl, lang: 'en', truncatedText: ui.en['editor.chrome.altSuggestTruncated'],
+      fileInput: { files: [{}], addEventListener: vi.fn() }, altInput, statusEl, lang: 'en', truncatedText: ui.en['editor.chrome.altSuggestTruncated'],
     });
     await click();
     return { altInput, status: statusEl.textContent, modelCalls: fetch.mock.calls.length - 1 };
