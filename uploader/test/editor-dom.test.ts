@@ -364,7 +364,7 @@ describe('serialized writes in the real editor', () => {
     expect(await posts.list()).toHaveLength(1);
     expect(h.el('deTitle').value).toBe('Not saved yet');
     expect(h.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveUnsaved']);
-    expect(h.confirmations).toEqual([]);
+    expect(h.prompts.map((prompt) => prompt.title)).toEqual([]);
     const writes = h.requests.filter(({ options }) => options.method === 'POST' || options.method === 'PUT');
     expect(writes.map(({ options }) => options.method)).toEqual(newPost ? ['POST', 'PUT'] : ['PUT', 'PUT']);
     expect(JSON.parse(String(writes[1]!.options.body)).translationKey).toBe('tk1');
@@ -406,7 +406,7 @@ describe('serialized writes in the real editor', () => {
     const finalSave = h.requests.filter(({ options }) => options.method === 'PUT').at(-1)!;
     expect(JSON.parse(String(finalSave.options.body)).updatedAt).toBe(actionToken);
     expect((await posts.get('tk1'))!.de.title).toBe('Typo corrected');
-    expect(h.confirmations).not.toContain('Reload the latest version?');
+    expect(h.prompts.map((prompt) => prompt.title)).not.toContain('Reload the latest version?');
     expect(h.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveSaved']);
   });
 
@@ -435,7 +435,7 @@ describe('serialized writes in the real editor', () => {
     expect(h.requests.filter(({ options }) => options.method === 'PUT' || options.method === 'POST')
       .map(({ url }) => url)).toEqual(['/posts/tk1', '/posts/tk1/publish', '/posts/tk1']);
     expect((await posts.get('tk1'))!.de.title).toBe('Save this later version');
-    expect(h.confirmations).not.toContain('Reload the latest version?');
+    expect(h.prompts.map((prompt) => prompt.title)).not.toContain('Reload the latest version?');
   });
 
   it('releases the chain after a request failure without retrying the failed intent', async () => {
@@ -488,7 +488,7 @@ describe('serialized writes in the real editor', () => {
     expect(await Promise.all([first, second])).toEqual([false, false]);
     expect((await posts.get('tk1'))!.de.title).toBe('Foreign writer');
     expect(saves).toBe(reload ? 1 : 2);
-    expect(h.confirmations).toContain('Reload the latest version?');
+    expect(h.prompts.map((prompt) => prompt.title)).toContain('Reload the latest version?');
     expect(h.el('deTitle').value).toBe(reload ? 'Foreign writer' : 'My queued intent');
     expect(h.el('draftSaveState').textContent).toBe(ui.en[reload ? 'editor.chrome.saveSaved' : 'editor.chrome.saveUnsaved']);
   });
@@ -517,12 +517,12 @@ describe('serialized writes in the real editor', () => {
     await settle();
     expect(loads).toBe(2);
     expect(h.el('deTitle').value).toBe('Stale local title');
-    expect(h.confirmations).toEqual(['Reload the latest version?']);
+    expect(h.prompts.map((prompt) => prompt.title)).toEqual(['Reload the latest version?']);
 
     h.el('publishBtn').click();
     await settle();
     expect(h.el('actionError').textContent).toBe(ui.en['editor.chrome.reloadFailed']);
-    expect(h.confirmations).toEqual(['Reload the latest version?']);
+    expect(h.prompts.map((prompt) => prompt.title)).toEqual(['Reload the latest version?']);
     reload.resolve();
     expect(await Promise.all([saving, olderQueuedSave])).toEqual([false, false]);
     await settle();
@@ -538,7 +538,7 @@ describe('serialized writes in the real editor', () => {
     // A new explicit action after the completed reload uses the accepted form.
     h.el('publishBtn').click();
     await settle();
-    expect(h.confirmations).toEqual(['Reload the latest version?', 'Publish to the live site?']);
+    expect(h.prompts.map((prompt) => prompt.title)).toEqual(['Reload the latest version?', 'Publish to the live site?']);
     expect((await posts.get('tk1'))!.status).toBe('published');
     expect((await posts.get('tk1'))!.en.bodyMarkdown).toBe('Foreign English body');
   });
