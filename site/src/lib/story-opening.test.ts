@@ -1,4 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { satteri } from '@astrojs/markdown-satteri';
+import { unified } from 'unified';
+import rehypeParse from 'rehype-parse';
+import rehypeStringify from 'rehype-stringify';
+import { transformBodyImages } from './body-images';
+import { MARKDOWN_OPTIONS } from './render-markdown';
 import { splitOpening } from './story-opening';
 
 const h = (depth: number, slug: string, text = slug) => `<h${depth} id="${slug}">${text}</h${depth}>`;
@@ -55,5 +61,72 @@ describe('splitOpening', () => {
     const html = `${h(2, 'a')}\n<p>See <a href="#b" id="b-link">b</a>.</p>\n${h(2, 'b')}`;
     const { rest } = splitOpening(html, [heading(2, 'a'), heading(2, 'b')]);
     expect(rest).toBe(h(2, 'b'));
+  });
+
+  describe('rendered story bodies', () => {
+    const renderer = satteri().createRenderer(MARKDOWN_OPTIONS);
+    const parser = unified().use(rehypeParse, { fragment: true }).use(rehypeStringify);
+    const sanitize = (html: string) => transformBodyImages(html, {}, 'https://img.example.com');
+    const elements = (html: string) => parser.parse(html).children
+      .filter((node) => node.type === 'element')
+      .map((node) => parser.stringify({ type: 'root', children: [node] }));
+
+    it.each([
+      {
+        name: 'quoted heading at the start of the story',
+        intro: '> ## Zitat des Tages\n> Ein Satz.\n\nIntro-Absatz.',
+        next: '## Anreise',
+        nestedSlug: 'zitat-des-tages',
+      },
+      {
+        name: 'heading inside a nested list',
+        intro: '- Etappe\n  - ## Zitat des Tages\n\n    Ein Satz.\n\nIntro-Absatz.',
+        next: '## Anreise',
+        nestedSlug: 'zitat-des-tages',
+      },
+      {
+        name: 'shallower quoted heading inside a root h3 section',
+        intro: '### Odyssee\n\n> ## Zitat des Tages\n> Ein Satz.\n\nIntro-Absatz.',
+        next: '### Anreise',
+        nestedSlug: 'zitat-des-tages',
+      },
+      {
+        name: 'ordinary intro heading and paragraph',
+        intro: '## Odyssee\n\nWillkommen.',
+        next: '## Anreise',
+      },
+      {
+        name: 'ordinary stacked intro headings',
+        intro: '## Ecuador: Cuyabeno\n\n## Jungle\n\nDer Amazonas.',
+        next: '## Anreise',
+      },
+      {
+        name: 'ordinary bare intro paragraph',
+        intro: 'Willkommen.',
+        next: '## Anreise',
+      },
+    ])('preserves complete nodes for $name', async ({ intro, next, nestedSlug }) => {
+      const markdown = await renderer;
+      const remaining = `${next}\n\nFlug.`;
+      const rendered = await markdown.render(`${intro}\n\n${remaining}`);
+      if (nestedSlug) {
+        expect(rendered.metadata.headings.some((heading) => heading.slug === nestedSlug)).toBe(true);
+      }
+      const html = await sanitize(rendered.code);
+      const { opening, rest } = splitOpening(html, rendered.metadata.headings);
+      expect(elements(opening)).toEqual(elements(await sanitize((await markdown.render(intro)).code)));
+      expect(elements(rest)).toEqual(elements(await sanitize((await markdown.render(remaining)).code)));
+      expect(opening + rest).toBe(html);
+      // An incomplete quote/list would be repaired on parsing either fragment,
+      // changing its serialized HTML rather than round-tripping it unchanged.
+      expect(String(parser.processSync(opening))).toBe(opening);
+      expect(String(parser.processSync(rest))).toBe(rest);
+    });
+
+    it('keeps the whole body when all its headings are nested', async () => {
+      const rendered = await (await renderer).render('> ## Zitat des Tages\n> Ein Satz.\n\nIntro-Absatz.');
+      const html = await sanitize(rendered.code);
+      expect(splitOpening(html, rendered.metadata.headings)).toEqual({ opening: html, rest: '' });
+    });
   });
 });
