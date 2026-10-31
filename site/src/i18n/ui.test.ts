@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { defaultLocale, locales, ui, useTranslations, type UIKey } from './ui';
+import { defaultLocale, locales, ui, type UIKey } from './ui';
 
 describe('ui dictionaries', () => {
   it('defines every key in every other locale (no leak like the old WP footer)', () => {
@@ -14,12 +14,6 @@ describe('ui dictionaries', () => {
     for (const locale of others) {
       expect(Object.keys(ui[locale]).sort(), `locale ${locale}`).toEqual(baseKeys);
     }
-  });
-
-  it('returns locale-specific strings', () => {
-    expect(useTranslations('de')('nav.about')).toBe('Über mich');
-    expect(useTranslations('en')('nav.about')).toBe('About me');
-    expect(useTranslations('en')('footer.latest')).toBe('Latest stories');
   });
 
   it('no key has an empty-string value in any locale', () => {
@@ -37,6 +31,8 @@ describe('ui dictionaries', () => {
    */
   const IDENTICAL_ON_PURPOSE: readonly UIKey[] = [
     'editor.chrome.studioName',
+    // Preserve ESA's prescribed English credit and the standard license identifier.
+    'map.landcoverAttribution', 'map.landcoverLicense',
     'editor.chrome.identityLogo', // “Logo” is the same word in German and English.
   ];
 

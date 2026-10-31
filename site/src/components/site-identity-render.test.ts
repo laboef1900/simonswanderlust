@@ -52,6 +52,16 @@ const story = {
 };
 
 describe('configured identity rendered at public escaping boundaries', () => {
+  it.each(['de', 'en'] as const)('keeps legal links independent of configured social profiles in %s', async (locale) => {
+    for (const socialLinks of [[], legacy.socialLinks, [...legacy.socialLinks, { label: 'Notes', url: 'https://notes.example/' }]]) {
+      Object.assign(identity, { socialLinks });
+      const document = await about(locale);
+      expect(document.querySelectorAll(`footer a[href="/legal/${locale}.html"]`)).toHaveLength(1);
+      expect(document.querySelectorAll('footer a[href="/legal/THIRD-PARTY-NOTICES.txt"]')).toHaveLength(1);
+      expect(document.querySelectorAll('footer a[target="_blank"]')).toHaveLength(socialLinks.length);
+    }
+  });
+
   it.each(['de', 'en'] as const)('preserves the legacy title, metadata, About profile, footer and RSS in %s', async (locale) => {
     Object.assign(identity, legacy);
     const document = await about(locale);

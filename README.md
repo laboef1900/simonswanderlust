@@ -242,6 +242,67 @@ Set `DATABASE_URL` for the site process. Both `npm run build` and `npx astro che
 content from Postgres. Site unit tests run with `npm test` without a database; uploader
 integration tests need a separate `TEST_DATABASE_URL`.
 
+## Software, contributions and content rights
+
+**Wanderlust Studio software is licensed under [GNU AGPL version 3 only](LICENSE)
+(`AGPL-3.0-only`). Copyright 2026 Simon and contributors.** This covers original
+application code, tests, build scripts and technical documentation, without warranty
+to the extent permitted by law. Third-party components retain their own licenses.
+
+Stories and translations, uploaded photos and illustrations, MDX story content
+(including `site/src/content/trips/` stubs), reader submissions and brand/logo
+artwork are **excluded from the software grant and are not open-licensed here**.
+Permission comes from their respective rightsholders, unless separately licensed
+or permitted by law. No ownership of users' or third parties' content is claimed.
+Using the CMS does not itself put authored content under AGPL or change its
+visibility/access controls. Software embedded in generated output retains its
+applicable license; AGPL §2 governs when output constitutes a covered work.
+
+Original software contributions are accepted under **AGPL-3.0-only, inbound =
+outbound**, with **no DCO or CLA**. Submit only material you have authority to
+license and preserve third-party notices. This is not a copyright assignment.
+
+The product stays **Wanderlust Studio**. The software grant does not grant rights
+to brand a separate service as “Simon's Wanderlust” or “Wanderlust Studio”, use
+their logos, or imply endorsement. See [NOTICE](NOTICE) and the
+[owner decision](docs/superpowers/specs/2026-10-27-software-content-brand-rights-design.md).
+The separately approved image rename is implemented on
+`feature/issue-291-image-name`; old artifacts remain untouched.
+
+### Distributing and operating modified software
+
+Provide the exact version's Corresponding Source under AGPL §6 when distributing
+object code, with clear source directions alongside each image/release. Modified
+network versions must prominently offer their Corresponding Source to all remote
+users, at no charge, under §13. A moving upstream branch or package inventory alone
+is not proof of correspondence. Release builds record the existing GitHub repository
+and full commit in `/app/source-release.json`; legal indexes offer that exact
+revision's archive and source tree, and release notes pair the links with the image
+digest. Local builds without that provenance explicitly show an unknown revision.
+Operators modifying code must provide their actual source and update those static
+directions, not claim their changes match upstream. The source archive contains
+tracked repository files; any tracked stories/content remain excluded from the
+software license. It collects no deployed uploads, databases, settings or secrets.
+No runtime configuration, source-download API or content export is introduced.
+
+`node uploader/scripts/generate-third-party-inventory.mjs` regenerates the lockfile
+[inventory](docs/third-party-inventory.json); [evidence](docs/third-party-evidence.json)
+records non-lockfile assets and obligations. After `npm ci`, run
+`node uploader/scripts/copy-legal.mjs site` and
+`node uploader/scripts/copy-legal.mjs uploader` from the repository root to package
+licenses, rights statements, inventory and installed-package notices. Docker does
+both; site `predev`/`prebuild` also refresh site notices. They are delivered through
+existing static serving at `/legal/de.html`, `/legal/en.html` and
+`/admin/legal/en.html`. Review `notice-gaps.json` and actual emitted/native assets:
+collecting notice files is not a complete dependency or corresponding-source audit.
+Exact historical `0.17.1` amd64/arm64 inspection and verified DHI base SBOM/source
+attestations are recorded in [image evidence](docs/third-party-image-evidence.json).
+Those images lack readable glyph/native package notices; this patch does not
+change their bytes or certify old images. Full native component notices, matching
+Rust standard-library notices and source/relink directions are now included as
+supplements. Review the recorded upstream missing-notice and mutable-input
+limitations, then check correspondence and delivery in the final rebuilt release.
+
 ## Documentation
 
 - [Authoring workflow](docs/authoring-workflow.md) — photos, stories, galleries and publishing.
