@@ -31,7 +31,6 @@ import type { AiProvider, AiProviderKind } from '../src/ai-providers.js';
 import { memorySiteIdentityStore } from '../src/site-identity.js';
 import { normalizeIdentityUpload } from '../src/site-identity-assets.js';
 import * as disk from '../src/disk.js';
-
 import * as bodyRenderer from '../../site/src/lib/render-markdown.js';
 
 let dir: string;
