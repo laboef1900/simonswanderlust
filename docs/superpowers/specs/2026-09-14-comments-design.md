@@ -54,6 +54,22 @@ not re-litigate product behaviour.
    *Rejected:* post-moderation (publish immediately, delete on report) — one admin, no on-call;
    abuse could sit on a public page for days. *Rejected:* no author-reply path — the owner would
    have to comment as an anonymous reader and then approve it, losing the `is_author` marker.
+   **Implementation correction (#349, verified 2026-10-28):** public serialization reads the
+   approved public-store row's own `isAuthor`, without consulting the moderation list.
+   More than 500 older approved comments on another story cannot remove the badge.
+   The explicit six-key public shape, reply-time name, oldest-first order and 500-row
+   per-story response cap remain unchanged; see the approved
+   `2026-10-27-issue-349-public-author-projection-design.md` for runtime evidence and recovery.
+   **Approved moderation traversal correction (#350, 2026-10-28):** the separate admin
+   list is now fixed at 50 rows per page with a 51st-row lookahead and `hasMore`, rather
+   than a site-wide 500-row ceiling. Both filters use oldest-first timestamp/canonical
+   UUID order. Auth precedes strict offset validation; admin replies remain `no-store`.
+   Previous/Next makes every erasure target reachable for a fixed dataset. Successful
+   mutations reset page one; external changes can shift offsets, requiring a restart.
+   Reply drafts survive paging, and #396's shared latest-request loader binds status
+   and offset together. Public behavior and the exception below are unchanged. See
+   `2026-10-27-issue-350-moderation-pagination-design.md` for approval, verification
+   requirements and rollback containment.
 6. **Runtime, never baked.** The static story page hosts a small island that `GET`s JSON from
    Fastify; a comment MUST NOT spawn `astro build`, take `workLock`, or trigger a rebuild.
    *Rejected:* baking approved comments into the release with a debounced rebuild — every
@@ -67,10 +83,20 @@ not re-litigate product behaviour.
    off with no global switch — no single containment lever, and the owner would have to opt in
    twenty stories one by one. *Rejected:* global default on — a public write surface must be an
    explicit act of enablement (Phase 4 UI), never a side effect of deploying the schema.
-8. **CSRF: public `POST` checks the `Origin` header (fallback `Referer`) against the origin of
-   `PUBLIC_BASE_URL` by origin equality — never a prefix match.** Missing `Origin` **and**
-   `Referer` → 403. *Rejected:* a per-request CSRF token — the story page is a static file and
-   cannot mint one; a token fetched at runtime would just be another Origin-gated request.
+8. **CSRF: public `POST` checks the `Origin` header (fallback `Referer` only when Origin is
+   absent/empty) against one allowed blog origin by origin equality — never a prefix match.**
+   Owner-approved #319 (2026-10-28) corrects the original image-origin source: explicit
+   `ServerConfig.commentsOrigin` override, otherwise trusted protocol + raw Host; #276 will
+   insert current validated canonical identity before this temporary fallback. Invalid explicit
+   configuration fails closed. Neither submitted Origin/Referer nor forwarded Host supplies the
+   expected origin. Exclude `PUBLIC_BASE_URL`'s image authority and actual `IMG_HOST`, including
+   alternate schemes; retain only the documented single-origin loopback exception. #369's
+   immediate-peer trust policy is required, and the proxy must reject unintended Host values.
+   Missing headers, credentials, malformed/non-HTTP(S) URLs, a path/query/fragment in Origin,
+   or mismatch → 403; malformed Origin cannot be rescued by Referer. This is CSRF protection,
+   not authorization or a permanent configured-domain allow-list.
+   *Rejected:* a per-request CSRF token — the story page is a static file and cannot mint one;
+   a token fetched at runtime would just be another Origin-gated request.
    *Rejected:* `SameSite` cookies as the control — there is no cookie on the public route.
 9. **Output safety: store plain text only, render with `textContent`.** `author_name` and `body`
    are NFC-normalized, `\p{C}` stripped (`cleanText` shape, #133), length-capped
@@ -128,7 +154,7 @@ Phase 2 (#206) and 3b (#208) write their tests from this table without inventing
 | --- | --- | --- |
 | 1 | Spam flood | Bounded per-IP limiter (`rate-limit.ts` shape, #109 caps) → 429; honeypot field filled → **204**, empty body, no row, no log; every accepted comment is `pending` |
 | 2 | XSS in name or body | Plain text at rest (D9); island and admin UI paint with `textContent`, never `innerHTML` (#131 username lesson) |
-| 3 | CSRF from a third-party form | `Origin` (fallback `Referer`) must equal `PUBLIC_BASE_URL`'s origin; missing both → 403; mismatch → 403 |
+| 3 | CSRF from a third-party form | Origin equality against the blog origin resolved by D8; Referer only if Origin absent/empty. Missing/malformed/credential-bearing or mismatched source → 403; production image authority excluded; malformed Origin never rescued by Referer |
 | 4 | Enumerate unpublished `translation_key`s | `GET` and `POST` → 404 unless a **published** pair exists for the key; same response for unknown and unpublished keys |
 | 5 | Pending leak via admin cookie on a public route | No session lookup on `GET`/`POST /comments`; the response never depends on cookies |
 | 6 | `javascript:` / HTML in body painted with `innerHTML` | Forbidden by construction in the island (`textContent` / `createTextNode` only); tests pin it |

@@ -70,12 +70,15 @@ cp uploader/.env.example .env
 
 # 3. Build the image (compose has no build: key, so `--build` is a no-op) and
 #    start the containers in the background:
-docker build -t ghcr.io/laboef1900/simonswanderlust-app:local .
+docker build -t ghcr.io/laboef1900/wanderlust-studio:local .
 IMAGE_TAG=local docker compose up -d
 
 # 4. First run — open /login to create the first admin account:
 open http://localhost:3000/login      # macOS (or just browse to the URL)
 ```
+
+After the local build, set `IMAGE_TAG=local` in your private `.env` for subsequent
+Compose commands. This tag exists locally only; do not try to pull it from GHCR.
 
 On first run, when no users exist, `/login` shows a "Create the first admin"
 form. Fill in a username and password to create the admin account; the form is
@@ -136,10 +139,14 @@ An empty `SITE_DIR` starts a build from `SITE_APP_DIR`, so check both paths befo
 1. Copy the repo to the server.
 2. From the monorepo root: `cp uploader/.env.example .env`, set a strong `POSTGRES_PASSWORD`, the
    matching `DATABASE_URL`, and `PUBLIC_BASE_URL=https://img.simonswanderlust.com`.
-3. Build and run: `docker build -t ghcr.io/laboef1900/simonswanderlust-app:local .` then
+3. Build and run: `docker build -t ghcr.io/laboef1900/wanderlust-studio:local .` then
    `IMAGE_TAG=local docker compose up -d` (compose has no `build:` key, so plain
-   `docker compose up -d --build` is a no-op) — or, to run the released GHCR image instead of
-   building: `docker compose pull && docker compose up -d`.
+   `docker compose up -d --build` is a no-op). To pull instead, first wait for the
+   owner-authorized initial release under `ghcr.io/laboef1900/wanderlust-studio`,
+   set `IMAGE_TAG` in `.env` to its published version, then run
+   `docker compose pull && docker compose up -d`. No release under the new name
+   is created by this source change. Historical `simonswanderlust-app` releases
+   stay under their original name; never substitute an old tag into the new name.
 4. Because the container runs non-root (uid 1000), make its data bind-mount writable once — this
    now covers image variants *and* the built blog output, since both live under the same `/data`
    volume: `mkdir -p uploader/data && sudo chown -R 1000:1000 uploader/data` (run from the
@@ -158,11 +165,22 @@ An empty `SITE_DIR` starts a build from `SITE_APP_DIR`, so check both paths befo
    bridge gateway at hop zero. Do not put it in `.env`; a different network/proxy topology
    requires a new spec. Failed gateway discovery refuses boot rather than losing `Secure`
    cookies or collapsing every reader into one limiter bucket.
+   Reject unintended public hostnames at the proxy. Reader comments compare Origin (or Referer
+   only when Origin is absent/empty) with the trusted scheme plus raw `Host`, **not**
+   `PUBLIC_BASE_URL` and never `X-Forwarded-Host`. This is #319's temporary request-authority
+   fallback, not a domain allow-list. The image authority and `IMG_HOST` cannot receive
+   same-origin comments, even under another scheme; single-origin loopback development remains
+   supported. No new blog-origin env setting is required. #276 will give validated canonical
+   identity precedence over this fallback; the explicit server override remains highest.
 6. Open `https://simonswanderlust.com/login` to create the first admin account, then upload.
    Before public cutover, inspect the target server's observed proxy peer, confirm `Secure`
    on an HTTPS login, and verify independent login-limit buckets from two external networks.
    The #369 Docker Desktop production-image TCP probe covers the Linux VM host-network
    proxy → app bridge path, not the target VPS's published-loopback/NAT configuration.
+   Also submit a synthetic comment from the blog origin: expect 201, a pending moderation row,
+   and no public entry until approval. The image origin, a third party and hostname-prefix or
+   userinfo lookalikes must receive 403. The local #319 proof used real `main.ts`/Postgres,
+   split `.localhost` hosts and a loopback proxy; it does not replace this target-server check.
 
 The admin panel is reachable directly at `https://simonswanderlust.com/admin/` — the same process
 serves it, so there's nothing to proxy to separately anymore.
@@ -240,6 +258,15 @@ do not bypass the ownership/session drain checks.
 storage key, not per variant file. Bulk drag-and-drop upload, virtual folders (a `media_folders`
 table; moving a photo re-labels it, it does not move bytes on disk), search, and per-item alt text
 that the gallery picker reuses.
+
+The Media page shows 60 photos per page. If deleting or moving photos removes the current
+last page, its reload steps backwards to the new last page instead of showing an empty
+library with a non-zero total. An empty result resets pagination to page 1 (the page label
+is hidden and both navigation buttons are disabled). Corrective requests keep the same
+load-sequence ticket, so a newer folder/filter selection wins even if an older correction
+arrives later. This was exercised against the real app and Postgres with 63 generated,
+encoded photos: confirmed deletion from a 61-photo folder, moving both rows off page 2,
+emptying a folder while on page 2, and a delayed correction racing a newer search.
 
 Re-uploading the same file preserves its existing non-root folder, including when recovering
 a `failed` or `missing` photo, even if the recovery attempt is refused by a full queue.
@@ -332,18 +359,31 @@ routes behind it (`GET /moderation/comments`, `POST /moderation/comments/:id/sta
 `DELETE /moderation/comments/:id`, `POST /moderation/comments/:id/reply`) are all
 `requireAdmin`: unauthenticated callers get 401, authors 403, and a non-UUID id is a 400.
 Approving does not rebuild the site — comments are runtime data, never baked by `astro build`.
+Both views are oldest-first by timestamp and UUID, with **50 comments per page** and
+**Previous / Next** controls. `GET /moderation/comments?status=pending|approved&offset=N`
+returns `{ comments, hasMore }` with `Cache-Control: no-store`; offset defaults to zero,
+must be a single nonnegative decimal safe integer with room to add 50, and invalid
+pagination returns 400 only after authorization. A page beyond the end is empty.
+Successful moderation (including Reply) and filter changes restart at page one;
+cancelled confirmations do not. Other moderators can shift offsets between reads,
+so restart traversal to see the current state rather than treating pages as a snapshot.
+Every admin row remains reachable; the public thread's oldest-500 response cap is unchanged.
+Deletion and unapproval take effect on the next public comment read, without a rebuild.
 
 Unsent author replies stay in memory, keyed by comment ID, while this page is open.
 Only one reply can be sending per comment ID: its submit button stays disabled even
 when filtering or moderation recreates the row, and becomes available again after
 success or failure so a later intentional reply or retry is possible.
-Moderation actions and switching between Pending and Approved preserve other replies;
+Moderation actions, paging and switching between Pending and Approved preserve other replies;
 hidden rows recover their own draft when shown again. A successful reply clears only
 the submitted text, preserving newer edits made while it was sending; failed replies
 keep their input. List refreshes restore the active row control and textarea selection
 when that row remains visible, or focus the status filter when it disappears. Drafts
 are not saved to browser storage or the server: navigating away or reloading the page
 discards them.
+Paging focuses the page indicator. While loading, or after a failed page request,
+old rows and paging actions are unavailable; reselect the filter to retry from page one.
+An externally emptied page keeps Previous available.
 
 ## Galleries
 
@@ -393,6 +433,22 @@ and **Other model ID…** takes any ID by hand (for example when browser CORS bl
 with the typed key if one is entered. Listing sends no photo and does not verify vision
 support. Custom providers must allow browser CORS. Local LM Studio providers never hold or
 receive a key.
+
+**Pending provider keys.** An Add/Edit form keeps its masked, unsaved key when you
+use **Set default**, **Save AI settings**, or delete another provider. These actions
+do not submit that key. **Save provider** and confirmed **Remove stored key** clear
+the originating form's key at request handoff, even if the request fails; a late
+response cannot discard a different form you opened meanwhile. Cancel, changing
+forms, switching Add to Local LM Studio, and leaving/reloading the page discard it.
+There is no browser-storage recovery of a key.
+
+When editing a provider's URL, a typed replacement is saved for that provider at
+the new URL; a blank key keeps the stored key and asks before moving it to a
+different URL. Declining confirmation preserves the form. If settings cannot be
+refreshed after another action, the open form stays visible, but Save, Remove key,
+Test and registry actions are blocked. Follow the reload-required message; reloading
+discards unsaved input. An unknown or partial save outcome is not retried
+automatically: inspect the freshly loaded provider state before submitting again.
 
 **Maximum output tokens** sets the per-photo output ceiling for both editor/uploader
 alt-text suggestions and media-library AI details (single and bulk). Default **8,000**;
@@ -454,9 +510,11 @@ fields. It is sent as untrusted JSON in a user message, separate from the review
 `EDITORIAL_REVIEW_SCHEMA`, and the matching pure parser.
 
 The parser accepts JSON wrapped in prose/fences or preceded by `<think>` reasoning,
-but rejects missing fields, wrong types/statuses, and extra keys. It strips Unicode
-control characters, caps text at 1,000 UTF-16 units, and caps each list at 10 strings
-of 200 units (without splitting surrogate pairs). Empty strings/lists are allowed;
+but rejects missing fields, wrong types/statuses, and extra keys. Whitespace runs
+(including newlines and tabs) become one space before other Unicode controls are
+removed and outer whitespace is trimmed, preserving word boundaries in suggestions.
+Text is capped at 1,000 UTF-16 units, and each list at 10 strings of 200 units
+(without splitting surrogate pairs). Empty strings/lists are allowed;
 title suggestions and the suggested excerpt are optional. Alt-text observations use
 `practicalDetails`, because the agreed result contract has no separate alt-text section.
 Parsing also bounds synchronous work: raw output may contain at most 128 Ki UTF-16
@@ -557,8 +615,9 @@ deploying: rollback is the older image + that dump + the `.pre-ai-registry` copy
 **Recovery:** v6 and later DB dumps include encrypted secrets, not the master key or settings.json.
 Escrow the master key separately offsite and keep historical keys for historical dumps.
 Absent secrets in legacy v1–v5 preserve live rows; an empty v6-or-later array intentionally clears
-them. Restore is still CLI-only, confirmed, with a pre-restore undo dump. Pause AI/settings
-edits during restore and reconcile the providers in settings.json before resuming; a restored
+them. Follow the [offline restore procedure](../ARCHITECTURE.md#database-dumps): stop every app
+and maintenance writer, confirm the CLI's target/counts, and retain its verified undo set.
+Reconcile the providers in settings.json before restarting remote use; a restored
 pre-registry `ai_api_key` row is never read — re-enter keys per provider.
 
 To rotate a provider key, replace it in that provider's form then revoke the old one externally.
@@ -711,6 +770,18 @@ character policy as the web forms, and invalidates that user's sessions. Routine
 logged in uses the "Change my password" card on
 `/admin/users.html`. Full recovery notes (including the last-resort `DELETE FROM users;` →
 `/setup` fallback) are in [`../ARCHITECTURE.md`](../ARCHITECTURE.md).
+
+The admin-only Users page reports list-load errors separately from account actions.
+**Reload users** clears obsolete rows and their Remove buttons before fetching; a failed
+request or unreadable JSON response leaves an explicit error, not an apparently empty
+successful list. Reloading does not discard entries in the Add user or password forms.
+After an account is added or removed, its refresh supersedes any older list request;
+late responses cannot hide the new account or restore a deleted account's Remove button.
+Both forms support Enter to submit, disable their submit button while waiting, and
+re-enable it after success or failure. A transport failure preserves the entries and
+reports that the outcome could not be confirmed: reload the list before retrying Add user,
+since a lost response does not prove the server rejected the change. The admin UI remains
+English; these status and recovery messages come from the shared DE/EN copy registry.
 
 ## Develop
 
