@@ -958,8 +958,16 @@ preview even though the live site would load it.
   serialized provider/settings write prevalidates everything, commits the secret first, then
   writes settings. A subsequent failure can leave a new key with the old URL, or a removed key
   on a provider that still exists; responses explicitly report partial or unknown outcomes.
-  Reload and deliberately reconcile before inference. The UI clears its typed key, reloads
-  presence/settings, and never runs inference on save.
+  Reload and deliberately reconcile before inference. At validated/confirmed request handoff,
+  the UI clears only the submitted provider form's masked key; unrelated settings operations
+  preserve an unsubmitted key in that same form node, never a second cache or browser storage.
+  Completions belong to the originating form object, so an older request cannot clear a new
+  form. A failed settings refresh retains pending input but blocks registry mutations and
+  provider tests until fresh settings are available; page reload discards that input.
+  Cancel, form replacement and switching Add to local discard the pending key intentionally.
+  Stored-key destination confirmation and typed-key/URL binding remain unchanged, as do the
+  credential endpoints, per-provider secret slots, encryption and disclosure policy above.
+  Save refreshes presence/settings and never runs inference or automatically retries.
 - **Registry migration:** the first boot of the registry release copies the legacy shared
   `ai_api_key` envelope to every provider that already received it (the remote providers the
   two features had selected) and deletes the legacy row, in one Postgres transaction, without

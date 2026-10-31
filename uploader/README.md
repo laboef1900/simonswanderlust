@@ -394,6 +394,22 @@ with the typed key if one is entered. Listing sends no photo and does not verify
 support. Custom providers must allow browser CORS. Local LM Studio providers never hold or
 receive a key.
 
+**Pending provider keys.** An Add/Edit form keeps its masked, unsaved key when you
+use **Set default**, **Save AI settings**, or delete another provider. These actions
+do not submit that key. **Save provider** and confirmed **Remove stored key** clear
+the originating form's key at request handoff, even if the request fails; a late
+response cannot discard a different form you opened meanwhile. Cancel, changing
+forms, switching Add to Local LM Studio, and leaving/reloading the page discard it.
+There is no browser-storage recovery of a key.
+
+When editing a provider's URL, a typed replacement is saved for that provider at
+the new URL; a blank key keeps the stored key and asks before moving it to a
+different URL. Declining confirmation preserves the form. If settings cannot be
+refreshed after another action, the open form stays visible, but Save, Remove key,
+Test and registry actions are blocked. Follow the reload-required message; reloading
+discards unsaved input. An unknown or partial save outcome is not retried
+automatically: inspect the freshly loaded provider state before submitting again.
+
 **Maximum output tokens** sets the per-photo output ceiling for both editor/uploader
 alt-text suggestions and media-library AI details (single and bulk). Default **8,000**;
 allowed range **256–32,768**, whole numbers only. Reasoning models spend this same budget
