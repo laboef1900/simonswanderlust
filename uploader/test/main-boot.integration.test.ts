@@ -329,13 +329,13 @@ maybe.each(['split', 'loopback'] as const)('production boot (src/main.ts, Postgr
     const cookie = (login.headers.get('set-cookie') ?? '').split(';')[0]!;
     try {
       await pool.query(
-        `INSERT INTO comments (translation_key, locale, name, body, status, created_at)
-         SELECT $1, 'de', 'Older reader', 'Older comment', 'approved', '2020-01-01'::timestamptz
+        `INSERT INTO comments (id, translation_key, locale, name, body, status, created_at)
+         SELECT gen_random_uuid(), $1, 'de', 'Older reader', 'Older comment', 'approved', '2020-01-01'::timestamptz
          FROM generate_series(1, 505)`, [olderKey],
       );
       const { rows } = await pool.query<{ id: string }>(
-        `INSERT INTO comments (translation_key, locale, name, body, status)
-         VALUES ($1, 'de', 'Integration reader', 'Dedicated parent', 'approved') RETURNING id`, [tk],
+        `INSERT INTO comments (id, translation_key, locale, name, body, status)
+         VALUES (gen_random_uuid(), $1, 'de', 'Integration reader', 'Dedicated parent', 'approved') RETURNING id`, [tk],
       );
       const parentId = rows[0]!.id;
       createdIds.push(parentId);
