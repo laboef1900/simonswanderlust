@@ -116,6 +116,18 @@ an owner-authorized safe rebuild/release switch and cache assessment. No safety 
   "logged out". Spec: `docs/superpowers/specs/2026-09-06-lazy-session-resolution-design.md`.
 - **First-admin setup** (`/setup`) is only available while no users exist, and is **serialized**
   with a per-process lock so two concurrent requests cannot both create an admin (TOCTOU closed).
+- **Account removal** (#368) preserves at least one administrator in a configured installation.
+  `UserStore.remove` takes a short Postgres `SHARE ROW EXCLUSIVE` users-table lock before reading
+  the target/count and deleting in the same transaction; the memory store makes the same decision
+  without an intervening await. Concurrent authenticated cross-deletions yield one 200 and one
+  409 `cannot remove the last admin`, not an empty users table that reopens setup. Only a removed
+  account loses sessions (Postgres FK cascade; explicit invalidation only after `removed`).
+  Self-delete remains 409; a later request using a deleted account's cookie remains 401.
+  Password policy, lazy session resolution and setup rate limiting are unchanged.
+  Verified over real `main.ts` TCP routes against isolated Postgres with two admins, then with
+  extra authors; both sessions of each survivor remained usable and `/setup` stayed 409.
+  Approval, lock-barrier evidence and rollback containment:
+  `docs/superpowers/specs/2026-10-27-issue-368-atomic-last-admin-design.md`.
 - **Password changes** — `POST /users/me/password` lets an authenticated user rotate their own
   password after re-proving the **current** one (rate-limited, so a hijacked session cannot
   brute-force it — see *Rate limiting*). On success **all of that user's sessions are destroyed**
@@ -188,19 +200,55 @@ ASVS L1 exception record: `docs/superpowers/specs/2026-09-14-comments-design.md`
   comments_enabled`; when false the approved thread is still readable (closed, not hidden) and
   `POST` answers 409 `comments_disabled`. `GET` 404s for an unknown key and for a draft-only
   key with the same body, so it cannot enumerate unpublished posts. Response is `no-store`.
+- **Author badges use the approved public row's stored flag** (#349), never an admin-list
+  lookup or a reader-supplied name/cookie. The explicit public key set above is unchanged.
+  An author reply returned for one story remains marked even after another story has more
+  than 500 approved comments. The existing per-story response cap and moderation permissions
+  are unchanged. Real-main/Postgres runtime proof on 2026-10-28 also kept public GET working
+  during a session-table lock and a deliberately injected moderation-query failure; neither
+  proves availability when the public comments/posts queries themselves fail.
 - **`POST` order of checks is load-bearing** and pinned by tests: (1) per-IP rate limit → 429,
   no insert; (2) **honeypot** — a non-blank `website` field answers **204 with an empty body**,
   no row, no log line (a 400 would train the bot; 204 does not look like the real 201);
-  (3) **Origin check** — the `Origin` header, else the origin of `Referer`, must equal
-  `new URL(PUBLIC_BASE_URL).origin` by **origin equality, never a prefix match** (the gallery
-  allow-list lesson: `https://simonswanderlust.com.evil.example` must fail); missing both,
-  unparsable, or mismatched → 403; (4) validation → 400 with the generic code `invalid_comment`,
+  (3) **Origin check** — the `Origin` header, else the origin of `Referer` only when Origin
+  is absent/empty, must equal the request's allowed **blog** origin by **origin equality,
+  never a prefix match** (#319). Credentials, malformed/non-HTTP(S) URLs, an Origin with
+  a path/query/fragment, missing both headers or mismatch → 403. A malformed Origin
+  cannot be rescued by Referer; (4) validation → 400 with the generic code `invalid_comment`,
   never the store's wording; (5) published pair → 404; (6) global or per-post flag off → 409;
   (7) insert as **`pending`** → 201 `{ ok: true }` — the new id is not echoed, so a caller cannot
   probe moderation. JSON body capped at 4 KiB; unknown fields (`email`, `parentId`, `status`)
   are ignored, never stored.
+- **Blog-origin source (#319):** resolve one origin per request. A supplied
+  `ServerConfig.commentsOrigin` override wins and invalid values fail closed. Otherwise the
+  temporary fallback is trusted `req.protocol` plus the **verbatim Host header**. It never
+  derives the expected origin from Origin, Referer or `X-Forwarded-Host`. The #369 immediate-peer
+  policy governs forwarded protocol and client IP; the proxy must preserve Host, overwrite
+  forwarded protocol and reject unintended public hostnames. Missing/malformed authority
+  fails closed. Both `PUBLIC_BASE_URL`'s image authority and actual `IMG_HOST` are excluded,
+  including alternate schemes. Authority comparisons normalize default ports under the
+  actual request protocol; explicit `:443`/`:80` cannot bypass the exclusion. A different
+  non-default port is not excluded merely for sharing a hostname. Malformed `IMG_HOST`
+  refuses the fallback, without overriding an explicit valid `commentsOrigin`. The only
+  exception is the existing single-origin loopback image/blog topology (`imgHostServesBlog`),
+  with matching image origin and serving authority.
+  This is CSRF equality, not authorization or a deployment-domain allow-list: until configured,
+  a non-image authority deliberately forwarded by the trusted proxy can accept its own
+  same-origin submissions. #276 will insert the current validated canonical identity between
+  the explicit override and fallback; #319 neither implements that API nor seeds identity from
+  a request. No CORS, session, persistence or ASVS-exception expansion is involved.
 - **Hold-for-moderation.** Every accepted comment is `pending`; nothing is public until an admin
   approves it on `/admin/comments.html` (`requireAdmin`, see below). Deletion is erasure.
+- **Bounded, complete admin traversal (#350).** The separate admin list returns 50 rows
+  plus `hasMore`, using one-row lookahead and oldest-first `(created_at, id)` ordering.
+  Pending and Approved both support nonnegative safe-integer offsets, validated after
+  `requireAdmin` and before a list query; responses are `no-store`. Previous/Next reaches
+  comments beyond the old 500-row admin ceiling, including erasure targets. A successful
+  moderation action restarts at page one; concurrent external changes can shift offsets,
+  so traversal is not a snapshot and must restart to see the new state. Deletion and
+  unapproval remove a comment from the next public GET immediately, without rebuilding.
+  The public six-key shape, oldest-500 per-story response cap, author flag projection,
+  admin-only permissions and ASVS exception remain unchanged.
 - **Rate limit:** 5 `POST`s per address per 15 minutes plus a process-wide 200 per hour, keyed on
   `req.ip` under the address-validated, immediate-peer policy below — never on the reader-chosen
   name, which would let anyone DoS a name. See *Rate limiting* for the separate limiter maps.
@@ -328,6 +376,12 @@ logs the full error server-side (stdout, captured by Docker) and returns a **gen
 never reach the client. Intentional 4xx framework responses (body-size 413, malformed JSON 400)
 keep their sanitized messages. (`uploader/src/server.ts`)
 
+WXR scalar text reconstruction (#388) concatenates adjacent CDATA fragments without
+inventing separators; it preserves actual commas and the existing parser policy.
+This does not relax XML/entity limits or `WxrParseError`'s fixed public error,
+slug admission, safe remote fetching, gallery-text isolation or render sanitization.
+Reconstructed source text remains untrusted. No persisted-content rewrite is performed.
+
 ## Rate limiting
 
 A per-client-IP fixed-window limiter throttles the password-verifying endpoints — the
@@ -339,6 +393,16 @@ For that peer, the rightmost `X-Forwarded-For` entry is the client; the walk sto
 even if that entry is itself a trusted address. For any other peer, its socket address is the key.
 Rotating client-supplied leftmost entries or sending forged headers directly from another
 container does not open a fresh bucket.
+
+The async rate-limit preHandler **returns the Fastify refusal reply** (#372), rather than
+merely calling `send`: a pending asynchronous `onSend` hook must not allow later preHandlers
+or the login, setup or password-change handler to continue behind a client-visible 429.
+The account-lock refusal in `/login` follows the same return contract. Budgets, keys and
+authentication checks are unchanged. On 2026-10-27, real loopback HTTP requests against
+`buildServer` with PostgreSQL user/session stores verified unchanged persisted users,
+password hashes and sessions after refusals, both with the normal hook chain and an explicitly
+injected asynchronous send delay. This is a conditional hook-composition fixture, not evidence
+of a production exploit; see the #372 design spec's runtime verification record.
 
 `/login` additionally keeps a **per-account failure budget across all sources** — the defence
 against a guess spread over many addresses, which the per-IP bucket cannot see — and checks it
@@ -434,6 +498,13 @@ Public image variants carry an explicit **allow-list** of EXIF tags, built in
 `FocalLength`, plus the ICC profile. Everything else — the **GPS IFD**, XMP,
 IPTC and `Orientation` — is dropped by construction, because `withExif()`
 replaces the EXIF block wholesale rather than filtering it.
+
+The #371 numeric correction preserves that boundary: sub-unit values use a reciprocal
+only within 1% relative error, otherwise the existing /1000 representation. Supported
+number bounds and all tag/format rules are unchanged. Actual Linux amd64/arm64 uploads
+confirmed exposure 0.4/0.6/0.8 and 1/8000 plus aperture 0.95 in every served variant;
+GPS/XMP/IPTC remained absent and originals remained unchanged and unservable. Existing
+photos are not automatically re-encoded.
 
 This replaced a blanket `.withMetadata()` which republished source GPS
 coordinates on every public file. Untouched originals under `/data/images`
@@ -734,6 +805,13 @@ tuned so it does **not** break legitimate output: heading `id`s stay un-prefixed
 contents `#anchor` links resolve) and `class` survives everywhere. Verified end-to-end against a
 published post carrying an XSS payload.
 
+**Import formatting boundary reconfirmed (#389, 2026-10-28).** The facts-bounded
+opening-paragraph repair operates on Turndown's existing parsed DOM and emits Markdown,
+not raw HTML. It is not a sanitizer. The render sanitizer above, gallery origin equality
+and store-level `images` validation below remain mandatory and unchanged; gallery
+content is excluded from this prose repair. Import authorization, safe fetches,
+resource caps, cancellation, EXIF filtering, slug identity and publish gates are unchanged.
+
 **No element may carry `style`** (#124). Astro's Markdown renderer passes raw HTML through, so the
 sanitizer cannot distinguish a Shiki `<span style="color:…">` from an author-typed one — and an
 author-typed `style="position:fixed;inset:0;background:url(https://evil/…)"` would overlay every
@@ -824,6 +902,13 @@ protections, so they carry their own:
   pre-flight count and merge substitution, the alt audit and media-sync's alt backfill. Gallery
   text that looks like an image or a tag therefore keeps its exact text through save, export,
   re-import and import re-runs, and is never fetched, audited or copied into Media.
+
+Inline-image re-host substitution (#360) emits replacement text literally. Dollar
+sequences in imported or author-edited alt text cannot copy surrounding Markdown
+or reinsert the old image destination. This is content preservation, not sanitization:
+gallery-text exclusion, image-map validation, origin equality, the foreign-image
+publish gate, SSRF/size/time guards and EXIF policy remain unchanged. Failed photos
+retain their original markup; the fix does not repair previously corrupted drafts.
 
 Why this is not merely theoretical: `GET /posts/:tk/preview` is `requireAuth` (**any** author, not
 just admins), runs the identical transform, and is served same-origin with `/admin/*`. A non-admin
@@ -929,8 +1014,16 @@ preview even though the live site would load it.
   serialized provider/settings write prevalidates everything, commits the secret first, then
   writes settings. A subsequent failure can leave a new key with the old URL, or a removed key
   on a provider that still exists; responses explicitly report partial or unknown outcomes.
-  Reload and deliberately reconcile before inference. The UI clears its typed key, reloads
-  presence/settings, and never runs inference on save.
+  Reload and deliberately reconcile before inference. At validated/confirmed request handoff,
+  the UI clears only the submitted provider form's masked key; unrelated settings operations
+  preserve an unsubmitted key in that same form node, never a second cache or browser storage.
+  Completions belong to the originating form object, so an older request cannot clear a new
+  form. A failed settings refresh retains pending input but blocks registry mutations and
+  provider tests until fresh settings are available; page reload discards that input.
+  Cancel, form replacement and switching Add to local discard the pending key intentionally.
+  Stored-key destination confirmation and typed-key/URL binding remain unchanged, as do the
+  credential endpoints, per-provider secret slots, encryption and disclosure policy above.
+  Save refreshes presence/settings and never runs inference or automatically retries.
 - **Registry migration:** the first boot of the registry release copies the legacy shared
   `ai_api_key` envelope to every provider that already received it (the remote providers the
   two features had selected) and deletes the legacy row, in one Postgres transaction, without
