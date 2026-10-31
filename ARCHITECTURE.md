@@ -176,7 +176,7 @@ attempt. `GET /health` reports `release: false` meanwhile (information, not a ve
 `SECURITY.md`). Restarts against an existing `/data` volume skip all of this and serve
 immediately — no rebuild on every boot.
 
-### Site identity (#274)
+### Site identity (#274–#275)
 
 The [approved identity contract](docs/superpowers/specs/2026-10-27-issue-273-site-identity-design.md)
 puts identity in Postgres, not `settings.json`. `ensureSchema` creates the two tables; the
@@ -190,6 +190,23 @@ descriptor and ordered social links. `GET`/`PUT /settings/identity` are admin-on
 Public text changes at the next Publish/Rebuild; admin chrome at the next page load; new
 author replies use the configured name immediately (empty becomes `Author`). Existing
 replies retain their stored names. The About body remains separate page content.
+
+Logo and favicon have separate save/remove actions in the same tab. Admin-only
+`PUT /settings/identity/assets/:role` accepts multipart `revision` plus one `file`;
+`DELETE` accepts JSON `{ revision }`. Roles are `logo` and `favicon`. Responses include
+`revision`, `savedAt`, `takesEffect: 'next_build'` and saved asset-presence flags, also returned
+by the identity GET. Asset and text mutations share one revision: the UI adopts a successful
+asset write's revision without overwriting unsaved text. Conflicts require explicit reload.
+
+`site-identity-assets.ts` normalizes PNG/JPEG/static WebP under the shared work lock, refuses
+SVG/animation, limits input to 2 MiB and 4096² pixels and strips all metadata. One transaction
+replaces a logo row or all three favicon rows with bounded PNGs (≤256 KiB per row). No
+originals, remote fetches, media-library rows or separate asset directory are involved.
+The existing build capture writes those exact bytes into each release at content-hashed
+`/_identity/` paths. Nav uses the logo and its intrinsic dimensions; Base emits the three
+favicon links. With no saved assets, the text name and bundled `/favicon.svg` remain.
+Save/remove waits until the next Publish/Rebuild to affect public output; an older release
+keeps its own assets. Recovery uses the existing v11 dump codec and restore transaction.
 
 Runtime reads use a cache loaded before listening and refreshed after successful writes.
 The public copy script exposes only the name, localized studio descriptor and reserved
@@ -211,10 +228,9 @@ Standalone commands with no snapshot retain ordinary reads.
 
 The shared validator checks all stored DE/EN maps before projection; missing locale values
 use that field's fallback, never another language's text. The v1 build projection excludes
-the admin-only descriptor and reserves `canonicalOrigin` and `assets`.
-**Scope boundary:** #274 does not implement logo/favicon upload or display (#275), canonical
-editing/SEO/robots/noindex, comment-origin switching or outbound headers (#276). Asset rows,
-if recovered, are validated and captured with the release, but no asset API is introduced.
+the admin-only descriptor, reserves `canonicalOrigin` and carries captured asset paths.
+**Scope boundary:** canonical editing/SEO/robots/noindex, comment-origin switching and
+outbound headers remain #276.
 The present fixed DE/EN projection is extended by #283's language contract, not by identity.
 Remaining branding exceptions are recorded in [the scoped allow-list](docs/site-identity-branding-allowlist.md).
 
@@ -445,8 +461,9 @@ Created idempotently by `uploader/src/db.ts` (`ensureSchema`):
 - **`site_identity`** — singleton `id = true`, revision, seed provenance, nullable `saved_at`,
   `updated_at`, site/author names, reserved canonical origin, localized text maps and ordered
   social links. Only an explicit admin save marks it configured.
-- **`site_identity_assets`** — reserved logo/favicon role rows, SHA-256, dimensions, PNG bytes
-  (≤256 KiB each) and creation time. Included in dumps now; upload/rendering is #275.
+- **`site_identity_assets`** — logo and favicon role rows, SHA-256, dimensions, normalized PNG
+  bytes (≤256 KiB each) and creation time. Included in DB dumps and copied into build releases;
+  favicon writes/removals are atomic across `favicon-32`, `favicon-192` and `apple-touch-180`.
 - **`posts`** — one row per (`translation_key`, `locale`); `slug`, `title`, `date`, `country`, `country_code`, `region`, `excerpt`, `hero_image` (jsonb), `coordinates` (jsonb), optional `stops`/`route`/`key_facts`, `body_markdown`, `images` (jsonb), `status` (`draft`/`published`), `featured` (boolean, "use as homepage cover" — a SHARED value written to both locale rows, deliberately not unique: the homepage takes the newest flagged story and falls back to the newest story), `comments_enabled` (boolean, SHARED, default `true` — the per-post switch; the site-wide `settings.commentsEnabled`, default `false`, is the real gate). Unique on (`locale`, `slug`) **where `slug <> ''`** — an empty slug means "not set yet" (a DE-first draft without an EN title), so any number of such drafts may coexist; `validateForPublish` requires a real slug per locale (#119).
   Optional **`title_image`** (nullable jsonb) holds an independent per-locale story banner.
   It uses the hero's image shape, including format and focal point. The story header and

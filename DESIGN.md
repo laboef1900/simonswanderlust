@@ -1111,8 +1111,18 @@ and the `<dialog>`s appended to `<body>` share one set:
   Saving checks the loaded revision: conflicts retain the author's inputs until an explicit,
   confirmed reload. Save never rebuilds. The timing note distinguishes the next public
   Publish/Rebuild from immediate new author replies and next-load admin chrome; **Rebuild
-  site now** confirms that it uses saved values, not unsaved form input. Domain and asset
-  controls remain owned by #276 and #275.
+  site now** confirms that it uses saved values, not unsaved form input. Domain controls
+  remain owned by #276.
+  Logo and favicon controls save/remove separately from text. Each states whether a custom
+  asset is saved or the default is selected; a local filename is a selection, not a public
+  preview. Accept PNG, JPEG or static WebP (2 MiB maximum), never SVG. Successful asset
+  actions advance the shared revision without discarding unsaved text; conflicts keep the
+  current inputs until explicit reload. Removal requires confirmation and restores the
+  default only at the next Publish/Rebuild, just like replacement.
+  On the public site a saved logo replaces the text wordmark inside the existing home link:
+  its accessible name is the site name (or localized fallback), its intrinsic dimensions
+  reserve space and its target height is 2rem. Without it the text name remains. Custom
+  favicon links replace the bundled icon only when the complete group exists.
   Text limits count NFC-normalized, trimmed Unicode code points; supplementary characters
   do not consume two slots. Excess input stays intact and receives focus on Save rather
   than being truncated by an HTML UTF-16 length cap. Configured wordmarks and footer text

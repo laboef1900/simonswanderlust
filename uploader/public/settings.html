@@ -303,6 +303,34 @@
               </div>
             </fieldset>
           </form>
+          <section class="identity-assets" aria-labelledby="identityAssetsHeading">
+            <h3 id="identityAssetsHeading" class="section-label"></h3>
+            <p id="identityAssetsHelp" class="muted"></p>
+            <div class="settings-field-pair">
+              <fieldset id="identity-logo-fields" class="identity-asset-fields" disabled>
+                <legend id="identity-logo-label"></legend>
+                <p id="identity-logo-state" class="muted"></p>
+                <label id="identity-logo-file-label" for="identity-logo-file"></label>
+                <input id="identity-logo-file" type="file" accept="image/png,image/jpeg,image/webp" aria-describedby="identityAssetsHelp identity-logo-help" />
+                <p id="identity-logo-help" class="muted"></p>
+                <div class="form-actions">
+                  <button id="identity-logo-upload" type="button" class="btn-secondary"></button>
+                  <button id="identity-logo-remove" type="button" class="btn-remove"></button>
+                </div>
+              </fieldset>
+              <fieldset id="identity-favicon-fields" class="identity-asset-fields" disabled>
+                <legend id="identity-favicon-label"></legend>
+                <p id="identity-favicon-state" class="muted"></p>
+                <label id="identity-favicon-file-label" for="identity-favicon-file"></label>
+                <input id="identity-favicon-file" type="file" accept="image/png,image/jpeg,image/webp" aria-describedby="identityAssetsHelp identity-favicon-help" />
+                <p id="identity-favicon-help" class="muted"></p>
+                <div class="form-actions">
+                  <button id="identity-favicon-upload" type="button" class="btn-secondary"></button>
+                  <button id="identity-favicon-remove" type="button" class="btn-remove"></button>
+                </div>
+              </fieldset>
+            </div>
+          </section>
           <div class="form-actions">
             <button id="identityReload" type="button" class="btn-secondary"></button>
             <button id="identityRebuild" type="button" class="btn-primary"></button>
