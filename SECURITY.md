@@ -445,6 +445,13 @@ Public image variants carry an explicit **allow-list** of EXIF tags, built in
 IPTC and `Orientation` — is dropped by construction, because `withExif()`
 replaces the EXIF block wholesale rather than filtering it.
 
+The #371 numeric correction preserves that boundary: sub-unit values use a reciprocal
+only within 1% relative error, otherwise the existing /1000 representation. Supported
+number bounds and all tag/format rules are unchanged. Actual Linux amd64/arm64 uploads
+confirmed exposure 0.4/0.6/0.8 and 1/8000 plus aperture 0.95 in every served variant;
+GPS/XMP/IPTC remained absent and originals remained unchanged and unservable. Existing
+photos are not automatically re-encoded.
+
 This replaced a blanket `.withMetadata()` which republished source GPS
 coordinates on every public file. Untouched originals under `/data/images`
 keep their full metadata; they are never served (the static mount admits only
