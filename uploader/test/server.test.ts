@@ -5,6 +5,7 @@ import { mkdtemp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
+import { setImmediate as nextTurn } from 'node:timers/promises';
 import type { BackupState, DbBackup } from '../src/backup.js';
 import sharp from 'sharp';
 import FormData from 'form-data';
@@ -27,6 +28,10 @@ import { fixedWindowLimiter, accountLockoutLimiter } from '../src/rate-limit.js'
 import type { SiteBuilder, BuildOutcome } from '../src/build.js';
 import { memorySecretsStore, SecretsError } from '../src/secrets.js';
 import type { AiProvider, AiProviderKind } from '../src/ai-providers.js';
+import { memorySiteIdentityStore } from '../src/site-identity.js';
+import { normalizeIdentityUpload } from '../src/site-identity-assets.js';
+import * as disk from '../src/disk.js';
+import * as bodyRenderer from '../../site/src/lib/render-markdown.js';
 
 let dir: string;
 beforeEach(async () => {
@@ -2019,12 +2024,114 @@ describe('user management', () => {
     expect((await b.app.inject({ method: 'DELETE', url: `/users/${bobId}`, cookies: cookie })).statusCode).toBe(200);
   });
 
-  it('rejects deleting yourself and the last admin', async () => {
+  it('rejects deleting yourself without changing accounts or sessions', async () => {
     const b = build();
     const me = await b.users.create({ username: 'admin', password: 'password123456', isAdmin: true });
-    const token = await b.sessions.create(me.id, 60_000);
-    const res = await b.app.inject({ method: 'DELETE', url: `/users/${me.id}`, cookies: { sid: token } });
-    expect(res.statusCode).toBe(409);
+    const tokens = await Promise.all([b.sessions.create(me.id, 60_000), b.sessions.create(me.id, 60_000)]);
+    const remove = vi.spyOn(b.users, 'remove');
+    const invalidate = vi.spyOn(b.sessions, 'destroyAllForUser');
+    try {
+      const res = await b.app.inject({ method: 'DELETE', url: `/users/${me.id}`, cookies: { sid: tokens[0]! } });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({ error: 'you cannot delete your own account' });
+      expect(remove).not.toHaveBeenCalled();
+      expect(invalidate).not.toHaveBeenCalled();
+      expect(await b.users.list()).toEqual([me]);
+      for (const token of tokens) expect((await b.sessions.find(token))?.userId).toBe(me.id);
+    } finally { await b.app.close(); }
+  });
+
+  it('authenticates and authorizes deletion before validating an id', async () => {
+    const b = build();
+    const { cookie } = await authed(b, { isAdmin: false, username: 'author' });
+    const remove = vi.spyOn(b.users, 'remove');
+    try {
+      expect((await b.app.inject({ method: 'DELETE', url: '/users/not-a-uuid' })).statusCode).toBe(401);
+      expect((await b.app.inject({ method: 'DELETE', url: '/users/not-a-uuid', cookies: cookie })).statusCode).toBe(403);
+      expect(remove).not.toHaveBeenCalled();
+    } finally { await b.app.close(); }
+  });
+
+  it('cross-deletion preserves the surviving admin and invalidates only the removed account', async () => {
+    const users = memoryUserStore();
+    const sessions = memorySessionStore();
+    const remove = users.remove;
+    let arrivals = 0;
+    const { promise: bothAuthenticated, resolve: release } = Promise.withResolvers<void>();
+    users.remove = async (id) => {
+      if (++arrivals === 2) release();
+      await bothAuthenticated;
+      return remove(id);
+    };
+    const invalidate = vi.spyOn(sessions, 'destroyAllForUser');
+    const b = build({ users, sessions });
+    const a = await authed(b, { username: 'admin-a' });
+    const c = await authed(b, { username: 'admin-b' });
+    const extraA = await sessions.create(a.user.id, 60_000);
+    const extraC = await sessions.create(c.user.id, 60_000);
+    try {
+      const results = await Promise.all([
+        b.app.inject({ method: 'DELETE', url: `/users/${c.user.id}`, cookies: a.cookie }),
+        b.app.inject({ method: 'DELETE', url: `/users/${a.user.id}`, cookies: c.cookie }),
+      ]);
+      expect(results.map((res) => res.statusCode).sort()).toEqual([200, 409]);
+      expect(results.find((res) => res.statusCode === 409)!.json()).toEqual({ error: 'cannot remove the last admin' });
+      const survivor = (await users.list())[0]!;
+      expect(await users.countAdmins()).toBe(1);
+      const deleted = survivor.id === a.user.id ? c : a;
+      expect(invalidate.mock.calls).toEqual([[deleted.user.id]]);
+      for (const [account, tokens] of [[a, [a.cookie.sid, extraA]], [c, [c.cookie.sid, extraC]]] as const) {
+        for (const token of tokens) {
+          expect((await sessions.find(token))?.userId ?? null).toBe(account.user.id === survivor.id ? survivor.id : null);
+        }
+      }
+      expect((await b.app.inject({ method: 'DELETE', url: `/users/${survivor.id}`, cookies: deleted.cookie })).statusCode).toBe(401);
+      expect((await b.app.inject({ method: 'GET', url: '/auth/status' })).json()).toEqual({ authenticated: false, needsSetup: false });
+      expect((await b.app.inject({ method: 'POST', url: '/setup', payload: { username: 'new', password: 'password123456' } })).statusCode).toBe(409);
+    } finally { release(); await b.app.close(); }
+  });
+
+  it('does not invalidate sessions for missing users or failed removals', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const target = await b.users.create({ username: 'target', password: 'password123456', isAdmin: false });
+    const token = await b.sessions.create(target.id, 60_000);
+    const invalidate = vi.spyOn(b.sessions, 'destroyAllForUser');
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      for (const id of ['not-a-uuid', randomUUID()]) {
+        const res = await b.app.inject({ method: 'DELETE', url: `/users/${id}`, cookies: cookie });
+        expect(res.statusCode).toBe(404);
+        expect(res.json()).toEqual({ error: 'user not found' });
+      }
+      vi.spyOn(b.users, 'remove').mockRejectedValueOnce(new Error('private transaction failure'));
+      const failed = await b.app.inject({ method: 'DELETE', url: `/users/${target.id}`, cookies: cookie });
+      expect(failed.statusCode).toBe(500);
+      expect(failed.json()).toEqual({ error: 'internal server error' });
+      expect(invalidate).not.toHaveBeenCalled();
+      expect(await b.users.findById(target.id)).toEqual(target);
+      expect((await b.sessions.find(token))?.userId).toBe(target.id);
+    } finally { log.mockRestore(); await b.app.close(); }
+  });
+
+  it('does not restore a deleted user when follow-up session invalidation fails', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const target = await b.users.create({ username: 'target', password: 'password123456', isAdmin: false });
+    const token = await b.sessions.create(target.id, 60_000);
+    vi.spyOn(b.sessions, 'destroyAllForUser').mockImplementation(async (id) => {
+      expect(await b.users.findById(id)).toBeNull();
+      throw new Error('private session-store failure');
+    });
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const failed = await b.app.inject({ method: 'DELETE', url: `/users/${target.id}`, cookies: cookie });
+      expect(failed.statusCode).toBe(500);
+      expect(failed.json()).toEqual({ error: 'internal server error' });
+      expect(await b.users.findById(target.id)).toBeNull();
+      expect((await b.sessions.find(token))?.userId).toBe(target.id);
+      expect((await b.app.inject({ method: 'GET', url: '/users', cookies: { sid: token } })).statusCode).toBe(401);
+    } finally { log.mockRestore(); await b.app.close(); }
   });
 
   it('POST /users 409 on duplicate username', async () => {
@@ -2033,6 +2140,156 @@ describe('user management', () => {
     await b.app.inject({ method: 'POST', url: '/users', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: { username: 'bob', password: 'password123456', isAdmin: false } });
     const dup = await b.app.inject({ method: 'POST', url: '/users', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: { username: 'BOB', password: 'password123456', isAdmin: false } });
     expect(dup.statusCode).toBe(409);
+  });
+});
+
+describe('auth rate-limit refusals with async onSend (#372)', () => {
+  const refusal = { error: 'too many attempts, please wait and try again' };
+
+  function buildWithAsyncSend(extra: Partial<ServerConfig> = {}) {
+    const b = build(extra);
+    // Install before readiness, without changing the production hook chain.
+    b.app.addHook('onSend', async (_req, _reply, payload) => { await Promise.resolve(); return payload; });
+    return b;
+  }
+
+  it.each(['password123456', 'wrong-password'])('refused login with %s neither verifies nor mutates sessions/account failures', async (password) => {
+    const accountLimiter = accountLockoutLimiter({ max: 3 });
+    const b = buildWithAsyncSend({
+      loginLimiter: fixedWindowLimiter({ max: 1, windowMs: 60_000 }),
+      accountLimiter,
+    });
+    try {
+      const { user, cookie } = await authed(b);
+      const hash = user.passwordHash;
+      const login = (password: string) => b.app.inject({
+        method: 'POST', url: '/login', payload: { username: user.username, password },
+      });
+      // A real admitted failure seeds the account counter and exhausts this IP.
+      expect((await login('wrong-password')).statusCode).toBe(401);
+      const lookup = vi.spyOn(b.users, 'findByUsername');
+      const createSession = vi.spyOn(b.sessions, 'create');
+      const failure = vi.spyOn(accountLimiter, 'recordFailure');
+      const success = vi.spyOn(accountLimiter, 'recordSuccess');
+
+      const denied = await login(password);
+      // Injection can finish before an incorrectly admitted async handler does.
+      // Let memory-store continuations finish before observing durable effects.
+      await nextTurn();
+      expect(denied.statusCode).toBe(429);
+      expect(denied.json()).toEqual(refusal);
+      expect(denied.headers['set-cookie']).toBeUndefined();
+      expect(lookup).not.toHaveBeenCalled(); // No stored hash read or scrypt either.
+      expect(createSession).not.toHaveBeenCalled();
+      expect(failure).not.toHaveBeenCalled();
+      expect(success).not.toHaveBeenCalled();
+      expect(await b.sessions.find(cookie.sid)).toMatchObject({ userId: user.id });
+      expect((await b.users.findById(user.id))?.passwordHash).toBe(hash);
+      // Observe the real limiter's state, not just method forwarding: neither
+      // an extra failure nor a successful-login reset may have happened.
+      accountLimiter.recordFailure(user.username);
+      expect(accountLimiter.isLocked(user.username)).toBe(false);
+      accountLimiter.recordFailure(user.username);
+      expect(accountLimiter.isLocked(user.username)).toBe(true);
+    } finally {
+      await b.app.close();
+    }
+  });
+
+  it.each(['password123456', 'wrong-password'])('refused password change with %s leaves hashes, sessions and account budget intact', async (currentPassword) => {
+    const passwordLimiter = accountLockoutLimiter({ max: 3 });
+    const b = buildWithAsyncSend({
+      loginLimiter: fixedWindowLimiter({ max: 2, windowMs: 60_000 }),
+      passwordLimiter,
+    });
+    try {
+      const { user, cookie } = await authed(b);
+      const otherToken = await b.sessions.create(user.id, 60_000);
+      const hash = user.passwordHash;
+      const change = (currentPassword: string, cookies?: Record<string, string>) => b.app.inject({
+        method: 'POST', url: '/users/me/password', ...(cookies ? { cookies } : {}),
+        payload: { currentPassword, newPassword: 'brand-new-password123' },
+      });
+      // The admitted path still requires both authentication and password proof.
+      expect((await change('password123456')).statusCode).toBe(401);
+      const wrong = await change('wrong-password', cookie);
+      expect(wrong.statusCode).toBe(400);
+      expect(wrong.json()).toEqual({ error: 'current password is incorrect' });
+      const findSession = vi.spyOn(b.sessions, 'find');
+      const createSession = vi.spyOn(b.sessions, 'create');
+      const destroySessions = vi.spyOn(b.sessions, 'destroyAllForUser');
+      const setPassword = vi.spyOn(b.users, 'setPassword');
+      const lookup = vi.spyOn(b.users, 'findById');
+      const failure = vi.spyOn(passwordLimiter, 'recordFailure');
+      const success = vi.spyOn(passwordLimiter, 'recordSuccess');
+
+      const denied = await change(currentPassword, cookie);
+      await nextTurn();
+      expect(denied.statusCode).toBe(429);
+      expect(denied.json()).toEqual(refusal);
+      expect(denied.headers['set-cookie']).toBeUndefined();
+      expect(findSession).not.toHaveBeenCalled(); // Stops the following requireAuth too.
+      expect(lookup).not.toHaveBeenCalled();
+      expect(setPassword).not.toHaveBeenCalled();
+      expect(createSession).not.toHaveBeenCalled();
+      expect(destroySessions).not.toHaveBeenCalled();
+      expect(failure).not.toHaveBeenCalled();
+      expect(success).not.toHaveBeenCalled();
+      expect((await b.users.findById(user.id))?.passwordHash).toBe(hash);
+      expect(await b.sessions.find(cookie.sid)).toMatchObject({ userId: user.id });
+      expect(await b.sessions.find(otherToken)).toMatchObject({ userId: user.id });
+      passwordLimiter.recordFailure(user.id);
+      expect(passwordLimiter.isLocked(user.id)).toBe(false);
+      passwordLimiter.recordFailure(user.id);
+      expect(passwordLimiter.isLocked(user.id)).toBe(true);
+    } finally {
+      await b.app.close();
+    }
+  });
+
+  it('refused setup creates no admin or session; after the window it succeeds only once', async () => {
+    let now = 0;
+    const b = buildWithAsyncSend({
+      loginLimiter: fixedWindowLimiter({ max: 2, windowMs: 60_000, now: () => now }),
+    });
+    try {
+      // Exhaust the SHARED bucket via login while leaving the user store empty.
+      for (let i = 0; i < 2; i++) {
+        expect((await b.app.inject({
+          method: 'POST', url: '/login', payload: { username: 'missing', password: 'wrong-password' },
+        })).statusCode).toBe(401);
+      }
+      const createUser = vi.spyOn(b.users, 'create');
+      const createSession = vi.spyOn(b.sessions, 'create');
+      const setup = () => b.app.inject({
+        method: 'POST', url: '/setup', payload: { username: 'first-admin', password: 'password123456' },
+      });
+      const denied = await setup();
+      await nextTurn();
+      expect(denied.statusCode).toBe(429);
+      expect(denied.json()).toEqual(refusal);
+      expect(denied.headers['set-cookie']).toBeUndefined();
+      expect(createUser).not.toHaveBeenCalled();
+      expect(createSession).not.toHaveBeenCalled();
+      expect(await b.users.count()).toBe(0);
+      expect(await b.users.findByUsername('first-admin')).toBeNull();
+
+      now = 60_000;
+      const allowed = await setup();
+      expect(allowed.statusCode).toBe(200);
+      expect(allowed.json()).toEqual({ username: 'first-admin', isAdmin: true });
+      const admin = await b.users.findByUsername('first-admin');
+      expect(admin).toMatchObject({ isAdmin: true });
+      const token = allowed.cookies.find((cookie) => cookie.name === 'sid')?.value;
+      expect(token).toBeDefined();
+      expect(await b.sessions.find(token ?? '')).toMatchObject({ userId: admin?.id });
+      expect((await setup()).statusCode).toBe(409);
+      expect(await b.users.count()).toBe(1);
+      expect(createUser).toHaveBeenCalledTimes(1);
+      expect(createSession).toHaveBeenCalledTimes(1);
+    } finally {
+      await b.app.close();
+    }
   });
 });
 
@@ -2540,7 +2797,7 @@ describe('alt-text audit (advisory, never a gate)', () => {
   });
 });
 
-describe('publish gate (foreign images, #91)', () => {
+describe('publish body gates (#91, #375)', () => {
   const IMG = 'https://img.simonswanderlust.com';
   const pairWithBody = (deBody: string, enBody = '## b') => ({
     translationKey: '', status: 'draft',
@@ -2550,6 +2807,144 @@ describe('publish gate (foreign images, #91)', () => {
   });
   const create = async (b: Built, cookie: { sid: string }, payload: Record<string, unknown>) =>
     (await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload })).json().translationKey;
+
+  it.each(['single', 'bulk'] as const)('%s refuses rendered H1s in either locale before writes, exports or builds', async (mode) => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder });
+    const publish = vi.spyOn(b.posts, 'publish');
+    const render = vi.spyOn(bodyRenderer, 'renderMarkdown');
+    try {
+      const { cookie } = await authed(b);
+      for (const locale of ['de', 'en'] as const) {
+        for (const body of ['# Title', 'Intro\n=====', '> # Title', '- # Title', '<div><h1 class="legacy">Title</h1></div>']) {
+          const input = pairWithBody('## Body');
+          input[locale].bodyMarkdown = body;
+          const tk = await create(b, cookie, input);
+          publish.mockClear();
+          render.mockClear();
+          const response = await b.app.inject(mode === 'single'
+            ? { method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) }
+            : { method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [tk] } });
+          const error = `${locale}: body must not contain an H1; the story hero provides the page H1`;
+          if (mode === 'single') {
+            expect(response.statusCode, body).toBe(400);
+            expect(response.json().error).toBe(error);
+          } else {
+            expect(response.statusCode).toBe(200);
+            expect(response.json()).toMatchObject({ succeeded: 0, failed: 1, results: [{ key: tk, ok: false, error }] });
+            expect(response.json().build).toBeUndefined();
+          }
+          expect(render).toHaveBeenCalledTimes(locale === 'de' ? 1 : 2);
+          expect(publish).not.toHaveBeenCalled();
+          expect(s.calls).toEqual([]);
+          expect((await b.posts.get(tk))?.status).toBe('draft');
+          expect((await b.posts.usageRows()).filter(row => row.source === 'published')).toEqual([]);
+          expect(existsSync(join(dir, 'backup'))).toBe(false);
+          await b.posts.remove(tk);
+        }
+      }
+    } finally {
+      render.mockRestore();
+      publish.mockRestore();
+      await b.app.close();
+    }
+  });
+
+  it.each(['single', 'bulk'] as const)('%s publishes literal H1 examples in either locale with one render per locale', async (mode) => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder });
+    const render = vi.spyOn(bodyRenderer, 'renderMarkdown');
+    try {
+      const { cookie } = await authed(b);
+      let published = 0;
+      for (const locale of ['de', 'en'] as const) {
+        for (const body of [
+          'Use `<h1>` for the page title.',
+          '    <h1>Indented example</h1>',
+          '````markdown\n# Example heading\n<h1>Example HTML</h1>\n````\n\n## Real section',
+          '&lt;h1&gt;Escaped title&lt;/h1&gt;',
+          '<script><h1>Removed by sanitation</h1></script>\n\nSafe body',
+        ]) {
+          const input = pairWithBody('## Body');
+          input[locale].bodyMarkdown = body;
+          const tk = await create(b, cookie, input);
+          render.mockClear();
+          const response = await b.app.inject(mode === 'single'
+            ? { method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) }
+            : { method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [tk] } });
+          expect(response.statusCode, body).toBe(200);
+          if (mode === 'bulk') expect(response.json()).toMatchObject({ succeeded: 1, failed: 0 });
+          expect(render).toHaveBeenCalledTimes(2);
+          expect(s.calls).toHaveLength(++published);
+          expect((await b.posts.get(tk))?.status).toBe('published');
+          expect((await b.posts.usageRows()).find(row => row.source === 'published' && row.locale === locale)?.bodyMarkdown).toBe(body);
+          expect(existsSync(join(dir, 'backup', 'trips', locale, `fgn-${locale}.mdx`))).toBe(true);
+          await b.posts.remove(tk);
+        }
+      }
+    } finally {
+      render.mockRestore();
+      await b.app.close();
+    }
+  });
+
+  it('bulk publishes eligible pairs while leaving an H1 pair untouched, exporting and rebuilding only successes', async () => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder });
+    const publish = vi.spyOn(b.posts, 'publish');
+    try {
+      const { cookie } = await authed(b);
+      const bad = await create(b, cookie, pairWithBody('## Body', '> # Title'));
+      const goodPair = pairWithBody('Use `<h1>` for a title.');
+      goodPair.de.slug = 'good-de';
+      goodPair.en.slug = 'good-en';
+      const good = await create(b, cookie, goodPair);
+      const response = await b.app.inject({ method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [bad, good] } });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        succeeded: 1, failed: 1,
+        results: [{ key: bad, ok: false, error: expect.stringMatching(/^en: body must not contain an H1/) }, { key: good, ok: true }],
+      });
+      expect(publish).toHaveBeenCalledTimes(1);
+      expect(publish.mock.calls[0]?.[0]).toBe(good);
+      expect((await b.posts.get(bad))?.status).toBe('draft');
+      expect((await b.posts.get(good))?.status).toBe('published');
+      expect(existsSync(join(dir, 'backup', 'trips', 'en', 'fgn-en.mdx'))).toBe(false);
+      expect(existsSync(join(dir, 'backup', 'trips', 'en', 'good-en.mdx'))).toBe(true);
+      expect(s.calls).toHaveLength(1);
+    } finally {
+      publish.mockRestore();
+      await b.app.close();
+    }
+  });
+
+  it.each(['single', 'bulk'] as const)('%s preserves renderer failures as internal errors, not validation refusals', async (mode) => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder });
+    const publish = vi.spyOn(b.posts, 'publish');
+    const render = vi.spyOn(bodyRenderer, 'renderMarkdown');
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { cookie } = await authed(b);
+      const tk = await create(b, cookie, pairWithBody('## Body'));
+      render.mockRejectedValueOnce(new Error('private renderer failure'));
+      const response = await b.app.inject(mode === 'single'
+        ? { method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) }
+        : { method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [tk] } });
+      if (mode === 'single') expect(response.statusCode).toBe(500);
+      else expect(response.json()).toMatchObject({ succeeded: 0, failed: 1, results: [{ key: tk, ok: false, error: 'internal error' }] });
+      expect(response.body).not.toMatch(/private renderer failure|H1/);
+      expect(publish).not.toHaveBeenCalled();
+      expect(s.calls).toEqual([]);
+      expect(existsSync(join(dir, 'backup'))).toBe(false);
+      expect((await b.posts.get(tk))?.status).toBe('draft');
+    } finally {
+      render.mockRestore();
+      publish.mockRestore();
+      log.mockRestore();
+      await b.app.close();
+    }
+  });
 
   it('409s with the count and examples while a body still hot-links another host, and publishes nothing', async () => {
     const s = stubBuilder();
@@ -3710,6 +4105,23 @@ describe('pages routes', () => {
     expect(s.calls.length).toBe(1);
   });
 
+  it('does not apply the story-only H1 gate to About publication', async () => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder });
+    try {
+      const { cookie } = await authed(b);
+      const body = {
+        de: { locale: 'de', title: 'Über mich', bodyMarkdown: 'Über mich\n=========', images: {} },
+        en: { locale: 'en', title: 'About me', bodyMarkdown: '<h1>About me</h1>', images: {} },
+      };
+      const response = await b.app.inject({ method: 'PUT', url: '/pages/about', cookies: cookie, payload: body });
+      expect(response.statusCode).toBe(200);
+      expect((await b.pages.get('about')).de.bodyMarkdown).toBe(body.de.bodyMarkdown);
+      expect((await b.pages.get('about')).en.bodyMarkdown).toBe(body.en.bodyMarkdown);
+      expect(s.calls).toHaveLength(1);
+    } finally { await b.app.close(); }
+  });
+
   it('PUT /pages/:key rejects an unsafe key with 400', async () => {
     const b = build();
     const { cookie } = await authed(b);
@@ -4126,5 +4538,143 @@ describe('POST /settings/image-preview', () => {
     expect((await first).statusCode).toBe(200);
     // The slot is released once the first finishes.
     expect((await preview(b, cookie, { format: 'webp', quality: '75' })).statusCode).toBe(200);
+  });
+});
+
+describe('identity asset administration and release serving (#275)', () => {
+  function assetRequest(b: Built, cookie: { sid: string }, files: Buffer[], revision = 1, role = 'logo') {
+    const form = new FormData();
+    form.append('revision', String(revision));
+    for (const bytes of files) form.append('file', bytes, { filename: 'untrusted-name.png', contentType: 'image/png' });
+    return b.app.inject({ method: 'PUT', url: '/settings/identity/assets/' + role, cookies: cookie, headers: form.getHeaders(), payload: form.getBuffer() });
+  }
+  it('authorizes PUT and DELETE before inspecting bytes or revision', async () => {
+    const identityStore = memorySiteIdentityStore();
+    const b = build({ identityStore, workLock: createWorkLock() });
+    const { cookie } = await authed(b, { isAdmin: false });
+    try {
+      for (const method of ['PUT', 'DELETE'] as const) {
+        const url = '/settings/identity/assets/logo';
+        expect((await b.app.inject({ method, url, payload: { revision: 1 } })).statusCode).toBe(401);
+        expect((await b.app.inject({ method, url, cookies: cookie, payload: { revision: 1 } })).statusCode).toBe(403);
+      }
+      expect(identityStore.get().revision).toBe(1);
+    } finally { await b.app.close(); }
+  });
+  it('saves one role group under the real shared lock, shares text revisions, removes to defaults and never builds or retains originals', async () => {
+    const identityStore = memorySiteIdentityStore();
+    const lock = createWorkLock();
+    const replace = identityStore.replaceAssets.bind(identityStore);
+    const mutation = vi.spyOn(identityStore, 'replaceAssets').mockImplementation((revision, group, assets) => {
+      if (assets.length) expect(lock.stats().sharedRunning).toBe(1);
+      return replace(revision, group, assets);
+    });
+    const builder = stubBuilder();
+    const b = build({ identityStore, workLock: lock, builder: builder.builder });
+    const { cookie } = await authed(b);
+    try {
+      const source = await jpeg();
+      const uploaded = await assetRequest(b, cookie, [source]);
+      expect(uploaded.statusCode).toBe(200);
+      expect(uploaded.json()).toEqual({ revision: 2, savedAt: null, takesEffect: 'next_build', assets: { logo: true, favicon: false } });
+      expect(uploaded.headers['cache-control']).toBe('no-store');
+      expect(mutation).toHaveBeenCalledOnce();
+      expect(mutation.mock.calls[0]![2][0]!.bytes.equals(source)).toBe(false);
+      expect(await readdir(dir)).toEqual([]);
+      expect(b.enqueued).toEqual([]);
+      expect(builder.calls).toEqual([]);
+      const { canonicalOrigin: _reserved, ...identity } = identityStore.get().identity;
+      const text = await b.app.inject({ method: 'PUT', url: '/settings/identity', cookies: cookie, payload: { revision: 2, identity: { ...identity, siteName: 'Field notes' } } });
+      expect(text.statusCode).toBe(200);
+      const stale = await assetRequest(b, cookie, [source], 2);
+      expect(stale.statusCode).toBe(409);
+      expect(stale.json().code).toBe('identity_conflict');
+      const favicon = await assetRequest(b, cookie, [source], 3, 'favicon');
+      expect(favicon.statusCode).toBe(200);
+      const settings = await b.app.inject({ url: '/settings/identity', cookies: cookie });
+      expect(settings.json()).toMatchObject({ revision: 4, assets: { logo: true, favicon: true }, identity: { siteName: 'Field notes' } });
+      expect(settings.json()).not.toHaveProperty('bytes');
+      const removed = await b.app.inject({ method: 'DELETE', url: '/settings/identity/assets/favicon', cookies: cookie, payload: { revision: 4 } });
+      expect(removed.statusCode).toBe(200);
+      expect(removed.json()).toMatchObject({ revision: 5, assets: { logo: true, favicon: false } });
+      const removedLogo = await b.app.inject({ method: 'DELETE', url: '/settings/identity/assets/logo', cookies: cookie, payload: { revision: 5 } });
+      expect(removedLogo.json()).toMatchObject({ revision: 6, assets: { logo: false, favicon: false } });
+      expect(builder.calls).toEqual([]);
+    } finally { mutation.mockRestore(); await b.app.close(); }
+  });
+  it('returns specific errors without replacing the previous asset or advancing its revision', async () => {
+    const identityStore = memorySiteIdentityStore();
+    const source = await jpeg();
+    await identityStore.replaceAssets(1, 'logo', await normalizeIdentityUpload(source, 'logo'));
+    const b = build({ identityStore, workLock: createWorkLock() });
+    const { cookie } = await authed(b);
+    try {
+      const frames = Buffer.concat([Buffer.alloc(180 * 180 * 3, 30), Buffer.alloc(180 * 180 * 3, 200)]);
+      const animated = await sharp(frames, { raw: { width: 180, height: 360, channels: 3, pageHeight: 180 } })
+        .webp({ loop: 0, delay: [100, 100] }).toBuffer();
+      const cases: [Buffer[], number, string][] = [
+        [[source, source], 413, 'too_many_files'],
+        [[Buffer.alloc(2 * 1024 * 1024 + 1)], 413, 'asset_too_large'],
+        [[Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"><script>alert(2)</script><image href="https://example.com/evil.png"/></svg>')], 415, 'unsupported_image_type'],
+        [[Buffer.from('not an image')], 415, 'unsupported_image_type'],
+        [[animated], 400, 'animated_image'],
+        [[await sharp({ create: { width: 4097, height: 4097, channels: 3, background: '#000' } }).png().toBuffer()], 400, 'image_too_large'],
+        [[(await sharp(source).png().toBuffer()).subarray(0, 40)], 400, 'image_invalid'],
+        [[await sharp(source).resize(31, 31).png().toBuffer()], 400, 'image_too_small'],
+      ];
+      for (const [files, status, code] of cases) {
+        const response = await assetRequest(b, cookie, files, 2);
+        expect(response.statusCode, code).toBe(status);
+        expect(response.json().code).toBe(code);
+        expect(identityStore.get().revision).toBe(2);
+        expect(identityStore.getAssetState()).toEqual({ logo: true, favicon: false });
+      }
+      expect((await assetRequest(b, cookie, [source], 2, 'other')).statusCode).toBe(400);
+      expect((await assetRequest(b, cookie, [source], 0)).statusCode).toBe(400);
+      const lowDisk = vi.spyOn(disk, 'diskSpace').mockResolvedValue({ free: 0, total: 1 });
+      try {
+        const response = await assetRequest(b, cookie, [source], 2);
+        expect(response.statusCode).toBe(507);
+        expect(response.json().code).toBe('insufficient_space');
+      } finally { lowDisk.mockRestore(); }
+      expect(identityStore.get().revision).toBe(2);
+    } finally { await b.app.close(); }
+  });
+  it('does not report success or change cached identity when persistence fails', async () => {
+    const identityStore = memorySiteIdentityStore();
+    const mutation = vi.spyOn(identityStore, 'replaceAssets').mockRejectedValue(new Error('private database failure'));
+    const b = build({ identityStore, workLock: createWorkLock() });
+    const { cookie } = await authed(b);
+    try {
+      const response = await assetRequest(b, cookie, [await jpeg()]);
+      expect(response.statusCode).toBe(500);
+      expect(response.body).not.toContain('private database failure');
+      expect(identityStore.get().revision).toBe(1);
+      expect(identityStore.getAssetState()).toEqual({ logo: false, favicon: false });
+    } finally { mutation.mockRestore(); await b.app.close(); }
+  });
+  it.each(['blog.example', 'localhost'])('serves release-owned PNG with nosniff and immutable caching on %s, not the dedicated image host', async (host) => {
+    const assets = await normalizeIdentityUpload(await jpeg(), 'logo');
+    const asset = assets[0]!;
+    const path = '/_identity/logo-' + asset.sha256.slice(0, 16) + '.png';
+    await mkdir(join(dir, 'site/current/_identity'), { recursive: true });
+    await writeFile(join(dir, 'site/current', path), asset.bytes);
+    const b = build({ imgHost: host === 'localhost' ? 'localhost' : 'images.example' });
+    try {
+      const response = await b.app.inject({ url: path, headers: { host } });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['content-type']).toMatch(/^image\/png/);
+      expect(response.headers['x-content-type-options']).toBe('nosniff');
+      expect(response.headers['cache-control']).toBe('public, max-age=31536000, immutable');
+      expect(response.rawPayload.equals(asset.bytes)).toBe(true);
+      if (host !== 'localhost') {
+        const foreign = await b.app.inject({ url: path, headers: { host: 'images.example' } });
+        expect(foreign.statusCode).toBe(404);
+        expect(foreign.headers['cache-control'] ?? '').not.toContain('immutable');
+      }
+      const missing = await b.app.inject({ url: path.replace(asset.sha256.slice(0, 16), '0'.repeat(16)), headers: { host } });
+      expect(missing.statusCode).toBe(404);
+      expect(missing.headers['cache-control'] ?? '').not.toContain('immutable');
+    } finally { await b.app.close(); }
   });
 });

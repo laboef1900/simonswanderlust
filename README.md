@@ -108,8 +108,8 @@ never runs inference. Remote providers may charge for use and receive the submit
 ## Quick start (full stack, Docker)
 
 **Bring your own server, keep your own journal.** The stack runs as two containers:
-one app for the CMS, image processing and public blog, plus Postgres. Published images
-are available for amd64 and arm64.
+one app for the CMS, image processing and public blog, plus Postgres. The release workflow
+builds for amd64 and arm64.
 
 This repository includes Simon's Wanderlust branding and a DE/EN site. Adapting it to your
 own blog means updating the site identity, domain configuration and any templates you want
@@ -118,6 +118,16 @@ theme marketplace. This README describes the current source; tagged images conta
 features shipped in their release.
 
 ### Start with a released image
+
+**Image-name cutover pending release:** current source uses
+`ghcr.io/laboef1900/wanderlust-studio`. The first release under that name is a
+**future, owner-authorized action**, not part of this change. Until it is published,
+use [Build the current source](#build-the-current-source), not the pull commands below.
+Already released images, including
+`ghcr.io/laboef1900/simonswanderlust-app:0.17.1`, retain their original name and tags;
+they are not copied or aliased to the new package. Existing installations should keep
+their existing deployment configuration until an upgrade is authorized. A saved
+`IMAGE_TAG=0.17.1` does not become valid under the new image name.
 
 You need Docker Engine with Compose (or Docker Desktop). From a checkout of this repository:
 
@@ -131,8 +141,14 @@ Before starting, edit your private `.env`:
   `DATABASE_URL`; leave the bare-development override commented out.
 - For a local trial, set `PUBLIC_BASE_URL=http://localhost:3000` and
   `IMG_HOST=localhost:3000`. For a server, use your image domain and its matching host.
-- Set `IMAGE_TAG` to the [release](https://github.com/laboef1900/simonswanderlust/releases)
-  you want to run. The committed default is `0.17.1`.
+- After the first new-name release, set `IMAGE_TAG` to a version actually published
+  under `ghcr.io/laboef1900/wanderlust-studio`, as identified in its
+  [release notes](https://github.com/laboef1900/simonswanderlust/releases).
+  There is deliberately no default tag; empty or unset `IMAGE_TAG` stops Compose.
+
+Override **both** domain values together. Unset or explicitly empty values still select
+Compose's Simon-specific defaults: `PUBLIC_BASE_URL=https://img.simonswanderlust.com` and
+`IMG_HOST=img.simonswanderlust.com`. They do not auto-detect your blog's domain.
 
 The app runs as non-root uid 1000. On a Linux host, prepare the data directory so it is
 writable, then start the stack:
@@ -143,6 +159,10 @@ sudo chown -R 1000:1000 uploader/data
 docker compose pull
 docker compose up -d
 ```
+
+Skipping ownership on a fresh root-owned Linux bind mount produced `EACCES`/permission
+denied, an exit-code-1 restart loop and an unhealthy container in the native rehearsal.
+Prepare ownership before starting; do not reproduce this failure on existing content.
 
 If the GHCR package requires authentication, run `docker login ghcr.io` before pulling.
 Open **http://localhost:3000/login** to create the first admin account, then head to the
@@ -155,19 +175,39 @@ and append or overwrite `X-Forwarded-For` so the rightmost entry is its accepted
 Compose exposes port 3000 on **loopback only** and sets `TRUSTED_PROXY: docker-gateway`
 literally; do not add it to `.env`. The app trusts only loopback and the discovered bridge
 gateway at hop zero, and refuses boot if gateway discovery fails. Postgres stays internal.
-Before cutover, verify the actual target-server peer, HTTPS `Secure` cookies and independent
-rate-limit buckets from two external networks; Docker Desktop TCP proof is not a VPS
+Reject unintended public hostnames at the proxy. Reader comments use trusted protocol plus
+raw `Host` for temporary blog-origin equality, not the image `PUBLIC_BASE_URL` or
+`X-Forwarded-Host`; the production image authority is excluded. Single-origin loopback
+development remains supported, with no new blog-origin env setting.
+Before cutover, verify the actual target-server peer, HTTPS `Secure` cookies, independent
+rate-limit buckets from two external networks, and blog-origin comment submission through
+moderation to the public list; Docker Desktop and local split-host proof are not a VPS
 rehearsal. See [architecture and deployment](ARCHITECTURE.md) and the
 [security model](SECURITY.md#transport-headers--proxy) before exposing the service.
+
+The [2026-10-29 native amd64/arm64 rehearsal](docs/2026-10-29-clean-install-rehearsal.md)
+records exact released-image digests, a verified two-host TLS proxy example, installation
+deviations and measured resources. It exercised released **0.17.1**, not current/unmerged
+code, through real HTTPS/API calls—not interactive browser UI or a browser certificate
+store. Split-domain blog-Origin comment posting reproduced the known
+[#319](https://github.com/laboef1900/simonswanderlust/issues/319) 403 defect.
+The two synthetic photos and one bilingual story establish **no hosting minimum**.
+That historical image predates the codec fixes tracked in
+[#347](https://github.com/laboef1900/simonswanderlust/issues/347); the rehearsal is not a
+security-support or downgrade endorsement. The broader supported installation guide
+and default changes belong to [#293](https://github.com/laboef1900/simonswanderlust/issues/293).
 
 ### Build the current source
 
 Compose runs images; it does not build them. To use your own changes:
 
 ```bash
-docker build -t ghcr.io/laboef1900/simonswanderlust-app:local .
+docker build -t ghcr.io/laboef1900/wanderlust-studio:local .
 IMAGE_TAG=local docker compose up -d
 ```
+
+For subsequent Compose commands against this local build, set `IMAGE_TAG=local` in
+your private `.env` too; `local` is a locally built tag, not a published release.
 
 The Dockerfile uses Docker Hardened Images (`dhi.io/node`); building requires access to
 those base images. Pulling a finished release from GHCR does not require a DHI login.
@@ -217,6 +257,67 @@ Set `DATABASE_URL` for the site process. Both `npm run build` and `npx astro che
 content from Postgres. Site unit tests run with `npm test` without a database; uploader
 integration tests need a separate `TEST_DATABASE_URL`.
 
+## Software, contributions and content rights
+
+**Wanderlust Studio software is licensed under [GNU AGPL version 3 only](LICENSE)
+(`AGPL-3.0-only`). Copyright 2026 Simon and contributors.** This covers original
+application code, tests, build scripts and technical documentation, without warranty
+to the extent permitted by law. Third-party components retain their own licenses.
+
+Stories and translations, uploaded photos and illustrations, MDX story content
+(including `site/src/content/trips/` stubs), reader submissions and brand/logo
+artwork are **excluded from the software grant and are not open-licensed here**.
+Permission comes from their respective rightsholders, unless separately licensed
+or permitted by law. No ownership of users' or third parties' content is claimed.
+Using the CMS does not itself put authored content under AGPL or change its
+visibility/access controls. Software embedded in generated output retains its
+applicable license; AGPL §2 governs when output constitutes a covered work.
+
+Original software contributions are accepted under **AGPL-3.0-only, inbound =
+outbound**, with **no DCO or CLA**. Submit only material you have authority to
+license and preserve third-party notices. This is not a copyright assignment.
+
+The product stays **Wanderlust Studio**. The software grant does not grant rights
+to brand a separate service as “Simon's Wanderlust” or “Wanderlust Studio”, use
+their logos, or imply endorsement. See [NOTICE](NOTICE) and the
+[owner decision](docs/superpowers/specs/2026-10-27-software-content-brand-rights-design.md).
+The separately approved image rename is implemented on
+`feature/issue-291-image-name`; old artifacts remain untouched.
+
+### Distributing and operating modified software
+
+Provide the exact version's Corresponding Source under AGPL §6 when distributing
+object code, with clear source directions alongside each image/release. Modified
+network versions must prominently offer their Corresponding Source to all remote
+users, at no charge, under §13. A moving upstream branch or package inventory alone
+is not proof of correspondence. Release builds record the existing GitHub repository
+and full commit in `/app/source-release.json`; legal indexes offer that exact
+revision's archive and source tree, and release notes pair the links with the image
+digest. Local builds without that provenance explicitly show an unknown revision.
+Operators modifying code must provide their actual source and update those static
+directions, not claim their changes match upstream. The source archive contains
+tracked repository files; any tracked stories/content remain excluded from the
+software license. It collects no deployed uploads, databases, settings or secrets.
+No runtime configuration, source-download API or content export is introduced.
+
+`node uploader/scripts/generate-third-party-inventory.mjs` regenerates the lockfile
+[inventory](docs/third-party-inventory.json); [evidence](docs/third-party-evidence.json)
+records non-lockfile assets and obligations. After `npm ci`, run
+`node uploader/scripts/copy-legal.mjs site` and
+`node uploader/scripts/copy-legal.mjs uploader` from the repository root to package
+licenses, rights statements, inventory and installed-package notices. Docker does
+both; site `predev`/`prebuild` also refresh site notices. They are delivered through
+existing static serving at `/legal/de.html`, `/legal/en.html` and
+`/admin/legal/en.html`. Review `notice-gaps.json` and actual emitted/native assets:
+collecting notice files is not a complete dependency or corresponding-source audit.
+Exact historical `0.17.1` amd64/arm64 inspection and verified DHI base SBOM/source
+attestations are recorded in [image evidence](docs/third-party-image-evidence.json).
+Those images lack readable glyph/native package notices; this patch does not
+change their bytes or certify old images. Full native component notices, matching
+Rust standard-library notices and source/relink directions are now included as
+supplements. Review the recorded upstream missing-notice and mutable-input
+limitations, then check correspondence and delivery in the final rebuilt release.
+
 ## Documentation
 
 - [Authoring workflow](docs/authoring-workflow.md) — photos, stories, galleries and publishing.
@@ -231,7 +332,8 @@ integration tests need a separate `TEST_DATABASE_URL`.
 
 ### Cutting a release
 
-**Current release: v0.17.1.** Fixes since v0.17.0:
+**Last release before the image-name cutover: v0.17.1**, published as
+`ghcr.io/laboef1900/simonswanderlust-app:0.17.1`. Fixes since v0.17.0:
 
 - Gallery reloads no longer risk saving mixed DE/EN content after partial form loading;
   failed reloads preserve a local recovery copy and block Save, Preview and Publish.
@@ -264,22 +366,30 @@ Upgrading from before v0.15.0: take **Back up now** before deploying. First boot
 `settings.json` and the stored AI key into the provider registry, keeping
 `settings.json.pre-ai-registry`. Rolling back needs the older image, the dump and that file.
 
-1. On a `feature/*` branch from `dev`, update both apps' package and lockfile versions,
-   plus `IMAGE_TAG` defaults in `docker-compose.yml` and `uploader/.env.example`. Update
-   the release notes here.
-2. Merge a green PR into `dev`, then a green release PR from `dev` into `main`.
-3. Tag the merged release on `main` (example for this release):
+The next release is a separate human action. This image-name change does not bump
+versions, publish an image or authorize a deployment.
 
-```bash
-git fetch origin main
-git tag -a v0.17.1 origin/main -m "Release v0.17.1"
-git push origin v0.17.1
-```
+1. On a `feature/*` branch from `dev`, choose an unused next release version and
+   update both apps' package and lockfile versions. Keep `IMAGE_TAG` explicit (no
+   historical default); document the new version and the
+   `ghcr.io/laboef1900/wanderlust-studio` package in the release notes.
+2. Merge a green PR into `dev`, then a green release PR from `dev` into `main`.
+3. Only with owner release authorization, create and push a **new** `vX.Y.Z` tag
+   on the merged `main` commit. Do not recreate `v0.17.1` or replay earlier releases.
+4. Confirm the workflow published the version for both architectures under the
+   new name, record its digest and verify package visibility/access for intended
+   installers. Only then may an operator set that version as `IMAGE_TAG` and
+   pull/deploy with the new Compose file. Existing private `.env` files must be
+   updated deliberately, not copied over or silently rewritten.
 
 Never push directly to protected branches, tag an unmerged feature branch or replace a
-published tag. The release workflow builds once for amd64 and arm64, pushes to GHCR and
-creates the GitHub Release. It requires repository variable `DHI_USERNAME` and secret
+published tag. The release workflow builds once for amd64 and arm64, pushes only to
+`ghcr.io/laboef1900/wanderlust-studio` and creates the GitHub Release.
+It requires repository variable `DHI_USERNAME` and secret
 `DHI_TOKEN` to pull the hardened base images. Verify the workflow before deployment;
 publishing a release does not deploy it or rebuild the live blog.
+
+See the [image-name cutover record](docs/superpowers/specs/2026-10-27-issue-291-image-name-cutover.md)
+for scope, retained history and recovery constraints.
 
 </details>

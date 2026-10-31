@@ -33,7 +33,7 @@ import {
 } from './ai-providers.js';
 import { validateDraft, validateForPublish, PostError, type PostStore, type PostPair, type StoredPostPair, type PostUsageRow, assertNotStale, assertPublishTokens, type PublishTokens } from './posts.js';
 import { GpxError } from './gpx-errors.js';
-import { analyzeBodyImages, bodyImageKey } from './publish-gate.js';
+import { analyzeBodyContent, bodyImageKey } from './publish-gate.js';
 import { auditAltText } from './alt-audit.js';
 import { renderPreviewHtml, previewCsp } from './preview.js';
 import { loadGalleryMetadata } from './gallery-metadata.js';
@@ -46,11 +46,11 @@ import { createImportRunner, memoryImportJobStore, ImportBusyError, type ImportR
 import { createRehostResume } from './wp-images.js';
 import { fixedWindowLimiter, rateLimitPreHandler, accountLockoutLimiter, commentLimiters, type RateLimiter, type AccountLimiter } from './rate-limit.js';
 import type { CommentStore } from './comments.js';
-import { registerPublicComments } from './comments-public.js';
+import { commentAuthorityOrigin, commentOrigin, registerPublicComments } from './comments-public.js';
 import { BACKUP_FILE_RE, IMAGES_ARCHIVE_RE, type DbBackup } from './backup.js';
 import { legacyRedirect } from './redirects.js';
 import { compressionHook } from './compress.js';
-import { CommentError, isCommentStatus, UUID_RE as COMMENT_ID_RE, type CommentAdminStore } from './comments-admin.js';
+import { CommentError, isCommentStatus, isModerationOffset, UUID_RE as COMMENT_ID_RE, type CommentAdminStore } from './comments-admin.js';
 import { ui } from '../../site/src/i18n/ui.js';
 import { createGeocoder, GeocodingError } from './geocoding.js';
 import { registerGpxRoutes } from './gpx-routes.js';
@@ -60,6 +60,7 @@ import { ROUTE_ARCHIVE_RE } from './gpx-backup.js';
 import { StorageReadOnlyError } from './storage-owner.js';
 import { IdentityConflictError, type SiteIdentityStore } from './site-identity.js';
 import { IdentityError, neutralIdentity } from '../../site/src/lib/site-identity.js';
+import { registerIdentityAssetRoutes } from './site-identity-routes.js';
 import type { TrustPolicy } from './trusted-proxy.js';
 
 export interface ServerConfig {
@@ -129,8 +130,8 @@ export interface ServerConfig {
   /** Site-wide comments switch. Defaults to OFF (fail closed): POST answers 409. */
   commentsEnabled?: () => boolean;
   /**
-   * Exact Origin a browser POST /comments must carry. Defaults to the origin
-   * of `baseUrl` (PUBLIC_BASE_URL). Compared by equality, never prefix.
+   * Explicit blog-origin override for POST /comments. Invalid values fail closed.
+   * Otherwise use trusted protocol + raw Host, excluding production image hosts.
    */
   commentsOrigin?: string;
   /** Injectable for tests; defaults to fresh `commentLimiters()` maps. */
@@ -268,7 +269,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     // it is what points at the new asset names.
     // Apply the fingerprint-specific policy after static serving; the rest of
     // the blog mount retains its native revalidation policy.
-    if (path.startsWith('/_astro/') && reply.statusCode < 400) {
+    if ((path.startsWith('/_astro/') || /^\/_identity\/(?:logo|favicon-32|favicon-192|apple-touch-180)-[a-f0-9]{16}\.png$/.test(path)) && reply.statusCode < 400) {
       reply.header('cache-control', 'public, max-age=31536000, immutable');
     }
   });
@@ -979,9 +980,10 @@ export function buildServer(cfg: ServerConfig): AppServer {
   const KEY_PARTIAL = 'API key change saved, but settings were not saved. Reload settings before retrying.';
   const PROVIDER_NOT_FOUND = { error: 'AI provider not found.' };
 
+  registerIdentityAssetRoutes(app, { store: cfg.identityStore, requireAdmin, workLock: cfg.workLock, storageDir, isWritable });
   app.get('/settings/identity', { preHandler: requireAdmin }, async (_req, reply) => {
     if (!cfg.identityStore) return reply.code(503).send({ error: 'Site identity unavailable.' });
-    return { ...cfg.identityStore.get(), locales: ['de', 'en'] };
+    return { ...cfg.identityStore.get(), assets: cfg.identityStore.getAssetState(), locales: ['de', 'en'] };
   });
   app.put('/settings/identity', { preHandler: requireAdmin }, async (req, reply) => {
     if (!cfg.identityStore) return reply.code(503).send({ error: 'Site identity unavailable.' });
@@ -1363,12 +1365,10 @@ export function buildServer(cfg: ServerConfig): AppServer {
   app.delete('/users/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const id = (req.params as { id: string }).id;
     if (req.authUser && req.authUser.id === id) return reply.code(409).send({ error: 'you cannot delete your own account' });
-    const target = await users.findById(id);
-    if (!target) return reply.code(404).send({ error: 'user not found' });
-    if (target.isAdmin && (await users.countAdmins()) <= 1) {
-      return reply.code(409).send({ error: 'cannot remove the last admin' });
-    }
-    await users.remove(id);
+    const outcome = await users.remove(id);
+    if (outcome === 'not_found') return reply.code(404).send({ error: 'user not found' });
+    if (outcome === 'last_admin') return reply.code(409).send({ error: 'cannot remove the last admin' });
+    await sessions.destroyAllForUser(id);
     return reply.send({ ok: true });
   });
 
@@ -1479,12 +1479,15 @@ export function buildServer(cfg: ServerConfig): AppServer {
   }
 
   /** Render once per locale; metadata alone is never a publication reference. */
-  async function publicationImages(pair: StoredPostPair): Promise<{ foreign: string[]; keys: string[] }> {
+  async function publicationBody(pair: StoredPostPair): Promise<{ foreign: string[]; keys: string[] }> {
     const foreign = new Set<string>();
     const keys = new Set<string>();
     for (const locale of ['de', 'en'] as const) {
       const l = pair[locale];
-      const body = await analyzeBodyImages(l.bodyMarkdown, l.images, imageBase);
+      const body = await analyzeBodyContent(l.bodyMarkdown, l.images, imageBase);
+      if (body.hasH1) {
+        throw new PostError(`${locale}: body must not contain an H1; the story hero provides the page H1`);
+      }
       for (const src of body.foreign) foreign.add(src);
       const storyUrl = new URL(`${locale === 'en' ? '/en' : ''}/${l.slug}/`, imageBase).href;
       for (const src of body.sources) {
@@ -1698,11 +1701,16 @@ export function buildServer(cfg: ServerConfig): AppServer {
     const state = await posts.getPublishState(tk);
     if (!state) return reply.code(404).send({ error: 'post not found' });
     const { pair } = state;
-    try { assertPublishTokens(state, tokens); validateForPublish(pair); } catch (e) {
+    let analysis: { foreign: string[]; keys: string[] };
+    try {
+      assertPublishTokens(state, tokens);
+      validateForPublish(pair);
+      analysis = await publicationBody(pair);
+    } catch (e) {
       if (e instanceof PostError) return reply.code(e.code === 'conflict' ? 409 : 400).send({ error: e.message, code: e.code });
       throw e;
     }
-    const { foreign, keys: imageKeys } = await publicationImages(pair);
+    const { foreign, keys: imageKeys } = analysis;
     if (foreign.length > 0) {
       return reply.code(409).send({
         error: foreignImagesMessage(foreign.length),
@@ -1804,7 +1812,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
         if (!pair) throw new PostError('post not found');
         if (action === 'publish') {
           validateForPublish(pair);
-          const { foreign, keys: imageKeys } = await publicationImages(pair);
+          const { foreign, keys: imageKeys } = await publicationBody(pair);
           if (foreign.length > 0) throw new PostError(foreignImagesMessage(foreign.length));
           const notReady = await notReadyPhotos(pair, imageKeys);
           if (notReady.length > 0) {
@@ -1936,24 +1944,37 @@ export function buildServer(cfg: ServerConfig): AppServer {
   // The limiter maps are the comment route's own, never `loginLimiter`.
   {
     const fresh = commentLimiters();
+    const imageOrigin = new URL(cfg.baseUrl).origin;
+    const imageAuthority = new URL(imageOrigin).host;
+    // Preserve alternate-scheme exclusions, including an explicitly configured
+    // default port, without excluding unrelated ports on the same hostname.
+    const servingImageAuthorities = ['http', 'https'].map((protocol) => {
+      const origin = commentAuthorityOrigin(protocol, cfg.imgHost);
+      return origin === null ? null : new URL(origin).host;
+    });
     registerPublicComments(app, {
       comments: cfg.comments,
       posts: cfg.posts,
-      allowedOrigin: cfg.commentsOrigin ?? new URL(cfg.baseUrl).origin,
+      allowedOrigin: (req) => {
+        if (cfg.commentsOrigin !== undefined) return commentOrigin(cfg.commentsOrigin);
+        // #276 inserts the CURRENT validated identity.canonicalOrigin here, not
+        // a boot snapshot. Until then, do not infer identity from reader input.
+        const origin = commentAuthorityOrigin(req.protocol, req.headers.host);
+        if (origin === null) return null;
+        if (servingImageAuthorities.some((authority) => authority === null)) return null;
+        // Normalize every authority under the actual request protocol. A default
+        // port in either image setting must not evade the image-host exclusion.
+        const servesImages = servingImageAuthorities.some((authority) =>
+          commentAuthorityOrigin(req.protocol, authority) === origin);
+        if (commentAuthorityOrigin(req.protocol, imageAuthority) === origin || servesImages) {
+          return imgHostServesBlog && servesImages && origin === imageOrigin ? origin : null;
+        }
+        return origin;
+      },
       // Falls back to the persisted global switch (default false = fail closed).
       commentsEnabled: cfg.commentsEnabled ?? (() => cfg.settings.get().commentsEnabled === true),
       ipLimiter: cfg.commentIpLimiter ?? fresh.ip,
       globalLimiter: cfg.commentGlobalLimiter ?? fresh.global,
-      // Author replies (#205) are `approved` + `is_author`; the public store's
-      // shape has no flag, so the id set comes from the admin store's approved
-      // list — a read of approved rows only, never pending ones.
-      ...(cfg.commentsAdmin ? {
-        isAuthorIds: async (tk: string) => new Set(
-          (await cfg.commentsAdmin!.list('approved'))
-            .filter((c) => c.translationKey === tk && c.isAuthor)
-            .map((c) => c.id),
-        ),
-      } : {}),
     });
   }
 
@@ -1972,10 +1993,16 @@ export function buildServer(cfg: ServerConfig): AppServer {
   const noStore = (reply: FastifyReply) => { void reply.code(503).send({ error: 'comments are not available' }); };
 
   app.get('/moderation/comments', { preHandler: requireAdmin }, async (req, reply) => {
-    const status = (req.query as { status?: string }).status ?? 'pending';
+    reply.header('cache-control', 'no-store');
+    const query = req.query as { status?: unknown; offset?: unknown };
+    const status = query.status ?? 'pending';
     if (!isCommentStatus(status)) return reply.code(400).send({ error: 'status must be pending or approved' });
+    const rawOffset = query.offset ?? '0';
+    if (typeof rawOffset !== 'string' || !/^[0-9]+$/.test(rawOffset) || !isModerationOffset(Number(rawOffset))) {
+      return reply.code(400).send({ error: 'invalid pagination' });
+    }
     if (!commentsAdmin) return noStore(reply);
-    return reply.header('cache-control', 'no-store').send({ comments: await commentsAdmin.list(status) });
+    return reply.send(await commentsAdmin.list(status, Number(rawOffset)));
   });
 
   app.post('/moderation/comments/:id/status', { preHandler: requireAdmin }, async (req, reply) => {
