@@ -6,6 +6,46 @@ import {
   BuildTimeoutError, STDERR_TAIL_BYTES, bootstrapRelease, createSiteBuilder, runChildBuild,
   type BuildOutcome, type SiteBuilder,
 } from '../src/build.js';
+import type * as FileSystem from 'node:fs/promises';
+
+// Inject faults at the real filesystem boundaries, without relying on uid or
+// permission semantics. All successful copies, promotions and removals stay real.
+const pruneFaults = vi.hoisted(() => ({
+  promoted: false,
+  beforePromotion: undefined as (() => void) | undefined,
+  afterPromotion: undefined as (() => Promise<void> | void) | undefined,
+  enumerate: undefined as (() => void) | undefined,
+  current: undefined as (() => string | void) | undefined,
+  remove: undefined as ((path: string) => Promise<void> | void) | undefined,
+}));
+vi.mock('node:fs/promises', async (original) => {
+  const fs = await original<typeof FileSystem>();
+  return {
+    ...fs,
+    rename: async (from: string, to: string) => {
+      const promoting = to.endsWith('/current');
+      if (promoting) pruneFaults.beforePromotion?.();
+      await fs.rename(from, to);
+      if (promoting) {
+        pruneFaults.promoted = true;
+        await pruneFaults.afterPromotion?.();
+      }
+    },
+    readdir: async (path: string) => {
+      if (pruneFaults.promoted) pruneFaults.enumerate?.();
+      return fs.readdir(path);
+    },
+    readlink: async (path: string) => {
+      const replacement = pruneFaults.promoted ? pruneFaults.current?.() : undefined;
+      return replacement ?? fs.readlink(path);
+    },
+    rm: async (...args: Parameters<typeof fs.rm>) => {
+      if (pruneFaults.promoted) await pruneFaults.remove?.(String(args[0]));
+      return fs.rm(...args);
+    },
+  };
+});
+const disk = await vi.importActual<typeof FileSystem>('node:fs/promises');
 
 let root: string;
 let siteApp: string;
@@ -14,7 +54,16 @@ beforeEach(async () => {
   siteApp = join(root, 'siteapp');
   await mkdir(siteApp, { recursive: true });
 });
-afterEach(() => { vi.unstubAllEnvs(); });
+afterEach(() => {
+  pruneFaults.promoted = false;
+  pruneFaults.beforePromotion = undefined;
+  pruneFaults.afterPromotion = undefined;
+  pruneFaults.enumerate = undefined;
+  pruneFaults.current = undefined;
+  pruneFaults.remove = undefined;
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 
 // Fake astro build: writes a marker file into the requested outDir.
 const fakeBuild = (marker: string) => async (outDir: string) => {
@@ -255,6 +304,153 @@ describe('createSiteBuilder', () => {
     expect(kept).toHaveLength(1);
     expect(kept[0]?.startsWith('.')).toBe(false);
     expect(await readFile(join(releases, 'current', 'index.html'), 'utf8')).toBe('v1');
+  });
+});
+
+describe('post-promotion pruning', () => {
+  const old = ['1000000000000-1-0000', '1000000000000-1-0001', '1000000000000-1-0002'];
+  const privateError = (code: string) => Object.assign(new Error('/private/path secret injected error'), { code });
+
+  async function fixture(options: { signal?: AbortSignal; isWritable?: () => boolean } = {}) {
+    const releasesRoot = join(root, 'site');
+    const releases = join(releasesRoot, 'releases');
+    for (const stamp of old) {
+      await disk.mkdir(join(releases, stamp), { recursive: true });
+      await disk.writeFile(join(releases, stamp, 'index.html'), 'previous');
+    }
+    await disk.symlink(join(releases, old[0]!), join(releasesRoot, 'current'));
+    const removals: string[] = [];
+    pruneFaults.remove = (path) => { removals.push(path); };
+    const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const builder = createSiteBuilder({
+      siteAppDir: siteApp, releasesRoot, keep: 2, runBuild: fakeBuild('promoted'), ...options,
+    });
+    return { releasesRoot, releases, removals, warnings, builder };
+  }
+
+  async function expectPromoted(releasesRoot: string, result: BuildOutcome) {
+    expect(result).toEqual({ ok: true, release: expect.stringMatching(/^\d+-\d+-\d+$/) });
+    expect(await disk.readlink(join(releasesRoot, 'current'))).toBe(join(releasesRoot, 'releases', result.release!));
+    expect(await disk.readFile(join(releasesRoot, 'current', 'index.html'), 'utf8')).toBe('promoted');
+  }
+
+  it.each(['EACCES', 'EBUSY', '/private/path\nunbounded-code'])('continues after a removal failure with bounded %s diagnostics', async (code) => {
+    const f = await fixture();
+    pruneFaults.remove = (path) => {
+      f.removals.push(path);
+      if (path === join(f.releases, old[0]!)) throw privateError(code);
+    };
+    const result = await f.builder.build();
+    await expectPromoted(f.releasesRoot, result);
+    expect(f.removals).toEqual(old.slice(0, 2).map((stamp) => join(f.releases, stamp)));
+    expect((await disk.readdir(f.releases)).sort()).toEqual([old[0], old[2], result.release]);
+    expect(f.warnings.mock.calls).toEqual([[
+      `release promoted; old-release cleanup incomplete release=${result.release} stage=remove errno=${code === 'EACCES' || code === 'EBUSY' ? code : 'unknown'}`,
+    ]]);
+  });
+
+  it.each(['enumerate', 'current'] as const)('skips all deletions when %s inspection fails', async (stage) => {
+    const f = await fixture();
+    pruneFaults[stage] = () => { throw privateError('EIO'); };
+    const result = await f.builder.build();
+    await expectPromoted(f.releasesRoot, result);
+    expect(f.removals).toEqual([]);
+    expect((await disk.readdir(f.releases)).sort()).toEqual([...old, result.release]);
+    expect(f.warnings.mock.calls).toEqual([[
+      `release promoted; old-release cleanup incomplete release=${result.release} stage=${stage} errno=EIO`,
+    ]]);
+  });
+
+  it.each(['another-release', 'same-basename-outside-releases'])('skips pruning when current unexpectedly targets %s', async (target) => {
+    const f = await fixture();
+    let promoted = '';
+    pruneFaults.afterPromotion = async () => {
+      promoted = await disk.readlink(join(f.releasesRoot, 'current'));
+      const unexpected = target === 'another-release'
+        ? join(f.releases, old[0]!)
+        : join(root, 'other', promoted.split('/').pop()!);
+      await disk.symlink(unexpected, join(f.releasesRoot, 'replacement'));
+      await disk.rename(join(f.releasesRoot, 'replacement'), join(f.releasesRoot, 'current'));
+    };
+    const result = await f.builder.build();
+    expect(result).toEqual({ ok: true, release: promoted.split('/').pop() });
+    expect(await disk.readFile(join(promoted, 'index.html'), 'utf8')).toBe('promoted');
+    expect(f.removals).toEqual([]);
+    expect((await disk.readdir(f.releases)).sort()).toEqual([...old, result.release]);
+    expect(f.warnings.mock.calls).toEqual([[
+      `release promoted; old-release cleanup incomplete release=${result.release} stage=current errno=unknown`,
+    ]]);
+  });
+
+  it.each(['signal', 'lease'] as const)('stops new mutations on immediate post-flip %s loss', async (kind) => {
+    const controller = new AbortController();
+    let writable = true;
+    const f = await fixture({ signal: controller.signal, isWritable: () => writable });
+    pruneFaults.afterPromotion = () => {
+      if (kind === 'signal') controller.abort();
+      else writable = false;
+    };
+    const result = await f.builder.build();
+    await expectPromoted(f.releasesRoot, result);
+    expect(f.removals).toEqual([]);
+    expect((await disk.readdir(f.releases)).sort()).toEqual([...old, result.release]);
+    expect(f.warnings.mock.calls).toEqual([[
+      `release promoted; old-release cleanup incomplete release=${result.release} stage=ownership errno=unknown`,
+    ]]);
+  });
+
+  it.each([false, true])('stops after ownership loss during an admitted removal (fails: %s)', async (fails) => {
+    let writable = true;
+    const f = await fixture({ isWritable: () => writable });
+    pruneFaults.remove = (path) => {
+      f.removals.push(path);
+      writable = false;
+      if (fails) throw privateError('EACCES');
+    };
+    const result = await f.builder.build();
+    await expectPromoted(f.releasesRoot, result);
+    expect(f.removals).toEqual([join(f.releases, old[0]!)]);
+    expect((await disk.readdir(f.releases)).sort()).toEqual([...(fails ? old : old.slice(1)), result.release]);
+    expect(f.warnings.mock.calls).toEqual([[
+      `release promoted; old-release cleanup incomplete release=${result.release} stage=ownership errno=unknown`,
+    ]]);
+  });
+
+  it('protects promoted/current and staging entries even when the clock moves backwards', async () => {
+    const f = await fixture();
+    vi.spyOn(Date, 'now').mockReturnValue(1);
+    // Created after the pre-build sweep, so this exercises pruning, not sweeping.
+    const staging = '.0000000000000.partial';
+    pruneFaults.afterPromotion = async () => { await disk.mkdir(join(f.releases, staging)); };
+    const result = await f.builder.build();
+    await expectPromoted(f.releasesRoot, result);
+    expect(f.removals).toEqual([join(f.releases, old[0]!)]);
+    expect((await disk.readdir(f.releases)).sort()).toEqual([staging, old[1], old[2], result.release].sort());
+    expect(f.warnings).not.toHaveBeenCalled();
+  });
+
+  it('keeps promotion successful and continues pruning if the diagnostic sink throws', async () => {
+    const f = await fixture();
+    f.warnings.mockImplementation(() => { throw new Error('sink failed'); });
+    pruneFaults.remove = (path) => {
+      f.removals.push(path);
+      if (path === join(f.releases, old[0]!)) throw privateError('EACCES');
+    };
+    const result = await f.builder.build();
+    await expectPromoted(f.releasesRoot, result);
+    expect(f.removals).toEqual(old.slice(0, 2).map((stamp) => join(f.releases, stamp)));
+    expect((await disk.readdir(f.releases)).sort()).toEqual([old[0], old[2], result.release]);
+  });
+
+  it('preserves pre-flip rename failure and serves the previous release', async () => {
+    const f = await fixture();
+    pruneFaults.beforePromotion = () => { throw privateError('EACCES'); };
+    const result = await f.builder.build();
+    expect(result).toEqual({ ok: false, error: '/private/path secret injected error' });
+    expect(await disk.readlink(join(f.releasesRoot, 'current'))).toBe(join(f.releases, old[0]!));
+    expect(await disk.readFile(join(f.releasesRoot, 'current', 'index.html'), 'utf8')).toBe('previous');
+    expect(f.removals).toEqual([]);
+    expect(f.warnings).not.toHaveBeenCalled();
   });
 });
 

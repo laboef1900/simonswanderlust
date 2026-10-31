@@ -97,9 +97,10 @@ export function commentLimiters(now?: () => number): { ip: RateLimiter; global: 
 
 /** Fastify preHandler that 429s when the per-IP limiter is exhausted. */
 export function rateLimitPreHandler(limiter: RateLimiter) {
-  return async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {
+  return async (req: FastifyRequest, reply: FastifyReply): Promise<void | FastifyReply> => {
     if (!limiter.check(req.ip)) {
-      reply.code(429).send({ error: 'too many attempts, please wait and try again' });
+      // Return the refusal through async onSend work; see AuthGuard in authn.ts.
+      return reply.code(429).send({ error: 'too many attempts, please wait and try again' });
     }
   };
 }
