@@ -37,6 +37,7 @@ import { analyzeBodyContent, bodyImageKey } from './publish-gate.js';
 import { auditAltText } from './alt-audit.js';
 import { renderPreviewHtml, previewCsp } from './preview.js';
 import { loadGalleryMetadata } from './gallery-metadata.js';
+import { analyzeGallerySource } from '../../site/src/lib/gallery-source.js';
 import { type PageStore, type PagePair, type PageContent, type ImageDims, PageError } from './pages.js';
 import { exportPost, exportAll } from './export.js';
 import type { SiteBuilder } from './build.js';
@@ -1422,6 +1423,25 @@ export function buildServer(cfg: ServerConfig): AppServer {
     }
   });
 
+  // Unsaved source analysis only: inherit the same JSON body ceiling as /posts.
+  app.post('/gallery/analyze', {
+    onRequest: async (_req, reply) => { reply.header('Cache-Control', 'no-store'); },
+    preHandler: requireAuth,
+  }, async (req, reply) => {
+    const body = req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body)
+      || !('bodyMarkdown' in body) || typeof body.bodyMarkdown !== 'string') {
+      return reply.code(400).send({ error: 'bodyMarkdown must be a string' });
+    }
+    try {
+      return reply.send(await analyzeGallerySource(body.bodyMarkdown));
+    } catch {
+      // Parser diagnostics may contain source. Keep them out of the global
+      // error logger while preserving its sanitized unexpected-error response.
+      throw new Error('Gallery source analysis failed');
+    }
+  });
+
   app.get('/admin/waypoint-copy.js', async (_req, reply) => {
     const copy = Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [
       locale, Object.fromEntries(Object.entries(strings)
@@ -1557,7 +1577,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
   app.get('/posts/:tk/alt-audit', { preHandler: requireAuth }, async (req, reply) => {
     const pair = await posts.get((req.params as { tk: string }).tk);
     if (!pair) return reply.code(404).send({ error: 'post not found' });
-    const audit = auditAltText(pair, await loadGalleryMetadata(pair, cfg.media, imageBase));
+    const audit = await auditAltText(pair, await loadGalleryMetadata(pair, cfg.media, imageBase));
     return reply.send({ count: audit.count, images: audit.images });
   });
 
@@ -1725,10 +1745,11 @@ export function buildServer(cfg: ServerConfig): AppServer {
         notReady,
       });
     }
-    // Read BEFORE publishing: the audit below must judge the library text the
-    // live page will show, and a failed read must refuse here rather than turn
-    // an already-published post into a 500 (publishing changes no media row).
+    // Analyze BEFORE publishing: the audit judges the library text the live
+    // page will show. A failed read or source analysis must refuse before any
+    // mutation; successfully computed warnings remain advisory.
     const galleryMetadata = await loadGalleryMetadata(pair, cfg.media, imageBase);
+    const audit = await auditAltText(pair, galleryMetadata);
     let committed: { updatedAt: Date };
     try { committed = await posts.publish(tk, tokens); }
     catch (e) {
@@ -1748,7 +1769,6 @@ export function buildServer(cfg: ServerConfig): AppServer {
     // altAudit rides along so the editor can name the photos that went live
     // undescribed (src/alt-audit.ts) without a second round trip. It is
     // reported AFTER the publish succeeded, on purpose: it never gates one.
-    const audit = auditAltText(pair, galleryMetadata);
     return reply.send({
       published: true,
       build,

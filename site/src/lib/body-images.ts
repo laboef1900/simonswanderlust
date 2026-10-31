@@ -1,9 +1,8 @@
 import { unified } from 'unified';
-import rehypeParse from 'rehype-parse';
 import rehypeStringify from 'rehype-stringify';
-import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import { visit, SKIP } from 'unist-util-visit';
 import { h } from 'hastscript';
+import { galleryCode, sanitizedBodyTree, textOf } from './gallery-identity.js';
 import { srcset, fallbackSrc, largestVariant, sourceFormats, type RemoteHeroImage } from './images.js';
 import {
   BREAKOUT_WIDTH,
@@ -75,28 +74,6 @@ const SLIDER_SIZES =
   `(min-width: ${BREAKOUT_WIDTH}px) ${Math.round((BREAKOUT_WIDTH - 2 * ROW_GAP) / 3)}px, ` +
   '(min-width: 900px) 33vw, (min-width: 600px) 50vw, 100vw';
 
-// Tuned from the GitHub-safe default: it still strips <script>, inline event
-// handlers, javascript: URLs and iframe/object/svg, but preserves the benign
-// markup Astro emits so the page doesn't visibly regress —
-//  • clobberPrefix:'' keeps heading `id`s un-prefixed so <Toc> #slug anchors resolve
-//  • `id`/`className` are allowed so heading anchors and code classes survive
-//
-// @ai-warning No element may allow `style` (#124). The sanitizer cannot tell
-// Shiki's `<span style>` from an author-typed one, and an author-typed
-// `style="position:fixed;inset:0;background:url(https://evil/…)"` would reach
-// every reader page (defacement + a third-party request per view) and the
-// draft preview, which is same-origin with /admin/*. Shiki's colours therefore
-// arrive as classes instead (`shiki-classes.ts`), backed by SHIKI_CSS — do not
-// re-add `style` "for one element"; extend the class mapping.
-const baseAttrs = defaultSchema.attributes ?? {};
-const BODY_SCHEMA = {
-  ...defaultSchema,
-  clobberPrefix: '',
-  attributes: {
-    ...baseAttrs,
-    '*': [...(baseAttrs['*'] ?? []), 'id', 'className'],
-  },
-};
 
 /** `<source>` nodes for exactly the formats recorded on this image. */
 function sourceNodes(image: RemoteHeroImage, sizes: string) {
@@ -123,30 +100,6 @@ function pictureNode(image: RemoteHeroImage) {
   ]);
 }
 
-/**
- * Is this the `<pre><code class="language-gallery">` a ```gallery fence
- * survives sanitize as? (See MARKDOWN_OPTIONS in render-markdown.ts for why
- * the class is still there.)
- */
-function galleryCode(node: { tagName: string; children: unknown[] }): { children: unknown[] } | null {
-  if (node.tagName !== 'pre') return null;
-  const kids = (node.children as { type: string; value?: string }[])
-    .filter((c) => !(c.type === 'text' && /^\s*$/.test(c.value ?? '')));
-  const only = kids.length === 1 ? kids[0] : undefined;
-  if (!only || only.type !== 'element') return null;
-  const code = only as unknown as { tagName: string; properties?: { className?: unknown }; children: unknown[] };
-  if (code.tagName !== 'code') return null;
-  const cls = code.properties?.className;
-  const names = Array.isArray(cls) ? cls.map(String) : typeof cls === 'string' ? cls.split(/\s+/) : [];
-  return names.includes('language-gallery') ? code : null;
-}
-
-/** Concatenated text of a hast subtree — the fence's raw lines. */
-function textOf(node: unknown): string {
-  const n = node as { type?: string; value?: string; children?: unknown[] };
-  if (n.type === 'text') return n.value ?? '';
-  return (n.children ?? []).map(textOf).join('');
-}
 
 /**
  * Build the photo grid for one ```gallery fence.
@@ -334,11 +287,6 @@ async function galleryNode(
   return h('div', { class: `jgal jgal--${mode} not-prose` }, children);
 }
 
-/** Shared sanitize-first preparation for body transformation and publication analysis. */
-function sanitizedBodyTree(html: string) {
-  const parser = unified().use(rehypeParse, { fragment: true }).use(rehypeSanitize, BODY_SCHEMA);
-  return parser.runSync(parser.parse(html));
-}
 
 /**
  * @param imageOrigin the ONLY origin a gallery may reference — passed in

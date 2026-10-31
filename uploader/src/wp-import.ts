@@ -393,15 +393,15 @@ function resilientRehost(rehost: RehostFn, cfg: {
  * URLs it fetches, this must change with it, or the cap would count a different
  * set than the import performs. `test/wp-import.test.ts` pins them to agree.
  */
-function rehostUrlSet(p: ParsedPost, attachments: Map<string, string>, includeHero: boolean): Set<string> {
+async function rehostUrlSet(p: ParsedPost, attachments: Map<string, string>, includeHero: boolean): Promise<Set<string>> {
   const urls = new Set<string>();
   const heroUrl = includeHero && p.thumbnailId ? attachments.get(p.thumbnailId) : undefined;
   if (heroUrl) urls.add(heroUrl);
   const body = htmlToMarkdown(p.contentHtml, attachments);
-  for (const { url } of markdownImages(body)) {
+  for (const { url } of await markdownImages(body)) {
     if (/^https?:\/\//.test(url)) urls.add(url);
   }
-  rewriteFences(body, (line) => {
+  await rewriteFences(body, (line) => {
     const url = (line.split('|')[0] ?? '').trim();
     if (/^https?:\/\//.test(url)) urls.add(url);
     return line;
@@ -442,12 +442,12 @@ interface PlannedRehost {
  * this map is the #96 cap's quantity; its keys feed the #94 resume-aware
  * free-space estimate. `test/wp-import.test.ts` pins both against the run.
  */
-function rehostPlan(de: ParsedPost, en: ParsedPost, attachments: Map<string, string>, includeHero: boolean): Map<string, PlannedRehost> {
+async function rehostPlan(de: ParsedPost, en: ParsedPost, attachments: Map<string, string>, includeHero: boolean): Promise<Map<string, PlannedRehost>> {
   const plan = new Map<string, PlannedRehost>();
   const legacyOwners = new Map<string, number>();
   for (const p of [de, en]) {
     const hero = includeHero && p.thumbnailId ? attachments.get(p.thumbnailId) : undefined;
-    for (const url of rehostUrlSet(p, attachments, includeHero)) {
+    for (const url of await rehostUrlSet(p, attachments, includeHero)) {
       if (plan.has(url)) continue;
       if (url === hero) { plan.set(url, { key: heroKey(p), legacy: null }); continue; }
       const legacy = legacyImageKey(p, url);
@@ -476,16 +476,14 @@ function rehostPlan(de: ParsedPost, en: ParsedPost, attachments: Map<string, str
  * parens, `<…>` around a space, a trailing " title") — issue #125. The rewrite
  * drops the title: Elementor fills it with the attachment filename, which is
  * noise, and the re-hosted URL needs no escaping.
- * @ai-warning: reuse `rewriteFences` rather than matching fences here. #75
- * already had to pin a second scanner (public/gallery-fence.js) against it
- * with gallery-fence-parity.test.ts; a third copy would silently disagree
- * about where a fence ends and drop or corrupt an author's photos. The inline
- * substitution is likewise confined to text OUTSIDE gallery fences
+ * @ai-warning Reuse the renderer-backed source analysis through `rewriteFences`
+ * rather than introducing a second gallery grammar. The inline substitution
+ * is likewise confined to text OUTSIDE gallery nodes
  * (`rewriteOutsideGalleries`): a gallery-local caption that reads like an
  * inline image is the author's text, and only the line's own URL field is
  * ever re-hosted.
  */
-function applyRehosts(body: string, rehosted: ReadonlyMap<string, RehostResult>, images: Record<string, ImageDims>): string {
+async function applyRehosts(body: string, rehosted: ReadonlyMap<string, RehostResult>, images: Record<string, ImageDims>): Promise<string> {
   // The store lifts a gallery line's `| alt= | caption=` into `images[url]` on
   // save — for a hot-link that failed last run, under the WordPress URL. Healing
   // the URL must carry that entry over, or the author's alt/caption is stranded
@@ -505,9 +503,9 @@ function applyRehosts(body: string, rehosted: ReadonlyMap<string, RehostResult>,
     images[r.src] = image;
     if (from !== r.src) delete images[from];
   };
-  body = rewriteOutsideGalleries(body, (text) => {
+  body = await rewriteOutsideGalleries(body, async (text) => {
     let out = text;
-    for (const { full, alt, url } of markdownImages(text)) {
+    for (const { full, alt, url } of await markdownImages(text)) {
       const r = rehosted.get(url);
       if (!r) continue;
       out = out.replaceAll(full, () => `![${alt}](${r.src})`);
@@ -567,12 +565,12 @@ async function buildLocale(
     try { rehosted.set(url, await rehost(url, imageKey(p, url), alt)); }
     catch { /* reported by the tally wrapper; the WordPress URL is left in place */ }
   };
-  for (const { alt, url } of markdownImages(body)) await rehostOnce(url, alt);
+  for (const { alt, url } of await markdownImages(body)) await rehostOnce(url, alt);
   const galleryUrls: string[] = [];
-  rewriteFences(body, (line) => { galleryUrls.push((line.split('|')[0] ?? '').trim()); return line; });
+  await rewriteFences(body, (line) => { galleryUrls.push((line.split('|')[0] ?? '').trim()); return line; });
   for (const url of galleryUrls) await rehostOnce(url, '');
   const images: Record<string, ImageDims> = {};
-  const bodyMarkdown = applyRehosts(body, rehosted, images);
+  const bodyMarkdown = await applyRehosts(body, rehosted, images);
   return {
     locale: { locale: p.locale, slug: p.slug, title: p.title, excerpt: p.excerpt, country: '', heroImage, bodyMarkdown, images },
     rehosted,
@@ -604,9 +602,9 @@ function includeHero(stored: StoredPostPair | null): boolean {
  * substitution over the STORED text,
  * so prose edits, alt edits, removed photos and reordered galleries survive.
  */
-function mergeLocale(stored: PostLocale, fresh: BuiltLocale): PostLocale {
+async function mergeLocale(stored: PostLocale, fresh: BuiltLocale): Promise<PostLocale> {
   const images: Record<string, ImageDims> = { ...stored.images };
-  const bodyMarkdown = applyRehosts(stored.bodyMarkdown, fresh.rehosted, images);
+  const bodyMarkdown = await applyRehosts(stored.bodyMarkdown, fresh.rehosted, images);
   const heroImage = stored.heroImage.src
     ? { ...stored.heroImage }
     : { ...fresh.locale.heroImage, alt: stored.heroImage.alt || fresh.locale.heroImage.alt };
@@ -838,7 +836,8 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
   // Count distinct (pair, url) — the same quantity `images.total` tallies per
   // fetch — and reject before any of it happens.
   const cap = deps.maxImages ?? DEFAULT_MAX_IMAGES;
-  const plans = pending.map((g) => rehostPlan(g.de, g.en, attachments, includeHero(g.stored)));
+  const plans: Map<string, PlannedRehost>[] = [];
+  for (const g of pending) plans.push(await rehostPlan(g.de, g.en, attachments, includeHero(g.stored)));
   let distinct = 0;
   for (const plan of plans) {
     distinct += plan.size;
@@ -897,7 +896,7 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
         const freshEn = await buildLocale(en, attachments, pairRehost, includeHero(stored));
         assertWritable();
         const pair: PostPair = stored
-          ? { translationKey: stored.translationKey, status: 'draft', shared: stored.shared, de: mergeLocale(stored.de, freshDe), en: mergeLocale(stored.en, freshEn) }
+          ? { translationKey: stored.translationKey, status: 'draft', shared: stored.shared, de: await mergeLocale(stored.de, freshDe), en: await mergeLocale(stored.en, freshEn) }
           : {
             translationKey: prior?.translationKey ?? '',
             status: 'draft',

@@ -60,14 +60,14 @@ export function validatePagePair(pair: PagePair): void {
  * canonical bare-URL fence. Runs inside `save()` in BOTH stores (after
  * `validatePagePair`), so it is the single chokepoint for page writes.
  */
-function pageWithDefaults(pair: PagePair): PagePair {
-  const fill = (c: PageContent): PageContent => {
+async function pageWithDefaults(pair: PagePair): Promise<PagePair> {
+  const fill = async (c: PageContent): Promise<PageContent> => {
     const images = c.images ?? {};
     if (typeof c.bodyMarkdown !== 'string') return { ...c, images };
-    const n = normalizeGalleryFences(c.bodyMarkdown, images);
+    const n = await normalizeGalleryFences(c.bodyMarkdown, images);
     return { ...c, bodyMarkdown: n.bodyMarkdown, images: n.images };
   };
-  return { ...pair, de: fill(pair.de), en: fill(pair.en) };
+  return { ...pair, de: await fill(pair.de), en: await fill(pair.en) };
 }
 
 export interface PageStore {
@@ -111,9 +111,9 @@ export function memoryPageStore(): PageStore {
     },
     async save(pair, baseUpdatedAt) {
       validatePagePair(pair);
+      const normalized = await pageWithDefaults(pair);
       const existing = read(pair.key);
       assertPageNotStale(existing.updatedAt, baseUpdatedAt);
-      const normalized = pageWithDefaults(pair);
       if (existing.updatedAt) {
         const revs = revisionsByKey.get(pair.key) ?? [];
         revs.push({ id: randomUUID(), savedAt: new Date(), titleDe: existing.de.title, snapshot: { de: existing.de, en: existing.en } });
@@ -167,7 +167,7 @@ export function pgPageStore(pool: DbPool): PageStore {
     get: (key) => readPage(pool, key),
     async save(pair, baseUpdatedAt) {
       validatePagePair(pair);
-      const normalized = pageWithDefaults(pair);
+      const normalized = await pageWithDefaults(pair);
       const client = await pool.connect();
       try {
         await client.query('BEGIN');

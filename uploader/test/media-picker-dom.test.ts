@@ -600,10 +600,10 @@ describe('gallery picker sources the gallery’s own photos from Media', () => {
     page.choose.click();
     const items = pickedGallery(page);
     expect(items.map((item) => item.src)).toEqual([athens, gone]);
-    const de = normalizeGalleryFences(page.galleryFence.serialize(items, 'de', [], postMeta), copied).images;
+    const de = (await normalizeGalleryFences(page.galleryFence.serialize(items, 'de', [], postMeta), copied)).images;
     expect(de[athens]).toEqual({ width: 640, height: 480, alt: 'Markt in Athen', caption: '', format: 'jpeg' });
     expect(de[gone]).toEqual(copied[gone]);
-    const en = normalizeGalleryFences(page.galleryFence.serialize(items, 'en', [], postMeta), copied).images;
+    const en = (await normalizeGalleryFences(page.galleryFence.serialize(items, 'en', [], postMeta), copied)).images;
     expect(en[athens]).toEqual({ width: 640, height: 480, alt: 'Athens market stalls', caption: 'Morning', format: 'jpeg' });
   });
 
@@ -615,7 +615,7 @@ describe('gallery picker sources the gallery’s own photos from Media', () => {
     await settleAll(page);
     expect(page.choose.disabled).toBe(false);
     page.choose.click();
-    const de = normalizeGalleryFences(page.galleryFence.serialize(pickedGallery(page), 'de', [], postMeta), copied).images;
+    const de = (await normalizeGalleryFences(page.galleryFence.serialize(pickedGallery(page), 'de', [], postMeta), copied)).images;
     expect(de).toEqual(copied);
   });
 });
@@ -705,11 +705,11 @@ describe('gallery-local caption controls in the picker', () => {
     const items = page.picked[0] as PickedItem[];
     const fence = page.galleryFence.serialize(items, 'en', [], {}, picks.overrides);
     expect(fence.split('\n')).toHaveLength(items.length + 2); // fence, one line per photo, fence
-    expect(page.galleryFence.parse(fence).lines.map((line) => [line.src, line.captionOverride]))
+    expect(page.galleryFence.parse(fence.slice(fence.indexOf('\n') + 1, fence.lastIndexOf('\n'))).lines.map((line) => [line.src, line.captionOverride]))
       .toEqual([[athens, hostile], [rhodes, undefined], [gone, '']]);
     // The URL-keyed images map still holds Media's caption, so another gallery
     // using the same photo cannot pick up this gallery's edit.
-    const saved = normalizeGalleryFences(fence, {});
+    const saved = (await normalizeGalleryFences(fence, {}));
     expect(saved.images[athens]?.caption).toBe('Morning');
     expect(JSON.stringify(saved.images)).not.toContain('Local');
   });

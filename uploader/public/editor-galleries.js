@@ -20,6 +20,28 @@ window.EditorGalleries = (function () {
     let previews = true;
     let editing = false;
     let controllers = [];
+    let refreshVersion = 0;
+    const pendingAlts = new Map();
+    let altWork = null;
+    let altFailed = false;
+    let refreshTimer;
+    let analysisSnapshot = null;
+    const analysisStatus = el('p', 'muted editor-gallery__status');
+    analysisStatus.setAttribute('role', 'status');
+    const analysisRetry = el('button', 'btn-secondary', copy.retry);
+    analysisRetry.type = 'button';
+    analysisRetry.hidden = true;
+    toggle.parentElement.appendChild(analysisStatus);
+    toggle.parentElement.appendChild(analysisRetry);
+    function failed(error) {
+      if (error?.status === 401) onUnauthed();
+      analysisStatus.textContent = copy.analysisFailed;
+      analysisRetry.hidden = false;
+    }
+    analysisRetry.addEventListener('click', async () => {
+      await drainAlts();
+      await refresh(true);
+    });
     let boundarySelection = null;
 
     function samePosition(a, b) { return a.line === b.line && a.ch === b.ch; }
@@ -42,17 +64,18 @@ window.EditorGalleries = (function () {
         let inserted;
         let cursor;
         if (before) {
-          // Mirror the block insertion convention: a blank line separates
-          // prose from the gallery, including a paste with its own newlines.
-          const suffix = text.endsWith('\n\n') ? '' : text.endsWith('\n') ? '\n' : '\n\n';
-          inserted = text + suffix;
+          // Keep padding AFTER the caret even when a paste ends in newlines.
+          // Widgets are removed until async analysis settles; the next input
+          // must remain outside the opener without depending on a live marker.
+          inserted = text + '\n\n';
           cursor = at + text.length;
         } else {
-          const insertion = GalleryFence.insertBlockAt(cm.getValue(), at, text);
-          inserted = insertion.text;
-          // insertBlockAt adds two newlines after the closer. Unlike inserting
-          // a photo, typing must leave the caret at the text, before its suffix.
-          cursor = insertion.start + 2 + text.length;
+          // The marker supplies the already-analyzed block edge. beforeChange
+          // is synchronous: never call the async source analyzer from here.
+          const following = cm.getValue().slice(at);
+          const suffix = following.startsWith('\n\n') ? '' : following.startsWith('\n') ? '\n' : '\n\n';
+          inserted = '\n\n' + text + suffix;
+          cursor = at + 2 + text.length;
         }
         boundarySelection = { end: at + inserted.length, cursor };
         change.update(change.from, change.to, inserted.split('\n'));
@@ -82,7 +105,9 @@ window.EditorGalleries = (function () {
       } catch { return null; }
     }
 
-    function cancel() { controllers.forEach((controller) => controller.cancel()); }
+    function cancel() {
+      controllers.forEach((controller) => controller.cancel());
+    }
     function dispose(controller) {
       controller.alive = false;
       // setValue may already have removed the widget's CodeMirror line. Stop
@@ -96,38 +121,91 @@ window.EditorGalleries = (function () {
     }
 
     function writeAlt(src, value) {
-      // The existing images map is keyed by URL, not occurrence. Keep every
-      // gallery use in this locale consistent without mutating that map outside undo.
-      editing = true;
-      try {
-        cm.operation(() => {
-          for (const controller of controllers) {
-            const range = controller.marker.find();
-            if (!range) continue;
-            const old = cm.getRange(range.from, range.to);
-            const next = GalleryFence.withAlt(old, src, value);
-            if (next !== old) {
-              // Keep the opener/closer intact: replacing the entire collapsed
-              // range would clear its marker, detach the focused input and lose caret.
-              const start = cm.indexFromPos(range.from);
-              cm.replaceRange(next.slice(next.indexOf('\n') + 1, next.lastIndexOf('\n') + 1),
-                cm.posFromIndex(start + old.indexOf('\n') + 1),
-                cm.posFromIndex(start + old.lastIndexOf('\n') + 1), '+gallery-alt');
-              controller.text = next;
-            }
-            controller.fields.forEach((field) => {
-              if (field.src !== src) return;
-              field.cancel();
-              if (field.input.value !== value) field.input.value = value;
-              field.image.alt = value;
-            });
+      // Keep the latest intent per photo, in edit order. Neither another photo
+      // nor switching locales cancels a manual edit awaiting source analysis.
+      pendingAlts.delete(src);
+      pendingAlts.set(src, { value });
+      controllers.forEach((controller) => controller.fields.forEach((field) => {
+        if (field.src !== src) return;
+        field.cancel();
+        field.input.value = value;
+        field.image.alt = value;
+      }));
+      drainAlts();
+    }
+
+    function drainAlts() {
+      if (altWork) return altWork;
+      altFailed = false;
+      altWork = (async () => {
+        while (pendingAlts.size) {
+          const [src, intent] = pendingAlts.entries().next().value;
+          const body = cm.getValue();
+          let edits;
+          try { edits = await GalleryFence.altEdit(body, src, intent.value); }
+          catch (error) {
+            if (pendingAlts.get(src) !== intent || cm.getValue() !== body) continue;
+            altFailed = true;
+            failed(error);
+            return false;
           }
-        });
-      } finally { editing = false; }
+          // A source edit needs new ranges; a replaced form or newer intent
+          // must never receive this response's edits.
+          if (pendingAlts.get(src) !== intent || cm.getValue() !== body) continue;
+          editing = true;
+          try {
+            cm.operation(() => {
+              edits.forEach((edit) => cm.replaceRange(edit.text,
+                cm.posFromIndex(edit.start), cm.posFromIndex(edit.end), '+gallery-alt'));
+              controllers.forEach((controller) => {
+                const range = controller.marker.find();
+                if (range) controller.text = cm.getRange(range.from, range.to);
+                controller.fields.forEach((field) => {
+                  if (field.src !== src) return;
+                  field.cancel();
+                  field.input.value = intent.value;
+                  field.image.alt = intent.value;
+                });
+              });
+            });
+          } finally { editing = false; }
+          pendingAlts.delete(src);
+          schedule();
+        }
+        return true;
+      })().finally(() => { altWork = null; });
+      return altWork;
+    }
+
+    async function flush() {
+      while (pendingAlts.size) {
+        if (!await drainAlts()) throw new Error(copy.analysisFailed);
+      }
+    }
+
+    function reset() {
+      pendingAlts.clear();
+      altFailed = false;
+      cancel();
+    }
+
+    function snapshotAlts() {
+      return Array.from(pendingAlts, ([src, intent]) => ({ src, value: intent.value }));
+    }
+
+    function restoreAlts(entries) {
+      if (!Array.isArray(entries)) return;
+      for (const entry of entries) {
+        if (!entry || typeof entry.src !== 'string' || !entry.src || typeof entry.value !== 'string') continue;
+        pendingAlts.delete(entry.src);
+        pendingAlts.set(entry.src, { value: entry.value });
+      }
+      // Only text intent survives recovery. Source ranges are always reanalyzed.
+      if (pendingAlts.size) drainAlts();
     }
 
     function create(block, text, number) {
-      const parsed = GalleryFence.parse(text);
+      const parsed = GalleryFence.parse(block.content);
       const root = el('section', 'editor-gallery');
       root.setAttribute('lang', locale);
       root.setAttribute('aria-label', copy.gallery + ' ' + number);
@@ -165,7 +243,7 @@ window.EditorGalleries = (function () {
       parsed.lines.forEach((line, index) => {
         const stored = images()[line.src] || {};
         const photo = { ...stored, ...line };
-        const postAlt = typeof photo.alt === 'string' ? photo.alt : '';
+        const postAlt = pendingAlts.get(line.src)?.value ?? (typeof photo.alt === 'string' ? photo.alt : '');
         const localCaption = typeof line.captionOverride === 'string' ? line.captionOverride : undefined;
         const postCaption = localCaption ?? (typeof photo.caption === 'string' ? photo.caption : '');
         const card = el('li', 'editor-gallery__photo');
@@ -279,7 +357,8 @@ window.EditorGalleries = (function () {
         dismiss.addEventListener('click', () => { field.cancel(); suggest.focus(); });
         use.addEventListener('click', () => {
           if (!controller.alive || suggestion.hidden || field.state !== 'missing') return;
-          writeAlt(line.src, suggestedText.textContent);
+          input.value = suggestedText.textContent;
+          input.dispatchEvent(new Event('input', { bubbles: true }));
           input.focus();
         });
         suggest.addEventListener('click', async () => {
@@ -359,16 +438,34 @@ window.EditorGalleries = (function () {
       return controller;
     }
 
-    function refresh(reset = false) {
+    async function refresh(reset = false) {
+      clearTimeout(refreshTimer);
       if (editing) return;
-      cm.operation(() => {
-        if (reset || !previews) {
+      const version = ++refreshVersion;
+      const body = cm.getValue();
+      if (reset || !previews) {
+        controllers.forEach(dispose);
+        controllers = [];
+      }
+      if (!previews) return;
+      let analysis;
+      try { analysis = await GalleryFence.analyze(body, { fresh: reset }); }
+      catch (error) {
+        if (version === refreshVersion && body === cm.getValue()) {
           controllers.forEach(dispose);
           controllers = [];
+          failed(error);
         }
-        if (!previews) return;
-        const body = cm.getValue();
-        const blocks = GalleryFence.scanFences(body).filter((block) => block.isGallery && !block.unterminated);
+        return;
+      }
+      if (version !== refreshVersion || body !== cm.getValue() || !previews) return;
+      analysisSnapshot = analysis;
+      if (!altFailed) {
+        analysisStatus.textContent = '';
+        analysisRetry.hidden = true;
+      }
+      cm.operation(() => {
+        const blocks = analysis.blocks.filter((block) => block.isGallery && !block.unterminated);
         const old = controllers;
         const next = [];
         blocks.forEach((block, index) => {
@@ -398,6 +495,13 @@ window.EditorGalleries = (function () {
       });
     }
 
+    function schedule() {
+      if (editing) return;
+      ++refreshVersion;
+      clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => refresh(), 250);
+    }
+
     toggle.textContent = copy.showMarkdown;
     toggle.setAttribute('aria-pressed', 'false');
     toggle.addEventListener('click', () => {
@@ -406,12 +510,18 @@ window.EditorGalleries = (function () {
       toggle.setAttribute('aria-pressed', String(!previews));
       refresh();
     });
-    cm.on('changes', () => refresh());
+    cm.on('changes', () => {
+      if (editing) return;
+      controllers.forEach(dispose);
+      controllers = [];
+      schedule();
+    });
     refresh();
     return {
-      refresh: () => refresh(true), cancel,
-      focusPhoto(src) {
+      refresh: () => refresh(true), cancel, flush, reset, snapshotAlts, restoreAlts,
+      async focusPhoto(src) {
         if (!previews) toggle.click();
+        await refresh();
         for (const controller of controllers) {
           const field = controller.fields.find((entry) => entry.src === src);
           const range = controller.marker.find();
@@ -444,14 +554,16 @@ window.EditorGalleries = (function () {
         const stored = Object.create(null);
         const body = cm.getValue();
         const map = images();
-        GalleryFence.scanFences(body).forEach((block) => {
-          if (!block.isGallery) return;
-          GalleryFence.parse(body.slice(block.start, block.end)).lines.forEach((line) => {
+        const sources = new Set(Object.keys(map));
+        if (analysisSnapshot?.bodyMarkdown === body) analysisSnapshot.blocks.forEach((block) => {
+          if (block.isGallery) GalleryFence.parse(block.content).lines.forEach((line) => sources.add(line.src));
+        });
+        sources.forEach((src) => {
+            const line = { src };
             const entry = library ? library.peek(line.src) : undefined;
             if (entry && entry.row) fromLibrary[line.src] = GalleryLibrary.describe(entry.row, locale).alt;
             const saved = Object.prototype.hasOwnProperty.call(map, line.src) ? map[line.src] : undefined;
             if (saved && typeof saved.alt === 'string') stored[line.src] = saved.alt;
-          });
         });
         return { library: fromLibrary, stored };
       },

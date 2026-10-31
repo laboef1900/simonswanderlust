@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  galleryFencesToMdx, imagesMapError, normalizeGalleryFences, rewriteOutsideGalleries,
+  galleryFencesToMdx, imagesMapError, normalizeGalleryFences, rewriteOutsideGalleries, rewriteFences,
   heroImageError, escapeAltText, unescapeAltText, imageMarkdown,
   type ImageMeta,
 } from '../src/body-content.js';
@@ -155,61 +155,61 @@ describe('escapeMeta / unescapeMeta', () => {
 });
 
 describe('normalizeGalleryFences', () => {
-  it('lifts per-line metadata into the images map and bares the line', () => {
+  it('lifts per-line metadata into the images map and bares the line', async () => {
     const body = fence(`${A} | 3000x2000 | alt="Sunrise" | caption="Day 3"`);
-    const out = normalizeGalleryFences(body, {});
+    const out = (await normalizeGalleryFences(body, {}));
     expect(out.bodyMarkdown).toBe(fence(A));
     expect(out.images[A]).toEqual({ width: 3000, height: 2000, alt: 'Sunrise', caption: 'Day 3' });
   });
 
-  it('lifts and preserves the JPEG-only marker', () => {
+  it('lifts and preserves the JPEG-only marker', async () => {
     const body = fence(`${A} | 3000x2000 | format="jpeg" | alt="Sunrise"`);
-    const out = normalizeGalleryFences(body, {});
+    const out = (await normalizeGalleryFences(body, {}));
     expect(out.bodyMarkdown).toBe(fence(A));
     expect(out.images[A]).toEqual({ width: 3000, height: 2000, format: 'jpeg', alt: 'Sunrise' });
-    expect(galleryFencesToMdx(out.bodyMarkdown, out.images)).toContain('format="jpeg"');
+    expect((await galleryFencesToMdx(out.bodyMarkdown, out.images))).toContain('format="jpeg"');
   });
 
-  it('decodes escaped alt/caption text', () => {
+  it('decodes escaped alt/caption text', async () => {
     const body = fence(`${A} | 800x600 | caption="a &#124; b &quot;c&quot; &lt;d&gt; &amp; e"`);
-    const out = normalizeGalleryFences(body, {});
+    const out = (await normalizeGalleryFences(body, {}));
     expect(out.images[A]?.caption).toBe('a | b "c" <d> & e');
   });
 
-  it('is idempotent — a normalized body passes through unchanged', () => {
-    const first = normalizeGalleryFences(fence(`${A} | 800x600 | alt="x"`), {});
-    const second = normalizeGalleryFences(first.bodyMarkdown, first.images);
+  it('is idempotent — a normalized body passes through unchanged', async () => {
+    const first = (await normalizeGalleryFences(fence(`${A} | 800x600 | alt="x"`), {}));
+    const second = (await normalizeGalleryFences(first.bodyMarkdown, first.images));
     expect(second.bodyMarkdown).toBe(first.bodyMarkdown);
     expect(second.images).toEqual(first.images);
   });
 
-  it('keeps existing dimensions when the line supplies only text', () => {
-    const out = normalizeGalleryFences(fence(`${A} | alt="Later"`), { [A]: { width: 10, height: 20, caption: 'kept' } });
+  it('keeps existing dimensions when the line supplies only text', async () => {
+    const out = (await normalizeGalleryFences(fence(`${A} | alt="Later"`), { [A]: { width: 10, height: 20, caption: 'kept' } }));
     expect(out.images[A]).toEqual({ width: 10, height: 20, alt: 'Later', caption: 'kept' });
     expect(out.bodyMarkdown).toBe(fence(A));
   });
 
-  it('leaves an unresolvable line untouched rather than destroying what was typed', () => {
+  it('leaves an unresolvable line untouched rather than destroying what was typed', async () => {
     const body = fence(`${A} | not-dimensions | alt="Typed"`);
-    const out = normalizeGalleryFences(body, {});
+    const out = (await normalizeGalleryFences(body, {}));
     expect(out.bodyMarkdown).toBe(body);
     expect(out.images).toEqual({});
   });
 
-  it('leaves blank and #-comment lines alone', () => {
+  it('leaves blank and #-comment lines alone', async () => {
     const body = fence(`# my gallery\n\n${A} | 800x600`);
-    const out = normalizeGalleryFences(body, {});
+    const out = (await normalizeGalleryFences(body, {}));
     expect(out.bodyMarkdown).toBe(fence(`# my gallery\n\n${A}`));
   });
 
-  it('ignores non-gallery fences', () => {
+  it('ignores non-gallery fences', async () => {
     const body = '```js\nconst a = 1 | 2;\n```';
-    expect(normalizeGalleryFences(body, {}).bodyMarkdown).toBe(body);
+    expect((await normalizeGalleryFences(body, {})).bodyMarkdown).toBe(body);
   });
 
-  it('handles several fences and several lines', () => {
+  it('handles several fences and several lines', async () => {
     const body = `${fence(`${A} | 800x600`)}\n\ntext\n\n${fence(`${B} | 100x200`)}`;
-    const out = normalizeGalleryFences(body, {});
+    const out = (await normalizeGalleryFences(body, {}));
     expect(out.bodyMarkdown).toBe(`${fence(A)}\n\ntext\n\n${fence(B)}`);
     expect(Object.keys(out.images)).toEqual([A, B]);
   });
@@ -219,36 +219,36 @@ describe('normalizeGalleryFences', () => {
   // inner fence destroys the very dimensions and captions being demonstrated,
   // and the renderer never treats it as a gallery either (it is code, not a
   // block), so normalizing it is wrong on both counts.
-  it('leaves a ```gallery example nested inside an outer fence completely alone', () => {
+  it('leaves a ```gallery example nested inside an outer fence completely alone', async () => {
     const body = `\`\`\`\`\n\`\`\`gallery\n${A} | 3000x2000 | alt="Blick"\n\`\`\`\n\`\`\`\``;
-    const out = normalizeGalleryFences(body, {});
+    const out = (await normalizeGalleryFences(body, {}));
     expect(out.bodyMarkdown).toBe(body);
     expect(out.images).toEqual({});
   });
 
-  it('leaves a gallery example nested inside a ~~~ fence alone', () => {
+  it('leaves a gallery example nested inside a ~~~ fence alone', async () => {
     const body = `~~~\n\`\`\`gallery\n${A} | 800x600\n\`\`\`\n~~~`;
-    expect(normalizeGalleryFences(body, {}).bodyMarkdown).toBe(body);
+    expect((await normalizeGalleryFences(body, {})).bodyMarkdown).toBe(body);
   });
 
   // CommonMark lets a closing fence be LONGER than the opening one. The
   // renderer follows that rule, so a scanner that requires equal length would
   // render the block as a gallery while never normalizing it.
-  it('closes on a longer fence, as CommonMark does', () => {
+  it('closes on a longer fence, as CommonMark does', async () => {
     const body = `\`\`\`gallery\n${A} | 800x600\n\`\`\`\`\n\ntext`;
-    const out = normalizeGalleryFences(body, {});
+    const out = (await normalizeGalleryFences(body, {}));
     expect(out.bodyMarkdown).toBe(`\`\`\`gallery\n${A}\n\`\`\`\`\n\ntext`);
     expect(out.images[A]).toEqual({ width: 800, height: 600 });
   });
 
-  it('does not treat text after an unterminated fence as a new gallery', () => {
+  it('does not treat text after an unterminated fence as a new gallery', async () => {
     const body = `\`\`\`js\nconst a = 1;\n\n\`\`\`gallery\n${A} | 800x600`;
-    expect(normalizeGalleryFences(body, {}).bodyMarkdown).toBe(body);
+    expect((await normalizeGalleryFences(body, {})).bodyMarkdown).toBe(body);
   });
 
-  it('preserves CRLF line endings on a rewritten photo line', () => {
+  it('preserves CRLF line endings on a rewritten photo line', async () => {
     const body = `\`\`\`gallery\r\n${A} | 800x600\r\n\`\`\`\r\n`;
-    expect(normalizeGalleryFences(body, {}).bodyMarkdown).toBe(`\`\`\`gallery\r\n${A}\r\n\`\`\`\r\n`);
+    expect((await normalizeGalleryFences(body, {})).bodyMarkdown).toBe(`\`\`\`gallery\r\n${A}\r\n\`\`\`\r\n`);
   });
 });
 
@@ -258,27 +258,27 @@ describe('galleryFencesToMdx', () => {
     [B]: { width: 100, height: 200 },
   };
 
-  it('re-attaches dimensions, alt and caption to each bare URL', () => {
-    expect(galleryFencesToMdx(fence(A), images))
+  it('re-attaches dimensions, alt and caption to each bare URL', async () => {
+    expect((await galleryFencesToMdx(fence(A), images)))
       .toBe(fence(`${A} | 3000x2000 | alt="Sunrise" | caption="Day 3"`));
   });
 
-  it('omits absent alt/caption', () => {
-    expect(galleryFencesToMdx(fence(B), images)).toBe(fence(`${B} | 100x200`));
+  it('omits absent alt/caption', async () => {
+    expect((await galleryFencesToMdx(fence(B), images))).toBe(fence(`${B} | 100x200`));
   });
 
-  it('leaves a URL with no images entry bare', () => {
+  it('leaves a URL with no images entry bare', async () => {
     const body = fence('https://img.example.com/unknown');
-    expect(galleryFencesToMdx(body, images)).toBe(body);
+    expect((await galleryFencesToMdx(body, images))).toBe(body);
   });
 
-  it('round-trips text containing the separator, quotes and a newline', () => {
+  it('round-trips text containing the separator, quotes and a newline', async () => {
     const hostile: Record<string, ImageMeta> = {
       [A]: { width: 8, height: 6, alt: 'a | b "c"', caption: '<d> & e\nsecond' },
     };
-    const mdx = galleryFencesToMdx(fence(A), hostile);
+    const mdx = (await galleryFencesToMdx(fence(A), hostile));
     expect(mdx.split('\n')).toHaveLength(3); // fence open, one photo line, fence close
-    expect(normalizeGalleryFences(mdx, {}).images[A]).toEqual(hostile[A]);
+    expect((await normalizeGalleryFences(mdx, {})).images[A]).toEqual(hostile[A]);
   });
 });
 
@@ -288,93 +288,120 @@ describe('galleryFencesToMdx', () => {
 describe('gallery-local captions through save and export', () => {
   const override = (text: string) => `caption-override="${escapeMeta(text)}"`;
 
-  it('keeps the override on its line and out of the images map', () => {
+  it('keeps the override on its line and out of the images map', async () => {
     const body = fence(`${A} | 3000x2000 | alt="Sunrise" | caption="Day 3" | ${override('Only here')}`);
-    const out = normalizeGalleryFences(body, {});
+    const out = (await normalizeGalleryFences(body, {}));
     expect(out.bodyMarkdown).toBe(fence(`${A} | ${override('Only here')}`));
     expect(out.images[A]).toEqual({ width: 3000, height: 2000, alt: 'Sunrise', caption: 'Day 3' });
     expect(JSON.stringify(out.images)).not.toContain('Only here');
   });
 
-  it('isolates the same URL in two galleries', () => {
+  it('isolates the same URL in two galleries', async () => {
     const body = `${fence(`${A} | 800x600 | ${override('First gallery')}`)}\n\ntext\n\n${fence(A)}`;
-    const out = normalizeGalleryFences(body, {});
+    const out = (await normalizeGalleryFences(body, {}));
     expect(out.bodyMarkdown).toBe(`${fence(`${A} | ${override('First gallery')}`)}\n\ntext\n\n${fence(A)}`);
     expect(out.images[A]?.caption).toBeUndefined();
   });
 
-  it('keeps an explicit empty override distinct from an absent one', () => {
-    const out = normalizeGalleryFences(fence(`${A} | 800x600 | caption-override=""\n${B} | 100x200`), {});
+  it('keeps an explicit empty override distinct from an absent one', async () => {
+    const out = (await normalizeGalleryFences(fence(`${A} | 800x600 | caption-override=""\n${B} | 100x200`), {}));
     expect(out.bodyMarkdown).toBe(fence(`${A} | caption-override=""\n${B}`));
   });
 
-  it('re-escapes HTML, quotes, separators and newlines canonically and caps the length', () => {
+  it('re-escapes HTML, quotes, separators and newlines canonically and caps the length', async () => {
     const hostile = '<img src=x onerror=alert(1)> | "q" & ```\n#captions: hidden';
-    const out = normalizeGalleryFences(fence(`${A} | 800x600 | ${override(hostile)}`), {});
+    const out = (await normalizeGalleryFences(fence(`${A} | 800x600 | ${override(hostile)}`), {}));
     const line = out.bodyMarkdown.split('\n')[1] ?? '';
     expect(line).toBe(`${A} | ${override(hostile)}`);
     expect(line).not.toMatch(/[<>\n]/);
     expect(out.bodyMarkdown.split('\n')).toHaveLength(3);
-    const long = normalizeGalleryFences(fence(`${A} | 800x600 | caption-override="${'x'.repeat(1200)}"`), {});
+    const long = (await normalizeGalleryFences(fence(`${A} | 800x600 | caption-override="${'x'.repeat(1200)}"`), {}));
     expect(long.bodyMarkdown).toBe(fence(`${A} | caption-override="${'x'.repeat(1000)}"`));
   });
 
-  it('is idempotent over its own output, so re-saves change nothing', () => {
-    const first = normalizeGalleryFences(fence(`#captions: hidden\n${A} | 800x600 | ${override('a | b')}`), {});
-    const second = normalizeGalleryFences(first.bodyMarkdown, first.images);
+  it('is idempotent over its own output, so re-saves change nothing', async () => {
+    const first = (await normalizeGalleryFences(fence(`#captions: hidden\n${A} | 800x600 | ${override('a | b')}`), {}));
+    const second = (await normalizeGalleryFences(first.bodyMarkdown, first.images));
     expect(second).toEqual(first);
     expect(first.bodyMarkdown).toContain('#captions: hidden');
   });
 
-  it('leaves an override line with no resolvable dimensions untouched', () => {
+  it('leaves an override line with no resolvable dimensions untouched', async () => {
     const body = fence(`${A} | ${override('Typed')}`);
-    expect(normalizeGalleryFences(body, {}).bodyMarkdown).toBe(body);
+    expect((await normalizeGalleryFences(body, {})).bodyMarkdown).toBe(body);
   });
 
-  it('exports the override last on the line and round-trips through save', () => {
+  it('exports the override last on the line and round-trips through save', async () => {
     const images: Record<string, ImageMeta> = { [A]: { width: 3000, height: 2000, alt: 'Sunrise', caption: 'Day 3' } };
     const stored = fence(`#captions: hidden\n${A} | ${override('Local "x" | y')}\n${A}\n${A} | caption-override=""`);
-    const mdx = galleryFencesToMdx(stored, images);
+    const mdx = (await galleryFencesToMdx(stored, images));
     expect(mdx).toBe(fence([
       '#captions: hidden',
       `${A} | 3000x2000 | alt="Sunrise" | caption="Day 3" | ${override('Local "x" | y')}`,
       `${A} | 3000x2000 | alt="Sunrise" | caption="Day 3"`,
       `${A} | 3000x2000 | alt="Sunrise" | caption="Day 3" | caption-override=""`,
     ].join('\n')));
-    const back = normalizeGalleryFences(mdx, {});
+    const back = (await normalizeGalleryFences(mdx, {}));
     expect(back.bodyMarkdown).toBe(stored);
     expect(back.images).toEqual(images);
   });
 
-  it('leaves a line that already carries other metadata to export as typed', () => {
+  it('leaves a line that already carries other metadata to export as typed', async () => {
     const body = fence(`${A} | not-dimensions | ${override('Typed')}`);
-    expect(galleryFencesToMdx(body, { [A]: { width: 8, height: 6 } })).toBe(body);
+    expect((await galleryFencesToMdx(body, { [A]: { width: 8, height: 6 } }))).toBe(body);
   });
 });
 
 describe('rewriteOutsideGalleries', () => {
   const mark = (text: string) => text.replace(/!\[x\]/g, 'IMG');
 
-  it('hands every non-gallery run to the callback and returns gallery lines verbatim', () => {
+  it('hands every non-gallery run to the callback and returns gallery lines verbatim', async () => {
     const line = `${A} | caption-override="![x](${A})"`;
     const body = `![x](a)\n\n\`\`\`gallery\n#captions: hidden\n# ![x] note\n${line}\n\`\`\`\nmid ![x](b)\n${fence(`${B}`)}\r\n![x](c)`;
-    expect(rewriteOutsideGalleries(body, mark)).toBe(
+    expect((await rewriteOutsideGalleries(body, mark))).toBe(
       `IMG(a)\n\n\`\`\`gallery\n#captions: hidden\n# ![x] note\n${line}\n\`\`\`\nmid IMG(b)\n${fence(`${B}`)}\r\nIMG(c)`,
     );
   });
 
-  it('treats an unterminated gallery as running to the end, like the renderer', () => {
+  it('treats an unterminated gallery as running to the end, like the renderer', async () => {
     const body = `![x](a)\n\`\`\`gallery\n${A} | caption-override="![x](a)"`;
-    expect(rewriteOutsideGalleries(body, mark)).toBe(`IMG(a)\n\`\`\`gallery\n${A} | caption-override="![x](a)"`);
+    expect((await rewriteOutsideGalleries(body, mark))).toBe(`IMG(a)\n\`\`\`gallery\n${A} | caption-override="![x](a)"`);
   });
 
-  it('does not protect a gallery example nested inside another fence — it is code, not a gallery', () => {
+  it('does not protect a gallery example nested inside another fence — it is code, not a gallery', async () => {
     const body = `\`\`\`\`\n\`\`\`gallery\n![x](a)\n\`\`\`\n\`\`\`\``;
-    expect(rewriteOutsideGalleries(body, mark)).toBe(body.replace('![x]', 'IMG'));
+    expect((await rewriteOutsideGalleries(body, mark))).toBe(body.replace('![x]', 'IMG'));
   });
 
-  it('returns the body unchanged when the callback is the identity', () => {
+  it('returns the body unchanged when the callback is the identity', async () => {
     const body = `a\r\n${fence(`${A} | caption-override=""`)}\n\nb\n`;
-    expect(rewriteOutsideGalleries(body, (t) => t)).toBe(body);
+    expect((await rewriteOutsideGalleries(body, (t) => t))).toBe(body);
+  });
+});
+
+describe('gallery rewrite callback contracts', () => {
+  it('invokes photo callbacks in source order while preserving ranges for length-changing edits', async () => {
+    const body = `${fence(`${A}\n${B}`)}\n\nBetween\n\n${fence(A)}`;
+    const seen: string[] = [];
+    const out = await rewriteFences(body, (line) => {
+      seen.push(line);
+      return `${line} | caption-override="Photo ${seen.length}"`;
+    });
+    expect(seen).toEqual([A, B, A]);
+    expect(out).toBe(`${fence(`${A} | caption-override="Photo 1"\n${B} | caption-override="Photo 2"`)}\n\nBetween\n\n${fence(`${A} | caption-override="Photo 3"`)}`);
+  });
+
+  it('awaits outside callbacks in source order without editing gallery text', async () => {
+    const body = `Before\n\n${fence(A)}\n\nAfter`;
+    const seen: string[] = [];
+    const out = await rewriteOutsideGalleries(body, async (text) => {
+      await Promise.resolve();
+      seen.push(text);
+      return text.replace('Before', 'First').replace('After', 'Last');
+    });
+    expect(seen.join('')).toContain('Before');
+    expect(seen.join('')).toContain('After');
+    expect(seen.join('')).not.toContain(A);
+    expect(out).toBe(`First\n\n${fence(A)}\n\nLast`);
   });
 });

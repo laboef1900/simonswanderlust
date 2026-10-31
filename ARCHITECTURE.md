@@ -139,6 +139,15 @@ are in the specification.
    fence's per-line `| WIDTHxHEIGHT | alt="…" | caption="…"` metadata is lifted into the row's
    `images` map at save time by `uploader/src/body-content.ts`, and re-attached by the MDX
    exporter so a backup round-trips.
+   Gallery identity now lives in the shared sanitized render predicate
+   (`gallery-identity.ts`). Satteri-backed `gallery-source.ts` supplies UTF-16
+   provenance and logical lines to save/import/export/audit and to the authenticated,
+   nonpersisting `POST /gallery/analyze` browser bridge. Nested/tilde/info-argument
+   fences and raw HTML galleries retain the renderer's existing semantics; there is
+   no second browser block parser. Source edits are batched, preserve wrappers and
+   prefixes, and refuse on missing provenance. The browser applies results only to
+   their exact unsaved snapshot. The #356 asynchronous layout/scheduling path remains
+   separate and unchanged.
    For **article galleries**, current localized Media alt/caption override those saved
    copies at render time, even when blank; missing library rows retain the saved copy.
    The trips loader selects only media keys and the four description columns once per

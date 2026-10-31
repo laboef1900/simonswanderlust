@@ -171,18 +171,18 @@ describe('htmlToMarkdown', () => {
       expect(md).toBe('```gallery\nhttps://wp/a.jpg | alt="line one line two three"\nhttps://wp/a.jpg | alt="B"\n```');
     });
 
-    it('degrades an anchor inside a blockquote or list item to an inline image the re-host pass finds', () => {
+    it('degrades an anchor inside a blockquote or list item to an inline image the re-host pass finds', async () => {
       for (const html of [`<blockquote>${anchor('Day [1]')}</blockquote>`, `<ul><li>${anchor('Day [1]')}</li></ul>`]) {
         const md = htmlToMarkdown(html);
         expect(md).not.toContain('\u0000');
         expect(md).not.toContain('```gallery');
-        expect(markdownImages(md)).toMatchObject([{ alt: 'Day \\[1\\]', url: 'https://wp/a.jpg' }]);
+        expect((await markdownImages(md))).toMatchObject([{ alt: 'Day \\[1\\]', url: 'https://wp/a.jpg' }]);
       }
     });
 
-    it('wraps a spaced destination and escapes parentheses in the degraded image', () => {
+    it('wraps a spaced destination and escapes parentheses in the degraded image', async () => {
       const md = htmlToMarkdown(`<blockquote>${anchor('', 'https://wp/my photo (1).jpg')}</blockquote>`);
-      expect(markdownImages(md).map((i) => i.url)).toEqual(['https://wp/my photo (1).jpg']);
+      expect((await markdownImages(md)).map((i) => i.url)).toEqual(['https://wp/my photo (1).jpg']);
     });
   });
 });
@@ -192,59 +192,59 @@ describe('htmlToMarkdown', () => {
  * importer must decode what Turndown encodes, or it fetches a bogus URL.
  */
 describe('markdownImages', () => {
-  const only = (html: string) => {
+  const only = async (html: string) => {
     const md = htmlToMarkdown(html);
-    const imgs = markdownImages(md);
+    const imgs = (await markdownImages(md));
     expect(imgs, md).toHaveLength(1);
     return { md, img: imgs[0]! };
   };
 
-  it('strips a trailing "title" (the Elementor default: the attachment filename)', () => {
-    const { md, img } = only('<img src="https://wp/uploads/a.jpg" alt="Beach" title="IMG_0001">');
+  it('strips a trailing "title" (the Elementor default: the attachment filename)', async () => {
+    const { md, img } = await only('<img src="https://wp/uploads/a.jpg" alt="Beach" title="IMG_0001">');
     expect(md).toContain('"IMG_0001"');
     expect(img).toMatchObject({ alt: 'Beach', url: 'https://wp/uploads/a.jpg' });
     expect(md.replaceAll(img.full, 'X')).toBe('X');
   });
 
-  it('unescapes parentheses in the destination', () => {
-    const { img } = only('<img src="https://wp/uploads/photo-(1).jpg" alt="">');
+  it('unescapes parentheses in the destination', async () => {
+    const { img } = await only('<img src="https://wp/uploads/photo-(1).jpg" alt="">');
     expect(img.url).toBe('https://wp/uploads/photo-(1).jpg');
   });
 
-  it('accepts a <…>-wrapped destination containing a space', () => {
-    const { md, img } = only('<img src="https://wp/uploads/my photo.jpg" alt="x">');
+  it('accepts a <…>-wrapped destination containing a space', async () => {
+    const { md, img } = await only('<img src="https://wp/uploads/my photo.jpg" alt="x">');
     expect(md).toContain('<https://wp/uploads/my photo.jpg>');
     expect(img.url).toBe('https://wp/uploads/my photo.jpg');
   });
 
-  it('keeps an escaped ] in alt and still finds the destination', () => {
-    const { img } = only('<img src="https://wp/a.jpg" alt="Day [1] of 3" title="t">');
+  it('keeps an escaped ] in alt and still finds the destination', async () => {
+    const { img } = await only('<img src="https://wp/a.jpg" alt="Day [1] of 3" title="t">');
     expect(img.alt).toBe('Day \\[1\\] of 3');
     expect(img.url).toBe('https://wp/a.jpg');
   });
 
-  it('handles a title containing an escaped quote and a title in single quotes', () => {
-    expect(markdownImages('![a](https://wp/a.jpg "he said \\"hi\\"") ![b](https://wp/b.jpg \'t\')').map((i) => i.url))
+  it('handles a title containing an escaped quote and a title in single quotes', async () => {
+    expect((await markdownImages('![a](https://wp/a.jpg "he said \\"hi\\"") ![b](https://wp/b.jpg \'t\')')).map((i) => i.url))
       .toEqual(['https://wp/a.jpg', 'https://wp/b.jpg']);
   });
 
-  it('returns every image on a line, each with its own exact source text', () => {
+  it('returns every image on a line, each with its own exact source text', async () => {
     const md = htmlToMarkdown('<p><img src="https://wp/a.jpg" alt="A" title="ta"> <img src="https://wp/b.jpg" alt="B"></p>');
-    const imgs = markdownImages(md);
+    const imgs = (await markdownImages(md));
     expect(imgs.map((i) => i.url)).toEqual(['https://wp/a.jpg', 'https://wp/b.jpg']);
     let out = md;
     for (const i of imgs) out = out.replaceAll(i.full, `![${i.alt}](https://img/${i.url.split('/').pop()})`);
     expect(out).toBe('![A](https://img/a.jpg) ![B](https://img/b.jpg)');
   });
 
-  it('ignores a plain link and an empty destination', () => {
-    expect(markdownImages('[text](https://wp/a.jpg) ![](  )')).toEqual([]);
+  it('ignores a plain link and an empty destination', async () => {
+    expect((await markdownImages('[text](https://wp/a.jpg) ![](  )'))).toEqual([]);
   });
 
   // Gallery-local captions (2026-10-19): a gallery line's text is never an
   // inline image, however it reads — every caller would otherwise re-host,
   // audit or back-fill a caption as if it were a photo.
-  it('skips gallery fences, including image-like caption text, but not other code fences', () => {
+  it('skips gallery fences, including image-like caption text, but not other code fences', async () => {
     const md = [
       '![a](https://wp/a.jpg)',
       '```gallery',
@@ -256,7 +256,7 @@ describe('markdownImages', () => {
       '````',
       '![e](https://wp/e.jpg)',
     ].join('\n');
-    expect(markdownImages(md).map((i) => i.url)).toEqual(['https://wp/a.jpg', 'https://wp/d.jpg', 'https://wp/e.jpg']);
+    expect((await markdownImages(md)).map((i) => i.url)).toEqual(['https://wp/a.jpg', 'https://wp/d.jpg', 'https://wp/e.jpg']);
   });
 });
 
@@ -296,7 +296,7 @@ describe('htmlToMarkdown classic shortcodes', () => {
     expect(md).not.toContain('caption');
   });
 
-  it('keeps the click-through link of a linked image inside [caption]', () => {
+  it('keeps the click-through link of a linked image inside [caption]', async () => {
     const md = htmlToMarkdown(
       '[caption id="attachment_5" align="alignnone" width="300"]<a href="https://wp/full.jpg"><img src="https://wp/thumb.jpg" alt="A" /></a> Caption[/caption]',
       attachments,
@@ -304,6 +304,6 @@ describe('htmlToMarkdown classic shortcodes', () => {
     expect(md).toContain('[![A](https://wp/thumb.jpg)](https://wp/full.jpg)');
     expect(md).toContain('Caption');
     expect(md).not.toContain('</a>');
-    expect(markdownImages(md).map((i) => i.url)).toEqual(['https://wp/thumb.jpg']);
+    expect((await markdownImages(md)).map((i) => i.url)).toEqual(['https://wp/thumb.jpg']);
   });
 });

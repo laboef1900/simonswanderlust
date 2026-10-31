@@ -122,61 +122,61 @@ describe('harvestAlt', () => {
     bodyMarkdown: '', images: {}, ...over,
   });
 
-  it('files hero alt under the referencing row\'s own locale', () => {
+  it('files hero alt under the referencing row\'s own locale', async () => {
     const src = `${BASE}/trips/a/hero`;
-    const out = harvestAlt(src, [
+    const out = (await harvestAlt(src, [
       row({ locale: 'de', heroImage: { src, width: 1, height: 1, alt: 'Altstadt' } }),
       row({ locale: 'en', heroImage: { src, width: 1, height: 1, alt: 'Old town' } }),
-    ]);
+    ]));
     expect(out).toEqual({ de: 'Altstadt', en: 'Old town' });
   });
 
-  it('harvests title-image alt only for its exact URL and locale', () => {
+  it('harvests title-image alt only for its exact URL and locale', async () => {
     const src = `${BASE}/trips/a/title`;
-    expect(harvestAlt(src, [
+    expect((await harvestAlt(src, [
       row({ titleImage: { src: src + '-other', width: 2000, height: 600, alt: 'Wrong photo' } }),
       row({ locale: 'en', titleImage: { src, width: 2000, height: 600, alt: 'Skyline' } }),
-    ])).toEqual({ de: '', en: 'Skyline' });
+    ]))).toEqual({ de: '', en: 'Skyline' });
   });
 
-  it('harvests body-image alt from the ![alt](src) form', () => {
+  it('harvests body-image alt from the ![alt](src) form', async () => {
     const src = `${BASE}/trips/a/pic`;
-    expect(harvestAlt(src, [row({ locale: 'en', bodyMarkdown: `text ![A gate](${src}) more` })]))
+    expect((await harvestAlt(src, [row({ locale: 'en', bodyMarkdown: `text ![A gate](${src}) more` })])))
       .toEqual({ de: '', en: 'A gate' });
   });
 
-  it('harvests the text the author typed, not its Markdown-escaped label (#140)', () => {
+  it('harvests the text the author typed, not its Markdown-escaped label (#140)', async () => {
     const src = `${BASE}/trips/a/pic`;
-    expect(harvestAlt(src, [row({ locale: 'de', bodyMarkdown: `![Blick \\[Norwegen\\]](${src})` })]))
+    expect((await harvestAlt(src, [row({ locale: 'de', bodyMarkdown: `![Blick \\[Norwegen\\]](${src})` })])))
       .toEqual({ de: 'Blick [Norwegen]', en: '' });
   });
 
   // Gallery-local captions (2026-10-19): caption text that reads like an
   // inline image is not that photo's alt and must never seed the library.
-  it('ignores image-like text inside a gallery caption override', () => {
+  it('ignores image-like text inside a gallery caption override', async () => {
     const src = `${BASE}/trips/a/pic`;
     const body = '```gallery\n' + `${BASE}/trips/a/g | caption-override="![Not an alt](${src})"\n` + '```';
-    expect(harvestAlt(src, [row({ locale: 'de', bodyMarkdown: body })])).toEqual({ de: '', en: '' });
+    expect((await harvestAlt(src, [row({ locale: 'de', bodyMarkdown: body })]))).toEqual({ de: '', en: '' });
   });
 
   // @ai-warning: exact URL matches only. A mis-attribution would silently
   // poison the library and then denormalize into every future post.
-  it('is exact-match only — a prefix or variant URL does not count', () => {
+  it('is exact-match only — a prefix or variant URL does not count', async () => {
     const src = `${BASE}/trips/a/hero`;
-    expect(harvestAlt(src, [
+    expect((await harvestAlt(src, [
       row({ bodyMarkdown: `![Wrong](${src}-2)` }),
       row({ bodyMarkdown: `![Also wrong](${src}-640.webp)` }),
       row({ heroImage: { src: `${src}x`, width: 1, height: 1, alt: 'Nope' } }),
-    ])).toEqual({ de: '', en: '' });
+    ]))).toEqual({ de: '', en: '' });
   });
 
-  it('does not mix locales when both rows share a title', () => {
+  it('does not mix locales when both rows share a title', async () => {
     // The regression that motivated carrying `locale` on PostUsageRow.
     const src = `${BASE}/trips/a/hero`;
-    const out = harvestAlt(src, [
+    const out = (await harvestAlt(src, [
       row({ locale: 'de', title: 'Same', heroImage: { src, width: 1, height: 1, alt: 'Deutsch' } }),
       row({ locale: 'en', title: 'Same', heroImage: { src, width: 1, height: 1, alt: 'English' } }),
-    ]);
+    ]));
     expect(out).toEqual({ de: 'Deutsch', en: 'English' });
   });
 });

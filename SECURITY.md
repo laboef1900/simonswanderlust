@@ -858,6 +858,39 @@ Authenticated disposable 400-photo preview and actual publication/build returned
 an unrelated static HTTP 200 completed before the last partition yield in both cases.
 See [the exact-search specification and measured evidence](docs/superpowers/specs/2026-10-27-gallery-partition-work-design.md).
 
+**Gallery grammar and source provenance** (#354, owner-approved 2026-10-28).
+`gallery-identity.ts` owns the unchanged sanitize-first gallery predicate and body
+schema. Satteri source analysis uses the same explicit parser features as Astro and
+preview; save/import/export/audit and browser tools consume its logical lines and
+UTF-16 source spans, including nested fences and raw HTML. HTML entities remain a
+text layer, never trusted markup. Source-map failures refuse the operation; there
+is no lexical-parser fallback or automatic content migration.
+
+`POST /gallery/analyze` requires a session and the existing post JSON size ceiling.
+It analyzes only the submitted unsaved body, returns `Cache-Control: no-store`, and
+does not read private metadata, fetch remote resources, write content/revisions,
+publish, or log source text. Browser results are tied to the exact request snapshot;
+failed/stale analysis cannot edit the manuscript. Both locales are normalized before
+store writes, and both export documents are prepared before either file is written.
+The warning-only alt audit is prepared before publication side effects.
+
+Pending accepted photo descriptions join the existing local draft recovery snapshot
+as locale-specific URL/value pairs, not source offsets. Explicit Restore obtains fresh
+authenticated analysis; it neither writes a post automatically nor sends recovery-only
+fields in the post payload. No credentials or unaccepted provider output are added.
+Recovery ownership/lifetime and authentication redirect policy are unchanged; the
+broader #304 recovery decisions remain deferred.
+
+Content injected after sanitize retains origin equality, HTTP(S)-only image URLs,
+dimension/format validation, string coercion/escaping and library-description
+precedence. Publish image guards still inspect the actual rendered tree. Preview
+CSP, authorization, EXIF/private-original policy and #356's awaited rendering and
+scheduling contract are unchanged. Recovery: stop gallery mutations/export if
+mapping is defective, retain the prior static release, and roll forward a targeted
+mapping fix; do not restore the lossy scanners or rewrite owner content silently.
+See [the approved grammar contract](docs/superpowers/specs/2026-10-27-gallery-grammar-agreement-design.md).
+
+
 
 ## Output sanitization (stored XSS)
 
@@ -963,8 +996,8 @@ protections, so they carry their own:
   another gallery using the same photo, and it creates no Media write. Precedence: hidden
   gallery → no caption (and so none in the lightbox, which reads `.jgal__cap` back out of the
   figure); line override (empty included) → that text; otherwise library caption, then the
-  stored one. Body-wide image passes run only outside gallery fences, through the one fence
-  scanner (`rewriteOutsideGalleries`, which `markdownImages` itself uses): the save-time
+  stored one. Body-wide image passes run only outside parser-established gallery ranges,
+  through `rewriteOutsideGalleries` (which `markdownImages` itself uses): the save-time
   `<BodyImage>` conversion, the MDX exporter's inline pass, the WXR importer's re-host scan,
   pre-flight count and merge substitution, the alt audit and media-sync's alt backfill. Gallery
   text that looks like an image or a tag therefore keeps its exact text through save, export,

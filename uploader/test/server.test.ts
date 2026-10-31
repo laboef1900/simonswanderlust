@@ -32,6 +32,8 @@ import { memorySiteIdentityStore } from '../src/site-identity.js';
 import { normalizeIdentityUpload } from '../src/site-identity-assets.js';
 import * as disk from '../src/disk.js';
 import * as bodyRenderer from '../../site/src/lib/render-markdown.js';
+import * as gallerySource from '../../site/src/lib/gallery-source.js';
+import * as altAudit from '../src/alt-audit.js';
 
 let dir: string;
 beforeEach(async () => {
@@ -166,6 +168,161 @@ async function upload(
     headers: { ...form.getHeaders() }, cookies: cookie, payload: form,
   });
 }
+
+describe('POST /gallery/analyze', () => {
+  const url = '/gallery/analyze';
+
+  it('requires a live session and does not cache an authentication refusal', async () => {
+    const b = build();
+    const { cookie } = await authed(b, { isAdmin: false });
+    await b.sessions.destroy(cookie.sid);
+    try {
+      for (const cookies of [undefined, cookie]) {
+        const res = await b.app.inject({ method: 'POST', url, cookies, payload: { bodyMarkdown: '' } });
+        expect(res.statusCode).toBe(401);
+        expect(res.headers['cache-control']).toBe('no-store');
+      }
+    } finally { await b.app.close(); }
+  });
+
+  it('lets an author analyze unsaved nested and raw HTML galleries with exact snapshot ranges', async () => {
+    const b = build();
+    const { cookie } = await authed(b, { isAdmin: false });
+    const bodyMarkdown = [
+      '🧭 Unsaved story',
+      '',
+      '> ~~~gallery extra',
+      '> https://images.example/photo | alt="A view"',
+      '> ~~~',
+      '',
+      '<pre><code class="language-gallery">https://images.example/raw | alt="A &amp; B"</code></pre>',
+      '',
+      '````text',
+      '```gallery',
+      'https://images.example/example',
+      '```',
+      '````',
+    ].join('\r\n');
+    try {
+      const expected = await gallerySource.analyzeGallerySource(bodyMarkdown);
+      const res = await b.app.inject({ method: 'POST', url, cookies: cookie, payload: { bodyMarkdown } });
+      expect(res.statusCode).toBe(200);
+      expect(res.headers['cache-control']).toBe('no-store');
+      expect(res.json()).toEqual(expected);
+      expect(res.json().bodyMarkdown).toBe(bodyMarkdown);
+      const galleries = expected.blocks.filter((block) => block.isGallery);
+      expect(galleries).toHaveLength(2);
+      expect(galleries.map((block) => block.kind)).toEqual(['fence', 'html']);
+      expect(bodyMarkdown.slice(galleries[0]!.start, galleries[0]!.end)).toContain('~~~gallery extra');
+      expect(galleries[1]!.content).toContain('alt="A & B"');
+      expect(expected.blocks.some((block) => !block.isGallery && block.content.includes('/example'))).toBe(true);
+    } finally { await b.app.close(); }
+  });
+
+  it('accepts an empty string without inventing a gallery', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    try {
+      const res = await b.app.inject({ method: 'POST', url, cookies: cookie, payload: { bodyMarkdown: '' } });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ bodyMarkdown: '', blocks: [] });
+    } finally { await b.app.close(); }
+  });
+
+  it.each([null, [], {}, { bodyMarkdown: null }, { bodyMarkdown: 7 }, { bodyMarkdown: [] }])(
+    'rejects an invalid JSON shape without coercion: %j', async (payload) => {
+      const b = build();
+      const { cookie } = await authed(b);
+      try {
+        const res = await b.app.inject({
+          method: 'POST', url, cookies: cookie,
+          headers: { 'content-type': 'application/json' }, payload: JSON.stringify(payload),
+        });
+        expect(res.statusCode).toBe(400);
+        expect(res.headers['cache-control']).toBe('no-store');
+        expect(res.json()).toEqual({ error: 'bodyMarkdown must be a string' });
+      } finally { await b.app.close(); }
+    },
+  );
+
+  it('keeps malformed JSON at 400 and the existing post JSON byte ceiling at 413', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    try {
+      const malformed = await b.app.inject({
+        method: 'POST', url, cookies: cookie,
+        headers: { 'content-type': 'application/json' }, payload: '{"bodyMarkdown":',
+      });
+      expect(malformed.statusCode).toBe(400);
+      expect(malformed.headers['cache-control']).toBe('no-store');
+      // Less than 1 MiB of UTF-16 characters, more than 1 MiB of JSON bytes.
+      const payload = { bodyMarkdown: 'é'.repeat(524_288) };
+      const res = await b.app.inject({ method: 'POST', url, cookies: cookie, payload });
+      const post = await b.app.inject({ method: 'POST', url: '/posts', cookies: cookie, payload });
+      expect(res.statusCode).toBe(413);
+      expect(post.statusCode).toBe(413);
+      expect(res.headers['cache-control']).toBe('no-store');
+    } finally { await b.app.close(); }
+  });
+
+  it('analyzes supplied source without content-store access, publication, network or source logging', async () => {
+    const settings = fakeStore();
+    const secrets = memorySecretsStore();
+    const { builder, calls } = stubBuilder();
+    const b = build({ settings, secrets, builder });
+    const { cookie } = await authed(b, { isAdmin: false });
+    const unused = [
+      vi.spyOn(b.posts, 'get'), vi.spyOn(b.posts, 'list'),
+      vi.spyOn(b.posts, 'upsertDraft'), vi.spyOn(b.posts, 'publish'),
+      vi.spyOn(b.posts, 'listRevisions'), vi.spyOn(b.pages, 'get'),
+      vi.spyOn(b.pages, 'save'), vi.spyOn(b.media, 'get'),
+      vi.spyOn(settings, 'get'), vi.spyOn(settings, 'update'),
+    ];
+    const fetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network forbidden'));
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const before = await readdir(dir);
+      const res = await b.app.inject({
+        method: 'POST', url, cookies: cookie,
+        payload: { bodyMarkdown: '~~~gallery\nhttps://private.example/unsaved | alt="Private source"\n~~~' },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().blocks.filter((block: { isGallery: boolean }) => block.isGallery)).toHaveLength(1);
+      for (const spy of [...unused, fetch, log, warn, error]) expect(spy).not.toHaveBeenCalled();
+      expect(calls).toEqual([]);
+      expect(b.enqueued).toEqual([]);
+      expect(await readdir(dir)).toEqual(before);
+    } finally {
+      for (const spy of [...unused, fetch, log, warn, error]) spy.mockRestore();
+      await b.app.close();
+    }
+  });
+
+  it('sanitizes parser failures without leaking source into the error log', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const source = 'PRIVATE UNSAVED SOURCE';
+    const analyze = vi.spyOn(gallerySource, 'analyzeGallerySource')
+      .mockRejectedValueOnce(new Error(`parser diagnostic: ${source}`));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await b.app.inject({ method: 'POST', url, cookies: cookie, payload: { bodyMarkdown: source } });
+      expect(res.statusCode).toBe(500);
+      expect(res.headers['cache-control']).toBe('no-store');
+      expect(res.json()).toEqual({ error: 'internal server error' });
+      expect(error).toHaveBeenCalledTimes(1);
+      expect(error.mock.calls.flat().map(String).join(' ')).not.toContain(source);
+      expect(error.mock.calls[0]![1]).toBeInstanceOf(Error);
+      expect((error.mock.calls[0]![1] as Error).message).toBe('Gallery source analysis failed');
+    } finally {
+      analyze.mockRestore();
+      error.mockRestore();
+      await b.app.close();
+    }
+  });
+});
 
 describe('POST /upload', () => {
   it('401 without auth', async () => {
@@ -2739,6 +2896,37 @@ describe('alt-text audit (advisory, never a gate)', () => {
       ],
     });
     expect((await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).json().status).toBe('published');
+  });
+
+  it('refuses a failed audit analysis before publishing or building, without changing the draft', async () => {
+    const { builder, calls } = stubBuilder();
+    const b = build({ builder });
+    const { cookie } = await authed(b);
+    const tk = await create(b, cookie);
+    const before = await b.posts.get(tk);
+    const revisions = await b.posts.listRevisions(tk);
+    const publish = vi.spyOn(b.posts, 'publish');
+    const audit = vi.spyOn(altAudit, 'auditAltText')
+      .mockRejectedValueOnce(new Error('gallery source mapping failed'));
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await b.app.inject({
+        method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie,
+        payload: await publishBody(b.posts, tk),
+      });
+      expect(res.statusCode).toBe(500);
+      expect(res.json()).toEqual({ error: 'internal server error' });
+      expect(audit).toHaveBeenCalledTimes(1);
+      expect(publish).not.toHaveBeenCalled();
+      expect(calls).toEqual([]);
+      expect(await b.posts.get(tk)).toEqual(before);
+      expect(await b.posts.listRevisions(tk)).toEqual(revisions);
+    } finally {
+      publish.mockRestore();
+      audit.mockRestore();
+      quiet.mockRestore();
+      await b.app.close();
+    }
   });
 
   it('serves the same audit before publishing, to any authed author', async () => {

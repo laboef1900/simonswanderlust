@@ -46,11 +46,11 @@ const elementorLightboxGallery: TurndownService.Rule = {
 };
 
 /**
- * A marker that did not stand on its own line — Turndown prefixes every line of
- * a blockquote with `> ` and of a list item with `- ` — cannot become a fence
- * (a fence inside a blockquote is not a gallery to `rewriteFences`). Degrade it
- * to the inline image it stands for, so the photo survives, the re-host pass
- * still finds it (`markdownImages`), and no marker byte reaches the store.
+ * A marker that did not stand on its own line belongs to a Turndown container.
+ * Keep the importer's existing inline-image representation there, rather than
+ * synthesizing container markup while grouping standalone slideshow markers.
+ * The photo survives, the re-host pass still finds it (`markdownImages`), and
+ * no marker byte reaches the store.
  */
 function inlineImage(href: string, title: string): string {
   const alt = title.replace(/[\\[\]]/g, '\\$&');
@@ -164,9 +164,9 @@ const IMAGE_RE = /!\[((?:\\.|[^\]\\])*)\]\(\s*(?:<([^<>\n]*)>|((?:\\.|[^\s()\\]|
  * misread that caption as a photo. Gallery photos are read from the fence
  * lines themselves (`rewriteFences`), never from here.
  */
-export function markdownImages(md: string): MarkdownImage[] {
+export async function markdownImages(md: string): Promise<MarkdownImage[]> {
   const out: MarkdownImage[] = [];
-  rewriteOutsideGalleries(md, (text) => {
+  await rewriteOutsideGalleries(md, (text) => {
     for (const m of text.matchAll(IMAGE_RE)) {
       // Backslash escapes apply to ASCII punctuation only (CommonMark §2.4); a
       // backslash before anything else is literal.

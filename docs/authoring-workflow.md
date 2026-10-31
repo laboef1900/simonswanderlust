@@ -558,6 +558,20 @@ Two cases it will refuse rather than guess: a gallery whose closing ` ``` ` is m
 would run to the end of the post), and a cursor inside a code block that is likewise unclosed. It
 tells you which; close the fence and try again.
 
+Visual gallery editing now asks the signed-in server to analyze the exact unsaved
+manuscript. If analysis is unavailable, your Markdown and undo history remain
+untouched; use the localized retry action or continue editing raw Markdown. If the
+manuscript changes while the picker is open, reopen it against the current text
+instead of applying an old selection.
+
+Existing tilde fences, longer fences, indentation, list/blockquote galleries and
+raw HTML `pre > code.language-gallery` galleries keep their placement and wrappers
+when saved, exported or edited. These are the same forms the article renderer
+already recognizes. Literal gallery examples inside other code blocks remain
+examples. An extra opener argument such as `gallery slider` does **not** select a
+layout: use the `#layout:` line below.
+
+
 Everything below is what that button writes, and is still the format to hand-edit.
 
 Several photos in one grid go in a fenced block with the language `gallery`, one image URL per

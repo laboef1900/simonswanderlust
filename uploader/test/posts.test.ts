@@ -2,6 +2,7 @@ import { publishTokens } from './publish-tokens.js';
 import { describe, expect, it, vi } from 'vitest';
 import { memoryPostStore, normalizeBodyImages, PostError, REVISION_CAP, MAX_SLUG_BYTES, isSafeSlug, validateDraft, validateForPublish, type PostPair } from '../src/posts.js';
 import { renderPostToMdx } from '../src/export.js';
+import * as bodyContent from '../src/body-content.js';
 import { imageUsage } from '../src/media-files.js';
 import { REGIONS } from '../src/db.js';
 import { regions as siteRegions } from '../../site/src/lib/paths.js';
@@ -71,7 +72,7 @@ describe('memoryPostStore', () => {
     expect((await store.get(saved.translationKey))?.de.titleImage).toEqual(titleImage);
     expect(saved.en.titleImage).toBeUndefined();
     expect(saved.de.heroImage).toEqual(input.de.heroImage);
-    expect(renderPostToMdx(saved, 'de')).toContain("titleImage:\n  src: 'https://img/title'\n  width: 2400\n  height: 800\n  alt: 'Panorama'\n  format: jpeg\n  focus: { x: 30, y: 70 }");
+    expect((await renderPostToMdx(saved, 'de'))).toContain("titleImage:\n  src: 'https://img/title'\n  width: 2400\n  height: 800\n  alt: 'Panorama'\n  format: jpeg\n  focus: { x: 30, y: 70 }");
     await store.publish(saved.translationKey, await publishTokens(store, saved.translationKey));
     delete saved.de.titleImage;
     await store.upsertDraft(saved);
@@ -719,48 +720,92 @@ describe('gallery fences at the store chokepoint', () => {
 });
 
 describe('normalizeBodyImages', () => {
-  it('converts a JSX-attr <BodyImage> tag to a markdown image and records its dims', () => {
+  it('normalizes direct-store nested and raw galleries in both locales and round-trips their metadata', async () => {
+    const store = memoryPostStore();
+    const input = pair();
+    const src = 'https://img/gallery/direct';
+    input.de.bodyMarkdown = `Intro 😀\r\n\r\n> ~~~gallery extra\r\n> #layout: slider\r\n> ${src} | 30x20 | alt="Blick" | caption=""\r\n> ~~~\r\n\r\nAfter`;
+    input.en.bodyMarkdown = `<pre><code class="language-gallery">${src} | 30x20 | alt="" | caption="Day 1"\n</code></pre>`;
+    input.de.images = { 'https://img/unrelated': { width: 5, height: 4, alt: 'Keep' } };
+    const before = structuredClone(input);
+    const saved = await store.upsertDraft(input);
+    expect(input).toEqual(before);
+    expect(saved.de.bodyMarkdown).toBe(`Intro 😀\r\n\r\n> ~~~gallery extra\r\n> #layout: slider\r\n> ${src}\r\n> ~~~\r\n\r\nAfter`);
+    expect(saved.en.bodyMarkdown).toBe(`<pre><code class="language-gallery">${src}\n</code></pre>`);
+    expect(saved.de.images[src]).toEqual({ width: 30, height: 20, alt: 'Blick', caption: '' });
+    expect(saved.en.images[src]).toEqual({ width: 30, height: 20, alt: '', caption: 'Day 1' });
+    expect(saved.de.images['https://img/unrelated']).toEqual(input.de.images['https://img/unrelated']);
+    for (const locale of ['de', 'en'] as const) {
+      const mdx = await renderPostToMdx(saved, locale);
+      const body = mdx.slice(mdx.indexOf('\n---\n') + 6).trim();
+      const back = await normalizeBodyImages(body, {});
+      expect(back.bodyMarkdown).toBe(saved[locale].bodyMarkdown);
+      expect(back.images[src]).toEqual(saved[locale].images[src]);
+    }
+    expect((await store.upsertDraft(saved)).de.images).toEqual(saved.de.images);
+  });
+
+  it('does not save either locale or a revision when later locale analysis fails', async () => {
+    const store = memoryPostStore();
+    const saved = await store.upsertDraft(pair());
+    const input = { ...saved, de: { ...saved.de, bodyMarkdown: '~~~gallery\nhttps://img/new | 30x20\n~~~' }, en: { ...saved.en, bodyMarkdown: 'EN analysis failure' } };
+    const before = structuredClone(input);
+    const normalize = bodyContent.normalizeGalleryFences;
+    const analysis = vi.spyOn(bodyContent, 'normalizeGalleryFences').mockImplementation((body, images) => {
+      if (body === input.en.bodyMarkdown) return Promise.reject(new Error('source mapping unavailable'));
+      return normalize(body, images);
+    });
+    try {
+      await expect(store.upsertDraft(input)).rejects.toThrow('source mapping unavailable');
+      expect(analysis).toHaveBeenCalledWith(input.de.bodyMarkdown, input.de.images);
+      expect(await store.get(saved.translationKey)).toEqual(saved);
+      expect(await store.listRevisions(saved.translationKey)).toEqual([]);
+      expect(input).toEqual(before);
+    } finally { analysis.mockRestore(); }
+  });
+
+  it('converts a JSX-attr <BodyImage> tag to a markdown image and records its dims', async () => {
     const body = 'Intro\n\n<BodyImage src="https://img/x/y" width={1600} height={1067} alt="Gasse" />\n\nMore';
-    const out = normalizeBodyImages(body, {});
+    const out = (await normalizeBodyImages(body, {}));
     expect(out.bodyMarkdown).toBe('Intro\n\n![Gasse](https://img/x/y)\n\nMore');
     expect(out.images).toEqual({ 'https://img/x/y': { width: 1600, height: 1067 } });
   });
 
-  it('preserves JPEG format through BodyImage normalization', () => {
+  it('preserves JPEG format through BodyImage normalization', async () => {
     const src = 'https://img/x/jpeg';
     const body = `<BodyImage src="${src}" width={1600} height={1067} alt="Gasse" format="jpeg" />`;
-    const out = normalizeBodyImages(body, {});
+    const out = (await normalizeBodyImages(body, {}));
     expect(out.bodyMarkdown).toBe(`![Gasse](${src})`);
     expect(out.images).toEqual({ [src]: { width: 1600, height: 1067, format: 'jpeg' } });
   });
 
-  it('accepts quoted numeric attrs and decodes &quot; in alt (inverse of export escaping)', () => {
+  it('accepts quoted numeric attrs and decodes &quot; in alt (inverse of export escaping)', async () => {
     const body = '<BodyImage src="https://img/a/b" width="1600" height="1067" alt="Die &quot;Gasse&quot;" />';
-    const out = normalizeBodyImages(body, {});
+    const out = (await normalizeBodyImages(body, {}));
     expect(out.bodyMarkdown).toBe('![Die "Gasse"](https://img/a/b)');
     expect(out.images).toEqual({ 'https://img/a/b': { width: 1600, height: 1067 } });
   });
 
-  it('converts a tag without parsable dims but records no images entry', () => {
-    const out = normalizeBodyImages('<BodyImage src="https://img/no/dims" alt="x" />', {});
+  it('converts a tag without parsable dims but records no images entry', async () => {
+    const out = (await normalizeBodyImages('<BodyImage src="https://img/no/dims" alt="x" />', {}));
     expect(out.bodyMarkdown).toBe('![x](https://img/no/dims)');
     expect(out.images).toEqual({});
   });
 
-  it('leaves a src-less tag untouched', () => {
+  it('leaves a src-less tag untouched', async () => {
     const body = 'a <BodyImage alt="broken" /> b';
-    const out = normalizeBodyImages(body, {});
+    const out = (await normalizeBodyImages(body, {}));
     expect(out.bodyMarkdown).toBe(body);
     expect(out.images).toEqual({});
   });
 
-  it('is idempotent: plain/already-normalized markdown passes through byte-identical, existing dims preserved', () => {
+  it('is idempotent: plain/already-normalized markdown passes through byte-identical, existing dims preserved', async () => {
     const existing = { 'https://img/x/y': { width: 800, height: 600 } };
     const body = '## Hi\n\n![Gasse](https://img/x/y)\n';
-    const once = normalizeBodyImages(body, existing);
+    const once = (await normalizeBodyImages(body, existing));
     expect(once.bodyMarkdown).toBe(body);
     expect(once.images).toEqual(existing);
-    const twice = normalizeBodyImages(once.bodyMarkdown, once.images);
+    const twice = (await normalizeBodyImages(once.bodyMarkdown, once.images));
     expect(twice).toEqual(once);
   });
 
@@ -785,7 +830,7 @@ describe('normalizeBodyImages', () => {
     const p = pair();
     p.de.bodyMarkdown = '<BodyImage src="https://img/x/y" width={1600} height={1067} alt="Gasse" />';
     const saved = await s.upsertDraft(p);
-    const mdx = renderPostToMdx(saved, 'de');
+    const mdx = (await renderPostToMdx(saved, 'de'));
     expect(mdx).toContain('<BodyImage src="https://img/x/y" width={1600} height={1067} alt="Gasse" />');
   });
 
@@ -795,19 +840,19 @@ describe('normalizeBodyImages', () => {
     p.de.bodyMarkdown = '<BodyImage src="https://img/x/y" width={16} height={10} alt="Blick [Norwegen]" />';
     const saved = await s.upsertDraft(p);
     expect(saved.de.bodyMarkdown).toBe('![Blick \\[Norwegen\\]](https://img/x/y)');
-    expect(renderPostToMdx(saved, 'de')).toContain('alt="Blick [Norwegen]"');
+    expect((await renderPostToMdx(saved, 'de'))).toContain('alt="Blick [Norwegen]"');
   });
 
-  it('converts a tag whose quoted alt contains ">" (legacy exports escaped only quotes)', () => {
+  it('converts a tag whose quoted alt contains ">" (legacy exports escaped only quotes)', async () => {
     const body = '<BodyImage src="https://img/x/y" width={1600} height={1067} alt="Blick > Westen" />';
-    const out = normalizeBodyImages(body, {});
+    const out = (await normalizeBodyImages(body, {}));
     expect(out.bodyMarkdown).toBe('![Blick > Westen](https://img/x/y)');
     expect(out.images).toEqual({ 'https://img/x/y': { width: 1600, height: 1067 } });
   });
 
-  it('does not truncate the tag on "/>" inside a quoted alt', () => {
+  it('does not truncate the tag on "/>" inside a quoted alt', async () => {
     const body = 'a <BodyImage src="https://img/x/y" width={16} height={10} alt="x/>y" /> b';
-    const out = normalizeBodyImages(body, {});
+    const out = (await normalizeBodyImages(body, {}));
     expect(out.bodyMarkdown).toBe('a ![x/>y](https://img/x/y) b');
     expect(out.images).toEqual({ 'https://img/x/y': { width: 16, height: 10 } });
   });
@@ -819,19 +864,19 @@ describe('normalizeBodyImages', () => {
     p.de.bodyMarkdown = `![${alt}](https://img/x/y)`;
     p.de.images = { 'https://img/x/y': { width: 1600, height: 1067 } };
     const saved = await s.upsertDraft(p);
-    const mdx = renderPostToMdx(saved, 'de');
+    const mdx = (await renderPostToMdx(saved, 'de'));
     expect(mdx).toContain('alt="Blick &lt;über&gt; das &quot;Tor&quot; &amp; zurück"');
     const tag = mdx.match(/<BodyImage[^\n]*\/>/)?.[0] ?? '';
-    const back = normalizeBodyImages(tag, {});
+    const back = (await normalizeBodyImages(tag, {}));
     expect(back.bodyMarkdown).toBe(`![${alt}](https://img/x/y)`);
     expect(back.images).toEqual({ 'https://img/x/y': { width: 1600, height: 1067 } });
   });
 
-  it('accepts a multiline tag and the braced src={…} attribute form', () => {
-    const multi = normalizeBodyImages('<BodyImage\n  src="https://img/m/l"\n  width={10}\n  height={20}\n  alt="ml"\n/>', {});
+  it('accepts a multiline tag and the braced src={…} attribute form', async () => {
+    const multi = (await normalizeBodyImages('<BodyImage\n  src="https://img/m/l"\n  width={10}\n  height={20}\n  alt="ml"\n/>', {}));
     expect(multi.bodyMarkdown).toBe('![ml](https://img/m/l)');
     expect(multi.images).toEqual({ 'https://img/m/l': { width: 10, height: 20 } });
-    const braced = normalizeBodyImages('<BodyImage src={https://img/b/r} width={10} height={20} alt="b" />', {});
+    const braced = (await normalizeBodyImages('<BodyImage src={https://img/b/r} width={10} height={20} alt="b" />', {}));
     expect(braced.bodyMarkdown).toBe('![b](https://img/b/r)');
     expect(braced.images).toEqual({ 'https://img/b/r': { width: 10, height: 20 } });
   });
@@ -839,7 +884,7 @@ describe('normalizeBodyImages', () => {
   // Gallery-local captions (2026-10-19): a gallery line's text is content.
   // The <BodyImage> pass must not reach into a fence and rewrite a caption
   // that happens to read like a tag or an inline image.
-  it('never rewrites image- or tag-like text inside a gallery caption override', () => {
+  it('never rewrites image- or tag-like text inside a gallery caption override', async () => {
     const a = 'https://img/g/a';
     const c = 'https://img/g/c';
     const text = `![x](${a}) <BodyImage src={${a}} width={1} height={1} />`;
@@ -848,17 +893,17 @@ describe('normalizeBodyImages', () => {
     const typed = `${c} | caption-override="<BodyImage src={${c}} width={5} height={5} />"`;
     const body = `<BodyImage src="${a}" width={10} height={20} alt="out" />\n\n\`\`\`gallery\n`
       + `${a} | 10x20 | caption-override="${text}"\n${typed}\n\`\`\``;
-    const out = normalizeBodyImages(body, {});
+    const out = (await normalizeBodyImages(body, {}));
     expect(out.bodyMarkdown).toBe(`![out](${a})\n\n\`\`\`gallery\n${a} | caption-override="${escaped}"\n${typed}\n\`\`\``);
     expect(out.images).toEqual({ [a]: { width: 10, height: 20 } });
-    expect(normalizeBodyImages(out.bodyMarkdown, out.images)).toEqual(out);
+    expect((await normalizeBodyImages(out.bodyMarkdown, out.images))).toEqual(out);
   });
 
-  it('leaves malformed tags untouched rather than truncating (pinned rejected shapes)', () => {
+  it('leaves malformed tags untouched rather than truncating (pinned rejected shapes)', async () => {
     const nonSelfClosing = 'a <BodyImage src="https://img/x/y"></BodyImage> b';
-    expect(normalizeBodyImages(nonSelfClosing, {}).bodyMarkdown).toBe(nonSelfClosing);
+    expect((await normalizeBodyImages(nonSelfClosing, {})).bodyMarkdown).toBe(nonSelfClosing);
     const unclosedQuote = 'a <BodyImage src="https://img/x/y" alt="oops /> b';
-    expect(normalizeBodyImages(unclosedQuote, {}).bodyMarkdown).toBe(unclosedQuote);
+    expect((await normalizeBodyImages(unclosedQuote, {})).bodyMarkdown).toBe(unclosedQuote);
   });
 
   it('normalizes the EN locale through the store chokepoint too', async () => {

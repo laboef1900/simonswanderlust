@@ -9,6 +9,8 @@ import { importWxr, prepareImport, rehostKey, ImportTooLargeError, ImportInsuffi
 import { memoryPostStore, PostError, type PostStore } from '../src/posts.js';
 import { createRehostResume, rehostImage, type RehostResult } from '../src/wp-images.js';
 import { FetchError, type LookupFn } from '../src/safe-fetch.js';
+import { renderMarkdown } from '../../site/src/lib/render-markdown.js';
+import { analyzeRenderedBody } from '../../site/src/lib/body-images.js';
 
 const xml = readFileSync(join(process.cwd(), 'test/fixtures/wxr-sample.xml'), 'utf8');
 const stubRehost = async (_url: string, _key: string, _alt: string) => ({ src: 'https://img/x', width: 100, height: 80 });
@@ -723,6 +725,43 @@ describe('importWxr re-run merge', () => {
     expect(healed.bodyMarkdown).not.toContain('https://wp/');
     expect(healed.images[SRC('de-1', 'https://wp/g2.jpg')]).toEqual({ width: 100, height: 80, alt: 'Abend', caption: 'Am Hafen' });
     expect(healed.images['https://wp/g2.jpg']).toBeUndefined();
+  });
+
+  it('heals nested and raw gallery sources without changing wrappers, caption text or the import cap', async () => {
+    const store = memoryPostStore();
+    const bilingualExport = pairOf('g', 'de-1', 'en-1', html, html);
+    const { h, nextRun } = flaky('g2.jpg');
+    await run(bilingualExport, h, {}, store);
+    const tk = (await store.list())[0]!.translationKey;
+    const p = (await store.get(tk))!;
+    const src = 'https://wp/g2.jpg';
+    const local = 'caption-override="Wie ![x](https://wp/a.jpg)"';
+    await store.upsertDraft({
+      ...p,
+      de: { ...p.de, bodyMarkdown: `Intro 😀\n\n> ~~~gallery extra\n> ${src} | 640x400 | alt="Abend" | ${local}\n> ~~~\n\nAfter` },
+      en: { ...p.en, bodyMarkdown: `<pre><code class="language-gallery">${src} | 640x400 | alt="Evening"\n</code></pre>` },
+    });
+    const before = (await store.get(tk))!;
+    nextRun();
+    h.calls.length = 0;
+    const summary = await run(bilingualExport, h, { maxImages: 4 }, store);
+    expect(summary.updated).toBe(1);
+    expect(summary.images).toEqual({ total: 4, hosted: 4, failed: 0 });
+    expect(h.calls).toEqual(['https://wp/a.jpg', 'https://wp/b.jpg', 'https://wp/g1.jpg', src]);
+    const healed = (await store.get(tk))!;
+    expect(healed.de.bodyMarkdown).toBe(before.de.bodyMarkdown.replace(src, SRC('de-1', src)));
+    expect(healed.en.bodyMarkdown.startsWith('<pre><code class="language-gallery">')).toBe(true);
+    expect(healed.en.bodyMarkdown.endsWith('\n</code></pre>')).toBe(true);
+    for (const locale of ['de', 'en'] as const) {
+      // Raw HTML edits may entity-encode punctuation. The real renderer and
+      // publish analysis must still discover exactly the healed photo.
+      expect(analyzeRenderedBody(await renderMarkdown(healed[locale].bodyMarkdown))).toEqual({
+        hasH1: false, sources: [], galleryLines: [SRC('de-1', src)],
+      });
+      expect(healed[locale].images[src]).toBeUndefined();
+    }
+    expect(healed.de.images[SRC('de-1', src)]).toEqual({ width: 100, height: 80, alt: 'Abend' });
+    expect(healed.en.images[SRC('de-1', src)]).toEqual({ width: 100, height: 80, alt: 'Evening' });
   });
 
   // Gallery-local captions (2026-10-19): only a gallery line's URL field is
