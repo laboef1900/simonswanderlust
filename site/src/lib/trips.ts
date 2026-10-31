@@ -1,5 +1,6 @@
 import type { CollectionEntry } from 'astro:content';
 import type { Locale, UIKey } from '../i18n/ui';
+import { countLabel } from '../i18n/count';
 import { regions, type Region } from './paths';
 
 export type Trip = CollectionEntry<'trips'>;
@@ -143,9 +144,9 @@ export function liveRegions(trips: Trip[], locale: Locale, keep?: Region): Regio
 /** "20 REISEN · 10 LÄNDER · 3 KONTINENTE" — the expedition-log stat line. */
 export function statsLine(stats: TripStats, t: (key: UIKey) => string): string {
   return [
-    `${stats.trips} ${t('stats.trips')}`,
-    `${stats.countries} ${t('stats.countries')}`,
-    `${stats.continents} ${t('stats.continents')}`,
+    `${stats.trips} ${countLabel(stats.trips, t('stats.trip'), t('stats.trips'))}`,
+    `${stats.countries} ${countLabel(stats.countries, t('stats.country'), t('stats.countries'))}`,
+    `${stats.continents} ${countLabel(stats.continents, t('stats.continent'), t('stats.continents'))}`,
   ].join(' · ');
 }
 

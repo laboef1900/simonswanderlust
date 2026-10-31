@@ -228,6 +228,23 @@ describe('statsLine', () => {
     expect(statsLine(stats, useTranslations('de'))).toBe('20 REISEN · 10 LÄNDER · 3 KONTINENTE');
     expect(statsLine(stats, useTranslations('en'))).toBe('20 TRIPS · 10 COUNTRIES · 3 CONTINENTS');
   });
+
+  it.each([
+    ['de', 0, '0 REISEN · 0 LÄNDER · 0 KONTINENTE'],
+    ['de', 1, '1 REISE · 1 LAND · 1 KONTINENT'],
+    ['de', 2, '2 REISEN · 2 LÄNDER · 2 KONTINENTE'],
+    ['en', 0, '0 TRIPS · 0 COUNTRIES · 0 CONTINENTS'],
+    ['en', 1, '1 TRIP · 1 COUNTRY · 1 CONTINENT'],
+    ['en', 2, '2 TRIPS · 2 COUNTRIES · 2 CONTINENTS'],
+  ] as const)('uses the correct grammar in %s for %d', (locale, count, expected) => {
+    expect(statsLine({ trips: count, countries: count, continents: count }, useTranslations(locale)))
+      .toBe(expected);
+  });
+
+  it('selects each count independently', () => {
+    expect(statsLine({ trips: 2, countries: 1, continents: 1 }, useTranslations('en')))
+      .toBe('2 TRIPS · 1 COUNTRY · 1 CONTINENT');
+  });
 });
 
 describe('entryNumberOf', () => {
