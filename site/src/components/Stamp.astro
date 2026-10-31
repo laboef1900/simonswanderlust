@@ -19,7 +19,13 @@ const code = countryCode.toUpperCase();
 const name = country.toUpperCase();
 const status = t('story.stamp');
 const pad = (n: number) => String(n).padStart(2, '0');
-const when = `${pad(date.getUTCDate())} ${pad(date.getUTCMonth() + 1)} ${date.getUTCFullYear()}`;
+// @ai-warning LOCAL getters, never getUTC*: a date-only trip date arrives as
+// local midnight on the build host (pg's `date` parse, and `parseRowDate` in
+// postgres-loader.ts for the published snapshot), the convention `dateLabel`
+// and `isoDate` read too. UTC getters printed the previous day — at a
+// month/year boundary the previous month/year — on any builder east of UTC
+// (#400). Pinned by Stamp.test.ts under UTC, Europe/Zurich and Los Angeles.
+const when = `${pad(date.getDate())} ${pad(date.getMonth() + 1)} ${date.getFullYear()}`;
 const dash = border === 'dashed' ? '5 3' : undefined;
 const styleVars = `--ink:${ink};--rot:${rotation}deg`;
 const topId = `stamp-top-${code}`;
