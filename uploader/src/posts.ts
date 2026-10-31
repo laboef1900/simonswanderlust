@@ -348,30 +348,9 @@ function validatePublishedImage(h: HeroImage, field: string, requireAlt = true):
 }
 
 /**
- * StoryHero owns the document's only H1. Ignore fenced examples so an article
- * may teach Markdown/HTML without the example making an otherwise valid post
- * impossible to publish.
+ * Synchronous structural validation only. Full publication eligibility also
+ * requires the async rendered-body and image-readiness gates in server.ts.
  */
-function bodyHasH1(body: string): boolean {
-  let fence: { marker: string; length: number } | null = null;
-  for (const line of body.split('\n')) {
-    if (fence) {
-      const close = new RegExp(`^ {0,3}\\${fence.marker}{${fence.length},}[ \\t]*$`);
-      if (close.test(line)) fence = null;
-      continue;
-    }
-    const open = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
-    if (open) {
-      const marker = open[1]?.[0];
-      if (marker) fence = { marker, length: open[1]!.length };
-      continue;
-    }
-    if (/^ {0,3}#[ \t]+/.test(line) || /<h1(?:[ \t\r\n][^>]*)?>/i.test(line)) return true;
-  }
-  return false;
-}
-
-
 export function validateForPublish(pair: PostPair): void {
   const s = pair.shared;
   if (s.countryCode.length !== 2) throw new PostError('countryCode must be 2 letters');
@@ -405,11 +384,6 @@ export function validateForPublish(pair: PostPair): void {
   if (!s.date.trim()) throw new PostError('date required');
   validateLocale(pair.de);
   validateLocale(pair.en);
-  for (const locale of ['de', 'en'] as const) {
-    if (bodyHasH1(pair[locale].bodyMarkdown)) {
-      throw new PostError(`${locale}: body must not contain an H1; the story hero provides the page H1`);
-    }
-  }
 }
 
 const PLACEHOLDER_HERO: HeroImage = { src: '', width: 0, height: 0, alt: '' };

@@ -48,12 +48,31 @@ function baseStyle(): StyleSpecification {
   } as StyleSpecification;
 }
 
+function createMap(container: HTMLElement): MapLibreMap {
+  // Like the editor's gpx-map: v6 returns a partial Map rather than throwing
+  // when WebGL2 is unavailable. Probe before allocating that partial instance.
+  const context = document.createElement('canvas').getContext('webgl2');
+  if (!context) throw new Error('map_webgl_unavailable');
+  context.getExtension('WEBGL_lose_context')?.loseContext();
+
+  const map = new MapLibreMap({ container, style: baseStyle(), attributionControl: {} });
+  if (!map.getCanvas().getContext('webgl2')) {
+    // A context can still fail after the probe. remove() itself throws on a
+    // painter-less v6 Map; always discard its empty, keyboard-focusable canvas.
+    try { map.remove(); } catch { /* Incomplete MapLibre initialization. */ }
+    container.replaceChildren();
+    container.classList.remove('maplibregl-map');
+    throw new Error('map_webgl_unavailable');
+  }
+  return map;
+}
+
 export function initFullMap(
   container: HTMLElement,
   geojson: PinCollection,
   labels: { readStory: string },
 ): void {
-  const map = new MapLibreMap({ container, style: baseStyle(), attributionControl: {} });
+  const map = createMap(container);
   map.addControl(new NavigationControl({ showCompass: false }));
 
   map.on('load', () => {
@@ -114,12 +133,7 @@ export function initMiniMap(container: HTMLElement, geometry: TripGeometry): voi
     ...feats.map((feature) => [feature.geometry.coordinates]),
   ]);
   const position = ([lng, lat]: [number, number]): [number, number] => [frame.longitude(lng), lat];
-  const map = new MapLibreMap({
-    container,
-    style: baseStyle(),
-    interactive: true,
-    attributionControl: {},
-  });
+  const map = createMap(container);
 
   let framed = false;
   let basemapFailed = false;
