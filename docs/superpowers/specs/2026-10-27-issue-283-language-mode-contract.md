@@ -1083,3 +1083,20 @@ integrating, each pinned by an updated or retained test:
   warnings and leave the other locale's advisory state unchanged.
 - **Drafts.** Gallery normalization runs inside the post-pair lock, because a disabled
   locale keeps the stored row read under that lock; its slug is not re-validated.
+
+## 24. #285 current-dev integration (2026-11-01)
+
+Merged `dev` after #284 landed. `astro.config.mjs` keeps this change's `MARKDOWN_OPTIONS`
+import (build and preview cannot diverge), so the lockstep test now pins the processor
+wiring and gallery exclusion instead of comparing two option objects. The About loader keeps
+dev's prose-description extraction and per-locale inline image sizes and applies them only to
+enabled locales, after the language assertion inside the loader snapshot. `byLocale` keeps
+dev's total `translationKey` tie-break and returns nothing for a disabled locale.
+
+Verification at the merge: site tests 668/668, `astro check` 0 errors, `astro build` and the
+uploader typecheck pass; the PostgreSQL-enabled uploader suite passed except one heavy test per
+run (`build-snapshot` once, `gpx-worker` once), neither touched by this change and both passing
+in isolation. A real app booted from this worktree published a bilingual DE-primary story (DE
+at root, EN under `/en/`, reciprocal `hreflang`, per-locale RSS) and refused both a primary
+change and removal of a published locale with 409; a fresh EN-primary instance served an
+EN-only story at root, 404 under `/en/`, `lang="en"` and no alternate.
