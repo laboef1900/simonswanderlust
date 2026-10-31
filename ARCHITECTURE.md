@@ -801,7 +801,8 @@ boot/rescan can decode originals even when uploads are disabled.
 1. Apply the target release's **actual Compose/bootstrap changes**, not just its image tag,
    retaining the old configuration with the recovery generation. Pin the reviewed app image
    by digest: the existing `IMAGE_TAG` interpolation also accepts a `tag@sha256:…` value, yielding
-   `ghcr.io/laboef1900/simonswanderlust-app:tag@sha256:…`. Substitute the real verified tag/digest
+   `ghcr.io/laboef1900/wanderlust-studio:tag@sha256:…` (historical releases remain under the old
+   image name; see Release flow). Substitute the real verified tag/digest
    privately; do not use the ellipsis literally. Preserve the selected platform and Postgres
    major. Do not print expanded Compose configuration containing credentials into evidence.
 2. **Host-proxy prerequisite for releases carrying #369:** deploy the matching proxy-trust
