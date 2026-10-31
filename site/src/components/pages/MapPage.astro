@@ -84,6 +84,8 @@ const stats = statsLine(tripStats(trips), t);
       );
     } catch (err) {
       console.error('map init failed', err);
+      el.replaceChildren();
+      el.parentElement!.hidden = true;
     }
   }
 </script>
