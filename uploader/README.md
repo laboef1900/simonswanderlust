@@ -252,6 +252,15 @@ storage key, not per variant file. Bulk drag-and-drop upload, virtual folders (a
 table; moving a photo re-labels it, it does not move bytes on disk), search, and per-item alt text
 that the gallery picker reuses.
 
+The Media page shows 60 photos per page. If deleting or moving photos removes the current
+last page, its reload steps backwards to the new last page instead of showing an empty
+library with a non-zero total. An empty result resets pagination to page 1 (the page label
+is hidden and both navigation buttons are disabled). Corrective requests keep the same
+load-sequence ticket, so a newer folder/filter selection wins even if an older correction
+arrives later. This was exercised against the real app and Postgres with 63 generated,
+encoded photos: confirmed deletion from a 61-photo folder, moving both rows off page 2,
+emptying a folder while on page 2, and a delayed correction racing a newer search.
+
 Re-uploading the same file preserves its existing non-root folder, including when recovering
 a `failed` or `missing` photo, even if the recovery attempt is refused by a full queue.
 A ready photo or a failed/missing photo being re-created may adopt the upload's selected
