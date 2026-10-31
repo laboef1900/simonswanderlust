@@ -22,8 +22,7 @@ const stats = tripStats(byLocale(await getCollection('trips'), locale));
 const entry = await getEntry('pages', `about/${locale}`);
 const heading = entry?.data.title?.trim() || t('about.title');
 const Content = entry ? (await render(entry)).Content : null;
-const plain = (entry?.body ?? '').replace(/[#>*_`~\-\[\]!()]/g, ' ').replace(/\s+/g, ' ').trim();
-const description = plain ? plain.slice(0, 150) : t('about.title');
+const description = entry?.data.description || t('about.title');
 ---
 
 <Base
