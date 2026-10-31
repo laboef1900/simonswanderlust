@@ -394,6 +394,22 @@ with the typed key if one is entered. Listing sends no photo and does not verify
 support. Custom providers must allow browser CORS. Local LM Studio providers never hold or
 receive a key.
 
+**Pending provider keys.** An Add/Edit form keeps its masked, unsaved key when you
+use **Set default**, **Save AI settings**, or delete another provider. These actions
+do not submit that key. **Save provider** and confirmed **Remove stored key** clear
+the originating form's key at request handoff, even if the request fails; a late
+response cannot discard a different form you opened meanwhile. Cancel, changing
+forms, switching Add to Local LM Studio, and leaving/reloading the page discard it.
+There is no browser-storage recovery of a key.
+
+When editing a provider's URL, a typed replacement is saved for that provider at
+the new URL; a blank key keeps the stored key and asks before moving it to a
+different URL. Declining confirmation preserves the form. If settings cannot be
+refreshed after another action, the open form stays visible, but Save, Remove key,
+Test and registry actions are blocked. Follow the reload-required message; reloading
+discards unsaved input. An unknown or partial save outcome is not retried
+automatically: inspect the freshly loaded provider state before submitting again.
+
 **Maximum output tokens** sets the per-photo output ceiling for both editor/uploader
 alt-text suggestions and media-library AI details (single and bulk). Default **8,000**;
 allowed range **256–32,768**, whole numbers only. Reasoning models spend this same budget
@@ -454,9 +470,11 @@ fields. It is sent as untrusted JSON in a user message, separate from the review
 `EDITORIAL_REVIEW_SCHEMA`, and the matching pure parser.
 
 The parser accepts JSON wrapped in prose/fences or preceded by `<think>` reasoning,
-but rejects missing fields, wrong types/statuses, and extra keys. It strips Unicode
-control characters, caps text at 1,000 UTF-16 units, and caps each list at 10 strings
-of 200 units (without splitting surrogate pairs). Empty strings/lists are allowed;
+but rejects missing fields, wrong types/statuses, and extra keys. Whitespace runs
+(including newlines and tabs) become one space before other Unicode controls are
+removed and outer whitespace is trimmed, preserving word boundaries in suggestions.
+Text is capped at 1,000 UTF-16 units, and each list at 10 strings of 200 units
+(without splitting surrogate pairs). Empty strings/lists are allowed;
 title suggestions and the suggested excerpt are optional. Alt-text observations use
 `practicalDetails`, because the agreed result contract has no separate alt-text section.
 Parsing also bounds synchronous work: raw output may contain at most 128 Ki UTF-16
@@ -711,6 +729,18 @@ character policy as the web forms, and invalidates that user's sessions. Routine
 logged in uses the "Change my password" card on
 `/admin/users.html`. Full recovery notes (including the last-resort `DELETE FROM users;` →
 `/setup` fallback) are in [`../ARCHITECTURE.md`](../ARCHITECTURE.md).
+
+The admin-only Users page reports list-load errors separately from account actions.
+**Reload users** clears obsolete rows and their Remove buttons before fetching; a failed
+request or unreadable JSON response leaves an explicit error, not an apparently empty
+successful list. Reloading does not discard entries in the Add user or password forms.
+After an account is added or removed, its refresh supersedes any older list request;
+late responses cannot hide the new account or restore a deleted account's Remove button.
+Both forms support Enter to submit, disable their submit button while waiting, and
+re-enable it after success or failure. A transport failure preserves the entries and
+reports that the outcome could not be confirmed: reload the list before retrying Add user,
+since a lost response does not prove the server rejected the change. The admin UI remains
+English; these status and recovery messages come from the shared DE/EN copy registry.
 
 ## Develop
 
