@@ -237,7 +237,7 @@ let stampSeq = 0;
  * `keep` and displaces a real rollback candidate (#110). Staging dirs are
  * removed on failure, swept at the next run, and ignored by pruning.
  */
-async function buildAndDeploy(opts: Pick<SiteBuilderOptions, 'siteAppDir' | 'releasesRoot' | 'signal' | 'isWritable'> & { keep: number; runBuild: (outDir: string) => Promise<void> }): Promise<string> {
+async function buildAndDeploy(opts: Pick<SiteBuilderOptions, 'siteAppDir' | 'releasesRoot' | 'signal' | 'isWritable'> & { keep: number; runBuild: (outDir: string) => Promise<void>; onPromoted: (stamp: string) => void }): Promise<string> {
   const releases = join(opts.releasesRoot, 'releases');
   assertWorkWritable(opts);
   await mkdir(releases, { recursive: true });
@@ -265,7 +265,9 @@ async function buildAndDeploy(opts: Pick<SiteBuilderOptions, 'siteAppDir' | 'rel
   assertWorkWritable(opts);
   await rename(tmpLink, join(opts.releasesRoot, 'current'));
   // @ai-note The current-link rename is the commit point (#397). Housekeeping
-  // cannot report a failed build after readers already see this release.
+  // cannot report a failed build after readers already see this release, and
+  // neither can a snapshot cancellation that lands while it runs.
+  opts.onPromoted(stamp);
   await prunePromotedRelease(releases, stamp, opts);
   return stamp;
 }
@@ -288,6 +290,7 @@ export function createSiteBuilder(opts: SiteBuilderOptions): SiteBuilder {
   // Always resolves (never rejects), so chaining a queued run off a failed
   // in-flight build is safe.
   const runOnce = async (): Promise<BuildOutcome> => {
+    let promoted: string | undefined;
     try {
       work.assertWritable();
       // Exclusive: pauses the encode queue for the duration (see work-lock.ts).
@@ -301,7 +304,7 @@ export function createSiteBuilder(opts: SiteBuilderOptions): SiteBuilder {
             else await runAstroBuild(opts.siteAppDir, outDir, timeoutMs, { ...buildWork, applicationName: opts.applicationName, snapshot });
             if (snapshot) await writeBuildAssets(outDir, snapshot);
           };
-          return buildAndDeploy({ siteAppDir: opts.siteAppDir, releasesRoot: opts.releasesRoot, keep, runBuild, ...buildWork });
+          return buildAndDeploy({ siteAppDir: opts.siteAppDir, releasesRoot: opts.releasesRoot, keep, runBuild, ...buildWork, onPromoted: (stamp) => { promoted = stamp; } });
         };
         if (opts.pool) return withBuildSnapshot(opts.pool, { timeoutMs, signal: work.signal }, deploy);
         if (!opts.runBuild) throw new Error('A database pool is required for site builds');
@@ -309,6 +312,9 @@ export function createSiteBuilder(opts: SiteBuilderOptions): SiteBuilder {
       });
       return { ok: true, release };
     } catch (e) {
+      // The snapshot wrapper rejects on a lease/connection/deadline abort even
+      // after promotion; it still waited for cleanup to settle first.
+      if (promoted) return { ok: true, release: promoted };
       return { ok: false, error: (e as Error).message };
     }
   };

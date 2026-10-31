@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { existsSync, realpathSync } from 'node:fs';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -178,6 +179,38 @@ suite('one PostgreSQL view for the complete build', () => {
       expect(await readFile(join(root, 'site', 'current', 'index.html'), 'utf8')).toBe('previous release');
     } finally {
       await pool.query("UPDATE site_identity SET localized='{}'");
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reports a committed promotion as published when the snapshot is cancelled during cleanup (#397)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'promotion-cancel-'));
+    const siteAppDir = join(root, 'app');
+    const releasesRoot = join(root, 'site');
+    await mkdir(siteAppDir);
+    await mkdir(join(releasesRoot, 'releases', '0-old'), { recursive: true });
+    const controller = new AbortController();
+    // Cleanup asks for writability before removing the old release: lose the
+    // lease exactly there, after `current` already names the new release.
+    const isWritable = () => {
+      if (!controller.signal.aborted && existsSync(join(releasesRoot, 'current'))) controller.abort(new Error('lease lost'));
+      return !controller.signal.aborted;
+    };
+    const builder = createSiteBuilder({
+      pool, siteAppDir, releasesRoot, keep: 1, signal: controller.signal, isWritable,
+      runBuild: async (outDir) => {
+        await mkdir(outDir, { recursive: true });
+        await writeFile(join(outDir, 'index.html'), 'new release');
+      },
+    });
+    try {
+      const outcome = await builder.build();
+      expect(outcome).toMatchObject({ ok: true });
+      expect(await readFile(join(releasesRoot, 'current', 'index.html'), 'utf8')).toBe('new release');
+      expect(realpathSync(join(releasesRoot, 'current'))).toBe(realpathSync(join(releasesRoot, 'releases', outcome.release!)));
+      // No cleanup write after the lease was lost.
+      expect(existsSync(join(releasesRoot, 'releases', '0-old'))).toBe(true);
+    } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
