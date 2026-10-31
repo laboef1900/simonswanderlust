@@ -26,7 +26,8 @@ export function galleryCode(node: Element): Element | null {
   const kids = node.children.filter((child) => !(child.type === 'text' && /^\s*$/.test(child.value)));
   const code = kids.length === 1 ? kids[0] : undefined;
   if (!code || code.type !== 'element' || code.tagName !== 'code') return null;
-  const cls = code.properties.className;
+  // Typed as a string array, but stay defensive for a hand-built tree.
+  const cls: unknown = code.properties.className;
   const names = Array.isArray(cls) ? cls.map(String) : typeof cls === 'string' ? cls.split(/\s+/) : [];
   return names.includes('language-gallery') ? code : null;
 }

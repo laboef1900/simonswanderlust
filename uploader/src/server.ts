@@ -47,11 +47,11 @@ import { createImportRunner, memoryImportJobStore, ImportBusyError, type ImportR
 import { createRehostResume } from './wp-images.js';
 import { fixedWindowLimiter, rateLimitPreHandler, accountLockoutLimiter, commentLimiters, type RateLimiter, type AccountLimiter } from './rate-limit.js';
 import type { CommentStore } from './comments.js';
-import { registerPublicComments } from './comments-public.js';
+import { commentAuthorityOrigin, commentOrigin, registerPublicComments } from './comments-public.js';
 import { BACKUP_FILE_RE, IMAGES_ARCHIVE_RE, type DbBackup } from './backup.js';
 import { legacyRedirect } from './redirects.js';
 import { compressionHook } from './compress.js';
-import { CommentError, isCommentStatus, UUID_RE as COMMENT_ID_RE, type CommentAdminStore } from './comments-admin.js';
+import { CommentError, isCommentStatus, isModerationOffset, UUID_RE as COMMENT_ID_RE, type CommentAdminStore } from './comments-admin.js';
 import { ui } from '../../site/src/i18n/ui.js';
 import { createGeocoder, GeocodingError } from './geocoding.js';
 import { registerGpxRoutes } from './gpx-routes.js';
@@ -130,8 +130,8 @@ export interface ServerConfig {
   /** Site-wide comments switch. Defaults to OFF (fail closed): POST answers 409. */
   commentsEnabled?: () => boolean;
   /**
-   * Exact Origin a browser POST /comments must carry. Defaults to the origin
-   * of `baseUrl` (PUBLIC_BASE_URL). Compared by equality, never prefix.
+   * Explicit blog-origin override for POST /comments. Invalid values fail closed.
+   * Otherwise use trusted protocol + raw Host, excluding production image hosts.
    */
   commentsOrigin?: string;
   /** Injectable for tests; defaults to fresh `commentLimiters()` maps. */
@@ -1364,12 +1364,10 @@ export function buildServer(cfg: ServerConfig): AppServer {
   app.delete('/users/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const id = (req.params as { id: string }).id;
     if (req.authUser && req.authUser.id === id) return reply.code(409).send({ error: 'you cannot delete your own account' });
-    const target = await users.findById(id);
-    if (!target) return reply.code(404).send({ error: 'user not found' });
-    if (target.isAdmin && (await users.countAdmins()) <= 1) {
-      return reply.code(409).send({ error: 'cannot remove the last admin' });
-    }
-    await users.remove(id);
+    const outcome = await users.remove(id);
+    if (outcome === 'not_found') return reply.code(404).send({ error: 'user not found' });
+    if (outcome === 'last_admin') return reply.code(409).send({ error: 'cannot remove the last admin' });
+    await sessions.destroyAllForUser(id);
     return reply.send({ ok: true });
   });
 
@@ -1964,24 +1962,37 @@ export function buildServer(cfg: ServerConfig): AppServer {
   // The limiter maps are the comment route's own, never `loginLimiter`.
   {
     const fresh = commentLimiters();
+    const imageOrigin = new URL(cfg.baseUrl).origin;
+    const imageAuthority = new URL(imageOrigin).host;
+    // Preserve alternate-scheme exclusions, including an explicitly configured
+    // default port, without excluding unrelated ports on the same hostname.
+    const servingImageAuthorities = ['http', 'https'].map((protocol) => {
+      const origin = commentAuthorityOrigin(protocol, cfg.imgHost);
+      return origin === null ? null : new URL(origin).host;
+    });
     registerPublicComments(app, {
       comments: cfg.comments,
       posts: cfg.posts,
-      allowedOrigin: cfg.commentsOrigin ?? new URL(cfg.baseUrl).origin,
+      allowedOrigin: (req) => {
+        if (cfg.commentsOrigin !== undefined) return commentOrigin(cfg.commentsOrigin);
+        // #276 inserts the CURRENT validated identity.canonicalOrigin here, not
+        // a boot snapshot. Until then, do not infer identity from reader input.
+        const origin = commentAuthorityOrigin(req.protocol, req.headers.host);
+        if (origin === null) return null;
+        if (servingImageAuthorities.some((authority) => authority === null)) return null;
+        // Normalize every authority under the actual request protocol. A default
+        // port in either image setting must not evade the image-host exclusion.
+        const servesImages = servingImageAuthorities.some((authority) =>
+          commentAuthorityOrigin(req.protocol, authority) === origin);
+        if (commentAuthorityOrigin(req.protocol, imageAuthority) === origin || servesImages) {
+          return imgHostServesBlog && servesImages && origin === imageOrigin ? origin : null;
+        }
+        return origin;
+      },
       // Falls back to the persisted global switch (default false = fail closed).
       commentsEnabled: cfg.commentsEnabled ?? (() => cfg.settings.get().commentsEnabled === true),
       ipLimiter: cfg.commentIpLimiter ?? fresh.ip,
       globalLimiter: cfg.commentGlobalLimiter ?? fresh.global,
-      // Author replies (#205) are `approved` + `is_author`; the public store's
-      // shape has no flag, so the id set comes from the admin store's approved
-      // list — a read of approved rows only, never pending ones.
-      ...(cfg.commentsAdmin ? {
-        isAuthorIds: async (tk: string) => new Set(
-          (await cfg.commentsAdmin!.list('approved'))
-            .filter((c) => c.translationKey === tk && c.isAuthor)
-            .map((c) => c.id),
-        ),
-      } : {}),
     });
   }
 
@@ -2000,10 +2011,16 @@ export function buildServer(cfg: ServerConfig): AppServer {
   const noStore = (reply: FastifyReply) => { void reply.code(503).send({ error: 'comments are not available' }); };
 
   app.get('/moderation/comments', { preHandler: requireAdmin }, async (req, reply) => {
-    const status = (req.query as { status?: string }).status ?? 'pending';
+    reply.header('cache-control', 'no-store');
+    const query = req.query as { status?: unknown; offset?: unknown };
+    const status = query.status ?? 'pending';
     if (!isCommentStatus(status)) return reply.code(400).send({ error: 'status must be pending or approved' });
+    const rawOffset = query.offset ?? '0';
+    if (typeof rawOffset !== 'string' || !/^[0-9]+$/.test(rawOffset) || !isModerationOffset(Number(rawOffset))) {
+      return reply.code(400).send({ error: 'invalid pagination' });
+    }
     if (!commentsAdmin) return noStore(reply);
-    return reply.header('cache-control', 'no-store').send({ comments: await commentsAdmin.list(status) });
+    return reply.send(await commentsAdmin.list(status, Number(rawOffset)));
   });
 
   app.post('/moderation/comments/:id/status', { preHandler: requireAdmin }, async (req, reply) => {

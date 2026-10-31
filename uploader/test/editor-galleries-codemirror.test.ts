@@ -167,12 +167,11 @@ describe('real CodeMirror collapsed gallery boundaries', () => {
     await expectGallery(h);
   });
 
-  it('keeps pasted trailing newlines and leaves the opener on its own line', async () => {
+  it('keeps pasted trailing newlines and immediate typing outside the opener before analysis settles', async () => {
     const h = await editor(body);
     arrowToEdge(h.cm, 'before');
     h.cm.replaceSelection('Pasted\n\n', 'end', 'paste');
-    expect(h.cm.getValue()).toBe('Intro\n\nPasted\n\n' + gallery + '\n\nFollowing story text');
-    await expectGallery(h);
+    expect(h.cm.getValue()).toBe('Intro\n\nPasted\n\n\n\n' + gallery + '\n\nFollowing story text');
     h.cm.replaceSelection('Next', 'end', '+input');
     await expectGallery(h);
     expect(h.cm.getValue()).toContain('Pasted\n\nNext\n\n```gallery');

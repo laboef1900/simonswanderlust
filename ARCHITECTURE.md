@@ -330,6 +330,16 @@ registered with a Fastify **host constraint** for the hostname of `PUBLIC_BASE_U
 via `IMG_HOST`), so on the img host the constrained `/` wildcard wins and image URLs behave exactly
 as before the merge. All other routes (admin, blog, map) are unconstrained.
 
+Reader comments use the **blog request's origin**, not `PUBLIC_BASE_URL` (#319).
+Until canonical identity is configured by #276, the allowed origin is the trusted request
+protocol plus the verbatim `Host`; `X-Forwarded-Host`, Origin and Referer never supply that
+authority. A supplied `ServerConfig.commentsOrigin` override takes precedence and fails closed
+if invalid. The image authority from `PUBLIC_BASE_URL` and the actual `IMG_HOST` are excluded,
+even under another scheme; the existing single-origin loopback development topology is the
+exception. Origin equality remains a CSRF check, not authentication or a domain allow-list:
+the reverse proxy must reject unintended public hostnames. #276 will put the current validated
+canonical identity between the explicit override and this temporary fallback.
+
 Legacy WordPress URLs are 301-redirected by the not-found handler (blog host only, before the
 404/503 fallbacks): the `/feed/` family (`/feed/`, its `/feed/{atom,rss2,rss,rdf}/` aliases,
 `/comments/feed/` and the `/en/…` Polylang equivalents) goes to `/rss.xml` resp. `/en/rss.xml`, and the six
@@ -767,8 +777,8 @@ separate owner action, not part of the dependency PR.
 | `DATABASE_URL` | app | Postgres connection (content + auth) |
 | `ENCRYPTION_KEY` | app | Optional 64-hex master key for encrypted AI credentials; unset permits local workflows, malformed values refuse boot; escrow separately |
 | `TRUSTED_PROXY` | app / compose literal | Unset or `loopback`: loopback peers only. Compose sets `docker-gateway`: also trust the single discovered IPv4 default gateway, at hop zero only. Empty/unknown values or failed gateway discovery refuse boot. Not an `.env` setting; changing bridge/proxy topology requires a new trust spec. |
-| `PUBLIC_BASE_URL` | app | Public base for image URLs (e.g. `https://img.simonswanderlust.com`) |
-| `IMG_HOST` | app | Hostname routed to the image-variant static handler (defaults to the host of `PUBLIC_BASE_URL`) |
+| `PUBLIC_BASE_URL` | app | Public base for image URLs (e.g. `https://img.simonswanderlust.com`); not the allowed blog-comment origin. Its image authority is excluded from the temporary comment-origin fallback except in single-origin loopback development. |
+| `IMG_HOST` | app | Hostname routed to the image-variant static handler (defaults to the host of `PUBLIC_BASE_URL`); also excluded from the comment-origin fallback, with the same loopback exception. |
 | `SITE_APP_DIR` | app | Path to the Astro project the builder spawns (`/app/site`) |
 | `SITE_DIR` | app | Release root for the built blog (`/data/site`) — `current` is served from here |
 | `SITE_IDENTITY_JSON` | build child only | **Internal**, set for every spawn by `build.ts`; not operator-configurable, overrides inherited values |
@@ -797,7 +807,8 @@ topology validation in the approved spec. This table does not introduce an opera
 - **Immediate proxy peer:** the shipped bridge topology permits one host TLS proxy. The app
   validates the socket address before accepting forwarded IP/protocol and stops at hop zero;
   it never trusts the whole bridge network. The host must preserve `Host`, overwrite the
-  forwarded scheme, and put its accepted client at the rightmost XFF position. See
+  forwarded scheme, reject unintended public hostnames, and put its accepted client at the
+  rightmost XFF position. These rules also protect the temporary comment-origin fallback. See
   [Transport, headers & proxy](SECURITY.md#transport-headers--proxy) for the accepted
   host-process residual, measured Docker Desktop TCP evidence and the remaining target-VPS
   loopback/real-client verification gate.
