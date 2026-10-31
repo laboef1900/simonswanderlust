@@ -827,6 +827,13 @@ becoming a contact sheet. The one cap left is on a row that would stand taller
 than the square — a lone portrait — held at the square's own height as a
 **percentage** of the container so it scales with it.
 
+**Lightbox dismissal follows the visible content, not its containers.** In all
+three modes, clicking or tapping the dark space around a photo closes the native
+dialog, even when that space hit-tests to its full-viewport figure. Only the
+photo, caption and controls are excluded from backdrop dismissal — never the
+whole figure or frame. Photo and caption clicks keep it open; arrows navigate;
+Close and Escape dismiss and return focus to the gallery link.
+
 ## Do's and Don'ts
 
 ### Do:
