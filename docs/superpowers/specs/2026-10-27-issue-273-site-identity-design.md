@@ -685,6 +685,23 @@ No new `.env` variable is introduced anywhere in this contract.
   acceptance).
 - There is no server-side fetch of a remote logo URL, ever.
 
+**#275 endpoint/UI implementation contract (2026-10-28):** `GET /settings/identity`
+also returns `assets: { logo: boolean, favicon: boolean }`. Upload is
+`PUT /settings/identity/assets/:role` with multipart `revision` (positive decimal integer)
+and one `file`; removal is `DELETE` on that path with JSON `{ revision }`. `:role` is
+`logo` or `favicon`. A successful mutation returns
+`{ revision, savedAt, takesEffect: 'next_build', assets: { logo, favicon } }`.
+Stale revisions return 409 `identity_conflict`; invalid role/revision returns 400
+`invalid_identity` naming the field. The space refusal is 507 `insufficient_space`;
+an oversized normalized output is 400 `asset_too_large` (distinct from the input's 413).
+These writes are admin-only and responses are `no-store`.
+
+Asset actions save independently from text. The Settings controller adopts the returned
+shared revision and asset-presence flags without replacing unsaved text. Conflicts retain
+the current inputs until an explicit reload. Removal asks for confirmation; saved/default
+state and a locally chosen filename are not a preview of the public release. No preview
+endpoint or automatic rebuild is introduced.
+
 ### 9.5 Rejected
 
 - **Sanitized SVG.** It needs a sanitizer dependency whose parse must match every browser's.
@@ -1194,3 +1211,39 @@ and captures are retained in `.issue-runtime/identity-about-home-reflow-proof.js
 development database was unchanged. This supplements, not replaces, the API/Unicode and
 header/footer acceptance evidence for #274.
 
+## 25. #275 implementation and acceptance coverage (2026-10-28)
+
+The asset upload/removal boundary and Settings/Nav/Base consumers complete §9 while reusing
+#274's schema, shared asset validator, v11 backup codec and build snapshot. The existing
+`SECURITY.md`, `ARCHITECTURE.md`, `DESIGN.md` and authoring workflow describe the normalized
+asset lifecycle, separate save timing, recovery and defaults. Canonical-origin work remains
+#276; no owner content, deployment or public rebuild is part of this change.
+
+Recovery/build regression coverage is extended in the existing suites:
+
+- `identity-backup.test.ts`: PNG/JPEG/static WebP passed through the upload normalizer,
+  then canonical-base64 dump parsing and full restored-PNG validation for all four roles.
+- `identity-backup.integration.test.ts`: normalized logo/favicon bytes and metadata survive
+  a real PostgreSQL dump/restore; malicious metadata, dimensions, incomplete/duplicate roles
+  and base64 refuse before changing live rows. Current-format empty assets and supported
+  pre-identity restores clear destination custom assets.
+- `build-snapshot.integration.test.ts`: captured logo and all favicon bytes/paths remain
+  the captured version despite committed replacements; a later capture sees the new version,
+  while removal yields default asset references without rewriting an older release.
+
+These are added acceptance assertions, **not runtime verification evidence**. This coverage
+assignment did not execute checks, tests, builds or browser runs. PostgreSQL integration
+suites require `TEST_DATABASE_URL`; a skipped suite is not recovery/build proof.
+
+Recovery remains §13's verified undo dump and atomic restore, followed by restart and explicit
+Rebuild. For an unwanted asset, remove or replace the saved role and rebuild; retain its source
+locally if it may be needed again. Existing release rollback retains that release's captured
+assets, and no original upload is stored.
+
+### Integration preparation — 2026-10-30
+
+Baseline `2a33742d5f9e1236b387e235661324c49c8641fd` retains the identity v11
+allocation. The asset-route registration and fingerprinted identity cache policy are
+combined with the baseline trusted-proxy type and native static-serving policy;
+neither boundary is replaced. Prior runtime evidence remains historical, with new
+integration checks recorded separately in the local preparation ledger.

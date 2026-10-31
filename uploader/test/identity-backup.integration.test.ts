@@ -8,7 +8,8 @@ import sharp from 'sharp';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { ensureSchema, type DbPool } from '../src/db.js';
 import { dumpDatabase, readDump, restoreDatabase, IDENTITY_DUMP_VERSION, type Connectable, type Dump } from '../src/backup.js';
-import { identityFromRow, seedSiteIdentity, type IdentityRow } from '../src/site-identity.js';
+import { identityFromRow, pgSiteIdentityStore, seedSiteIdentity, type IdentityRow } from '../src/site-identity.js';
+import { normalizeIdentityUpload } from '../src/site-identity-assets.js';
 import { LEGACY_IDENTITY } from '../src/site-identity-legacy.js';
 import { neutralIdentity } from '../../site/src/lib/site-identity.js';
 import { identityDumpRow } from './site-identity-fixture.js';
@@ -62,29 +63,57 @@ maybe('identity recovery with isolated PostgreSQL state', () => {
     await pool.query('INSERT INTO site_identity_assets (role,sha256,width,height,bytes) VALUES ($1,$2,$3,$4,$5)',
       ['logo', createHash('sha256').update(bytes).digest('hex'), 64, 32, bytes]);
   }
+  async function addNormalizedAssets() {
+    const store = await pgSiteIdentityStore(pool);
+    const source = await sharp({ create: { width: 360, height: 180, channels: 4, background: '#12345680' } })
+      .withMetadata().webp().toBuffer();
+    const logo = await normalizeIdentityUpload(source, 'logo');
+    const favicon = await normalizeIdentityUpload(source, 'favicon');
+    await store.replaceAssets(store.get().revision, 'logo', logo);
+    await store.replaceAssets(store.get().revision, 'favicon', favicon);
+    return [...logo, ...favicon];
+  }
 
-  it('round-trips full retained DE/EN maps, metadata and PNG bytes, replacing destination-only values', async () => {
+  it('seeds default assets without later seeding erasing a saved custom group', async () => {
+    const seeded = await pgSiteIdentityStore(pool);
+    expect(seeded.getAssetState()).toEqual({ logo: false, favicon: false });
+    expect(seeded.get()).toMatchObject({ revision: 1, savedAt: null, seedSource: 'neutral' });
+    await addNormalizedAssets();
+    const before = await content();
+    await seedSiteIdentity(pool);
+    expect(await content()).toEqual(before);
+    expect((await pgSiteIdentityStore(pool)).getAssetState()).toEqual({ logo: true, favicon: true });
+  });
+
+  it('round-trips full retained DE/EN maps, metadata and normalized logo/favicon bytes, replacing destination-only values', async () => {
     const localized = { tagline: { de: 'Deutsch', en: 'Retained English' }, aboutRole: { en: 'Writer' },
       aboutGear: { de: 'Notebook' }, studioDescriptor: { en: 'Private studio descriptor' } };
     await pool.query(`UPDATE site_identity SET revision=9, seed_source='legacy', saved_at=now(),
       site_name='Other journal', author_name='Ada', canonical_origin='https://journal.example',
       localized=$1::jsonb, social_links=$2::jsonb`, [JSON.stringify(localized), JSON.stringify([{ label: 'Profile', url: 'https://social.example/ada' }])]);
-    await addLogo();
+    const normalized = await addNormalizedAssets();
     const before = await content();
     const file = join(dir, await dumpDatabase(pool, dir));
     const dump = readDump(file);
-    expect(dump.tables.site_identity_assets![0]!.bytes).toBe((before.assets[0]!.bytes as Buffer).toString('base64'));
+    expect(dump.tables.site_identity_assets).toHaveLength(4);
+    for (const asset of normalized) {
+      expect(dump.tables.site_identity_assets!.find((row) => row.role === asset.role)).toMatchObject({
+        role: asset.role, sha256: asset.sha256, width: asset.width, height: asset.height,
+        bytes: asset.bytes.toString('base64'),
+      });
+    }
     await pool.query("UPDATE site_identity SET site_name='Destination', localized='{\"tagline\":{\"de\":\"Overwrite\"}}', canonical_origin=NULL");
     await pool.query('DELETE FROM site_identity_assets');
     await pool.query("UPDATE pages SET title='Destination page'");
     await restoreDatabase(pool, file);
     expect(await content()).toEqual(before);
     expect(identityFromRow(await stored()).tagline).toEqual(localized.tagline);
+    expect((await pgSiteIdentityStore(pool)).getAssetState()).toEqual({ logo: true, favicon: true });
   });
 
   it.each([1, 10])('restores v%i as legacy, clears assets, keeps the live canonical and leaves saved_at unset', async (version) => {
     await pool.query("UPDATE site_identity SET site_name='Live', canonical_origin='https://destination.example', saved_at=now(), revision=7");
-    await addLogo();
+    await addNormalizedAssets();
     const legacy: Dump = { version, createdAt: new Date().toISOString(), tables: { users: [], posts: [],
       ...(version >= 10 ? { post_routes: [] } : {}) } };
     await restoreDatabase(pool, await save(legacy));
@@ -92,6 +121,7 @@ maybe('identity recovery with isolated PostgreSQL state', () => {
     expect(identityFromRow(row)).toEqual({ ...LEGACY_IDENTITY, canonicalOrigin: 'https://destination.example' });
     expect(row).toMatchObject({ seed_source: 'restored-legacy', saved_at: null, revision: 1 });
     expect((await pool.query('SELECT * FROM site_identity_assets')).rows).toEqual([]);
+    expect((await pgSiteIdentityStore(pool)).getAssetState()).toEqual({ logo: false, favicon: false });
   });
 
   it('uses the legacy canonical when the destination has none, and keeps identity in the undo dump', async () => {
@@ -123,6 +153,44 @@ maybe('identity recovery with isolated PostgreSQL state', () => {
     asset.bytes = broken.toString('base64'); asset.sha256 = createHash('sha256').update(broken).digest('hex');
     await expect(restoreDatabase(pool, await save(dump))).rejects.toThrow(/assets.png/);
     expect(await content()).toEqual(before);
+  });
+
+  it.each(['metadata', 'wrong dimensions', 'incomplete favicon', 'duplicate role', 'invalid base64'] as const)(
+    'rejects malicious normalized-asset dumps (%s) without changing any live rows', async (attack) => {
+      await addNormalizedAssets();
+      const before = await content();
+      const dump = readDump(join(dir, await dumpDatabase(pool, dir)));
+      const assets = dump.tables.site_identity_assets!;
+      const logo = assets.find((asset) => asset.role === 'logo')!;
+      if (attack === 'metadata') {
+        const bytes = await sharp(Buffer.from(logo.bytes as string, 'base64')).withMetadata().png().toBuffer();
+        logo.bytes = bytes.toString('base64');
+        logo.sha256 = createHash('sha256').update(bytes).digest('hex');
+      } else if (attack === 'wrong dimensions') {
+        logo.width = Number(logo.width) - 1;
+      } else if (attack === 'incomplete favicon') {
+        dump.tables.site_identity_assets = assets.filter((asset) => asset.role !== 'favicon-192');
+      } else if (attack === 'duplicate role') {
+        assets.push({ ...logo });
+      } else {
+        logo.bytes = 'not-base64';
+      }
+      dump.tables.site_identity![0]!.site_name = 'Must never replace live identity';
+      dump.tables.pages = [];
+      await expect(restoreDatabase(pool, await save(dump))).rejects.toThrow(/assets\./);
+      expect(await content()).toEqual(before);
+    },
+  );
+
+  it('restores a current-format no-assets dump to the defaults, not destination assets', async () => {
+    const empty = join(dir, await dumpDatabase(pool, dir));
+    await addNormalizedAssets();
+    expect((await pgSiteIdentityStore(pool)).getAssetState()).toEqual({ logo: true, favicon: true });
+    await restoreDatabase(pool, empty);
+    const restored = await pgSiteIdentityStore(pool);
+    expect(restored.getAssetState()).toEqual({ logo: false, favicon: false });
+    expect(restored.get()).toMatchObject({ revision: 1, savedAt: null, seedSource: 'neutral' });
+    expect(restored.get().identity).toEqual(neutralIdentity());
   });
 
   it('rolls identity, assets and content back together on a transaction failure', async () => {

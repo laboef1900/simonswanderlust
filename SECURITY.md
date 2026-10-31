@@ -297,10 +297,31 @@ Identity lives in Postgres with content; operational settings remain in `setting
   pixel decode, and refuses embedded EXIF/XMP/IPTC/ICC. The CLI and direct restore perform
   decoding before mutation. Recovered bytes are never repaired or silently skipped.
 
-**Not implemented by #274:** logo/favicon upload routes and rendering (#275); canonical-origin
-editing, topology checks, comment-Origin switching, noindex/robots and outbound headers (#276).
-Canonical values currently receive serialized-origin shape validation only. The comment Origin
-source documented above is unchanged by #274; #319/#276 own replacing its image-origin fallback.
+#### Logo and favicon (#275)
+
+- `PUT`/`DELETE /settings/identity/assets/:role` are admin-only, `no-store` writes for
+  `logo` or `favicon`. They use the same optimistic revision as text saves; a stale revision
+  refuses the whole mutation. A favicon's three rows replace or disappear in one transaction.
+- Uploads accept one PNG, JPEG or static WebP, detected from decoded content rather than
+  the filename/MIME declaration. SVG and other formats are refused. Input is bounded to
+  2 MiB and 4096 × 4096 pixels; animated input is refused. Logos need 32 pixels of source
+  height; favicons need at least 180 × 180. The existing free-space precondition applies.
+- Normalization runs under the shared work lock. Orientation is applied, colour converted
+  to sRGB and pixels re-encoded as PNG without EXIF/GPS/XMP/IPTC/ICC. Originals are not kept,
+  and no URL is fetched. Logos fit inside 960 × 240 without enlargement; favicon outputs
+  are 32, 192 and 180 pixels square. The Apple icon is flattened onto canvas `#fbfbfd`.
+- Only normalized bytes enter Postgres, with SHA-256 and a 256 KiB per-output ceiling.
+  Assets are included in DB dumps, not the media library or image archives. The existing
+  restore boundary above validates them again before replacing live rows.
+- A save/remove does not rebuild or mutate the current public release. The next build copies
+  its captured bytes to content-hashed `/_identity/<role>-<hash16>.png` paths on the blog
+  origin, served as PNG with global `nosniff`. A replacement cannot change a previously
+  captured release's bytes; old release assets remain available with that release.
+
+**Not implemented by #274/#275:** canonical-origin editing, topology checks, comment-Origin
+switching, noindex/robots and outbound headers (#276). Canonical values currently receive
+serialized-origin shape validation only. The comment Origin source documented above is unchanged;
+#319/#276 own replacing its image-origin fallback.
 Do not infer these future controls from the reserved columns/snapshot fields. Gallery image
 allow-listing, existing upload limits and EXIF policy are unchanged.
 
