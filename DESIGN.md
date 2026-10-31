@@ -347,6 +347,15 @@ Extend those roles with a size or a weight when needed — never
 a tracking value, and never a coloured plate, which is what the card's date
 line used to be.
 
+**Count grammar.** Public DE/EN labels use the singular only for exactly one:
+`1 REISE` / `1 TRIP`, `1 LAND` / `1 COUNTRY`, `1 KONTINENT` / `1 CONTINENT`,
+`1 Pin-Standort` / `1 pin location`, and `1 Kommentar` / `1 comment`.
+The homepage map band, region kicker, map page, About statistics and comment
+thread share this rule through `countLabel`; translated forms stay in `ui.ts`.
+Zero and two or more use plural labels. Existing empty states take precedence:
+the homepage omits its map band without stories, empty regions have no page,
+and an empty comment thread says “Noch keine Kommentare.” / “No comments yet.”
+
 **Where the entry number belongs.** `N°09` is a signature mark and it earns
 its place where it says something: the homepage hero's entry, where it
 introduces the latest story as one of a numbered series. It was also on every
@@ -354,6 +363,13 @@ grid card, nine of them down one index, restating an order the grid's own
 newest-first sequence already shows, and on the story page, where the reader
 has already arrived and the number told them nothing they act on. Spending
 the mark where it carries meaning is not a retreat from the identity.
+
+**Equal-date stories keep one order (#377).** `byLocale` orders trip dates
+newest first, then the pair's shared `translationKey` ascending by code-point
+comparison. Localized titles, slugs and save chronology never decide ties.
+The homepage cover (including competing featured stories), its entry number,
+home/region grids, previous/next links, footer latest list and RSS share that
+rule, so DE and EN retain the same pair order after saves and rebuilds.
 
 ### Named Rules
 
@@ -384,11 +400,17 @@ box — 10% wider at the owner's request (2026-10-19). Inside the spread the
 rail is a fixed `18rem`, the gap `3rem`, and the column takes the available
 remainder — up to `45rem` (720px) — so the three always sum to the spread
 (`--container-story-column` / `--container-story-rail`). The rail holds
-the story's furniture — contents, key facts, the route map — open in a stack
-that stays `0.5rem` from the viewport top while the *opening* is in view.
-The stack never scrolls internally: a second scrollbar beside the page's was
-the owner's objection, and a rail taller than the spread simply sets the
-spread's height and stays put.
+the story's furniture — contents, key facts, the route map — open in a stack.
+The rail is static by default and sticks `0.5rem` from the viewport top only
+when its measured height plus that offset fits the viewport. A ResizeObserver
+and viewport resize listener update `data-sticky-fit` as disclosures, fonts,
+lazy map content or the viewport change. An oversized rail scrolls with the
+page, so its lower facts and map controls remain reachable before the opening
+ends, including by keyboard. The stack never scrolls internally: a second
+scrollbar beside the page's was the owner's objection. Without JavaScript or
+ResizeObserver it stays nonsticky; native disclosures remain usable (initially
+collapsed without JavaScript). A rail taller than the opening still sets the
+spread's height.
 The opening is the body's first section — everything before the first
 top-level heading that has content in front of it (`story-opening.ts`), so
 an intro heading, its paragraphs and its first photograph sit beside the
@@ -766,6 +788,14 @@ rotation are hashed from the country code, so a country always stamps the same
 way. `mix-blend-mode: multiply` at full opacity on an opaque canvas chip; the
 chip stays square while the ink is rotated.
 
+The date is the stored trip's **calendar date**, not a UTC instant: `Stamp.astro`
+reads local day/month/year, matching the loader's local-midnight convention and
+the hero/card date formatters. Do not use UTC getters here. Runtime rebuilds via
+the app's `/rebuild` endpoint were verified in UTC, Europe/Zurich and
+America/Los_Angeles with unchanged `2024-01-01` and `2024-03-01` synthetic
+published stories: both DE and EN stamps retain `01 01 2024` and `01 03 2024`
+respectively (#400).
+
 ### Route Divider (signature)
 
 Filled `brand-red` dot → dashed 2px navy rule → a 16px compass arrow at
@@ -809,6 +839,13 @@ so a 37-photo gallery grows taller than it is wide instead of
 becoming a contact sheet. The one cap left is on a row that would stand taller
 than the square — a lone portrait — held at the square's own height as a
 **percentage** of the container so it scales with it.
+
+**Lightbox dismissal follows the visible content, not its containers.** In all
+three modes, clicking or tapping the dark space around a photo closes the native
+dialog, even when that space hit-tests to its full-viewport figure. Only the
+photo, caption and controls are excluded from backdrop dismissal — never the
+whole figure or frame. Photo and caption clicks keep it open; arrows navigate;
+Close and Escape dismiss and return focus to the gallery link.
 
 ## Do's and Don'ts
 

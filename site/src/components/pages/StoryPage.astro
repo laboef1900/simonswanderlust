@@ -75,8 +75,8 @@ const jsonLd = serializeJsonLd(
           `display: contents`, so these are the same three disclosures stacked
           above the article they always were, and the sticky strip's
           containing block stays .story-reading — the whole story. From lg the
-          rail floats beside the opening, its stack stays in view for the
-          spread's height, and the disclosures start open. */}
+          rail floats beside the opening and sticks only when its full stack
+          fits the viewport; the disclosures start open. */}
       <div class="story-spread">
         <div class="story-rail">
           <div class="story-rail__stack">
@@ -134,6 +134,13 @@ const jsonLd = serializeJsonLd(
   </div>
 </Base>
 
+<script>
+  import { initStoryRailFit } from '../../scripts/story-rail-fit';
+
+  const rail = document.querySelector<HTMLElement>('.story-rail');
+  if (rail) initStoryRailFit(rail);
+</script>
+
 <style>
   .story-spread,
   .story-rail,
@@ -175,20 +182,22 @@ const jsonLd = serializeJsonLd(
       margin-top: 4rem;
     }
 
-    /* The rail is one sticky float; its stack is a plain block. It never
-     * scrolls internally: a rail taller than the viewport simply stays where
-     * the opening puts it (the sticky offset can only hold it while the
-     * spread is taller than the rail, and then the rail fits). An inner
-     * `overflow-y: auto` used to clip it to the viewport and put a second
-     * scrollbar beside the page's — the owner asked for it gone (2026-09-20). */
+    /* The rail never scrolls internally. Only a measured, viewport-fitting
+     * rail sticks; oversized rails and the no-JS fallback scroll with the
+     * page so lower controls remain reachable. An inner scrollbar was
+     * explicitly rejected by the owner (2026-09-20). */
     .story-rail {
       display: block;
-      position: sticky;
+      position: static;
       top: 0.5rem;
       float: right;
       clear: right;
       width: var(--container-story-rail);
       margin-left: 3rem;
+    }
+
+    .story-rail[data-sticky-fit] {
+      position: sticky;
     }
 
     .story-rail__stack {
