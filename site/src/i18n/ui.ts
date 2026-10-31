@@ -264,6 +264,7 @@ const de = {
   'map.viewOnMap': 'Auf der Karte ansehen',
   'map.readStory': 'Reisebericht lesen',
   'map.pinCount': 'Pin-Standorte',
+  'map.pinCountOne': 'Pin-Standort',
   'stories.emptyTitle': 'Keine Beiträge gefunden',
   // Generic ("hier", not "in dieser Region"): StoryGrid also renders this on the
   // home page and the regions index, where a region-specific wording would lie.
@@ -300,6 +301,7 @@ const de = {
   'comments.privacy':
     'Name und Kommentar werden gespeichert und nach Freigabe veröffentlicht; eine E-Mail-Adresse wird nicht erhoben.',
   'comments.count': '{n} Kommentare',
+  'comments.countOne': '{n} Kommentar',
   'region.europe': 'Europa',
   'region.asia': 'Asien',
   'region.africa': 'Afrika',
@@ -317,6 +319,9 @@ const de = {
   'stats.trips': 'REISEN',
   'stats.countries': 'LÄNDER',
   'stats.continents': 'KONTINENTE',
+  'stats.trip': 'REISE',
+  'stats.country': 'LAND',
+  'stats.continent': 'KONTINENT',
   'gpx.mapLoading': 'GPX-Route wird geladen…',
   'gpx.mapBasemapMissing': 'Hintergrundkarte nicht verfügbar. Die Route bleibt sichtbar.',
   'gpx.mapWebglFallback': 'Kartenbeschleunigung nicht verfügbar. Rastervorschau der Route.',
@@ -690,6 +695,7 @@ const en: Record<UIKey, string> = {
   'map.viewOnMap': 'View on the map',
   'map.readStory': 'Read the story',
   'map.pinCount': 'pin locations',
+  'map.pinCountOne': 'pin location',
   'stories.emptyTitle': 'No stories found',
   'stories.emptyBody': 'There are no travel stories here yet.',
   'story.toc': 'Contents',
@@ -720,6 +726,7 @@ const en: Record<UIKey, string> = {
   'comments.privacy':
     'Your name and comment are stored and published once approved; no email address is collected.',
   'comments.count': '{n} comments',
+  'comments.countOne': '{n} comment',
   'region.europe': 'Europe',
   'region.asia': 'Asia',
   'region.africa': 'Africa',
@@ -737,6 +744,9 @@ const en: Record<UIKey, string> = {
   'stats.trips': 'TRIPS',
   'stats.countries': 'COUNTRIES',
   'stats.continents': 'CONTINENTS',
+  'stats.trip': 'TRIP',
+  'stats.country': 'COUNTRY',
+  'stats.continent': 'CONTINENT',
   'gpx.mapLoading': 'Loading GPX route…',
   'gpx.mapBasemapMissing': 'Basemap unavailable. The route remains visible.',
   'gpx.mapWebglFallback': 'Map rendering is unavailable. Showing the route as a simple map.',
