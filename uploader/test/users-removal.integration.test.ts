@@ -17,6 +17,7 @@ import { pgSessionStore, type SessionStore } from '../src/sessions.js';
 import { createSettingsStore, defaultSettings } from '../src/settings.js';
 import { pgUserStore } from '../src/users.js';
 import { createWorkLock } from '../src/work-lock.js';
+import { TEST_TRUST } from './trusted-proxy-fixture.js';
 
 const url = process.env.TEST_DATABASE_URL;
 const maybe = url ? describe : describe.skip;
@@ -76,7 +77,7 @@ maybe('atomic last-administrator removal (#368, real Postgres)', () => {
     const queue = createEncodeQueue({ store: media, storageDir: root, lock: createWorkLock() });
     queues.push(queue);
     const app = buildServer({
-      storageDir: root, baseUrl: 'https://images.test', imgHost: 'images.test', siteDir: join(root, 'site'),
+      storageDir: root, baseUrl: 'https://images.test', imgHost: 'images.test', siteDir: join(root, 'site'), trustProxy: TEST_TRUST,
       users: pgUserStore(pool), sessions, posts: memoryPostStore(), pages: memoryPageStore(),
       media, encodeQueue: queue, secrets: memorySecretsStore(),
       settings: createSettingsStore({ path: join(root, 'settings.json'), defaults: defaultSettings() }),
