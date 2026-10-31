@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Map as MapLibreMap, StyleSpecification } from 'maplibre-gl';
 import type * as MapLibreModule from 'maplibre-gl';
 import { initFullMap, initMiniMap } from './travel-map';
@@ -24,13 +24,24 @@ vi.mock('maplibre-gl', async (importOriginal) => {
         const control = new actual.AttributionControl({});
         options.container.append(control.onAdd(adapter as unknown as MapLibreMap));
       }
+      getCanvas() { return document.createElement('canvas'); }
       on() {}
       addControl() {}
     },
   };
 });
 
-afterEach(() => document.body.replaceChildren());
+// The map probes WebGL2 before constructing MapLibre (#364); happy-dom has none.
+beforeEach(() => {
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(
+    () => ({ getExtension: () => null }) as unknown as WebGL2RenderingContext,
+  );
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  document.body.replaceChildren();
+});
 
 for (const width of [360, 1024]) {
   describe(`real attribution control at ${width}px`, () => {
