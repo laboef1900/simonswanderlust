@@ -11,13 +11,13 @@ The WordPress/Elementor import preserved all prose and photos, but also preserve
 - Per-locale `Eckdaten`, `Key data`, or `Key facts` rows belong in that locale's `keyFacts` JSON and are removed from `body_markdown`. The old empty TOC heading is removed because the Astro page generates its own contents navigation.
 - StoryHero owns the only page H1. A body H1 that merely repeats the title is removed; any other body H1 is demoted to H2 during this one-time content pass.
 - **Elementor heading rule:** an imported `## Heading:` immediately followed through a hard break by a short plain-text subtitle becomes one heading: `## Heading — Subtitle`. The colon is dropped, the subtitle text is preserved, and the rule is identical for DE and EN.
-- Hard breaks that joined the imported opening copy are paragraph boundaries and become real blank-line-separated Markdown paragraphs.
+- Hard breaks joining ordinary imported opening paragraphs become real blank-line-separated Markdown paragraphs **only when their first following H2–H4 section is `Eckdaten`, `Key data`, or `Key facts`**. An opening heading before the prose is allowed; an intervening different section ends eligibility. Without that facts boundary, preserve every normal hard break. Lists, quotes, code, headings and galleries are never candidates (owner-approved clarification: [#389](2026-10-27-issue-389-scoped-opening-hard-breaks.md)).
 - The typo `Hauptstad` is normalized to `Hauptstadt` while the Galápagos facts move into `keyFacts`.
 - Curated gallery width is explicit. `#layout: breakout` is added only to the four fences selected in the paired Galápagos and Cuyabeno stories; no photographs are removed by this pass.
 
 ## Publish and import guards
 
-`htmlToMarkdown` now repairs the Elementor heading/subtitle artifact, splits hard-break-joined opening copy before the facts block, and drops an empty legacy TOC slot. A real authored contents section with list content is preserved.
+`htmlToMarkdown` repairs the Elementor heading/subtitle artifact, splits actual `<br>` nodes only in facts-bounded ordinary opening paragraphs using Turndown's existing DOM, and drops an empty legacy TOC slot. Transparent Elementor wrappers do not change eligibility. A real authored contents section with list content is preserved. Fresh imports and explicit overwrite use this conversion; normal merge re-runs preserve the author's stored prose and only substitute recovered image URLs. This clarification authorizes no repair of existing owner content.
 
 `validateForPublish` synchronously refuses either locale when its body contains an ATX `# ` heading or raw `<h1>` element. Fenced Markdown/HTML examples are ignored. The error names the locale and explains that the story hero supplies the page H1. This is a structural publish gate, not an editorial-quality gate.
 

@@ -3,6 +3,14 @@ export type Locale = (typeof locales)[number];
 export const defaultLocale: Locale = 'de';
 
 const de = {
+  'editor.chrome.commentsPrevious': 'Zurück',
+  'editor.chrome.commentsNext': 'Weiter',
+  'editor.chrome.commentsPagination': 'Kommentarseiten',
+  'editor.chrome.commentsPage': 'Seite {page}',
+  'editor.chrome.commentsEmptyPage': 'Auf dieser Seite sind keine Kommentare mehr. Zur vorherigen Seite wechseln oder die Ansicht neu wählen.',
+  'editor.chrome.commentsPaginationError': 'Diese Kommentarseite konnte nicht geladen werden. Ansicht neu wählen und erneut versuchen.',
+  'editor.chrome.commentsDeleteBody': 'Der Kommentar von „{name}“ wird dauerhaft gelöscht. Das kann nicht rückgängig gemacht werden.',
+  'editor.chrome.commentsDeleteApprovedBody': 'Der Kommentar von „{name}“ wird dauerhaft gelöscht und fehlt sofort beim nächsten öffentlichen Abruf der Kommentare. Ein Neuaufbau der Website ist nicht nötig. Das kann nicht rückgängig gemacht werden.',
   'editor.chrome.usersReload': 'Benutzerliste neu laden',
   'editor.chrome.usersLoading': 'Benutzer werden geladen…',
   'editor.chrome.usersLoaded': 'Benutzerliste geladen: {count} Konten.',
@@ -163,6 +171,10 @@ const de = {
   'editor.chrome.restoredStale': 'Ungespeicherter Entwurf wiederhergestellt. Der Beitrag hat sich seit der Sicherung geändert, daher meldet das Speichern einen Konflikt, statt ihn zu überschreiben.',
   'editor.chrome.restoreBlocked': 'Speichern ist gesperrt: Dieser wiederhergestellte Entwurf hält nicht fest, auf welcher gespeicherten Fassung er beruht. Kopiere, was du brauchst, lade dann die Seite neu und lehne die Wiederherstellung ab.',
   'editor.chrome.restoreSlugsKept': 'Die Live-Slugs bleiben erhalten, denn die URL eines veröffentlichten Beitrags ist gesperrt.',
+  'editor.chrome.revisionRestoreTitle': 'Revision in den Editor laden?',
+  'editor.chrome.revisionRestoreBody': 'Revision „{title}“ vom {time} laden? Dies ersetzt ungespeicherte Inhalte und Metadaten in beiden Sprachen (Deutsch und Englisch) sowie die gemeinsamen Story-Details. Es wird nichts gespeichert oder veröffentlicht.',
+  'editor.chrome.revisionRestoreConfirm': 'Revision laden',
+  'editor.chrome.revisionUntitled': 'Ohne Titel',
   'editor.chrome.reviewTestLabel': 'Konfiguration testen',
   'editor.chrome.reviewTestModel': 'Gib vor dem Test eine Review-Modell-ID ein.',
   'editor.chrome.reviewTestTimeoutRange': 'Wähle für den Review eine Zeitgrenze zwischen 5000 und 300000 ms.',
@@ -442,6 +454,14 @@ const de = {
 export type UIKey = keyof typeof de;
 
 const en: Record<UIKey, string> = {
+  'editor.chrome.commentsPrevious': 'Previous',
+  'editor.chrome.commentsNext': 'Next',
+  'editor.chrome.commentsPagination': 'Comment pages',
+  'editor.chrome.commentsPage': 'Page {page}',
+  'editor.chrome.commentsEmptyPage': 'No comments remain on this page. Go to the previous page or select the view again.',
+  'editor.chrome.commentsPaginationError': 'This comment page could not be loaded. Select the view again and retry.',
+  'editor.chrome.commentsDeleteBody': 'This comment by “{name}” is permanently deleted. This cannot be undone.',
+  'editor.chrome.commentsDeleteApprovedBody': 'This comment by “{name}” is permanently deleted and disappears immediately on the next public comments request. No site rebuild is needed. This cannot be undone.',
   'editor.chrome.usersReload': 'Reload users',
   'editor.chrome.usersLoading': 'Loading users…',
   'editor.chrome.usersLoaded': 'User list loaded: {count} accounts.',
@@ -602,6 +622,10 @@ const en: Record<UIKey, string> = {
   'editor.chrome.restoredStale': 'Restored unsaved draft. The post changed since it was stashed, so Save draft will report a conflict rather than overwrite it.',
   'editor.chrome.restoreBlocked': 'Saving is blocked: this restored draft does not record which saved version it was based on. Copy what you need, then reload the page and decline the restore.',
   'editor.chrome.restoreSlugsKept': 'The live slugs were kept because a published post’s URL is locked.',
+  'editor.chrome.revisionRestoreTitle': 'Load revision into the editor?',
+  'editor.chrome.revisionRestoreBody': 'Load revision “{title}” from {time}? This replaces unsaved content and metadata in both languages (German and English), plus shared story details. Nothing will be saved or published.',
+  'editor.chrome.revisionRestoreConfirm': 'Load revision',
+  'editor.chrome.revisionUntitled': 'Untitled',
   'editor.chrome.reviewTestLabel': 'Test configuration',
   'editor.chrome.reviewTestModel': 'Enter a review model ID before testing.',
   'editor.chrome.reviewTestTimeoutRange': 'Set a review timeout between 5000 and 300000 ms.',

@@ -240,6 +240,20 @@ Gallery descriptions are the exception: alt text and captions for photos in the 
 library use the current library values on the next rebuild, without republishing each
 article. This does not publish any draft text or change gallery order.
 
+**Revisions → Restore into editor** loads a saved snapshot into the form, not into the
+database. If you have unsaved edits, a confirmation names the revision and its time,
+and warns that it replaces content and metadata in **both German and English**, plus
+shared story details. **Cancel** leaves your fields, text selections and local recovery
+draft intact. A clean form loads the revision without that extra prompt; edits made
+while the revision is loading still trigger confirmation.
+
+After loading, the form is marked **Unsaved changes**. Review both languages before
+choosing **Save draft**; only a separate **Publish** changes the live story. Published
+posts retain their current, locked slugs even when the revision used older ones.
+Restoring a revision does not reset conflict protection: a local recovery draft based
+on an older saved version still cannot overwrite a newer writer, and a recovery draft
+without a known base version remains blocked from saving.
+
 **More actions → Unpublish** returns both languages to draft and rebuilds the site.
 The previous release remains visible until that rebuild succeeds; if it fails, the
 old live pages remain until a successful rebuild. After your own successful unpublish,
@@ -600,8 +614,33 @@ into the static site, so none of the switches below need a Publish or a rebuild.
    close a trip, but only an admin can open the site to comments.
 3. **Moderation** — a reader's comment lands in `/admin/comments.html` as **pending** and is not
    public until an admin clicks **Approve**. Author replies are auto-approved and marked as such.
-4. **No rebuild** — closing or opening comments (either switch) takes effect on the next request.
-   It does not require **Publish** and never triggers a site build.
+   Their localized **Autor / Author** badge follows the reply's stored author flag, independent
+   of the number of approved comments elsewhere on the site. This does not change the current
+   limit of the oldest 500 approved comments returned for one story.
+   Both moderation views show the oldest comments first, **50 per page**. Use **Previous**
+   and **Next** to reach every comment, including those beyond the old 500-row queue.
+   The page indicator identifies the current page; a filter change or successful Approve,
+   Unapprove, Delete, Spam or Reply returns to page one. Cancelling a confirmation leaves
+   the current page untouched. Other moderators can shift the pages while you browse:
+   restart at page one to see the new state. If the last page becomes empty, Previous
+   remains available.
+   Switching **Show** or refreshing after moderation immediately removes the old rows and
+   actions while the selected view loads. Only the newest request can update the list,
+   loading indicator or error message; a delayed response from an earlier view cannot
+   replace it. A failed refresh leaves no stale rows or usable stale paging controls.
+   Switch views to try loading again. Unsent replies stay attached to their comment for
+   this page session, including after a failed refresh, paging or a filter change;
+   navigating away or reloading the page discards them.
+   A successful reply clears only its submitted draft, not newer text written meanwhile.
+   Concurrent actions in the same filter each refresh after success, even when another
+   action has already refreshed the list. A real filter or page change retires those
+   old-view completions; paging focuses the page indicator, without discarding drafts.
+   If those refreshes overlap, the newest one retains the last focused reply and its
+   selection. Moving focus elsewhere cancels restoration, including when you then
+   blur that control; a delayed response does not pull focus back.
+4. **No rebuild** — closing or opening comments (either switch), approval, unapproval and
+   deletion take effect on the next public request. A confirmed Delete or Spam is permanent.
+   None requires **Publish** or triggers a site build.
 5. **Deleting a post deletes its comments** — the thread is removed in the same transaction as the
    post and its revisions; there is no undo.
 

@@ -158,11 +158,22 @@ An empty `SITE_DIR` starts a build from `SITE_APP_DIR`, so check both paths befo
    bridge gateway at hop zero. Do not put it in `.env`; a different network/proxy topology
    requires a new spec. Failed gateway discovery refuses boot rather than losing `Secure`
    cookies or collapsing every reader into one limiter bucket.
+   Reject unintended public hostnames at the proxy. Reader comments compare Origin (or Referer
+   only when Origin is absent/empty) with the trusted scheme plus raw `Host`, **not**
+   `PUBLIC_BASE_URL` and never `X-Forwarded-Host`. This is #319's temporary request-authority
+   fallback, not a domain allow-list. The image authority and `IMG_HOST` cannot receive
+   same-origin comments, even under another scheme; single-origin loopback development remains
+   supported. No new blog-origin env setting is required. #276 will give validated canonical
+   identity precedence over this fallback; the explicit server override remains highest.
 6. Open `https://simonswanderlust.com/login` to create the first admin account, then upload.
    Before public cutover, inspect the target server's observed proxy peer, confirm `Secure`
    on an HTTPS login, and verify independent login-limit buckets from two external networks.
    The #369 Docker Desktop production-image TCP probe covers the Linux VM host-network
    proxy → app bridge path, not the target VPS's published-loopback/NAT configuration.
+   Also submit a synthetic comment from the blog origin: expect 201, a pending moderation row,
+   and no public entry until approval. The image origin, a third party and hostname-prefix or
+   userinfo lookalikes must receive 403. The local #319 proof used real `main.ts`/Postgres,
+   split `.localhost` hosts and a loopback proxy; it does not replace this target-server check.
 
 The admin panel is reachable directly at `https://simonswanderlust.com/admin/` — the same process
 serves it, so there's nothing to proxy to separately anymore.
@@ -240,6 +251,15 @@ do not bypass the ownership/session drain checks.
 storage key, not per variant file. Bulk drag-and-drop upload, virtual folders (a `media_folders`
 table; moving a photo re-labels it, it does not move bytes on disk), search, and per-item alt text
 that the gallery picker reuses.
+
+The Media page shows 60 photos per page. If deleting or moving photos removes the current
+last page, its reload steps backwards to the new last page instead of showing an empty
+library with a non-zero total. An empty result resets pagination to page 1 (the page label
+is hidden and both navigation buttons are disabled). Corrective requests keep the same
+load-sequence ticket, so a newer folder/filter selection wins even if an older correction
+arrives later. This was exercised against the real app and Postgres with 63 generated,
+encoded photos: confirmed deletion from a 61-photo folder, moving both rows off page 2,
+emptying a folder while on page 2, and a delayed correction racing a newer search.
 
 Re-uploading the same file preserves its existing non-root folder, including when recovering
 a `failed` or `missing` photo, even if the recovery attempt is refused by a full queue.
@@ -332,18 +352,31 @@ routes behind it (`GET /moderation/comments`, `POST /moderation/comments/:id/sta
 `DELETE /moderation/comments/:id`, `POST /moderation/comments/:id/reply`) are all
 `requireAdmin`: unauthenticated callers get 401, authors 403, and a non-UUID id is a 400.
 Approving does not rebuild the site — comments are runtime data, never baked by `astro build`.
+Both views are oldest-first by timestamp and UUID, with **50 comments per page** and
+**Previous / Next** controls. `GET /moderation/comments?status=pending|approved&offset=N`
+returns `{ comments, hasMore }` with `Cache-Control: no-store`; offset defaults to zero,
+must be a single nonnegative decimal safe integer with room to add 50, and invalid
+pagination returns 400 only after authorization. A page beyond the end is empty.
+Successful moderation (including Reply) and filter changes restart at page one;
+cancelled confirmations do not. Other moderators can shift offsets between reads,
+so restart traversal to see the current state rather than treating pages as a snapshot.
+Every admin row remains reachable; the public thread's oldest-500 response cap is unchanged.
+Deletion and unapproval take effect on the next public comment read, without a rebuild.
 
 Unsent author replies stay in memory, keyed by comment ID, while this page is open.
 Only one reply can be sending per comment ID: its submit button stays disabled even
 when filtering or moderation recreates the row, and becomes available again after
 success or failure so a later intentional reply or retry is possible.
-Moderation actions and switching between Pending and Approved preserve other replies;
+Moderation actions, paging and switching between Pending and Approved preserve other replies;
 hidden rows recover their own draft when shown again. A successful reply clears only
 the submitted text, preserving newer edits made while it was sending; failed replies
 keep their input. List refreshes restore the active row control and textarea selection
 when that row remains visible, or focus the status filter when it disappears. Drafts
 are not saved to browser storage or the server: navigating away or reloading the page
 discards them.
+Paging focuses the page indicator. While loading, or after a failed page request,
+old rows and paging actions are unavailable; reselect the filter to retry from page one.
+An externally emptied page keeps Previous available.
 
 ## Galleries
 
