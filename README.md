@@ -108,8 +108,8 @@ never runs inference. Remote providers may charge for use and receive the submit
 ## Quick start (full stack, Docker)
 
 **Bring your own server, keep your own journal.** The stack runs as two containers:
-one app for the CMS, image processing and public blog, plus Postgres. Published images
-are available for amd64 and arm64.
+one app for the CMS, image processing and public blog, plus Postgres. The release workflow
+builds for amd64 and arm64.
 
 This repository includes Simon's Wanderlust branding and a DE/EN site. Adapting it to your
 own blog means updating the site identity, domain configuration and any templates you want
@@ -118,6 +118,16 @@ theme marketplace. This README describes the current source; tagged images conta
 features shipped in their release.
 
 ### Start with a released image
+
+**Image-name cutover pending release:** current source uses
+`ghcr.io/laboef1900/wanderlust-studio`. The first release under that name is a
+**future, owner-authorized action**, not part of this change. Until it is published,
+use [Build the current source](#build-the-current-source), not the pull commands below.
+Already released images, including
+`ghcr.io/laboef1900/simonswanderlust-app:0.17.1`, retain their original name and tags;
+they are not copied or aliased to the new package. Existing installations should keep
+their existing deployment configuration until an upgrade is authorized. A saved
+`IMAGE_TAG=0.17.1` does not become valid under the new image name.
 
 You need Docker Engine with Compose (or Docker Desktop). From a checkout of this repository:
 
@@ -131,8 +141,10 @@ Before starting, edit your private `.env`:
   `DATABASE_URL`; leave the bare-development override commented out.
 - For a local trial, set `PUBLIC_BASE_URL=http://localhost:3000` and
   `IMG_HOST=localhost:3000`. For a server, use your image domain and its matching host.
-- Set `IMAGE_TAG` to the [release](https://github.com/laboef1900/simonswanderlust/releases)
-  you want to run. The committed default is `0.17.1`.
+- After the first new-name release, set `IMAGE_TAG` to a version actually published
+  under `ghcr.io/laboef1900/wanderlust-studio`, as identified in its
+  [release notes](https://github.com/laboef1900/simonswanderlust/releases).
+  There is deliberately no default tag; empty or unset `IMAGE_TAG` stops Compose.
 
 Override **both** domain values together. Unset or explicitly empty values still select
 Compose's Simon-specific defaults: `PUBLIC_BASE_URL=https://img.simonswanderlust.com` and
@@ -190,9 +202,12 @@ and default changes belong to [#293](https://github.com/laboef1900/simonswanderl
 Compose runs images; it does not build them. To use your own changes:
 
 ```bash
-docker build -t ghcr.io/laboef1900/simonswanderlust-app:local .
+docker build -t ghcr.io/laboef1900/wanderlust-studio:local .
 IMAGE_TAG=local docker compose up -d
 ```
+
+For subsequent Compose commands against this local build, set `IMAGE_TAG=local` in
+your private `.env` too; `local` is a locally built tag, not a published release.
 
 The Dockerfile uses Docker Hardened Images (`dhi.io/node`); building requires access to
 those base images. Pulling a finished release from GHCR does not require a DHI login.
@@ -317,7 +332,8 @@ limitations, then check correspondence and delivery in the final rebuilt release
 
 ### Cutting a release
 
-**Current release: v0.17.1.** Fixes since v0.17.0:
+**Last release before the image-name cutover: v0.17.1**, published as
+`ghcr.io/laboef1900/simonswanderlust-app:0.17.1`. Fixes since v0.17.0:
 
 - Gallery reloads no longer risk saving mixed DE/EN content after partial form loading;
   failed reloads preserve a local recovery copy and block Save, Preview and Publish.
@@ -350,22 +366,30 @@ Upgrading from before v0.15.0: take **Back up now** before deploying. First boot
 `settings.json` and the stored AI key into the provider registry, keeping
 `settings.json.pre-ai-registry`. Rolling back needs the older image, the dump and that file.
 
-1. On a `feature/*` branch from `dev`, update both apps' package and lockfile versions,
-   plus `IMAGE_TAG` defaults in `docker-compose.yml` and `uploader/.env.example`. Update
-   the release notes here.
-2. Merge a green PR into `dev`, then a green release PR from `dev` into `main`.
-3. Tag the merged release on `main` (example for this release):
+The next release is a separate human action. This image-name change does not bump
+versions, publish an image or authorize a deployment.
 
-```bash
-git fetch origin main
-git tag -a v0.17.1 origin/main -m "Release v0.17.1"
-git push origin v0.17.1
-```
+1. On a `feature/*` branch from `dev`, choose an unused next release version and
+   update both apps' package and lockfile versions. Keep `IMAGE_TAG` explicit (no
+   historical default); document the new version and the
+   `ghcr.io/laboef1900/wanderlust-studio` package in the release notes.
+2. Merge a green PR into `dev`, then a green release PR from `dev` into `main`.
+3. Only with owner release authorization, create and push a **new** `vX.Y.Z` tag
+   on the merged `main` commit. Do not recreate `v0.17.1` or replay earlier releases.
+4. Confirm the workflow published the version for both architectures under the
+   new name, record its digest and verify package visibility/access for intended
+   installers. Only then may an operator set that version as `IMAGE_TAG` and
+   pull/deploy with the new Compose file. Existing private `.env` files must be
+   updated deliberately, not copied over or silently rewritten.
 
 Never push directly to protected branches, tag an unmerged feature branch or replace a
-published tag. The release workflow builds once for amd64 and arm64, pushes to GHCR and
-creates the GitHub Release. It requires repository variable `DHI_USERNAME` and secret
+published tag. The release workflow builds once for amd64 and arm64, pushes only to
+`ghcr.io/laboef1900/wanderlust-studio` and creates the GitHub Release.
+It requires repository variable `DHI_USERNAME` and secret
 `DHI_TOKEN` to pull the hardened base images. Verify the workflow before deployment;
 publishing a release does not deploy it or rebuild the live blog.
+
+See the [image-name cutover record](docs/superpowers/specs/2026-10-27-issue-291-image-name-cutover.md)
+for scope, retained history and recovery constraints.
 
 </details>
