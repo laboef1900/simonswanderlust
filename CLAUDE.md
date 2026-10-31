@@ -921,7 +921,7 @@ blog/
   so the live page hot-linked the old domain (inline image) or silently lost the photo (gallery
   line) — and after the DNS cutover both 404. `foreignImageUrls(body, imageOrigin)` in
   `publish-gate.ts` **renders** the body with the build's own `renderMarkdown` and reads every
-  `img`/`source` URL and gallery line from the sanitized hast tree (`bodyImageSources` in
+  `img`/`source` URL and gallery line from the sanitized hast tree (`analyzeRenderedBody` in
   `site/src/lib/body-images.ts`, before `images` resolution) whose origin is not the image host, by
   **origin equality** on the URL *resolved against that host* — a browser gives an origin-less
   reference the page's, so `//old.example/a.jpg` hot-links and `https:old.example/a.jpg` does not;
