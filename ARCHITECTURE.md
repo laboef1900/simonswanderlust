@@ -11,10 +11,12 @@ see [SECURITY.md](SECURITY.md).
 
 | Service (compose) | Image | Role | Exposure |
 | :-- | :-- | :-- | :-- |
-| `app` | `ghcr.io/laboef1900/simonswanderlust-app` (built from the repo-root `Dockerfile`, DHI node base) | Single Fastify 5 process: admin CMS (editor, WordPress import), image service (sharp, host-routed on the img subdomain), public blog static serving, in-process `astro build` on Publish/boot/manual rebuild, `/map/` PMTiles basemap, and DB backups | Public (via host port → reverse proxy / TLS) |
+| `app` | `ghcr.io/laboef1900/wanderlust-studio` (built from the repo-root `Dockerfile`, DHI node base; first release under this name pending) | Single Fastify 5 process: admin CMS (editor, WordPress import), image service (sharp, host-routed on the img subdomain), public blog static serving, in-process `astro build` on Publish/boot/manual rebuild, `/map/` PMTiles basemap, and DB backups | Public (via host port → reverse proxy / TLS) |
 | `db` | `postgres:18-alpine` | Source of truth for posts, users, and sessions | Internal only (`:5432`) |
 
-The `app` image is **released to GHCR** by CI and pulled on the server (pinned via `IMAGE_TAG`).
+The `app` image is released to GHCR by CI and pulled on the server (pinned via required
+`IMAGE_TAG`, with no default). The first `wanderlust-studio` release is a future owner
+action; this source cutover does not publish it. See the release prerequisites below.
 `docker-compose.yml` has no `build:` key, so `docker compose up -d --build` is a no-op — to build
 the image locally, run `docker build .` from the repo root instead. See [Packaging & release
 pipeline](#packaging--release-pipeline). Note: rebuilding the image does not regenerate the
@@ -174,7 +176,7 @@ attempt. `GET /health` reports `release: false` meanwhile (information, not a ve
 `SECURITY.md`). Restarts against an existing `/data` volume skip all of this and serve
 immediately — no rebuild on every boot.
 
-### Site identity (#274)
+### Site identity (#274–#275)
 
 The [approved identity contract](docs/superpowers/specs/2026-10-27-issue-273-site-identity-design.md)
 puts identity in Postgres, not `settings.json`. `ensureSchema` creates the two tables; the
@@ -188,6 +190,23 @@ descriptor and ordered social links. `GET`/`PUT /settings/identity` are admin-on
 Public text changes at the next Publish/Rebuild; admin chrome at the next page load; new
 author replies use the configured name immediately (empty becomes `Author`). Existing
 replies retain their stored names. The About body remains separate page content.
+
+Logo and favicon have separate save/remove actions in the same tab. Admin-only
+`PUT /settings/identity/assets/:role` accepts multipart `revision` plus one `file`;
+`DELETE` accepts JSON `{ revision }`. Roles are `logo` and `favicon`. Responses include
+`revision`, `savedAt`, `takesEffect: 'next_build'` and saved asset-presence flags, also returned
+by the identity GET. Asset and text mutations share one revision: the UI adopts a successful
+asset write's revision without overwriting unsaved text. Conflicts require explicit reload.
+
+`site-identity-assets.ts` normalizes PNG/JPEG/static WebP under the shared work lock, refuses
+SVG/animation, limits input to 2 MiB and 4096² pixels and strips all metadata. One transaction
+replaces a logo row or all three favicon rows with bounded PNGs (≤256 KiB per row). No
+originals, remote fetches, media-library rows or separate asset directory are involved.
+The existing build capture writes those exact bytes into each release at content-hashed
+`/_identity/` paths. Nav uses the logo and its intrinsic dimensions; Base emits the three
+favicon links. With no saved assets, the text name and bundled `/favicon.svg` remain.
+Save/remove waits until the next Publish/Rebuild to affect public output; an older release
+keeps its own assets. Recovery uses the existing v11 dump codec and restore transaction.
 
 Runtime reads use a cache loaded before listening and refreshed after successful writes.
 The public copy script exposes only the name, localized studio descriptor and reserved
@@ -209,10 +228,9 @@ Standalone commands with no snapshot retain ordinary reads.
 
 The shared validator checks all stored DE/EN maps before projection; missing locale values
 use that field's fallback, never another language's text. The v1 build projection excludes
-the admin-only descriptor and reserves `canonicalOrigin` and `assets`.
-**Scope boundary:** #274 does not implement logo/favicon upload or display (#275), canonical
-editing/SEO/robots/noindex, comment-origin switching or outbound headers (#276). Asset rows,
-if recovered, are validated and captured with the release, but no asset API is introduced.
+the admin-only descriptor, reserves `canonicalOrigin` and carries captured asset paths.
+**Scope boundary:** canonical editing/SEO/robots/noindex, comment-origin switching and
+outbound headers remain #276.
 The present fixed DE/EN projection is extended by #283's language contract, not by identity.
 Remaining branding exceptions are recorded in [the scoped allow-list](docs/site-identity-branding-allowlist.md).
 
@@ -262,10 +280,10 @@ standing between a lost encode job and a published page full of broken images. A
 `media` row never blocks (WordPress-imported and legacy files predate the library). The same gate
 also refuses (409, with a count and up to five example URLs) while the rendered body of either
 locale would emit an `<img>`, or holds a ` ```gallery ` line, whose **origin is not the image
-host** (#91; both readings come from one render per locale in `analyzeBodyImages`,
+host** (#91; both readings come from one render per locale in `analyzeBodyContent`,
 `uploader/src/publish-gate.ts`): that is what a failed WXR re-host leaves behind, and the render
 path would hot-link the old domain or drop the photo silently. The body is judged from the
-renderer's own sanitized tree (`renderMarkdown` + `bodyImageSources`), so code fences, code spans
+renderer's own sanitized tree (`renderMarkdown` + `analyzeRenderedBody`), so code fences, code spans
 and every other Markdown/HTML subtlety are decided by the renderer itself, not a second parser.
 
 The queue runs at concurrency **2** (the measured throughput plateau) and shares a lock with the
@@ -320,6 +338,16 @@ Host-based routing keeps the two domains on one process: the image-variant stati
 registered with a Fastify **host constraint** for the hostname of `PUBLIC_BASE_URL` (overridable
 via `IMG_HOST`), so on the img host the constrained `/` wildcard wins and image URLs behave exactly
 as before the merge. All other routes (admin, blog, map) are unconstrained.
+
+Reader comments use the **blog request's origin**, not `PUBLIC_BASE_URL` (#319).
+Until canonical identity is configured by #276, the allowed origin is the trusted request
+protocol plus the verbatim `Host`; `X-Forwarded-Host`, Origin and Referer never supply that
+authority. A supplied `ServerConfig.commentsOrigin` override takes precedence and fails closed
+if invalid. The image authority from `PUBLIC_BASE_URL` and the actual `IMG_HOST` are excluded,
+even under another scheme; the existing single-origin loopback development topology is the
+exception. Origin equality remains a CSRF check, not authentication or a domain allow-list:
+the reverse proxy must reject unintended public hostnames. #276 will put the current validated
+canonical identity between the explicit override and this temporary fallback.
 
 Legacy WordPress URLs are 301-redirected by the not-found handler (blog host only, before the
 404/503 fallbacks): the `/feed/` family (`/feed/`, its `/feed/{atom,rss2,rss,rdf}/` aliases,
@@ -433,8 +461,9 @@ Created idempotently by `uploader/src/db.ts` (`ensureSchema`):
 - **`site_identity`** — singleton `id = true`, revision, seed provenance, nullable `saved_at`,
   `updated_at`, site/author names, reserved canonical origin, localized text maps and ordered
   social links. Only an explicit admin save marks it configured.
-- **`site_identity_assets`** — reserved logo/favicon role rows, SHA-256, dimensions, PNG bytes
-  (≤256 KiB each) and creation time. Included in dumps now; upload/rendering is #275.
+- **`site_identity_assets`** — logo and favicon role rows, SHA-256, dimensions, normalized PNG
+  bytes (≤256 KiB each) and creation time. Included in DB dumps and copied into build releases;
+  favicon writes/removals are atomic across `favicon-32`, `favicon-192` and `apple-touch-180`.
 - **`posts`** — one row per (`translation_key`, `locale`); `slug`, `title`, `date`, `country`, `country_code`, `region`, `excerpt`, `hero_image` (jsonb), `coordinates` (jsonb), optional `stops`/`route`/`key_facts`, `body_markdown`, `images` (jsonb), `status` (`draft`/`published`), `featured` (boolean, "use as homepage cover" — a SHARED value written to both locale rows, deliberately not unique: the homepage takes the newest flagged story and falls back to the newest story), `comments_enabled` (boolean, SHARED, default `true` — the per-post switch; the site-wide `settings.commentsEnabled`, default `false`, is the real gate). Unique on (`locale`, `slug`) **where `slug <> ''`** — an empty slug means "not set yet" (a DE-first draft without an EN title), so any number of such drafts may coexist; `validateForPublish` requires a real slug per locale (#119).
   Optional **`title_image`** (nullable jsonb) holds an independent per-locale story banner.
   It uses the hero's image shape, including format and focal point. The story header and
@@ -935,12 +964,28 @@ warns about.
 1. logs in to GHCR (`GITHUB_TOKEN`) and to `dhi.io` (repo variable `DHI_USERNAME` + secret
    `DHI_TOKEN`) to pull the DHI bases,
 2. `buildx` multi-arch (**amd64 + arm64**) with the DHI build-args, pushed to
-   `ghcr.io/laboef1900/simonswanderlust-app` tagged `{version}`, `{major}.{minor}`, and `latest`,
+   `ghcr.io/laboef1900/wanderlust-studio` tagged `{version}`, `{major}.{minor}`, and `latest`,
 3. creates the GitHub Release with generated notes.
+
+The first release under this name requires a future owner-authorized **new** version tag on
+merged `main`, a successful multi-architecture workflow run, and confirmation of the published
+version/digest and GHCR package access. Only after that may the operator set `IMAGE_TAG` in
+their private `.env` to that published version and run
+`docker compose pull && docker compose up -d` (no `dhi.io` login needed there — that's CI-only).
+Compose requires an explicit tag; the example leaves it empty instead of inventing a release.
+Until publication, build locally with the new name and `IMAGE_TAG=local` as described in README.
+
+Historical images remain at `ghcr.io/laboef1900/simonswanderlust-app`, including `:0.17.1`.
+Old tags are not available under the new name merely because this source changed.
+Keep existing deployment configuration until an authorized upgrade; do not reuse an old
+private `IMAGE_TAG` with the new Compose file. No republishing, alias, dual push, image deletion,
+data migration or operator-secret change is part of this cutover. Product, repository and npm
+package names stay unchanged. See the
+[separate image-name cutover record](docs/superpowers/specs/2026-10-27-issue-291-image-name-cutover.md).
 
 Server upgrades follow [App upgrades and supported recovery](#app-upgrades-and-supported-recovery),
 including the coherent pre-upgrade recovery point, reviewed Compose/bootstrap changes and
-immutable app image selection. GHCR pulls do not require the CI-only `dhi.io` login.
+immutable app image selection.
 Cut releases through the protected-branch flow in [README](README.md#cutting-a-release);
 generated GitHub notes do not replace the mandatory recovery notes below.
 
@@ -983,8 +1028,8 @@ separate owner action, not part of the dependency PR.
 | `DATABASE_URL` | app | Postgres connection (content + auth) |
 | `ENCRYPTION_KEY` | app | Optional 64-hex master key for encrypted AI credentials; unset permits local workflows, malformed values refuse boot; escrow separately |
 | `TRUSTED_PROXY` | app / compose literal | Unset or `loopback`: loopback peers only. Compose sets `docker-gateway`: also trust the single discovered IPv4 default gateway, at hop zero only. Empty/unknown values or failed gateway discovery refuse boot. Not an `.env` setting; changing bridge/proxy topology requires a new trust spec. |
-| `PUBLIC_BASE_URL` | app | Public base for image URLs (e.g. `https://img.simonswanderlust.com`) |
-| `IMG_HOST` | app | Hostname routed to the image-variant static handler (defaults to the host of `PUBLIC_BASE_URL`) |
+| `PUBLIC_BASE_URL` | app | Public base for image URLs (e.g. `https://img.simonswanderlust.com`); not the allowed blog-comment origin. Its image authority is excluded from the temporary comment-origin fallback except in single-origin loopback development. |
+| `IMG_HOST` | app | Hostname routed to the image-variant static handler (defaults to the host of `PUBLIC_BASE_URL`); also excluded from the comment-origin fallback, with the same loopback exception. |
 | `SITE_APP_DIR` | app | Path to the Astro project the builder spawns (`/app/site`) |
 | `SITE_DIR` | app | Release root for the built blog (`/data/site`) — `current` is served from here |
 | `SITE_IDENTITY_JSON` | build child only | **Internal**, set for every spawn by `build.ts`; not operator-configurable, overrides inherited values |
@@ -1013,7 +1058,8 @@ topology validation in the approved spec. This table does not introduce an opera
 - **Immediate proxy peer:** the shipped bridge topology permits one host TLS proxy. The app
   validates the socket address before accepting forwarded IP/protocol and stops at hop zero;
   it never trusts the whole bridge network. The host must preserve `Host`, overwrite the
-  forwarded scheme, and put its accepted client at the rightmost XFF position. See
+  forwarded scheme, reject unintended public hostnames, and put its accepted client at the
+  rightmost XFF position. These rules also protect the temporary comment-origin fallback. See
   [Transport, headers & proxy](SECURITY.md#transport-headers--proxy) for the accepted
   host-process residual, measured Docker Desktop TCP evidence and the remaining target-VPS
   loopback/real-client verification gate.

@@ -18,6 +18,7 @@ interface Guard {
   markDirty(): void;
   markClean(token?: number): void;
   snapshot(): number;
+  isDirty(): boolean;
   stashNow(): void;
   tryRestore(): Stash | null;
   adopt(stash: Stash | null): void;
@@ -301,10 +302,13 @@ describe('DraftGuard.createDraftGuard', () => {
     const guard = sb.api.createDraftGuard({ storageKey: KEY, collect: () => ({ e: 5 }) });
     guard.markDirty();
     guard.redirectToLogin();
+    expect(guard.isDirty()).toBe(true);
     expect(sb.store.has(KEY)).toBe(true);
     expect(sb.location.href).toBe('/login?next=%2Fadmin%2Feditor.html%3Ftk%3Dabc');
     // the intentional navigation must not trigger the leave-page dialog
     expect(sb.fireBeforeUnload().defaultPrevented).toBe(false);
+    guard.markDirty();
+    expect(sb.fireBeforeUnload().defaultPrevented).toBe(true);
   });
 
   it('redirectToLogin does not stash a pristine form (nothing worth restoring)', () => {

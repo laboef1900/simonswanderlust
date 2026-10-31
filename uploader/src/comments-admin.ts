@@ -29,7 +29,7 @@ export interface AdminComment {
 }
 
 export interface CommentAdminStore {
-  list(status: CommentStatus): Promise<AdminComment[]>;
+  list(status: CommentStatus, offset?: number): Promise<{ comments: AdminComment[]; hasMore: boolean }>;
   /** false when the id is unknown. */
   setStatus(id: string, status: CommentStatus): Promise<boolean>;
   remove(id: string): Promise<boolean>;
@@ -38,7 +38,16 @@ export interface CommentAdminStore {
 }
 
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-export const LIST_LIMIT = 500;
+export const MODERATION_PAGE_SIZE = 50;
+
+export function isModerationOffset(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value)
+    && value >= 0 && value <= Number.MAX_SAFE_INTEGER - MODERATION_PAGE_SIZE;
+}
+
+function assertOffset(offset: number): void {
+  if (!isModerationOffset(offset)) throw new CommentError('invalid pagination');
+}
 
 export function isCommentStatus(v: unknown): v is CommentStatus {
   return v === 'pending' || v === 'approved';
@@ -49,10 +58,20 @@ export { CommentError };
 export function memoryCommentAdminStore(seed: AdminComment[] = []): CommentAdminStore & { all(): AdminComment[]; add(c: AdminComment): void } {
   const rows: AdminComment[] = seed.map((r) => ({ ...r }));
   return {
-    async list(status) {
-      return rows.filter((r) => r.status === status)
-        .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
-        .slice(0, LIST_LIMIT).map((r) => ({ ...r }));
+    async list(status, offset = 0) {
+      assertOffset(offset);
+      const page = rows.filter((r) => r.status === status)
+        .sort((a, b) => {
+          const time = a.createdAt.getTime() - b.createdAt.getTime();
+          const aId = a.id.toLowerCase();
+          const bId = b.id.toLowerCase();
+          return time || (aId < bId ? -1 : aId > bId ? 1 : 0);
+        })
+        .slice(offset, offset + MODERATION_PAGE_SIZE + 1);
+      return {
+        comments: page.slice(0, MODERATION_PAGE_SIZE).map((r) => ({ ...r })),
+        hasMore: page.length > MODERATION_PAGE_SIZE,
+      };
     },
     async setStatus(id, status) {
       const r = rows.find((x) => x.id === id);
@@ -109,13 +128,14 @@ export function pgCommentAdminStore(pool: DbPool): CommentAdminStore {
     return ready;
   };
   return {
-    async list(status) {
+    async list(status, offset = 0) {
+      assertOffset(offset);
       await init();
       const { rows } = await pool.query<Row>(
-        `SELECT ${COLS} FROM comments WHERE status = $1 ORDER BY created_at ASC, id ASC LIMIT ${LIST_LIMIT}`,
-        [status],
+        `SELECT ${COLS} FROM comments WHERE status = $1 ORDER BY created_at ASC, id ASC LIMIT ${MODERATION_PAGE_SIZE + 1} OFFSET $2`,
+        [status, offset],
       );
-      return rows.map(toAdmin);
+      return { comments: rows.slice(0, MODERATION_PAGE_SIZE).map(toAdmin), hasMore: rows.length > MODERATION_PAGE_SIZE };
     },
     async setStatus(id, status) {
       if (!UUID_RE.test(id) || !isCommentStatus(status)) return false;
