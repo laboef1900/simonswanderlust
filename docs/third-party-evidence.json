@@ -1,0 +1,1448 @@
+{
+  "schemaVersion": 1,
+  "reviewedAt": "2026-10-27",
+  "scope": "Issue #291 owner-approved AGPL-3.0-only software license, 2026-10-27; no legal assurance. Exact lockfile metadata is separate from reviewed upstream evidence. AND means all component terms; OR is a choice. Summaries never replace full notices or release-specific source obligations.",
+  "packageResolutions": [
+    {
+      "name": "@bruits/satteri-darwin-arm64",
+      "version": "0.9.4",
+      "tarball": "https://registry.npmjs.org/@bruits/satteri-darwin-arm64/-/satteri-darwin-arm64-0.9.4.tgz",
+      "integrity": "sha512-W3MSUkr2mZRR8Stoe+lqNAyzQzRuFMU8WffV9IvFSxTok0LGWR0ZZQPLELU4QTRiUbhL2Y4VUP9vV7pj8rHjgg==",
+      "gitHead": null,
+      "licenseFiles": [],
+      "packageFileCount": 3,
+      "registryEvidence": {
+        "name": "@bruits/satteri-darwin-arm64",
+        "url": "https://registry.npmjs.org/@bruits%2fsatteri-darwin-arm64/0.9.4",
+        "version": "0.9.4",
+        "gitHead": "815424811e52f097b4052d2ddd0051b32fbbbc55",
+        "license": null,
+        "repository": {
+          "url": "git+https://github.com/bruits/satteri.git",
+          "type": "git"
+        }
+      },
+      "reviewedLicense": "MIT",
+      "reviewedAt": "2026-10-27",
+      "licenseEvidence": "https://raw.githubusercontent.com/bruits/satteri/815424811e52f097b4052d2ddd0051b32fbbbc55/LICENSE",
+      "releaseTag": "satteri-v0.9.4",
+      "basis": "Wrapper tarball includes MIT LICENSE; native/WASI package registry gitHead identifies same release with repository MIT license. This resolves the package license, not the complete license set of statically linked Rust/WASM dependencies.",
+      "obligation": "Retain Copyright (c) 2026 Bruits and full MIT text. Native/WASI tarballs contain no LICENSE/COPYING/NOTICE-named files; collect bundled dependency notices/source evidence for distributed binaries separately."
+    },
+    {
+      "name": "@bruits/satteri-darwin-x64",
+      "version": "0.9.4",
+      "tarball": "https://registry.npmjs.org/@bruits/satteri-darwin-x64/-/satteri-darwin-x64-0.9.4.tgz",
+      "integrity": "sha512-DXOuuaE1lsv7mpk2mOvGrzqoEWEvOIZEO/fXVa7zfM23Iob+CBjBkRAMwpHA4pmZ3j6Gj7WJzPKw0kQ7w741AQ==",
+      "gitHead": null,
+      "licenseFiles": [],
+      "packageFileCount": 3,
+      "registryEvidence": {
+        "name": "@bruits/satteri-darwin-x64",
+        "url": "https://registry.npmjs.org/@bruits%2fsatteri-darwin-x64/0.9.4",
+        "version": "0.9.4",
+        "gitHead": "815424811e52f097b4052d2ddd0051b32fbbbc55",
+        "license": null,
+        "repository": {
+          "url": "git+https://github.com/bruits/satteri.git",
+          "type": "git"
+        }
+      },
+      "reviewedLicense": "MIT",
+      "reviewedAt": "2026-10-27",
+      "licenseEvidence": "https://raw.githubusercontent.com/bruits/satteri/815424811e52f097b4052d2ddd0051b32fbbbc55/LICENSE",
+      "releaseTag": "satteri-v0.9.4",
+      "basis": "Wrapper tarball includes MIT LICENSE; native/WASI package registry gitHead identifies same release with repository MIT license. This resolves the package license, not the complete license set of statically linked Rust/WASM dependencies.",
+      "obligation": "Retain Copyright (c) 2026 Bruits and full MIT text. Native/WASI tarballs contain no LICENSE/COPYING/NOTICE-named files; collect bundled dependency notices/source evidence for distributed binaries separately."
+    },
+    {
+      "name": "@bruits/satteri-linux-arm64-gnu",
+      "version": "0.9.4",
+      "tarball": "https://registry.npmjs.org/@bruits/satteri-linux-arm64-gnu/-/satteri-linux-arm64-gnu-0.9.4.tgz",
+      "integrity": "sha512-gJxU9rGGoqIznSEgEzpjxkry24jeHuMpoo1tCIAhHYh7WaD3j5F8zt3jmHxEaN1Uwa+K5+wFgIR2uIGOnMzEmw==",
+      "gitHead": null,
+      "licenseFiles": [],
+      "packageFileCount": 3,
+      "registryEvidence": {
+        "name": "@bruits/satteri-linux-arm64-gnu",
+        "url": "https://registry.npmjs.org/@bruits%2fsatteri-linux-arm64-gnu/0.9.4",
+        "version": "0.9.4",
+        "gitHead": "815424811e52f097b4052d2ddd0051b32fbbbc55",
+        "license": null,
+        "repository": {
+          "url": "git+https://github.com/bruits/satteri.git",
+          "type": "git"
+        }
+      },
+      "reviewedLicense": "MIT",
+      "reviewedAt": "2026-10-27",
+      "licenseEvidence": "https://raw.githubusercontent.com/bruits/satteri/815424811e52f097b4052d2ddd0051b32fbbbc55/LICENSE",
+      "releaseTag": "satteri-v0.9.4",
+      "basis": "Wrapper tarball includes MIT LICENSE; native/WASI package registry gitHead identifies same release with repository MIT license. This resolves the package license, not the complete license set of statically linked Rust/WASM dependencies.",
+      "obligation": "Retain Copyright (c) 2026 Bruits and full MIT text. Native/WASI tarballs contain no LICENSE/COPYING/NOTICE-named files; collect bundled dependency notices/source evidence for distributed binaries separately."
+    },
+    {
+      "name": "@bruits/satteri-linux-arm64-musl",
+      "version": "0.9.4",
+      "tarball": "https://registry.npmjs.org/@bruits/satteri-linux-arm64-musl/-/satteri-linux-arm64-musl-0.9.4.tgz",
+      "integrity": "sha512-Wjzu9hmmAbfmDkBfPI1VdZygJtYz9uYZQnkEyrXi6S2JFi+2pXQ1A5irj38bqm0IZmWcTbk0cVG4NZnPdtVNJA==",
+      "gitHead": null,
+      "licenseFiles": [],
+      "packageFileCount": 3,
+      "registryEvidence": {
+        "name": "@bruits/satteri-linux-arm64-musl",
+        "url": "https://registry.npmjs.org/@bruits%2fsatteri-linux-arm64-musl/0.9.4",
+        "version": "0.9.4",
+        "gitHead": "815424811e52f097b4052d2ddd0051b32fbbbc55",
+        "license": null,
+        "repository": {
+          "url": "git+https://github.com/bruits/satteri.git",
+          "type": "git"
+        }
+      },
+      "reviewedLicense": "MIT",
+      "reviewedAt": "2026-10-27",
+      "licenseEvidence": "https://raw.githubusercontent.com/bruits/satteri/815424811e52f097b4052d2ddd0051b32fbbbc55/LICENSE",
+      "releaseTag": "satteri-v0.9.4",
+      "basis": "Wrapper tarball includes MIT LICENSE; native/WASI package registry gitHead identifies same release with repository MIT license. This resolves the package license, not the complete license set of statically linked Rust/WASM dependencies.",
+      "obligation": "Retain Copyright (c) 2026 Bruits and full MIT text. Native/WASI tarballs contain no LICENSE/COPYING/NOTICE-named files; collect bundled dependency notices/source evidence for distributed binaries separately."
+    },
+    {
+      "name": "@bruits/satteri-linux-x64-gnu",
+      "version": "0.9.4",
+      "tarball": "https://registry.npmjs.org/@bruits/satteri-linux-x64-gnu/-/satteri-linux-x64-gnu-0.9.4.tgz",
+      "integrity": "sha512-MR1Q+wMx65FQlbSV7cRqWW87Knp0zkoaIV55Dt+xZl028wJABXEPEEmG3670SLq7lVZvcGIDwCgSg2kCYxvRwA==",
+      "gitHead": null,
+      "licenseFiles": [],
+      "packageFileCount": 3,
+      "registryEvidence": {
+        "name": "@bruits/satteri-linux-x64-gnu",
+        "url": "https://registry.npmjs.org/@bruits%2fsatteri-linux-x64-gnu/0.9.4",
+        "version": "0.9.4",
+        "gitHead": "815424811e52f097b4052d2ddd0051b32fbbbc55",
+        "license": null,
+        "repository": {
+          "url": "git+https://github.com/bruits/satteri.git",
+          "type": "git"
+        }
+      },
+      "reviewedLicense": "MIT",
+      "reviewedAt": "2026-10-27",
+      "licenseEvidence": "https://raw.githubusercontent.com/bruits/satteri/815424811e52f097b4052d2ddd0051b32fbbbc55/LICENSE",
+      "releaseTag": "satteri-v0.9.4",
+      "basis": "Wrapper tarball includes MIT LICENSE; native/WASI package registry gitHead identifies same release with repository MIT license. This resolves the package license, not the complete license set of statically linked Rust/WASM dependencies.",
+      "obligation": "Retain Copyright (c) 2026 Bruits and full MIT text. Native/WASI tarballs contain no LICENSE/COPYING/NOTICE-named files; collect bundled dependency notices/source evidence for distributed binaries separately."
+    },
+    {
+      "name": "@bruits/satteri-linux-x64-musl",
+      "version": "0.9.4",
+      "tarball": "https://registry.npmjs.org/@bruits/satteri-linux-x64-musl/-/satteri-linux-x64-musl-0.9.4.tgz",
+      "integrity": "sha512-T4gxhXve3zyNAZesrXAd/rDZOGRkbfFIUFld4TGsw6BsjoIteCcDji6IMqeXyaWEVSykY2X8Eid2hr6aXGYAaw==",
+      "gitHead": null,
+      "licenseFiles": [],
+      "packageFileCount": 3,
+      "registryEvidence": {
+        "name": "@bruits/satteri-linux-x64-musl",
+        "url": "https://registry.npmjs.org/@bruits%2fsatteri-linux-x64-musl/0.9.4",
+        "version": "0.9.4",
+        "gitHead": "815424811e52f097b4052d2ddd0051b32fbbbc55",
+        "license": null,
+        "repository": {
+          "url": "git+https://github.com/bruits/satteri.git",
+          "type": "git"
+        }
+      },
+      "reviewedLicense": "MIT",
+      "reviewedAt": "2026-10-27",
+      "licenseEvidence": "https://raw.githubusercontent.com/bruits/satteri/815424811e52f097b4052d2ddd0051b32fbbbc55/LICENSE",
+      "releaseTag": "satteri-v0.9.4",
+      "basis": "Wrapper tarball includes MIT LICENSE; native/WASI package registry gitHead identifies same release with repository MIT license. This resolves the package license, not the complete license set of statically linked Rust/WASM dependencies.",
+      "obligation": "Retain Copyright (c) 2026 Bruits and full MIT text. Native/WASI tarballs contain no LICENSE/COPYING/NOTICE-named files; collect bundled dependency notices/source evidence for distributed binaries separately."
+    },
+    {
+      "name": "@bruits/satteri-wasm32-wasi",
+      "version": "0.9.4",
+      "tarball": "https://registry.npmjs.org/@bruits/satteri-wasm32-wasi/-/satteri-wasm32-wasi-0.9.4.tgz",
+      "integrity": "sha512-/CEG8LUlpaBEnhFnYVn0UnlHFLs51UhrkJBUPDUXLzkadzAcnR88iRA/nOl7Zwhjb4WhfBV4p3P5qeOJMtH0iA==",
+      "gitHead": null,
+      "licenseFiles": [],
+      "packageFileCount": 7,
+      "registryEvidence": {
+        "name": "@bruits/satteri-wasm32-wasi",
+        "url": "https://registry.npmjs.org/@bruits%2fsatteri-wasm32-wasi/0.9.4",
+        "version": "0.9.4",
+        "gitHead": "815424811e52f097b4052d2ddd0051b32fbbbc55",
+        "license": null,
+        "repository": {
+          "url": "git+https://github.com/bruits/satteri.git",
+          "type": "git"
+        }
+      },
+      "reviewedLicense": "MIT",
+      "reviewedAt": "2026-10-27",
+      "licenseEvidence": "https://raw.githubusercontent.com/bruits/satteri/815424811e52f097b4052d2ddd0051b32fbbbc55/LICENSE",
+      "releaseTag": "satteri-v0.9.4",
+      "basis": "Wrapper tarball includes MIT LICENSE; native/WASI package registry gitHead identifies same release with repository MIT license. This resolves the package license, not the complete license set of statically linked Rust/WASM dependencies.",
+      "obligation": "Retain Copyright (c) 2026 Bruits and full MIT text. Native/WASI tarballs contain no LICENSE/COPYING/NOTICE-named files; collect bundled dependency notices/source evidence for distributed binaries separately."
+    },
+    {
+      "name": "@bruits/satteri-win32-arm64-msvc",
+      "version": "0.9.4",
+      "tarball": "https://registry.npmjs.org/@bruits/satteri-win32-arm64-msvc/-/satteri-win32-arm64-msvc-0.9.4.tgz",
+      "integrity": "sha512-E1ZPQbgCtFKiU7pFYVndynvY7ne4coeVDUgnVThErSFlJ2ceQCBZrfRTD1lzrIDy63Bbqo+g/cZY9duw+JYjIw==",
+      "gitHead": null,
+      "licenseFiles": [],
+      "packageFileCount": 3,
+      "registryEvidence": {
+        "name": "@bruits/satteri-win32-arm64-msvc",
+        "url": "https://registry.npmjs.org/@bruits%2fsatteri-win32-arm64-msvc/0.9.4",
+        "version": "0.9.4",
+        "gitHead": "815424811e52f097b4052d2ddd0051b32fbbbc55",
+        "license": null,
+        "repository": {
+          "url": "git+https://github.com/bruits/satteri.git",
+          "type": "git"
+        }
+      },
+      "reviewedLicense": "MIT",
+      "reviewedAt": "2026-10-27",
+      "licenseEvidence": "https://raw.githubusercontent.com/bruits/satteri/815424811e52f097b4052d2ddd0051b32fbbbc55/LICENSE",
+      "releaseTag": "satteri-v0.9.4",
+      "basis": "Wrapper tarball includes MIT LICENSE; native/WASI package registry gitHead identifies same release with repository MIT license. This resolves the package license, not the complete license set of statically linked Rust/WASM dependencies.",
+      "obligation": "Retain Copyright (c) 2026 Bruits and full MIT text. Native/WASI tarballs contain no LICENSE/COPYING/NOTICE-named files; collect bundled dependency notices/source evidence for distributed binaries separately."
+    },
+    {
+      "name": "@bruits/satteri-win32-x64-msvc",
+      "version": "0.9.4",
+      "tarball": "https://registry.npmjs.org/@bruits/satteri-win32-x64-msvc/-/satteri-win32-x64-msvc-0.9.4.tgz",
+      "integrity": "sha512-5I7SiarsNdAUuhJb50CXJPTwr/ECVrBoU+fymoLjChK5fW//+srhY4lstcNTzgFRtQSYfVtm4OQZz16CVMeTeA==",
+      "gitHead": null,
+      "licenseFiles": [],
+      "packageFileCount": 3,
+      "registryEvidence": {
+        "name": "@bruits/satteri-win32-x64-msvc",
+        "url": "https://registry.npmjs.org/@bruits%2fsatteri-win32-x64-msvc/0.9.4",
+        "version": "0.9.4",
+        "gitHead": "815424811e52f097b4052d2ddd0051b32fbbbc55",
+        "license": null,
+        "repository": {
+          "url": "git+https://github.com/bruits/satteri.git",
+          "type": "git"
+        }
+      },
+      "reviewedLicense": "MIT",
+      "reviewedAt": "2026-10-27",
+      "licenseEvidence": "https://raw.githubusercontent.com/bruits/satteri/815424811e52f097b4052d2ddd0051b32fbbbc55/LICENSE",
+      "releaseTag": "satteri-v0.9.4",
+      "basis": "Wrapper tarball includes MIT LICENSE; native/WASI package registry gitHead identifies same release with repository MIT license. This resolves the package license, not the complete license set of statically linked Rust/WASM dependencies.",
+      "obligation": "Retain Copyright (c) 2026 Bruits and full MIT text. Native/WASI tarballs contain no LICENSE/COPYING/NOTICE-named files; collect bundled dependency notices/source evidence for distributed binaries separately."
+    },
+    {
+      "name": "satteri",
+      "version": "0.9.4",
+      "tarball": "https://registry.npmjs.org/satteri/-/satteri-0.9.4.tgz",
+      "integrity": "sha512-BKob126Tay84diOZsnVNH/Q/c+3njPJTCad3w5zLKa6j8bVjxskPNHDtxrMwYK4bN/RlqUSdMnPwKY4k65EMOQ==",
+      "gitHead": null,
+      "licenseFiles": [
+        {
+          "path": "package/LICENSE",
+          "text": "MIT License\n\nCopyright (c) 2026 Bruits\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n"
+        }
+      ],
+      "packageFileCount": 79,
+      "registryEvidence": {
+        "name": "satteri",
+        "url": "https://registry.npmjs.org/satteri/0.9.4",
+        "version": "0.9.4",
+        "gitHead": null,
+        "license": null,
+        "repository": {
+          "url": "git+https://github.com/bruits/satteri.git",
+          "type": "git"
+        }
+      },
+      "reviewedLicense": "MIT",
+      "reviewedAt": "2026-10-27",
+      "licenseEvidence": "https://raw.githubusercontent.com/bruits/satteri/815424811e52f097b4052d2ddd0051b32fbbbc55/LICENSE",
+      "releaseTag": "satteri-v0.9.4",
+      "basis": "Wrapper tarball includes MIT LICENSE; native/WASI package registry gitHead identifies same release with repository MIT license. This resolves the package license, not the complete license set of statically linked Rust/WASM dependencies.",
+      "obligation": "Retain Copyright (c) 2026 Bruits and full MIT text. Native/WASI tarballs contain no LICENSE/COPYING/NOTICE-named files; collect bundled dependency notices/source evidence for distributed binaries separately."
+    }
+  ],
+  "licenseObligations": {
+    "AGPL-3.0-only": {
+      "summary": "Original first-party software only, owner-approved 2026-10-27. Preserve license/copyright/no-warranty and modification notices; convey Corresponding Source under section 6 and prominently offer modified network-version Corresponding Source to remote users at no charge under section 13. Content and brand exclusions are in NOTICE; third-party terms remain separate.",
+      "url": "https://www.gnu.org/licenses/agpl-3.0.txt",
+      "sha256": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0",
+      "reviewedAt": "2026-10-27"
+    },
+    "0BSD": {
+      "summary": "No notice-retention condition in the license text; retain provenance and warranty disclaimer in the distribution inventory.",
+      "url": "https://spdx.org/licenses/0BSD.json",
+      "sha256": "e3f18c71e10d673590eb9856c1d79dd3b4b0d65404efb5e8584dbede7edd608b",
+      "upstream": [
+        "http://landley.net/toybox/license.html",
+        "https://opensource.org/license/0BSD"
+      ],
+      "reviewedAt": "2026-10-27"
+    },
+    "Apache-2.0": {
+      "summary": "Supply the license; preserve applicable notices and upstream NOTICE content; mark modified files. Patent and trademark terms remain applicable (sections 3–6).",
+      "url": "https://spdx.org/licenses/Apache-2.0.json",
+      "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+      "upstream": [
+        "https://www.apache.org/licenses/LICENSE-2.0",
+        "https://opensource.org/license/apache-2.0"
+      ],
+      "reviewedAt": "2026-10-27"
+    },
+    "BSD-2-Clause": {
+      "summary": "Retain copyright, conditions and disclaimer in source; reproduce them in documentation/materials accompanying binary redistribution.",
+      "url": "https://spdx.org/licenses/BSD-2-Clause.json",
+      "sha256": "f32fb3b417a194167cfad068223fc975ba96c5960513a10f66a3c28720aec1df",
+      "upstream": [
+        "https://opensource.org/license/BSD-2-Clause"
+      ],
+      "reviewedAt": "2026-10-27"
+    },
+    "BSD-3-Clause": {
+      "summary": "BSD-2-Clause notice duties plus no use of contributor/copyright-holder names to endorse derived products without permission.",
+      "url": "https://spdx.org/licenses/BSD-3-Clause.json",
+      "sha256": "5a93d5831e1297ab10fe643e1a631e83be392896da14ee2951285a79012df69d",
+      "upstream": [
+        "https://opensource.org/license/BSD-3-Clause",
+        "https://www.eclipse.org/org/documents/edl-v10.php"
+      ],
+      "reviewedAt": "2026-10-27"
+    },
+    "BlueOak-1.0.0": {
+      "summary": "Ensure recipients also receive the license or its link; patent grant and no-warranty terms remain applicable.",
+      "url": "https://spdx.org/licenses/BlueOak-1.0.0.json",
+      "sha256": "8a1af140fdfbf5afd3df27f7e662f989c5b963a300020dfafce42033cae9e004",
+      "upstream": [
+        "https://blueoakcouncil.org/license/1.0.0"
+      ],
+      "reviewedAt": "2026-10-27"
+    },
+    "CC0-1.0": {
+      "summary": "Public-domain dedication with fallback license; no attribution condition, but patent/trademark rights and third-party rights are not granted.",
+      "url": "https://spdx.org/licenses/CC0-1.0.json",
+      "sha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499",
+      "upstream": [
+        "https://creativecommons.org/publicdomain/zero/1.0/legalcode"
+      ],
+      "reviewedAt": "2026-10-27"
+    },
+    "ISC": {
+      "summary": "Include copyright and permission notice in all copies; preserve disclaimer.",
+      "url": "https://spdx.org/licenses/ISC.json",
+      "sha256": "521c6f0ed8e64736684f89843d16a4df6b4b7449acbcfc6ca6630a3037ca8c53",
+      "upstream": [
+        "https://www.isc.org/licenses/",
+        "https://www.isc.org/downloads/software-support-policy/isc-license/",
+        "https://opensource.org/license/ISC"
+      ],
+      "reviewedAt": "2026-10-27"
+    },
+    "LGPL-3.0-or-later": {
+      "summary": "Preserve notices and supply LGPL plus GPL texts; meet corresponding-source duties for distributed covered libraries. Combined works must allow library modification/reverse engineering for debugging and satisfy relinking/shared-library requirements (LGPL section 4). Choose and document a permitted license version; do not treat a package metadata label or upstream URL alone as compliance.",
+      "url": "https://spdx.org/licenses/LGPL-3.0-or-later.json",
+      "sha256": "996af0513df21f7496288951c41428a03c174e9e4a9d63665c57d670f845ccb1",
+      "upstream": [
+        "https://www.gnu.org/licenses/lgpl-3.0-standalone.html",
+        "https://www.gnu.org/licenses/lgpl+gpl-3.0.txt",
+        "https://opensource.org/license/LGPL-3.0"
+      ],
+      "reviewedAt": "2026-10-27"
+    },
+    "MIT": {
+      "summary": "Include copyright and permission notice in all copies or substantial portions; preserve disclaimer.",
+      "url": "https://spdx.org/licenses/MIT.json",
+      "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+      "upstream": [
+        "https://opensource.org/license/MIT",
+        "https://gitlab.freedesktop.org/xorg/xserver/-/blob/dd5c2595a42d3ff0c4f18d9b53d1f6c3fd934fd4/COPYING#L365-389"
+      ],
+      "reviewedAt": "2026-10-27"
+    },
+    "MPL-2.0": {
+      "summary": "Covered files, including modifications, remain MPL; make covered Source Code Form available to executable recipients and inform them how to obtain it (3.1–3.2); preserve notices (3.4). Larger works can have separate terms (3.3).",
+      "url": "https://spdx.org/licenses/MPL-2.0.json",
+      "sha256": "66a3107d5ad6a058aab753eaac2047ccb2ed0e39465dd0fe5844da3e300d5172",
+      "upstream": [
+        "https://www.mozilla.org/MPL/2.0/",
+        "https://opensource.org/license/MPL-2.0"
+      ],
+      "reviewedAt": "2026-10-27"
+    },
+    "OFL-1.1": {
+      "summary": "Include copyright and full OFL with font copies; fonts cannot be sold alone; modified fonts must respect Reserved Font Names; font derivatives remain OFL; no endorsement. Documents made using fonts are not thereby OFL.",
+      "url": "https://spdx.org/licenses/OFL-1.1.json",
+      "sha256": "8eea8287e5876b539670cadb82e99f9a7afddec6f6730811be1daf25d2e9bcfd",
+      "upstream": [
+        "http://scripts.sil.org/cms/scripts/page.php?item_id=OFL_web",
+        "https://opensource.org/license/OFL-1.1"
+      ],
+      "reviewedAt": "2026-10-27"
+    },
+    "Python-2.0": {
+      "summary": "Retain the full applicable Python license chain (PSF, BeOpen, CNRI and CWI notices), including copyright/permission notices in copies and supporting documentation as specified; summarize modifications for derivative works; respect no-endorsement/trademark restrictions.",
+      "url": "https://spdx.org/licenses/Python-2.0.json",
+      "sha256": "893c2bafbb8133f7aa97e1f79a3ee3241ebca7025f56278e9e1f72bb98592f9d",
+      "upstream": [
+        "https://opensource.org/license/Python-2.0"
+      ],
+      "reviewedAt": "2026-10-27"
+    }
+  },
+  "manualAssets": [
+    {
+      "name": "DHI Node build base",
+      "source": "Dockerfile:17,42,50",
+      "url": "dhi.io/node:26-dev",
+      "version": "Public 0.17.1 provenance: dhi.io/node:26-dev@sha256:0c199c224fbc0dd15ca49b716ab92f9ffaee604f29e9a778d84e9b4ab7e9e771",
+      "license": "Docker DHI catalog: Apache-2.0; included components retain their own licenses",
+      "licenseEvidence": [
+        "https://docs.docker.com/dhi/",
+        "https://docs.docker.com/dhi/explore/security-concepts/sbom/"
+      ],
+      "reviewedAt": "2026-10-27",
+      "obligation": "Apache notices for Docker material plus component-specific terms. Build stage not copied wholesale; /app uploader and site including installed npm assets are copied. Capture exact base digest/platform and signed SBOM for release-specific component accounting. Current documentation does not prove terms of every previously published image."
+    },
+    {
+      "name": "DHI Node runtime base",
+      "source": "Dockerfile:18,105",
+      "url": "dhi.io/node:26",
+      "version": "Public 0.17.1 provenance: dhi.io/node:26@sha256:dc87c509f7279f734d04036f696bf9aad1b8d66f34750f32c30c5b85e033187f (26.12.1-1-debian13)",
+      "license": "Docker DHI catalog: Apache-2.0; included components retain their own licenses",
+      "licenseEvidence": [
+        "https://docs.docker.com/dhi/",
+        "https://docs.docker.com/dhi/explore/security-concepts/sbom/"
+      ],
+      "reviewedAt": "2026-10-27",
+      "obligation": "Final image redistributes this base; retain applicable Docker/component notices and satisfy component source duties. Verified per-platform SBOM/source attestations and reachable source-image digests are recorded in third-party-image-evidence.json. The image-level MIT annotation is not blanket relicensing of OS/Node dependencies; missing component license assertions remain unresolved rather than inferred."
+    },
+    {
+      "name": "Alpine map-fetch build base",
+      "source": "Dockerfile:59,67,117",
+      "url": "https://hub.docker.com/_/alpine",
+      "version": "alpine:3.22, mutable tag; apk repositories resolve curl/tar and dependencies at build time",
+      "license": "per component, not one image-wide software license; examples GPL-2.0-only (busybox) and MIT (musl)",
+      "licenseEvidence": [
+        "https://raw.githubusercontent.com/docker-library/docs/master/alpine/license.md",
+        "https://pkgs.alpinelinux.org/package/v3.22/main/x86_64/busybox",
+        "https://pkgs.alpinelinux.org/package/v3.22/main/x86_64/musl"
+      ],
+      "reviewedAt": "2026-10-27",
+      "obligation": "Only /map output is copied to final image, not Alpine tools. If build-stage images/caches are distributed, preserve per-package notices and satisfy applicable source duties. Observed repository examples busybox 1.37.0-r20 / musl 1.2.5-r13 are not asserted to be the historical build versions."
+    },
+    {
+      "name": "go-pmtiles CLI",
+      "source": "Dockerfile:36,69-72",
+      "url": "https://github.com/protomaps/go-pmtiles/releases/tag/v1.30.3",
+      "version": "1.30.3 default (build argument can override)",
+      "license": "BSD-3-Clause",
+      "licenseEvidence": [
+        "https://raw.githubusercontent.com/protomaps/go-pmtiles/v1.30.3/LICENSE"
+      ],
+      "reviewedAt": "2026-10-27",
+      "obligation": "Retain Copyright 2021 Protomaps LLC, conditions and disclaimer for source/binary redistribution; no endorsement. CLI only in build stage, not /map output. A distributed CLI/build-stage image also needs its Go dependency notices; this is not a Go binary SBOM."
+    },
+    {
+      "name": "Protomaps basemap slice",
+      "source": "Dockerfile:37-39,80-95,117",
+      "url": "https://build.protomaps.com/${BUILD}.pmtiles",
+      "version": "PROTOMAPS_BUILD=auto; newest within 14 days, maxzoom=8; exact resolved date in image /map-assets/BASEMAP_BUILD",
+      "license": "ODbL-1.0 Produced Work per Protomaps downloads; OSM/coastlines ODbL; Natural Earth public domain; landcover CC-BY-4.0 where included",
+      "licenseEvidence": [
+        "https://docs.protomaps.com/basemaps/downloads",
+        "https://protomaps.com/legal",
+        "https://raw.githubusercontent.com/protomaps/basemaps/main/LICENSE_DATA.md",
+        "https://www.openstreetmap.org/copyright",
+        "https://opendatacommons.org/licenses/odbl/1-0/",
+        "https://esa-worldcover.org/en/data-access"
+      ],
+      "reviewedAt": "2026-10-27",
+      "obligation": "Public interactive map: visible corner OSM attribution linked to OSM copyright. Preserve provenance/notices with distributed PMTiles; database duties remain governed separately by ODbL 4.2/4.4/4.6. Public 0.17.1 amd64/arm64 and #347 candidate artifacts identify builds 20261026/20261024 and basemap 4.15.2 with landcover, linking to the profile's documented Daylight/ESA WorldCover 2020 source. Public maps now carry the required 2020 credit and CC-BY-4.0 link; NOTICE describes transformations. Natural Earth attribution is not required; Protomaps branding is encouraged, not made mandatory by the cited terms. Recheck changed inputs."
+    },
+    {
+      "name": "Protomaps Noto Sans glyph ranges",
+      "source": "Dockerfile:96-102,117",
+      "url": "https://github.com/protomaps/basemaps-assets/archive/028c18f713baecad011301ff7a69acc39bcc2ae7.tar.gz",
+      "version": "028c18f713baecad011301ff7a69acc39bcc2ae7 pinned for future builds; not proven historical image revision",
+      "paths": [
+        "fonts/Noto Sans Regular",
+        "fonts/Noto Sans Medium",
+        "fonts/Noto Sans Italic"
+      ],
+      "license": "OFL-1.1",
+      "licenseEvidence": [
+        "https://raw.githubusercontent.com/protomaps/basemaps-assets/028c18f713baecad011301ff7a69acc39bcc2ae7/fonts/OFL.txt"
+      ],
+      "reviewedAt": "2026-10-27",
+      "obligation": "Include Copyright 2022 The Noto Project Authors and full OFL with glyph font copies; respect reserved names/no standalone sale/no endorsement. Docker now ships fonts/OFL.txt and records GLYPHS_REVISION. Both inspected public 0.17.1 platforms and #347 candidates lack a readable OFL or revision; this correction does not change their existing bytes."
+    }
+  ],
+  "vendorAssets": {
+    "sources": [
+      "uploader/scripts/copy-vendor.mjs",
+      "uploader/scripts/copy-fonts.mjs",
+      "uploader/scripts/copy-easymde.mjs"
+    ],
+    "packages": [
+      "easymde",
+      "htm",
+      "preact",
+      "maplibre-gl",
+      "pmtiles",
+      "fflate",
+      "font-awesome",
+      "@fontsource-variable/inter",
+      "@fontsource/ibm-plex-mono"
+    ],
+    "scope": "All npm versions/licenses are generated from locks, including browser copies and fonts. copy-legal.mjs collects installed-package LICENSE/COPYING/NOTICE/COPYRIGHT/AUTHORS files and license directories, plus supplemental texts, into public/legal for both trees. It delivers the license, NOTICE, inventory and evidence through existing static serving. Actual emitted bundle/font/native coverage and corresponding source require artifact inspection.",
+    "evidence": [
+      "https://github.com/protomaps/PMTiles/blob/0cebcaeade40034b86facb6e7da4ec726b9053fb/LICENSE",
+      "https://fontawesome.com/v4/license"
+    ],
+    "noticeGap": "Generated notice-gaps.json lists installed packages lacking recognized notices; review upstream, supplemental coverage and emitted/native assets. No recognized-file scan alone proves a complete notice bundle or source compliance."
+  },
+  "limitations": [
+    "First-party roots now declare owner-approved AGPL-3.0-only. The approved image rename is a separate implementation; historical public artifacts remain untouched.",
+    "Lockfile inventory includes optional platforms and dev entries, not only installed/distributed packages. Site devDependencies ship in final image because builds run at runtime.",
+    "Native source evidence now includes checksum-matched Satteri Cargo.lock archives (154), libvips 1.3.4 source/patch downloads (33) and librsvg crates (357), historical libvips 1.3.2 downloads (32) and crates (348), plus release-generated Rust standard-library notices matched to the compiler source identities read from both image platforms. Full texts and exact source directions supplement the package license labels. These are dependency supersets, not exact ELF linkage or reproduction claims.",
+    "Read-only inspection of exact public 0.17.1 amd64/arm64 and local #347 candidates is recorded in third-party-image-evidence.json. Published provenance resolves the base; signed runtime-base SBOM/source attestations verified with Docker Scout identify 20 components per platform and corresponding source-image digests. Source manifests are reachable. No inspected image was started or altered; uninspected historical releases remain unassessed.",
+    "Downloaded public Satteri tarballs were inspected in memory and SHA-512 matched to locks. No package installation or dependency code execution. Evidence date is review date, not release certification.",
+    "Artifact BASEMAP_BUILD/tileset metadata now connects 0.17.1 and #347 to Protomaps 4.15.2 and its documented Daylight input. Daylight's primary 2023-10-11 announcement identifies ESA WorldCover 2020 and remapping/denoising/smoothing/vectorization: https://daylightmap.org/2023/10/11/landcover.html. Credit year 2020 follows that source lineage, not the app release date; mutable future inputs must be reassessed.",
+    "No application builds, tests, type checks, lint, formatter or runtime/browser smoke were performed.",
+    "Supplemental native summaries: sharp-libvips 1.3.2 SHA256 25ffcfa69e28b1913ced27ec778b90f24911a1bb3021253577e8b0af55db0d49 at git 4da6d14c0d59866adfb9d8cf52bcaa53846dc4f6; 1.3.4 SHA256 6f0d5086e3bcbee12bcdacf5878b31d1104002aeecaeb241d3fff466108082fe at git ebb95f8add54eee8bed840e3fb587e4cbec857d7; Node 26.12.1 LICENSE SHA256 8e603aa87c70d36e497004f0dec63111511cb61b7d65ace12e10ea791599286c. Full component bundles and their source/hash inventories are now in third-party-image-evidence.json. Genuine missing notices and historical mutable-patch-byte uncertainty are explicitly retained; no copyright owners/years were fabricated."
+  ],
+  "finalLockRefresh": {
+    "reviewedAt": "2026-10-27",
+    "scope": "Final integrated #369A/#369B locks supplied by parent; no node_modules changes, builds, tests or installs performed by this refresh. The historical 0.17.1 and #347 artifact records remain unchanged.",
+    "lockfiles": {
+      "site": {
+        "path": "site/package-lock.json",
+        "sha256": "190a503c577842e69a0e94fc07ccb44912f3838deb0858171644d4b723207271",
+        "entries": 489
+      },
+      "uploader": {
+        "path": "uploader/package-lock.json",
+        "sha256": "e60dbfbdf4b66e00107ac208293cc2cc56fa6f5f13010260def952fa16b4ecc8",
+        "entries": 298
+      }
+    },
+    "totalEntries": 787,
+    "previousInventoryEntries": 917,
+    "nativePackages": [
+      {
+        "name": "satteri",
+        "version": "0.10.5",
+        "license": "MIT",
+        "integrity": "sha512-Ao1LKpAEa9Wdg0otgbVKViZHEq9ebdXe4DMrp3s9vQAU0HNIuHnFEuMuOcm0ZIXyV0Yzxj91NvhLpvXZJO/5ZQ==",
+        "lockLocations": [
+          {
+            "tree": "site",
+            "path": "node_modules/satteri"
+          }
+        ],
+        "registry": "https://registry.npmjs.org/satteri/0.10.5",
+        "sourceRevision": "b3d38e1e341c809b20b76a655e9b1601d11bd1f0",
+        "sourceTree": "https://github.com/bruits/satteri/tree/b3d38e1e341c809b20b76a655e9b1601d11bd1f0",
+        "sourceArchive": "https://github.com/bruits/satteri/archive/b3d38e1e341c809b20b76a655e9b1601d11bd1f0.tar.gz",
+        "sourceRevisionBasis": "Read npm SLSA provenance resolvedDependencies; provenance signature not independently verified in this review",
+        "noticeFiles": [
+          {
+            "path": "package/LICENSE",
+            "sha256": "902c04ca47795eb6e9b2a2f178a9d9e62f5330988a8d6e1818ee33aeb0f426c1"
+          }
+        ],
+        "cargoLock": {
+          "url": "https://raw.githubusercontent.com/bruits/satteri/b3d38e1e341c809b20b76a655e9b1601d11bd1f0/Cargo.lock",
+          "sha256": "5b3552a37b7ab9b0e267d6c374e477e79261383f2b9e262689079eae589f606b",
+          "registryEntries": 175
+        }
+      },
+      {
+        "name": "@astrojs/compiler-binding",
+        "version": "0.5.2",
+        "license": "MIT",
+        "integrity": "sha512-lEn76+0JcMQ5RDXU0wSMWJg2ZppiZvSULpghC29cfv4o9bhvWFDbQjsCtvjjXN9iVLFQ7fL3wTR2L2UU13mP8g==",
+        "lockLocations": [
+          {
+            "tree": "site",
+            "path": "node_modules/@astrojs/compiler-binding"
+          }
+        ],
+        "registry": "https://registry.npmjs.org/%40astrojs%2Fcompiler-binding/0.5.2",
+        "sourceRevision": "342e26603bf6416545a85b506b434d25226e1435",
+        "sourceTree": "https://github.com/withastro/compiler-rs/tree/342e26603bf6416545a85b506b434d25226e1435",
+        "sourceArchive": "https://github.com/withastro/compiler-rs/archive/342e26603bf6416545a85b506b434d25226e1435.tar.gz",
+        "sourceRevisionBasis": "Read npm SLSA provenance resolvedDependencies; provenance signature not independently verified in this review",
+        "noticeFiles": [
+          {
+            "path": "package/LICENSE",
+            "sha256": "ee92354a87bc4a402e022fa15e10a6c713136aba84c46095dccc2b8091132806"
+          }
+        ],
+        "cargoLock": {
+          "url": "https://raw.githubusercontent.com/withastro/compiler-rs/342e26603bf6416545a85b506b434d25226e1435/Cargo.lock",
+          "sha256": "7c62ffd73f811f1e13cd78e6ca3aa80fdf13ecdd904f4dce50cb8b427a81025e",
+          "registryEntries": 249
+        }
+      },
+      {
+        "name": "rolldown",
+        "version": "1.2.15",
+        "license": "MIT",
+        "integrity": "sha512-6odND+fel5zVw3I4Yc2e69gvguDnX0CAAGiNDZSq4ik5WUcaLrkD2GLuog0XcODbor31hZ5ayEMgVDno+KPV5g==",
+        "lockLocations": [
+          {
+            "tree": "site",
+            "path": "node_modules/rolldown"
+          },
+          {
+            "tree": "uploader",
+            "path": "node_modules/rolldown"
+          }
+        ],
+        "registry": "https://registry.npmjs.org/rolldown/1.2.15",
+        "sourceRevision": "89d821ca07cf9ccd84dd92bd3f48af0f579ab21a",
+        "sourceTree": "https://github.com/rolldown/rolldown/tree/89d821ca07cf9ccd84dd92bd3f48af0f579ab21a",
+        "sourceArchive": "https://github.com/rolldown/rolldown/archive/89d821ca07cf9ccd84dd92bd3f48af0f579ab21a.tar.gz",
+        "sourceRevisionBasis": "Read npm SLSA provenance resolvedDependencies; provenance signature not independently verified in this review",
+        "noticeFiles": [
+          {
+            "path": "package/LICENSE",
+            "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734"
+          }
+        ],
+        "cargoLock": {
+          "url": "https://raw.githubusercontent.com/rolldown/rolldown/89d821ca07cf9ccd84dd92bd3f48af0f579ab21a/Cargo.lock",
+          "sha256": "bf58f901950f80c21e00dffa4953f61c366bcca53f80c526177ba0dad14debe5",
+          "registryEntries": 356
+        }
+      },
+      {
+        "name": "lightningcss",
+        "version": "1.33.0",
+        "license": "MPL-2.0",
+        "integrity": "sha512-WkUDrojuJs0xkgGf2udWxa3yGBRxPtxUkB79i6aCZLRgc7PM8fZe9TosfPDcvEpQZbuFASnHYmRLBLUbmLOIIA==",
+        "lockLocations": [
+          {
+            "tree": "site",
+            "path": "node_modules/vite/node_modules/lightningcss"
+          },
+          {
+            "tree": "uploader",
+            "path": "node_modules/lightningcss"
+          }
+        ],
+        "registry": "https://registry.npmjs.org/lightningcss/1.33.0",
+        "sourceRevision": "1d680fa14e9a089c92dc0929f869d6757ae91c30",
+        "sourceTree": "https://github.com/parcel-bundler/lightningcss/tree/1d680fa14e9a089c92dc0929f869d6757ae91c30",
+        "sourceArchive": "https://github.com/parcel-bundler/lightningcss/archive/1d680fa14e9a089c92dc0929f869d6757ae91c30.tar.gz",
+        "sourceRevisionBasis": "Registry gitHead",
+        "noticeFiles": [
+          {
+            "path": "package/LICENSE",
+            "sha256": "5eba353fe5076ac3432177f8ab1cf75e3afcd0584251e37c3bfead5f447d040e"
+          }
+        ],
+        "cargoLock": {
+          "url": "https://raw.githubusercontent.com/parcel-bundler/lightningcss/1d680fa14e9a089c92dc0929f869d6757ae91c30/Cargo.lock",
+          "sha256": "907581b789997511b0e60ec6eea0e9e42f29cea5705bf641c5b7a112b2731794",
+          "registryEntries": 233
+        }
+      }
+    ],
+    "unchangedNative": "@img/sharp-libvips remains 1.3.4 in both final trees; existing 1.3.4 source evidence applies to that package version, not an unbuilt image/base/compiler assertion.",
+    "noticeSupplement": {
+      "path": "uploader/scripts/vendor-licenses/final-lock-native-NOTICES.txt",
+      "sha256": "9551a582f25665fffda2386f2fd7f69772c1b6c6de421ba8b2ac07a7cbb0ff88"
+    },
+    "limits": [
+      "Existing Satteri 0.9.4 dependency/compiler notices describe historical inspected artifacts; they are not asserted to inventory new 0.10.5 binaries.",
+      "Updated wrapper notices, pinned source trees/archives and Cargo.lock metadata are delivered; parent owns final installed/emitted native dependency coverage and image/compiler identity checks.",
+      "Npm SLSA statements were read for source revisions; their signatures were not independently verified here. Tarball content integrity was matched to the final lock SHA512."
+    ]
+  },
+  "jsonEscapeSimdSourceGrant": {
+    "name": "json-escape-simd",
+    "version": "3.0.2",
+    "sourceRevision": "a7eb4e70c5dc007ec618c53914e3301a0c159af7",
+    "declaredLicense": "MIT",
+    "manifest": {
+      "url": "https://raw.githubusercontent.com/napi-rs/escape-simd/a7eb4e70c5dc007ec618c53914e3301a0c159af7/Cargo.toml",
+      "sha256": "45737f4dd3c8311f95614401fce55641f6a5bafd61d2dab25bcdc5854bcc8469"
+    },
+    "readme": {
+      "url": "https://raw.githubusercontent.com/napi-rs/escape-simd/a7eb4e70c5dc007ec618c53914e3301a0c159af7/README.md",
+      "sha256": "bc8b8de017f796af78b940f4b00992caa84334e4ff5063a0210a59843605547a"
+    },
+    "declaration": "The pinned Cargo.toml explicitly says license = \"MIT\" and includes src/**/*.rs. The pinned README says its implementation is from sonic-rs. This is primary evidence of the declaration and credited origin, not a fabricated copyright notice.",
+    "creditedOrigin": {
+      "repository": "https://github.com/cloudwego/sonic-rs",
+      "reviewedRevision": "f63d1851de596fb9c53bf2a67ec84828c1d65c3c",
+      "declaredLicense": "Apache-2.0",
+      "license": {
+        "url": "https://raw.githubusercontent.com/cloudwego/sonic-rs/f63d1851de596fb9c53bf2a67ec84828c1d65c3c/LICENSE",
+        "sha256": "43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1"
+      },
+      "limitation": "The json-escape-simd README does not identify the sonic-rs revision copied. Current origin terms are evidence, not a retroactive determination of the copied code licensing."
+    },
+    "currentRelevance": "Final compiler-binding 0.5.2 Cargo.lock still includes json-escape-simd 3.0.2; final Satteri 0.10.5 instead locks 3.1.1. Historical Satteri 0.9.4 evidence remains separate.",
+    "remainingNoticeGap": "No original notice was found in the reviewed 3.0.2 archive, pinned repository root or leading source comments. Preserve the source declarations and credited origin; do not invent copyright holders/years or claim legal clearance."
+  },
+  "installedNoticeGapReview": {
+    "reviewedAt": "2026-10-27",
+    "inputs": {
+      "site": {
+        "path": "site/public/legal/notice-gaps.json",
+        "sha256": "fe736901d9abbaf988b7666b86707eb2b8bbd677e7b7a3910f8244b64a443d39",
+        "rows": 17
+      },
+      "uploader": {
+        "path": "uploader/public/legal/notice-gaps.json",
+        "sha256": "14cd03cf85aa28bb0bf7975ebacd003ef589457e7abdbff6ec82bc5ad418039d",
+        "rows": 13
+      }
+    },
+    "distinctPackages": 22,
+    "method": "Read-only registry/package/source inspection; all 22 npm tarballs SHA512-matched to final locks. Pinned licenses, exact package README license sections, V8 source header and complete dictionary notice preserved through vendor-licenses. No application code/dependency changes, builds, tests or package execution.",
+    "supplement": {
+      "path": "uploader/scripts/vendor-licenses/installed-gap-NOTICES.txt",
+      "sha256": "7ee779a910c362a6f735405ac223755235800a66ecc905198f94a1951dd68534"
+    },
+    "packages": [
+      {
+        "name": "@astrojs/compiler-binding-darwin-arm64",
+        "version": "0.5.2",
+        "declaredLicense": "MIT",
+        "locations": [
+          {
+            "tree": "site",
+            "path": "node_modules/@astrojs/compiler-binding-darwin-arm64",
+            "integrity": "sha512-1ZG5Ar3dD8HtodX9XH1mRmE0qBXZlvjYXSFfpgFwocqfWnvhFuqtGUNseL8wgfImiRMztIjpQqlogQFQQtgiag=="
+          }
+        ],
+        "tarball": "https://registry.npmjs.org/@astrojs/compiler-binding-darwin-arm64/-/compiler-binding-darwin-arm64-0.5.2.tgz",
+        "tarballIntegrityMatched": true,
+        "status": "existing-supplement-covered",
+        "assessment": "Package-level notice is already delivered by final-lock-native-NOTICES.txt. This does not certify embedded native dependencies, Darwin/compiler identity, final Linux linkage or source/relink completeness.",
+        "sourceIdentity": {
+          "revision": "342e26603bf6416545a85b506b434d25226e1435",
+          "basis": "npm registry gitHead"
+        },
+        "existingSupplement": "final-lock-native-NOTICES.txt",
+        "embeddedNotices": [],
+        "upstreamNotices": [],
+        "sourceTree": "https://github.com/withastro/compiler-rs/tree/342e26603bf6416545a85b506b434d25226e1435"
+      },
+      {
+        "name": "@bruits/satteri-darwin-arm64",
+        "version": "0.10.5",
+        "declaredLicense": "MIT",
+        "locations": [
+          {
+            "tree": "site",
+            "path": "node_modules/@bruits/satteri-darwin-arm64",
+            "integrity": "sha512-27KTVl4TJkVahMy/ohyA7qd4938G5UNneFUz/PsScYfpIhj0IVAS23mpcJXdPF44sa6nva198lmV/cKIb2YPyA=="
+          }
+        ],
+        "tarball": "https://registry.npmjs.org/@bruits/satteri-darwin-arm64/-/satteri-darwin-arm64-0.10.5.tgz",
+        "tarballIntegrityMatched": true,
+        "status": "existing-supplement-covered",
+        "assessment": "Package-level notice is already delivered by final-lock-native-NOTICES.txt. This does not certify embedded native dependencies, Darwin/compiler identity, final Linux linkage or source/relink completeness.",
+        "sourceIdentity": {
+          "revision": "b3d38e1e341c809b20b76a655e9b1601d11bd1f0",
+          "basis": "npm registry gitHead"
+        },
+        "existingSupplement": "final-lock-native-NOTICES.txt",
+        "embeddedNotices": [],
+        "upstreamNotices": [],
+        "sourceTree": "https://github.com/bruits/satteri/tree/b3d38e1e341c809b20b76a655e9b1601d11bd1f0"
+      },
+      {
+        "name": "@img/sharp-libvips-darwin-arm64",
+        "version": "1.3.4",
+        "declaredLicense": "LGPL-3.0-or-later",
+        "locations": [
+          {
+            "tree": "site",
+            "path": "node_modules/@img/sharp-libvips-darwin-arm64",
+            "integrity": "sha512-5R89nBYiRdUlSWJxPhO+GVtaXzXSxKnRu/xqMn3KTA3L9EB9Oy/P+Nn2f2vlhPuUdy/Zusb2DarbyTpGCfEDuw=="
+          },
+          {
+            "tree": "uploader",
+            "path": "node_modules/@img/sharp-libvips-darwin-arm64",
+            "integrity": "sha512-5R89nBYiRdUlSWJxPhO+GVtaXzXSxKnRu/xqMn3KTA3L9EB9Oy/P+Nn2f2vlhPuUdy/Zusb2DarbyTpGCfEDuw=="
+          }
+        ],
+        "tarball": "https://registry.npmjs.org/@img/sharp-libvips-darwin-arm64/-/sharp-libvips-darwin-arm64-1.3.4.tgz",
+        "tarballIntegrityMatched": true,
+        "status": "existing-supplement-covered",
+        "assessment": "Package-level notice is already delivered by sharp-libvips-1.3.4-COMPONENT-NOTICES.txt + GNU GPL/LGPL texts. This does not certify embedded native dependencies, Darwin/compiler identity, final Linux linkage or source/relink completeness.",
+        "sourceIdentity": {
+          "revision": "ebb95f8add54eee8bed840e3fb587e4cbec857d7",
+          "basis": "npm registry gitHead"
+        },
+        "existingSupplement": "sharp-libvips-1.3.4-COMPONENT-NOTICES.txt + GNU GPL/LGPL texts",
+        "embeddedNotices": [],
+        "upstreamNotices": [],
+        "sourceTree": "https://github.com/lovell/sharp-libvips/tree/ebb95f8add54eee8bed840e3fb587e4cbec857d7"
+      },
+      {
+        "name": "@nodable/entities",
+        "version": "2.1.1",
+        "declaredLicense": "MIT",
+        "locations": [
+          {
+            "tree": "site",
+            "path": "node_modules/@nodable/entities",
+            "integrity": "sha512-Pig3HxDIoMgjdEH8OCf/dkcTmLFjJRjWuq8jSnklu284/TKOPibSRERmOykiwmyXTtv61mP+44f3GMx0tLAyjg=="
+          }
+        ],
+        "tarball": "https://registry.npmjs.org/@nodable/entities/-/entities-2.1.1.tgz",
+        "tarballIntegrityMatched": true,
+        "status": "original-notice-unavailable",
+        "assessment": "Locked README/manifest declare MIT. Published gitHead is unavailable from GitHub tree/history and codeload (404); no original copyright is invented or borrowed from 3.1.0.",
+        "sourceIdentity": {
+          "revision": "8aa6d25b44b96a547e47c00873baaf5817ae2b9f",
+          "basis": "npm registry gitHead"
+        },
+        "existingSupplement": null,
+        "embeddedNotices": [
+          {
+            "path": "package/README.md (license/author section)",
+            "sha256": "a6dbc30856e877eb481e3453a6f7277d0ec968d0302df03828b05f60a6eac5cb"
+          }
+        ],
+        "upstreamNotices": [],
+        "sourceTree": "https://github.com/nodable/val-parsers/tree/8aa6d25b44b96a547e47c00873baaf5817ae2b9f",
+        "sourceAttempts": [
+          {
+            "url": "https://api.github.com/repos/nodable/val-parsers/git/trees/8aa6d25b44b96a547e47c00873baaf5817ae2b9f",
+            "result": "HTTP 404"
+          },
+          {
+            "url": "https://api.github.com/repos/nodable/val-parsers/commits?path=LICENSE&sha=8aa6d25b44b96a547e47c00873baaf5817ae2b9f&per_page=100",
+            "result": "HTTP 404"
+          },
+          {
+            "url": "https://codeload.github.com/nodable/val-parsers/tar.gz/8aa6d25b44b96a547e47c00873baaf5817ae2b9f",
+            "result": "HTTP Error 404: Not Found"
+          }
+        ]
+      },
+      {
+        "name": "@rolldown/binding-darwin-arm64",
+        "version": "1.2.15",
+        "declaredLicense": "MIT",
+        "locations": [
+          {
+            "tree": "site",
+            "path": "node_modules/@rolldown/binding-darwin-arm64",
+            "integrity": "sha512-m2WuQ6r0B4OTYxyPpNLtXaMRbRDUbG8YQV2Q3KTdSSK8Th6KHCnC8jVCJt8bvYeSB5WivkkNbc85mKadaSdOxA=="
+          },
+          {
+            "tree": "uploader",
+            "path": "node_modules/@rolldown/binding-darwin-arm64",
+            "integrity": "sha512-m2WuQ6r0B4OTYxyPpNLtXaMRbRDUbG8YQV2Q3KTdSSK8Th6KHCnC8jVCJt8bvYeSB5WivkkNbc85mKadaSdOxA=="
+          }
+        ],
+        "tarball": "https://registry.npmjs.org/@rolldown/binding-darwin-arm64/-/binding-darwin-arm64-1.2.15.tgz",
+        "tarballIntegrityMatched": true,
+        "status": "existing-supplement-covered",
+        "assessment": "Package-level notice is already delivered by final-lock-native-NOTICES.txt. This does not certify embedded native dependencies, Darwin/compiler identity, final Linux linkage or source/relink completeness.",
+        "sourceIdentity": {
+          "revision": "89d821ca07cf9ccd84dd92bd3f48af0f579ab21a",
+          "basis": "npm SLSA source statement read; signature not independently verified"
+        },
+        "existingSupplement": "final-lock-native-NOTICES.txt",
+        "embeddedNotices": [],
+        "upstreamNotices": [],
+        "sourceTree": "https://github.com/rolldown/rolldown/tree/89d821ca07cf9ccd84dd92bd3f48af0f579ab21a"
+      },
+      {
+        "name": "@vscode/l10n",
+        "version": "0.0.18",
+        "declaredLicense": "MIT",
+        "locations": [
+          {
+            "tree": "site",
+            "path": "node_modules/@vscode/l10n",
+            "integrity": "sha512-KYSIHVmslkaCDyw013pphY+d7x1qV8IZupYfeIfzNA+nsaWHbn5uPuQRvdRFsa9zFzGeudPuoGoZ1Op4jrJXIQ=="
+          }
+        ],
+        "tarball": "https://registry.npmjs.org/@vscode/l10n/-/l10n-0.0.18.tgz",
+        "tarballIntegrityMatched": true,
+        "status": "pinned-source-notice-recovered",
+        "assessment": "Original notice file omitted by the package is recovered from the identified upstream source snapshot.",
+        "sourceIdentity": {
+          "revision": "fc7e3d79ddb91a2cc24a9730aad912026a43dbf2",
+          "basis": "upstream version tag l10n/v0.0.18; not npm build provenance"
+        },
+        "existingSupplement": null,
+        "embeddedNotices": [],
+        "upstreamNotices": [
+          {
+            "path": "LICENSE",
+            "url": "https://raw.githubusercontent.com/Microsoft/vscode-l10n/fc7e3d79ddb91a2cc24a9730aad912026a43dbf2/LICENSE",
+            "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+          }
+        ],
+        "sourceTree": "https://github.com/Microsoft/vscode-l10n/tree/fc7e3d79ddb91a2cc24a9730aad912026a43dbf2"
+      },
+      {
+        "name": "am-i-vibing",
+        "version": "0.5.0",
+        "declaredLicense": "MIT",
+        "locations": [
+          {
+            "tree": "site",
+            "path": "node_modules/am-i-vibing",
+            "integrity": "sha512-KLcsDhqf1XRrJmJr+9I/C0EX2K+sGrAGZFgkmd84c8TJO9zJBu+/kFInjazu1KfJWFhWDKdRWkpBzEs7s35DVA=="
+          }
+        ],
+        "tarball": "https://registry.npmjs.org/am-i-vibing/-/am-i-vibing-0.5.0.tgz",
+        "tarballIntegrityMatched": true,
+        "status": "readme-copyright-declaration-preserved",
+        "assessment": "Locked README contains the MIT declaration and Copyright © 2025 Matt Kane; preserved verbatim. Pinned source has no separate full license file.",
+        "sourceIdentity": {
+          "revision": "a858d9865e3f5a278504aad0a775a8b7a8d70bbc",
+          "basis": "npm SLSA source statement read; signature not independently verified"
+        },
+        "existingSupplement": null,
+        "embeddedNotices": [
+          {
+            "path": "package/README.md (license/author section)",
+            "sha256": "cf5b4d1f323f370800ba1d5351699588aed7b94a0bf77fe962aa7bd11bcd5ad5"
+          }
+        ],
+        "upstreamNotices": [],
+        "sourceTree": "https://github.com/ascorbic/am-i-vibing/tree/a858d9865e3f5a278504aad0a775a8b7a8d70bbc"
+      },
+      {
+        "name": "boolbase",
+        "version": "1.0.0",
+        "declaredLicense": "ISC",
+        "locations": [
+          {
+            "tree": "site",
+            "path": "node_modules/boolbase",
+            "integrity": "sha512-JZOSA7Mo9sNGB8+UjSgzdLtokWAky1zbztM3WRLCbZ70/3cTANmQmOdR7y2g+J0e2WXywy1yS468tY+IruqEww=="
+          }
+        ],
+        "tarball": "https://registry.npmjs.org/boolbase/-/boolbase-1.0.0.tgz",
+        "tarballIntegrityMatched": true,
+        "status": "original-notice-missing",
+        "assessment": "Locked manifest declares ISC. Reviewed historical source snapshot and package contain no named license or original copyright notice; author metadata is not fabricated into a copyright notice.",
+        "sourceIdentity": {
+          "revision": "9837d5bf4f30390ac6384a6bc605ca2d69ade4bf",
+          "basis": "latest package.json revision before npm publication with matching version; not npm build provenance",
+          "published": "2014-02-15T14:44:50.620Z"
+        },
+        "existingSupplement": null,
+        "embeddedNotices": [],
+        "upstreamNotices": [],
+        "sourceTree": "https://github.com/fb55/boolbase/tree/9837d5bf4f30390ac6384a6bc605ca2d69ade4bf"
+      },
+      {
+        "name": "murmurhash-js",
+        "version": "1.0.0",
+        "declaredLicense": "MIT",
+        "locations": [
+          {
+            "tree": "site",
+            "path": "node_modules/murmurhash-js",
+            "integrity": "sha512-TvmkNhkv8yct0SVBSy+o8wYzXjE4Zz3PCesbfs8HiCXXdcTuocApFv11UWlNFWKYsP2okqrhb7JNlSm9InBhIw=="
+          },
+          {
+            "tree": "uploader",
+            "path": "node_modules/murmurhash-js",
+            "integrity": "sha512-TvmkNhkv8yct0SVBSy+o8wYzXjE4Zz3PCesbfs8HiCXXdcTuocApFv11UWlNFWKYsP2okqrhb7JNlSm9InBhIw=="
+          }
+        ],
+        "tarball": "https://registry.npmjs.org/murmurhash-js/-/murmurhash-js-1.0.0.tgz",
+        "tarballIntegrityMatched": true,
+        "status": "embedded-license-notice-recovered",
+        "assessment": "Full original license notice appears in the locked package README and is preserved verbatim.",
+        "sourceIdentity": {
+          "revision": "72aabce3f52cb8f16245692a69fd35951e165af0",
+          "basis": "npm registry gitHead"
+        },
+        "existingSupplement": null,
+        "embeddedNotices": [
+          {
+            "path": "package/README.md (license/author section)",
+            "sha256": "0439b967686bd53ae0f059314fdcf140bbc08002891c54b0ee7597a6bb5ef215"
+          }
+        ],
+        "upstreamNotices": [],
+        "sourceTree": "https://github.com/mikolalysenko/murmurhash-js/tree/72aabce3f52cb8f16245692a69fd35951e165af0"
+      },
+      {
+        "name": "pg-types",
+        "version": "2.2.0",
+        "declaredLicense": "MIT",
+        "locations": [
+          {
+            "tree": "site",
+            "path": "node_modules/pg-types",
+            "integrity": "sha512-qTAAlrEsl8s4OiEQY69wDvcMIdQN6wdz5ojQiOy6YRMuynxenON0O5oCpJI6lshc6scgAY8qvJ2On/p+CXY0GA=="
+          },
+          {
+            "tree": "uploader",
+            "path": "node_modules/pg-types",
+            "integrity": "sha512-qTAAlrEsl8s4OiEQY69wDvcMIdQN6wdz5ojQiOy6YRMuynxenON0O5oCpJI6lshc6scgAY8qvJ2On/p+CXY0GA=="
+          }
+        ],
+        "tarball": "https://registry.npmjs.org/pg-types/-/pg-types-2.2.0.tgz",
+        "tarballIntegrityMatched": true,
+        "status": "embedded-license-notice-recovered",
+        "assessment": "Full original license notice appears in the locked package README and is preserved verbatim.",
+        "sourceIdentity": {
+          "revision": "d9d9dfb87eb50914043cbc178c301b7dd3b0c50d",
+          "basis": "npm registry gitHead"
+        },
+        "existingSupplement": null,
+        "embeddedNotices": [
+          {
+            "path": "package/README.md (license/author section)",
+            "sha256": "c565667e0560bba6502cda29fd9d461fd3acaf9dac24dda4d2758ce0f8b720cd"
+          }
+        ],
+        "upstreamNotices": [],
+        "sourceTree": "https://github.com/brianc/node-pg-types/tree/d9d9dfb87eb50914043cbc178c301b7dd3b0c50d"
+      },
+      {
+        "name": "pgpass",
+        "version": "1.0.5",
+        "declaredLicense": "MIT",
+        "locations": [
+          {
+            "tree": "site",
+            "path": "node_modules/pgpass",
+            "integrity": "sha512-FdW9r/jQZhSeohs1Z3sI1yxFQNFvMcnmfuj4WBMUTxOrAyLMaTcE1aAMBiTlbMNaXvBCQuVi0R7hd8udDSP7ug=="
+          },
+          {
+            "tree": "uploader",
+            "path": "node_modules/pgpass",
+            "integrity": "sha512-FdW9r/jQZhSeohs1Z3sI1yxFQNFvMcnmfuj4WBMUTxOrAyLMaTcE1aAMBiTlbMNaXvBCQuVi0R7hd8udDSP7ug=="
+          }
+        ],
+        "tarball": "https://registry.npmjs.org/pgpass/-/pgpass-1.0.5.tgz",
+        "tarballIntegrityMatched": true,
+        "status": "embedded-license-notice-recovered",
+        "assessment": "Full original license notice appears in the locked package README and is preserved verbatim.",
+        "sourceIdentity": {
+          "revision": "4230ed5e417ba6044ea7eb80b7c33db9ec301398",
+          "basis": "npm registry gitHead"
+        },
+        "existingSupplement": null,
+        "embeddedNotices": [
+          {
+            "path": "package/README.md (license/author section)",
+            "sha256": "f660a02f22de943c8c28a93791e8571c67f9088be93226fd526842b586cb4db4"
+          }
+        ],
+        "upstreamNotices": [],
+        "sourceTree": "https://github.com/hoegaarden/pgpass/tree/4230ed5e417ba6044ea7eb80b7c33db9ec301398"
+      },
+      {
+        "name": "piccolore",
+        "version": "0.1.3",
+        "declaredLicense": "ISC",
+        "locations": [
+          {
+            "tree": "site",
+            "path": "node_modules/piccolore",
+            "integrity": "sha512-o8bTeDWjE086iwKrROaDf31K0qC/BENdm15/uH9usSC/uZjJOKb2YGiVHfLY4GhwsERiPI1jmwI2XrA7ACOxVw=="
+          }
+        ],
+        "tarball": "https://registry.npmjs.org/piccolore/-/piccolore-0.1.3.tgz",
+        "tarballIntegrityMatched": true,
+        "status": "credited-origin-notice-preserved",
+        "assessment": "Pinned README explicitly identifies a picocolors fork. Source contains no own named ISC notice. Credited origin ISC license retained from a pinned revision; exact copied revision is unspecified.",
+        "sourceIdentity": {
+          "revision": "5af9fa6834292e3cb3a2bc778e4057517c1505e0",
+          "basis": "npm SLSA source statement read; signature not independently verified"
+        },
+        "existingSupplement": null,
+        "embeddedNotices": [],
+        "upstreamNotices": [],
+        "sourceTree": "https://github.com/delucis/piccolore/tree/5af9fa6834292e3cb3a2bc778e4057517c1505e0",
+        "creditedOrigin": {
+          "url": "https://raw.githubusercontent.com/alexeyraspopov/picocolors/0e7c4af2de299dd7bc5916f2bddd151fa2f66740/LICENSE",
+          "revision": "0e7c4af2de299dd7bc5916f2bddd151fa2f66740",
+          "sha256": "6582629e2979466878f6014313dcc2f3756c9616148682227ce3063dde310750",
+          "limitation": "Pinned piccolore README calls it a temporary fork of picocolors but does not identify the copied revision. This preserves the credited origin license, not an invented fork copyright or provenance equivalence."
+        }
+      },
+      {
+        "name": "pmtiles",
+        "version": "4.4.1",
+        "declaredLicense": "BSD-3-Clause",
+        "locations": [
+          {
+            "tree": "site",
+            "path": "node_modules/pmtiles",
+            "integrity": "sha512-5oTeQc/yX/ft1evbpIlnoCZugQuug/iYIAj/ZTqIqzdGek4uZEho99En890EE6NOSI3JTI3IG8R7r8+SltphxA=="
+          },
+          {
+            "tree": "uploader",
+            "path": "node_modules/pmtiles",
+            "integrity": "sha512-5oTeQc/yX/ft1evbpIlnoCZugQuug/iYIAj/ZTqIqzdGek4uZEho99En890EE6NOSI3JTI3IG8R7r8+SltphxA=="
+          }
+        ],
+        "tarball": "https://registry.npmjs.org/pmtiles/-/pmtiles-4.4.1.tgz",
+        "tarballIntegrityMatched": true,
+        "status": "existing-supplement-covered",
+        "assessment": "Package-level notice is already delivered by pmtiles-LICENSE.txt.",
+        "sourceIdentity": {
+          "revision": "0cebcaeade40034b86facb6e7da4ec726b9053fb",
+          "basis": "npm registry gitHead"
+        },
+        "existingSupplement": "pmtiles-LICENSE.txt",
+        "embeddedNotices": [],
+        "upstreamNotices": []
+      },
+      {
+        "name": "process-ancestry",
+        "version": "0.1.0",
+        "declaredLicense": "MIT",
+        "locations": [
+          {
+            "tree": "site",
+            "path": "node_modules/process-ancestry",
+            "integrity": "sha512-tGqJW/UnclpYASFcM6Xh8D8l/BMtaQ9+CSG0vlJSJTcdMM4lDRv4c6H0Pdcsfted+bVczdYSfk2fdukg2gQkZg=="
+          }
+        ],
+        "tarball": "https://registry.npmjs.org/process-ancestry/-/process-ancestry-0.1.0.tgz",
+        "tarballIntegrityMatched": true,
+        "status": "license-author-declaration-preserved",
+        "assessment": "Locked README declares MIT and names Matt Kane as author. Pinned tagged source has no named license/copyright file; no copyright year or full upstream notice is invented.",
+        "sourceIdentity": {
+          "revision": "45004fd6155437eef40a632877a567db1b9addc5",
+          "basis": "upstream version tag process-ancestry@0.1.0; not npm build provenance"
+        },
+        "existingSupplement": null,
+        "embeddedNotices": [
+          {
+            "path": "package/README.md (license/author section)",
+            "sha256": "8106da517c09aead3186a9ad3a19aa0e1eec3d99dfda70385d6ed3f33da4985e"
+          },
+          {
+            "path": "package/README.md (license/author section)",
+            "sha256": "738702ed6831305a24a7e9eb6ea5183e47b50acc9421d82d5fd23c80a5b2db0a"
+          }
+        ],
+        "upstreamNotices": [],
+        "sourceTree": "https://github.com/ascorbic/process-ancestry/tree/45004fd6155437eef40a632877a567db1b9addc5"
+      },
+      {
+        "name": "protomaps-themes-base",
+        "version": "4.5.0",
+        "declaredLicense": "BSD-3-Clause",
+        "locations": [
+          {
+            "tree": "site",
+            "path": "node_modules/protomaps-themes-base",
+            "integrity": "sha512-z5A6oXAXNi/CHEIbCfzZ/6uVDgnv3pO4C3LFvomxjUFXwyqWZ7HJdfPoNJSIlsvaQubqsaxCbamEzqBr/W7vkg=="
+          }
+        ],
+        "tarball": "https://registry.npmjs.org/protomaps-themes-base/-/protomaps-themes-base-4.5.0.tgz",
+        "tarballIntegrityMatched": true,
+        "status": "pinned-source-notice-recovered",
+        "assessment": "Original notice file omitted by the package is recovered from the identified upstream source snapshot.",
+        "sourceIdentity": {
+          "revision": "cd18b22f8ba4e9d18aac1afe7246ebe3c395cb1f",
+          "basis": "npm registry gitHead"
+        },
+        "existingSupplement": null,
+        "embeddedNotices": [],
+        "upstreamNotices": [
+          {
+            "path": "LICENSE.md",
+            "url": "https://raw.githubusercontent.com/protomaps/basemaps/cd18b22f8ba4e9d18aac1afe7246ebe3c395cb1f/LICENSE.md",
+            "sha256": "74f975cfedd168098c43b5cfd6e587e40604684c4ffcec3e90d24b3b09c061b0"
+          },
+          {
+            "path": "LICENSE_DATA.md",
+            "url": "https://raw.githubusercontent.com/protomaps/basemaps/cd18b22f8ba4e9d18aac1afe7246ebe3c395cb1f/LICENSE_DATA.md",
+            "sha256": "43e493185269f9ecf1fff6ce0cdcf53a39cdc795cda0fefa57c4824ba9f69479"
+          }
+        ],
+        "sourceTree": "https://github.com/protomaps/basemaps/tree/cd18b22f8ba4e9d18aac1afe7246ebe3c395cb1f"
+      },
+      {
+        "name": "stackback",
+        "version": "0.0.2",
+        "declaredLicense": "MIT",
+        "locations": [
+          {
+            "tree": "site",
+            "path": "node_modules/stackback",
+            "integrity": "sha512-1XMJE5fQo1jGH6Y/7ebnwPOBEkIEnT4QF32d5R1+VXdXveM0IBMJt8zfaxX1P3QhVwrYe+576+jkANtSS2mBbw=="
+          },
+          {
+            "tree": "uploader",
+            "path": "node_modules/stackback",
+            "integrity": "sha512-1XMJE5fQo1jGH6Y/7ebnwPOBEkIEnT4QF32d5R1+VXdXveM0IBMJt8zfaxX1P3QhVwrYe+576+jkANtSS2mBbw=="
+          }
+        ],
+        "tarball": "https://registry.npmjs.org/stackback/-/stackback-0.0.2.tgz",
+        "tarballIntegrityMatched": true,
+        "status": "embedded-additional-conditions-preserved",
+        "assessment": "Original formatstack.js V8 2012 BSD-style notice is preserved in full. Package MIT metadata does not erase those conditions; no separate original MIT copyright notice was present in the reviewed package/source.",
+        "sourceIdentity": {
+          "revision": "2963095372abf7b75ba55f01cef08ab1e62c2ff4",
+          "basis": "upstream version tag v0.0.2; not npm build provenance"
+        },
+        "existingSupplement": null,
+        "embeddedNotices": [
+          {
+            "path": "package/formatstack.js (original leading V8 notice)",
+            "sha256": "50e3a58083f6fa4aa476c27ebc77b9ed03f38be59fc4127754999c5689b85152"
+          }
+        ],
+        "upstreamNotices": [],
+        "sourceTree": "https://github.com/shtylman/node-stackback/tree/2963095372abf7b75ba55f01cef08ab1e62c2ff4"
+      },
+      {
+        "name": "xml-naming",
+        "version": "0.1.0",
+        "declaredLicense": "MIT",
+        "locations": [
+          {
+            "tree": "site",
+            "path": "node_modules/xml-naming",
+            "integrity": "sha512-k8KO9hrMyNk6tUWqUfkTEZbezRRpONVOzUTnc97VnCvyj6Tf9lyUR9EDAIeiVLv56jsMcoXEwjW8Kv5yPY52lw=="
+          },
+          {
+            "tree": "uploader",
+            "path": "node_modules/xml-naming",
+            "integrity": "sha512-k8KO9hrMyNk6tUWqUfkTEZbezRRpONVOzUTnc97VnCvyj6Tf9lyUR9EDAIeiVLv56jsMcoXEwjW8Kv5yPY52lw=="
+          }
+        ],
+        "tarball": "https://registry.npmjs.org/xml-naming/-/xml-naming-0.1.0.tgz",
+        "tarballIntegrityMatched": true,
+        "status": "pinned-source-notice-recovered",
+        "assessment": "Original notice file omitted by the package is recovered from the identified upstream source snapshot. The initial source commit postdates npm publication; README and src/index.js were byte-matched to the locked tarball. This is not registry build provenance.",
+        "sourceIdentity": {
+          "revision": "c0afc395948730bed124859d7fc7cccabe0aac8a",
+          "basis": "initial upstream source commit after npm publication; source file correspondence assessed separately, not npm provenance",
+          "published": "2026-05-08T06:20:54.228Z"
+        },
+        "existingSupplement": null,
+        "embeddedNotices": [
+          {
+            "path": "package/README.md (license/author section)",
+            "sha256": "a6dbc30856e877eb481e3453a6f7277d0ec968d0302df03828b05f60a6eac5cb"
+          }
+        ],
+        "upstreamNotices": [
+          {
+            "path": "LICENSE",
+            "url": "https://raw.githubusercontent.com/NaturalIntelligence/xml-naming/c0afc395948730bed124859d7fc7cccabe0aac8a/LICENSE",
+            "sha256": "8e75fc0e776c62ccadb8178ece8d3daa9ba7601fb0a49b2dfb0ea9a7a5c0aa07"
+          }
+        ],
+        "sourceTree": "https://github.com/NaturalIntelligence/xml-naming/tree/c0afc395948730bed124859d7fc7cccabe0aac8a",
+        "sourceCorrespondence": [
+          {
+            "path": "README.md",
+            "url": "https://raw.githubusercontent.com/NaturalIntelligence/xml-naming/c0afc395948730bed124859d7fc7cccabe0aac8a/README.md",
+            "sha256": "fbb211d0da0ae219c4f7a91c6be497c126fa0c30707181c2e509c25f9471fc5b",
+            "matchesLockedTarball": true
+          },
+          {
+            "path": "src/index.js",
+            "url": "https://raw.githubusercontent.com/NaturalIntelligence/xml-naming/c0afc395948730bed124859d7fc7cccabe0aac8a/src/index.js",
+            "sha256": "ebdaa8d1ac41dbb15c842b0dcb091adb9c13e4a76f33b1537fcddfafb674cf11",
+            "matchesLockedTarball": true
+          }
+        ]
+      },
+      {
+        "name": "@esbuild/darwin-arm64",
+        "version": "0.28.1",
+        "declaredLicense": "MIT",
+        "locations": [
+          {
+            "tree": "uploader",
+            "path": "node_modules/@esbuild/darwin-arm64",
+            "integrity": "sha512-TZbWkQY7kvTAXbXUT7uVACR5cMHsDiSz9z7ZKAX/RTq/WJEk3QyRr0wZpNhBDX+/0CtdqUIJlOiodQcta6tY3Q=="
+          }
+        ],
+        "tarball": "https://registry.npmjs.org/@esbuild/darwin-arm64/-/darwin-arm64-0.28.1.tgz",
+        "tarballIntegrityMatched": true,
+        "status": "pinned-source-notice-recovered",
+        "assessment": "Original notice file omitted by the package is recovered from the identified upstream source snapshot.",
+        "sourceIdentity": {
+          "revision": "bb9db84c02433fbe37b3509f53f9f3e3cc48725e",
+          "basis": "npm registry gitHead"
+        },
+        "existingSupplement": null,
+        "embeddedNotices": [],
+        "upstreamNotices": [
+          {
+            "path": "LICENSE.md",
+            "url": "https://raw.githubusercontent.com/evanw/esbuild/bb9db84c02433fbe37b3509f53f9f3e3cc48725e/LICENSE.md",
+            "sha256": "b40ec5baec7bb34fa5b1c09521fa3cd52d5fad7adafed74932a2010d3612a681"
+          }
+        ],
+        "sourceTree": "https://github.com/evanw/esbuild/tree/bb9db84c02433fbe37b3509f53f9f3e3cc48725e"
+      },
+      {
+        "name": "@nodable/entities",
+        "version": "3.1.0",
+        "declaredLicense": "MIT",
+        "locations": [
+          {
+            "tree": "uploader",
+            "path": "node_modules/@nodable/entities",
+            "integrity": "sha512-LsS/DjHr+uDM647Gru/cA8+J3a3HfhttwCKLyuoyN7yXTFCxKBtSgMQBvrW9yNPa2/zDRUNuGPaH5QUFoa4arQ=="
+          }
+        ],
+        "tarball": "https://registry.npmjs.org/@nodable/entities/-/entities-3.1.0.tgz",
+        "tarballIntegrityMatched": true,
+        "status": "pinned-source-notice-recovered",
+        "assessment": "Original notice file omitted by the package is recovered from the identified upstream source snapshot.",
+        "sourceIdentity": {
+          "revision": "ac48e7ea591da372be023a481875c747535812b3",
+          "basis": "npm registry gitHead"
+        },
+        "existingSupplement": null,
+        "embeddedNotices": [
+          {
+            "path": "package/README.md (license/author section)",
+            "sha256": "a6dbc30856e877eb481e3453a6f7277d0ec968d0302df03828b05f60a6eac5cb"
+          }
+        ],
+        "upstreamNotices": [
+          {
+            "path": "LICENSE",
+            "url": "https://raw.githubusercontent.com/nodable/val-parsers/ac48e7ea591da372be023a481875c747535812b3/LICENSE",
+            "sha256": "750cb3fb6362804957ef52caaf9b5c824015be44d494637330d7cd8834d31d40"
+          }
+        ],
+        "sourceTree": "https://github.com/nodable/val-parsers/tree/ac48e7ea591da372be023a481875c747535812b3"
+      },
+      {
+        "name": "abstract-logging",
+        "version": "2.0.1",
+        "declaredLicense": "MIT",
+        "locations": [
+          {
+            "tree": "uploader",
+            "path": "node_modules/abstract-logging",
+            "integrity": "sha512-2BjRTZxTPvheOvGbBslFSYOUkr+SjPtOnrLP33f+VIWLzezQpZcqVg7ja3L4dBXmzzgwT+a029jRx5PCi3JuiA=="
+          }
+        ],
+        "tarball": "https://registry.npmjs.org/abstract-logging/-/abstract-logging-2.0.1.tgz",
+        "tarballIntegrityMatched": true,
+        "status": "linked-license-grant-preserved",
+        "assessment": "Locked README links jsumners.mit-license.org. Its full original article is preserved as text with review-date/mutable-page caveat; displayed 2026 is not invented or asserted as the historical publication-year notice.",
+        "sourceIdentity": {
+          "revision": "80dfaef91ee87008f4ed2b6e78921d383bccd406",
+          "basis": "npm registry gitHead"
+        },
+        "existingSupplement": null,
+        "embeddedNotices": [
+          {
+            "path": "package/Readme.md (license/author section)",
+            "sha256": "edd22fb263cd1c159873ea9ce37b8fbb6678e39ec7d509991a17f08e149df159"
+          }
+        ],
+        "upstreamNotices": [],
+        "sourceTree": "https://github.com/jsumners/abstract-logging/tree/80dfaef91ee87008f4ed2b6e78921d383bccd406",
+        "linkedGrant": {
+          "url": "https://jsumners.mit-license.org/",
+          "reviewedAt": "2026-10-27",
+          "readerHtmlSha256": "743613e2449585dbecff4a71a8f75140cb436ced16f8daa0c17b4de734739de9",
+          "excerptSha256": "2a40fc4489c8dcca1eced6a6c7ab27ee4b3e05ca7b6c12abc763d1c59f4c55f5",
+          "limitation": "Package README links this mutable license page; its reviewed copyright says 2026. This is not asserted to be the historical notice at the 2.0.1 publication date. Static reader retrieval succeeded; direct urllib retrieval returned 403."
+        }
+      },
+      {
+        "name": "font-awesome",
+        "version": "4.7.0",
+        "declaredLicense": "(OFL-1.1 AND MIT)",
+        "locations": [
+          {
+            "tree": "uploader",
+            "path": "node_modules/font-awesome",
+            "integrity": "sha512-U6kGnykA/6bFmg1M/oT9EkFeIYv7JlX3bozwQJWiiLz6L0w3F5vBVPxHlwyX/vtNq1ckcpRKOB9f2Qal/VtFpg=="
+          }
+        ],
+        "tarball": "https://registry.npmjs.org/font-awesome/-/font-awesome-4.7.0.tgz",
+        "tarballIntegrityMatched": true,
+        "status": "existing-supplement-covered",
+        "assessment": "Package-level notice is already delivered by font-awesome-LICENSE.txt.",
+        "sourceIdentity": {
+          "revision": "a8386aae19e200ddb0f6845b5feeee5eb7013687",
+          "basis": "npm registry gitHead"
+        },
+        "existingSupplement": "font-awesome-LICENSE.txt",
+        "embeddedNotices": [
+          {
+            "path": "package/README.md (license/author section)",
+            "sha256": "a8a9a64300dcbe2056e5e7db5c2b6b7dab8e97cb72d045981ff598ac987e044f"
+          },
+          {
+            "path": "package/README.md (license/author section)",
+            "sha256": "a770b019c343be41fe30f232c06f818fac8660bd49550d71194176b9d987e705"
+          },
+          {
+            "path": "package/fonts/fontawesome-webfont.svg (original copyright metadata)",
+            "sha256": "28dd36f56a89a2629207a6d2da0dec28235980273f67f75190cf9bd95ed2ad98"
+          }
+        ],
+        "upstreamNotices": [],
+        "sourceTree": "https://github.com/FortAwesome/Font-Awesome/tree/a8386aae19e200ddb0f6845b5feeee5eb7013687"
+      },
+      {
+        "name": "typo-js",
+        "version": "1.3.2",
+        "declaredLicense": "BSD-3-Clause",
+        "locations": [
+          {
+            "tree": "uploader",
+            "path": "node_modules/typo-js",
+            "integrity": "sha512-Z1YkJ7IIYNrFeOxAlHUercY4Q2I+PhYD/3VkWpJGy/Oqudy3bFpNcQxnv6Oa9fTSXCHPGz1eDoX1bZYm2Z891A=="
+          }
+        ],
+        "tarball": "https://registry.npmjs.org/typo-js/-/typo-js-1.3.2.tgz",
+        "tarballIntegrityMatched": true,
+        "status": "pinned-source-notice-recovered",
+        "assessment": "Original notice file omitted by the package is recovered from the identified upstream source snapshot. The complete distributed dictionary README also preserves SCOWL, Ispell, WordNet and other third-party conditions; wrapper BSD metadata is not a blanket dictionary license.",
+        "sourceIdentity": {
+          "revision": "1d594ebd9a12f922fa4884324cfb67ae569e4095",
+          "basis": "npm registry gitHead"
+        },
+        "existingSupplement": null,
+        "embeddedNotices": [
+          {
+            "path": "package/dictionaries/en_US/README.md (complete dictionary provenance/notice file)",
+            "sha256": "2a7e8d8ae9e8facc84818546ae2a8d83aec5e9c80a675ff789acd1c338b53b3d"
+          }
+        ],
+        "upstreamNotices": [
+          {
+            "path": "license.txt",
+            "url": "https://raw.githubusercontent.com/cfinke/Typo.js/1d594ebd9a12f922fa4884324cfb67ae569e4095/license.txt",
+            "sha256": "d36ddbbca5451e2799557c158305096ed88f0fa1f32f5542130954528cd61602"
+          }
+        ],
+        "sourceTree": "https://github.com/cfinke/Typo.js/tree/1d594ebd9a12f922fa4884324cfb67ae569e4095"
+      }
+    ],
+    "limits": [
+      "Raw notice-gaps.json counts remain filename-scan results; do not suppress entries just because this review supplies supplemental coverage.",
+      "Native package-level notices/source links do not establish complete embedded-library/compiler/platform linkage or source/relink compliance. Parent owns final image inspection.",
+      "Missing originals, unavailable historical source, mutable license-page dates and unspecified fork-origin revisions are explicitly distinguished; no copyright holder/year was synthesized."
+    ]
+  }
+}

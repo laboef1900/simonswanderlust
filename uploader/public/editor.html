@@ -543,6 +543,21 @@
       let excerptAssist = null;
       let reviewIsAdmin = false;
       let pendingSaves = 0;
+      let writeTail = Promise.resolve();
+      let writeEpoch = 0;
+      function enqueueWrite(write) {
+        if (loadBlocked) return Promise.resolve(false);
+        const epoch = writeEpoch;
+        pendingSaves += 1;
+        renderDraftState();
+        const result = writeTail.then(() => epoch === writeEpoch && !loadBlocked ? write() : false).finally(() => {
+          pendingSaves -= 1;
+          renderDraftState();
+        });
+        // A rejected request must not poison later explicit user actions.
+        writeTail = result.catch(() => {});
+        return result;
+      }
       let populatingBody = false;
       let formVersion = 0;
       const deImages = {};        // src → {width, height}
@@ -1802,16 +1817,11 @@
       }
 
       // ---- save draft ----
-      // Persists the current on-screen form. Returns true on success so Publish
-      // can save first and validate exactly what's on screen.
-      async function doSaveDraft({ gpxAttach = false } = {}) {
-        if (loadBlocked || restoreBaseUnknown) {
-          showErr(restoreBaseUnknown ? editorCopy.restoreBlocked : editorCopy.reloadFailed);
-          return false;
-        }
-        if (!gpxAttach && !gpxEditor.guardAction()) return false;
-        showErr('');
-        setStatus('');
+      // Capture each explicit intent before queuing, but bind identity/version
+      // only when it runs. Later typing remains dirty; no save is coalesced.
+      // Gallery alt edits reach the body asynchronously (#354). Settle them
+      // before capturing, so the click's payload includes what was typed.
+      async function flushGalleryEdits() {
         const version = formVersion;
         try {
           let before;
@@ -1822,13 +1832,41 @@
             // Another locale can receive a new edit after its flush returned
             // while this round still waits for the first locale.
           } while (before !== guard.snapshot());
-        }
-        catch (error) {
+          return true;
+        } catch (error) {
           if (version === formVersion) showErr(error.message);
           return false;
         }
-        const snap = guard.snapshot(); // edits typed after this point must survive markClean
-        const payload = buildPayload();
+      }
+      function snapshotIntent() {
+        return { snap: guard.snapshot(), payload: structuredClone(buildPayload()), skipped: partialStopCount() };
+      }
+      // Synchronous at the click unless a gallery edit is still settling, so
+      // typing after the click stays out of this intent (#362).
+      function captureSaveIntent() {
+        if (!Object.values(galleryEditors).some((editor) => editor.snapshotAlts().length)) return snapshotIntent();
+        return flushGalleryEdits().then((ok) => ok ? snapshotIntent() : null);
+      }
+      async function doSaveDraft() {
+        if (loadBlocked || restoreBaseUnknown) {
+          showErr(restoreBaseUnknown ? editorCopy.restoreBlocked : editorCopy.reloadFailed);
+          return false;
+        }
+        if (!gpxEditor.guardAction()) return false;
+        const intent = await captureSaveIntent();
+        if (!intent) return false;
+        return enqueueWrite(() => saveDraftNow(intent));
+      }
+      // Called only while holding the editor write queue (also by Publish/GPX).
+      async function saveDraftNow({ snap, payload, skipped }) {
+        if (loadBlocked || restoreBaseUnknown) {
+          showErr(restoreBaseUnknown ? editorCopy.restoreBlocked : editorCopy.reloadFailed);
+          return false;
+        }
+        showErr('');
+        setStatus('');
+        payload.translationKey = currentTk || undefined;
+        payload.updatedAt = loadedUpdatedAt || undefined;
         const url = currentTk ? '/posts/' + encodeURIComponent(currentTk) : '/posts';
         const method = currentTk ? 'PUT' : 'POST';
         // A slug change on an existing draft is deliberate or it does not happen
@@ -1852,8 +1890,6 @@
         }
         let res;
         let body;
-        pendingSaves += 1;
-        renderDraftState();
         try {
           res = await fetch(url, {
             method,
@@ -1865,9 +1901,6 @@
           showErr('Save failed: ' + e);
           setStatus('');
           return false;
-        } finally {
-          pendingSaves -= 1;
-          renderDraftState();
         }
         if (res.status === 401) { guard.redirectToLogin(); return false; }
         if (!res.ok) {
@@ -1905,7 +1938,6 @@
         // What was just stored is what the audit judges — refresh from the
         // server rather than re-deriving the rule in the browser.
         refreshAltAudit().catch(() => {});
-        const skipped = partialStopCount();
         const savedMsg = guard.isDirty() ? editorCopy.saveNewer : isPublished ? editorCopy.saveLiveUnchanged : '';
         setStatus(skipped
           ? savedMsg + ' Note: ' + skipped + ' incomplete stop row(s) were skipped (each needs a name, latitude and longitude).'
@@ -1921,6 +1953,10 @@
       });
 
       $('publishBtn').addEventListener('click', async () => {
+        if (loadBlocked) {
+          showErr(editorCopy.reloadFailed);
+          return;
+        }
         if (!gpxEditor.guardAction()) return;
         let reviewedRouteVersion;
         try { reviewedRouteVersion = gpxEditor.publishVersion(); }
@@ -1935,6 +1971,11 @@
         const titleEn = $('enTitle').value.trim() || '(untitled)';
         const slugs = { de: $('slugFieldDe').value.trim(), en: $('slugFieldEn').value.trim() };
         const urlBlock = AdminConfirm.urlsPlain(slugs);
+        const intent = await captureSaveIntent();
+        if (!intent) return;
+        await enqueueWrite(() => publishNow(intent, reviewedRouteVersion, slugs, titleDe, titleEn, urlBlock));
+      });
+      async function publishNow(intent, reviewedRouteVersion, slugs, titleDe, titleEn, urlBlock) {
         const ok = await AdminConfirm.ask({
           title: 'Publish to the live site?',
           body: titleDe + ' / ' + titleEn + '\n\n'
@@ -1943,7 +1984,7 @@
           confirmLabel: 'Publish',
         });
         if (!ok) return;
-        const saved = await doSaveDraft();
+        const saved = await saveDraftNow(intent);
         if (!saved) return;
         const btn = $('publishBtn');
         btn.disabled = true;
@@ -1967,6 +2008,8 @@
             setStatus('');
             return;
           }
+          // The post commit succeeded even if its subsequent build failed.
+          if (body.updatedAt) loadedUpdatedAt = body.updatedAt;
           if (body.build && !body.build.ok) {
             showErr('Build error: ' + (body.build.error || 'unknown'));
             setStatus('');
@@ -1975,7 +2018,6 @@
           const release = (body.build && body.build.release) ? body.build.release : '';
           setPublishedLive(slugs, release);
           isPublished = true;
-          if (body.updatedAt) loadedUpdatedAt = body.updatedAt;
           $('slugFieldDe').disabled = true;
           $('slugFieldEn').disabled = true;
           // The publish reply carries the audit of what actually went live.
@@ -1989,10 +2031,13 @@
           btn.disabled = false;
           updateLocaleChip();
         }
-      });
+      }
 
       $('unpublishBtn').addEventListener('click', async () => {
         const title = $('deTitle').value.trim() || '(untitled)';
+        await enqueueWrite(() => unpublishNow(title));
+      });
+      async function unpublishNow(title) {
         const ok = await AdminConfirm.ask({
           title: 'Unpublish this trip?',
           body: '"' + title + '" will leave the live site on the next build and revert to a draft.',
@@ -2024,7 +2069,7 @@
         } finally {
           btn.disabled = false;
         }
-      });
+      }
 
       document.addEventListener('keydown', (e) => {
         if ((e.metaKey || e.ctrlKey) && (e.key === 's' || e.key === 'S')) {
@@ -2147,7 +2192,10 @@
 
       // Returns false only when it redirected to /login (callers must stop);
       // true otherwise — even on a failed load, so a local stash can still be offered.
-      async function loadPost(tk) {
+      async function loadPost(tk, { deferRouteRefresh = false } = {}) {
+        // Reload explicitly replaces the editing base; older queued intents
+        // must never be replayed against that newly accepted foreign version.
+        const reloadEpoch = ++writeEpoch;
         loadBlocked = true;
         setStatus('Loading…');
         let post;
@@ -2165,6 +2213,7 @@
           setStatus('');
           return true;
         }
+        if (reloadEpoch !== writeEpoch) return true;
         // Never pair a partly populated bilingual form with a fresh concurrency
         // token. Retain the pre-reload payload independently of the live form:
         // even a second failure while rolling back cannot corrupt its stash.
@@ -2192,7 +2241,6 @@
         loadedSlugs.de = post.de?.slug || '';
         loadedSlugs.en = post.en?.slug || '';
         recoveryDraft = null;
-        loadBlocked = false;
         restoreBaseUnknown = false;
         $('pageTitle').textContent = 'Edit post';
         showErr('');
@@ -2209,6 +2257,10 @@
         setStatus(isPublished
           ? (post.hasUnpublishedChanges ? editorCopy.loadedPublishedChanges : editorCopy.loadedPublished)
           : '');
+        // Initialization alone defers this read until after local stash recovery.
+        // Explicit Reload holds the write queue closed across both reads.
+        const routeReady = deferRouteRefresh || await gpxEditor.refresh();
+        if (reloadEpoch === writeEpoch) loadBlocked = !routeReady;
         return true;
       }
 
@@ -2244,11 +2296,24 @@
       // gets its own revision) — there is no direct server-side restore.
       async function restoreRevision(id) {
         if (!gpxEditor.guardAction()) return;
-        showErr('');
         const res = await fetch('/posts/' + encodeURIComponent(currentTk) + '/revisions/' + encodeURIComponent(id));
         if (res.status === 401) { guard.redirectToLogin(); return; }
         if (!res.ok) { showErr('Could not load revision: ' + res.status); return; }
         const rev = await res.json();
+        // Check after the fetch: edits made while it loads still need consent.
+        if (guard.isDirty()) {
+          const restore = await AdminConfirm.ask({
+            title: editorCopy.revisionRestoreTitle,
+            body: editorCopy.revisionRestoreBody
+              .replace('{time}', () => new Date(rev.savedAt).toLocaleString())
+              .replace('{title}', () => rev.snapshot.de?.title || rev.snapshot.en?.title || editorCopy.revisionUntitled),
+            confirmLabel: editorCopy.revisionRestoreConfirm,
+          });
+          if (!restore) return;
+        }
+        showErr('');
+        // This replaces content, not the save base. Keep loadedUpdatedAt and
+        // any #345 unknown-base block; savedAt is only the revision's label.
         // On a published post the slug fields are disabled (slug locked for
         // SEO), but buildPayload still reads their .value — restoring a
         // snapshot from before a slug change would make every Save 409
@@ -2271,7 +2336,13 @@
 
       const gpxEditor = GpxEditor.wire({
         getPost: () => ({ tk: currentTk, baseUpdatedAt: loadedUpdatedAt }),
-        saveDraft: () => doSaveDraft({ gpxAttach: true }),
+        runWrite: async (write) => {
+          const intent = await captureSaveIntent();
+          if (!intent) return false;
+          // Save-and-attach owns one queue slot; its requested draft save must
+          // use the click's form snapshot without trying to reacquire the slot.
+          return enqueueWrite(() => write(() => saveDraftNow(intent)));
+        },
         saveError: () => $('actionError').textContent,
         setBaseUpdatedAt: (value) => { loadedUpdatedAt = value; },
         adoptStops: (stops) => {
@@ -2327,7 +2398,7 @@
         const params = new URLSearchParams(location.search);
         const tk = params.get('tk');
         if (tk) {
-          const proceed = await loadPost(tk);
+          const proceed = await loadPost(tk, { deferRouteRefresh: true });
           if (!proceed) return; // redirecting to /login
         } else {
           setStatus('New post. Fill in the fields and Save draft.');
@@ -2400,7 +2471,9 @@
         } else {
           guard.markClean();
         }
-        await gpxEditor.refresh();
+        // A failed post load is not a reconciled baseline, even if a stash was
+        // recovered. Do not promote a route-only read to a reviewed token.
+        if (!loadBlocked && !await gpxEditor.refresh()) loadBlocked = true;
         document.querySelector('main').addEventListener('input', updateLocaleChip);
         updateLocaleChip();
       })();

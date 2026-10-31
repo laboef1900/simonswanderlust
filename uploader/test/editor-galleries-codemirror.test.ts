@@ -5,6 +5,7 @@ import { ui } from '../../site/src/i18n/ui.js';
 import vm from 'node:vm';
 import { resolve } from 'node:path';
 import { analyzeGallerySource } from '../../site/src/lib/gallery-source.js';
+import { browserScript, galleryCodecBindings } from './gallery-browser-module.js';
 
 // Use the bundle copied by copy-easymde.mjs, not the separately installed
 // codemirror package: EasyMDE ships its own CodeMirror version. Happy DOM is
@@ -49,8 +50,9 @@ async function editor(body: string): Promise<GalleryEditor> {
   window.document.body.innerHTML = '<textarea></textarea><button id="toggle" type="button"></button>';
   window.eval(easyMDE);
   const fenceWindow: { GalleryFence?: FenceApi } = {};
-  vm.runInNewContext(readFileSync('public/gallery-fence.js', 'utf8'), {
+  vm.runInNewContext(browserScript('gallery-fence.js'), {
     window: fenceWindow, AbortController, setTimeout, clearTimeout,
+    ...galleryCodecBindings,
     fetch: async (_url: string, init: RequestInit) => ({
       ok: true,
       json: () => analyzeGallerySource(JSON.parse(String(init.body)).bodyMarkdown),
@@ -167,12 +169,11 @@ describe('real CodeMirror collapsed gallery boundaries', () => {
     await expectGallery(h);
   });
 
-  it('keeps pasted trailing newlines and leaves the opener on its own line', async () => {
+  it('keeps pasted trailing newlines and immediate typing outside the opener before analysis settles', async () => {
     const h = await editor(body);
     arrowToEdge(h.cm, 'before');
     h.cm.replaceSelection('Pasted\n\n', 'end', 'paste');
-    expect(h.cm.getValue()).toBe('Intro\n\nPasted\n\n' + gallery + '\n\nFollowing story text');
-    await expectGallery(h);
+    expect(h.cm.getValue()).toBe('Intro\n\nPasted\n\n\n\n' + gallery + '\n\nFollowing story text');
     h.cm.replaceSelection('Next', 'end', '+input');
     await expectGallery(h);
     expect(h.cm.getValue()).toContain('Pasted\n\nNext\n\n```gallery');

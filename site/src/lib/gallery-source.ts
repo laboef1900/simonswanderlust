@@ -49,15 +49,9 @@ function physicalLines(source: string, start: number, end: number): PhysicalLine
   return lines;
 }
 
-/** Satteri positions count Unicode scalar values, NOT UTF-8 or UTF-16.
- * Explicit conversion is pinned by astral/CRLF tests; HTML parser positions are
- * already UTF-16 and must not pass through this conversion a second time. */
-function sourceOffsets(source: string): number[] {
-  const offsets = [0];
-  let offset = 0;
-  for (const scalar of source) { offset += scalar.length; offsets.push(offset); }
-  return offsets;
-}
+/** Satteri 0.10 positions are UTF-16 code-unit offsets, like JS string indices
+ * and the HTML parser's (0.9 counted Unicode scalar values). Pinned by the
+ * astral/CRLF tests; a position outside the source fails closed. */
 
 /** Map one parser-established logical line onto its physical line. Only the
  * bounded line suffix is matched; duplicated text elsewhere is never searched.
@@ -221,16 +215,17 @@ function alignPositionedTokens(tokens: Unit[], value: string): Unit[] {
 /** Serialize the parser's HAST with the installed HTML serializer while tracking
  * emitted raw/code regions. Parsing the COMPLETE HTML (not isolated raw fragments)
  * preserves HTML's tree-repair and sanitization semantics across node boundaries. */
-function mappedHtml(root: SourceNode, source: string, offsets: number[]) {
+function mappedHtml(root: SourceNode, source: string) {
   const chunks: string[] = [];
   const raw: RawRegion[] = [];
   const code: CodeRegion[] = [];
   let length = 0;
   const emit = (value: string) => { chunks.push(value); length += value.length; };
   const bounds = (node: SourceNode) => {
-    const start = offsets[node.position?.start.offset ?? -1];
-    const end = offsets[node.position?.end.offset ?? -1];
-    if (start === undefined || end === undefined) return fail();
+    const start = node.position?.start.offset;
+    const end = node.position?.end.offset;
+    if (start === undefined || end === undefined || !Number.isInteger(start) || !Number.isInteger(end)
+      || start < 0 || end < start || end > source.length) return fail();
     return { start, end };
   };
   const walk = (node: SourceNode, containers: SourceContainer[] = []) => {
@@ -355,9 +350,8 @@ function decodedUnits(value: string, sourceAt: (offset: number) => Unit): Unit[]
 }
 
 export async function analyzeGallerySource(bodyMarkdown: string): Promise<GalleryAnalysis> {
-  const offsets = sourceOffsets(bodyMarkdown);
   const tree = markdownToHast(bodyMarkdown, { features: MARKDOWN_FEATURES }) as SourceNode;
-  const mapped = mappedHtml(tree, bodyMarkdown, offsets);
+  const mapped = mappedHtml(tree, bodyMarkdown);
   const rendered = sanitizedBodyTree(mapped.html);
   const blocks: GalleryBlock[] = [];
   const codeByStart = new Map(mapped.code.map((region) => [region.start, region]));
