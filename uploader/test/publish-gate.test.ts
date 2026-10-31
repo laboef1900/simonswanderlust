@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { analyzeBodyImages, bodyImageKey } from '../src/publish-gate.js';
+import { analyzeBodyContent, bodyImageKey } from '../src/publish-gate.js';
 import { renderMarkdown } from '../../site/src/lib/render-markdown.js';
 import { transformBodyImages } from '../../site/src/lib/body-images.js';
 
@@ -15,13 +15,13 @@ import { transformBodyImages } from '../../site/src/lib/body-images.js';
 // nothing is resolved away). The oracle is deliberately more liberal than a
 // tag parser — it cannot be fooled by a `>` inside an attribute — and the gate
 // must agree with it exactly.
-describe('analyzeBodyImages foreign-origin interpretation', () => {
+describe('analyzeBodyContent foreign-origin interpretation', () => {
   const ORIGIN = 'https://img.simonswanderlust.com';
   const OLD = 'https://old.example';
   const oracle = async (body: string): Promise<string[]> => {
     // Literal text inside <code> is escaped by the serializer (`&#x3C;img`), so a
     // `src="` there is never a real attribute; drop it before the liberal scan.
-    const html = transformBodyImages(await renderMarkdown(body), {}, ORIGIN).replace(/<code(?![^>]*language-gallery)[^>]*>[\s\S]*?<\/code>/g, '');
+    const html = (await transformBodyImages(await renderMarkdown(body), {}, ORIGIN)).replace(/<code(?![^>]*language-gallery)[^>]*>[\s\S]*?<\/code>/g, '');
     const urls = [...html.matchAll(/\b(?:src|srcset)="([^"]*)"/g)]
       .flatMap((m) => (m[1] ?? '').split(',').map((c) => c.trim().split(/\s+/, 1)[0] ?? ''))
       .map((u) => u.replace(/&#x26;/g, '&').replace(/&#x22;/g, '"'));
@@ -86,7 +86,7 @@ describe('analyzeBodyImages foreign-origin interpretation', () => {
 
   it('reports exactly what the renderer would hot-link', async () => {
     for (const [body, expected] of cases) {
-      const { foreign: got } = await analyzeBodyImages(body, {}, ORIGIN);
+      const { foreign: got } = await analyzeBodyContent(body, {}, ORIGIN);
       expect(got, body).toEqual(expected);
       expect(got, `oracle disagrees for ${body}`).toEqual(await oracle(body));
     }
@@ -101,10 +101,10 @@ describe('analyzeBodyImages foreign-origin interpretation', () => {
       `<pre>\n<code class="language-gallery" id="c">${ORIGIN}/trips/x/one\n${OLD}/wp-content/uploads/g.jpg</code>\n</pre>`,
     ];
     for (const body of bodies) {
-      expect((await analyzeBodyImages(body, {}, ORIGIN)).foreign, body).toEqual([`${OLD}/wp-content/uploads/g.jpg`]);
+      expect((await analyzeBodyContent(body, {}, ORIGIN)).foreign, body).toEqual([`${OLD}/wp-content/uploads/g.jpg`]);
       // The hole being closed: with the own photo resolvable, the renderer builds
       // the gallery and the foreign line simply disappears.
-      const rendered = transformBodyImages(await renderMarkdown(body), { [`${ORIGIN}/trips/x/one`]: { width: 3000, height: 2000 } }, ORIGIN);
+      const rendered = (await transformBodyImages(await renderMarkdown(body), { [`${ORIGIN}/trips/x/one`]: { width: 3000, height: 2000 } }, ORIGIN));
       expect(rendered).toContain(`${ORIGIN}/trips/x/one`);
       expect(rendered).not.toContain('old.example');
     }
@@ -114,12 +114,36 @@ describe('analyzeBodyImages foreign-origin interpretation', () => {
     const body = ['```gallery', `${ORIGIN}/trips/x/one | 3000x2000`, '//old.example/wp-content/uploads/g.jpg', '```'].join('\n');
     // galleryPhotos parses the line without a base too, so the renderer drops it
     // silently — the same disappearing photo, one spelling further out.
-    expect((await analyzeBodyImages(body, {}, ORIGIN)).foreign).toEqual(['//old.example/wp-content/uploads/g.jpg']);
+    expect((await analyzeBodyContent(body, {}, ORIGIN)).foreign).toEqual(['//old.example/wp-content/uploads/g.jpg']);
   });
 
   it('de-duplicates across shapes', async () => {
     const body = `![a](${OLD}/a.jpg)\n\n![b](${OLD}/a.jpg)\n<img src="${OLD}/a.jpg">\n\n\`\`\`gallery\n${OLD}/a.jpg\n\`\`\``;
-    expect((await analyzeBodyImages(body, {}, ORIGIN)).foreign).toEqual([`${OLD}/a.jpg`]);
+    expect((await analyzeBodyContent(body, {}, ORIGIN)).foreign).toEqual([`${OLD}/a.jpg`]);
+  });
+});
+
+describe('rendered heading semantics (#375)', () => {
+  it.each([
+    ['# Duplicate document title', true],
+    ['Intro\n=====', true],
+    ['> # Quoted heading', true],
+    ['- # Listed heading', true],
+    ['<div><h1 class="legacy">Legacy &amp; title</h1></div>', true],
+    ['<blockquote><h1>&#35; Title</h1></blockquote>', true],
+    ['<pre><code class="language-gallery"><h1>Real element</h1></code></pre>', true],
+    ['Use `<h1>` for the page title.', false],
+    ['    <h1>Indented example</h1>\n\n    # Code heading', false],
+    ['````markdown\n# Example heading\n<h1>Example HTML</h1>\n````\n\n## Real section', false],
+    ['~~~html\n<h1>Example</h1>\n~~~', false],
+    ['&lt;h1&gt;Escaped&lt;/h1&gt; and &#60;h1&#62;', false],
+    ['<script><h1>Removed</h1></script>', false],
+    ['```gallery\n# Heading-looking comment\nhttps://images.test/photo | caption="<h1>Caption</h1>"\n```', false],
+  ])('judges %s from sanitized rendered elements', async (body, expected) => {
+    const result = await analyzeBodyContent(body, {}, 'https://images.test');
+    expect(result.hasH1).toBe(expected);
+    const rendered = (await transformBodyImages(await renderMarkdown(body), {}, 'https://images.test'));
+    expect(/<h1(?:\s|>)/.test(rendered)).toBe(expected);
   });
 });
 
@@ -131,38 +155,38 @@ describe('rendered readiness references (#334)', () => {
   it.each(['avif', 'webp', 'jpeg'])('reads direct %s variants without metadata from Markdown and raw HTML', async (format) => {
     const src = `${photo}-640.${format}`;
     for (const body of [`![View](${src})`, `<img src="${src}" alt="View > valley">`]) {
-      expect((await analyzeBodyImages(body, {}, origin)).sources).toEqual([src]);
-      expect(transformBodyImages(await renderMarkdown(body), {}, origin)).toContain(`src="${src}"`);
+      expect((await analyzeBodyContent(body, {}, origin)).sources).toEqual([src]);
+      expect((await transformBodyImages(await renderMarkdown(body), {}, origin))).toContain(`src="${src}"`);
     }
   });
 
   it('retains every raw picture candidate, not just its ready fallback', async () => {
     const body = `<picture><source srcset="${photo}-640.avif 1x, ${origin}/other-1280.avif 2x"><img src="${origin}/ready-640.webp"></picture>`;
-    const result = await analyzeBodyImages(body, {}, origin);
+    const result = await analyzeBodyContent(body, {}, origin);
     expect(result.sources).toEqual([`${photo}-640.avif`, `${origin}/other-1280.avif`, `${origin}/ready-640.webp`]);
-    const html = transformBodyImages(await renderMarkdown(body), {}, origin);
+    const html = (await transformBodyImages(await renderMarkdown(body), {}, origin));
     for (const src of result.sources) expect(html).toContain(src);
   });
 
   it('reads resolved galleries and inline pictures but ignores obsolete metadata and code examples', async () => {
     const bodies = [`![View](${photo})`, `\`\`\`gallery\n${photo}\n\`\`\``];
     for (const body of bodies) {
-      const result = await analyzeBodyImages(body, images, origin);
-      const html = transformBodyImages(await renderMarkdown(body), images, origin);
+      const result = await analyzeBodyContent(body, images, origin);
+      const html = (await transformBodyImages(await renderMarkdown(body), images, origin));
       expect(result.sources.length).toBeGreaterThan(0);
       expect(new Set(result.sources.map(src => bodyImageKey(src, origin, `${origin}/story/`)))).toEqual(new Set(['trips/test/photo']));
       for (const src of result.sources) expect(html).toContain(src);
     }
     for (const body of ['No photo remains', `\`![View](${photo})\``, `\`\`\`html\n<img src="${photo}">\n\`\`\``]) {
-      expect((await analyzeBodyImages(body, images, origin)).sources).toEqual([]);
+      expect((await analyzeBodyContent(body, images, origin)).sources).toEqual([]);
     }
   });
 
   it('does not treat unresolved gallery text as an image load, but still refuses foreign gallery lines', async () => {
     const body = `\`\`\`gallery\n${photo}\nhttps://foreign.test/photo\n\`\`\``;
-    const result = await analyzeBodyImages(body, {}, origin);
-    expect(result).toEqual({ sources: [], foreign: ['https://foreign.test/photo'] });
-    expect(transformBodyImages(await renderMarkdown(body), {}, origin)).toContain('<pre>');
+    const result = await analyzeBodyContent(body, {}, origin);
+    expect(result).toEqual({ hasH1: false, sources: [], foreign: ['https://foreign.test/photo'] });
+    expect((await transformBodyImages(await renderMarkdown(body), {}, origin))).toContain('<pre>');
   });
 
   it.each([

@@ -5,6 +5,7 @@ import { once } from 'node:events';
 import { randomBytes } from 'node:crypto';
 import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
+import { request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createPool, ensureSchema, type DbPool } from '../src/db.js';
@@ -26,6 +27,28 @@ const freePort = () => new Promise<number>((resolve, reject) => {
   });
 });
 
+/** Node's fetch rewrites Host; use the wire transport to exercise proxy authority. */
+function requestWithHost(url: string, options: { method: string; headers: Record<string, string>; body: string }): Promise<Response> {
+  const { promise, resolve, reject } = Promise.withResolvers<Response>();
+  const req = request(url, { method: options.method, headers: options.headers }, (res) => {
+    const chunks: Buffer[] = [];
+    res.on('data', (chunk: Buffer) => chunks.push(chunk));
+    res.once('error', reject);
+    res.once('end', () => {
+      const headers = new Headers();
+      for (let i = 0; i < res.rawHeaders.length; i += 2) {
+        headers.append(res.rawHeaders[i]!, res.rawHeaders[i + 1]!);
+      }
+      resolve(new Response(Buffer.concat(chunks).toString(), { status: res.statusCode!, headers }));
+    });
+  });
+  req.once('error', reject);
+  // Bound a stalled real socket; this is not a sleep or a timing assertion.
+  req.setTimeout(10_000, () => req.destroy(new Error('HTTP fixture request timed out')));
+  req.end(options.body);
+  return promise;
+}
+
 /** `{ comments: [...] }` from a comment route, narrowed at runtime. */
 function commentsOf(body: unknown): Record<string, unknown>[] {
   if (!body || typeof body !== 'object' || !('comments' in body) || !Array.isArray(body.comments)) {
@@ -40,11 +63,15 @@ function commentsOf(body: unknown): Record<string, unknown>[] {
  * stores directly, which is how a deployed container shipped with the comment
  * stores never passed in: all comment routes answered 503 while CI was green.
  */
-maybe('production boot (src/main.ts, Postgres)', () => {
+maybe.each(['split', 'loopback'] as const)('production boot (src/main.ts, Postgres, %s origins)', (topology) => {
   let pool: DbPool;
   let dir: string;
   let child: ChildProcess;
   let base: string;
+  let blogOrigin: string;
+  let blogHost: string;
+  let imageOrigin: string;
+  let commentHeaders: Record<string, string>;
   let tk: string;
   let username: string;
   const password = 'password123456';
@@ -83,6 +110,13 @@ maybe('production boot (src/main.ts, Postgres)', () => {
     }));
     const port = await freePort();
     base = `http://localhost:${port}`;
+    blogOrigin = topology === 'split' ? 'https://blog.example' : base;
+    blogHost = new URL(blogOrigin).host;
+    imageOrigin = topology === 'split' ? 'https://images.example' : base;
+    commentHeaders = {
+      'content-type': 'application/json', host: blogHost, origin: blogOrigin,
+      'x-forwarded-proto': new URL(blogOrigin).protocol.slice(0, -1),
+    };
     const { ENCRYPTION_KEY: _unused, TRUSTED_PROXY: _proxyUnused, ...env } = process.env;
     child = spawn(process.execPath, ['--import', 'tsx', 'src/main.ts'], {
       cwd: new URL('..', import.meta.url),
@@ -92,8 +126,8 @@ maybe('production boot (src/main.ts, Postgres)', () => {
         DATABASE_URL: url!,
         PORT: String(port),
         HOST: '127.0.0.1',
-        PUBLIC_BASE_URL: base,
-        IMG_HOST: `localhost:${port}`,
+        PUBLIC_BASE_URL: imageOrigin,
+        IMG_HOST: new URL(imageOrigin).host,
         STORAGE_DIR: join(dir, 'images'),
         SETTINGS_PATH: settingsPath,
         SITE_DIR: join(dir, 'site'),
@@ -161,10 +195,64 @@ maybe('production boot (src/main.ts, Postgres)', () => {
     expect(login.headers.get('set-cookie')).toMatch(/;\s*Secure(?:;|$)/i);
   });
 
-  it('a reader comment lands in the admin moderation queue, and approving it makes it public', async () => {
-    const posted = await fetch(`${base}/comments`, {
+  it('refuses foreign, credential-bearing and malformed origins without inserting a row', async () => {
+    const before = await pool.query('SELECT id FROM comments WHERE translation_key = $1', [tk]);
+    const cases: Record<string, string>[] = [
+      { origin: 'https://third-party.example' },
+      { origin: `${blogOrigin}.evil.example` },
+      { origin: `${new URL(blogOrigin).protocol}//${blogHost}@evil.example` },
+      { origin: `${new URL(blogOrigin).protocol}//evil.example@${blogHost}` },
+      { origin: 'null', referer: `${blogOrigin}/trip/` },
+      { origin: `${blogOrigin}/path`, referer: `${blogOrigin}/trip/` },
+      { origin: '', referer: '' },
+      { origin: 'https://spoof.example', 'x-forwarded-host': 'spoof.example' },
+      { origin: blogOrigin, 'x-forwarded-proto': new URL(blogOrigin).protocol === 'https:' ? 'http' : 'https' },
+      ...(topology === 'split' ? [
+        { origin: imageOrigin },
+        { origin: imageOrigin, host: new URL(imageOrigin).host },
+        { origin: 'http://images.example', host: 'images.example', 'x-forwarded-proto': 'http' },
+        { origin: blogOrigin, host: 'images.example', 'x-forwarded-host': blogHost },
+        { origin: `${blogOrigin}:444` },
+      ] : []),
+    ];
+    for (const [index, headers] of cases.entries()) {
+      const response = await requestWithHost(`${base}/comments`, {
+        method: 'POST',
+        // Distinct proxy-accepted clients preserve the real five-per-window
+        // limiter without allowing a 429 to mask any origin assertion.
+        headers: { ...commentHeaders, 'x-forwarded-for': `198.51.100.${index + 1}`, ...headers },
+        body: JSON.stringify({ translationKey: tk, postedLocale: 'de', authorName: 'Reader', body: 'Must not be stored' }),
+      });
+      expect(response.status, JSON.stringify(headers)).toBe(403);
+      expect(await response.json()).toEqual({ error: 'forbidden' });
+      expect(response.headers.get('access-control-allow-origin')).toBeNull();
+    }
+    expect((await pool.query('SELECT id FROM comments WHERE translation_key = $1', [tk])).rows).toEqual(before.rows);
+  });
+
+  it('accepts Referer only when Origin is absent and ignores a spoofed forwarded Host', async () => {
+    const { origin: _origin, ...headers } = commentHeaders;
+    const response = await requestWithHost(`${base}/comments`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', origin: base },
+      headers: {
+        ...headers, referer: `${blogOrigin}/trip/?q=1#h`,
+        'x-forwarded-host': 'spoof.example', 'x-forwarded-for': '203.0.113.10',
+      },
+      body: JSON.stringify({ translationKey: tk, postedLocale: 'de', authorName: 'Referer reader', body: 'Pending only' }),
+    });
+    expect(response.status).toBe(201);
+    const rows = await pool.query('SELECT id, status FROM comments WHERE translation_key = $1', [tk]);
+    expect(rows.rows).toHaveLength(1);
+    expect(rows.rows[0]?.status).toBe('pending');
+    expect(commentsOf(await (await fetch(`${base}/comments?tk=${tk}`)).json())).toEqual([]);
+    // Keep the subsequent moderation round-trip isolated from this fixture.
+    await pool.query('DELETE FROM comments WHERE id = $1', [rows.rows[0]!.id]);
+  });
+
+  it('a reader comment lands in the admin moderation queue, and approving it makes it public', async () => {
+    const posted = await requestWithHost(`${base}/comments`, {
+      method: 'POST',
+      headers: commentHeaders,
       body: JSON.stringify({ translationKey: tk, postedLocale: 'de', authorName: 'Leserin', body: 'Schöne Reise!' }),
     });
     expect(posted.status).toBe(201);
@@ -227,6 +315,60 @@ maybe('production boot (src/main.ts, Postgres)', () => {
         body: JSON.stringify({ revision, identity: editable }),
       });
       expect(restored.status).toBe(200);
+    }
+  });
+
+  it('keeps author projection and paginated moderation aligned beyond 500 older comments', async () => {
+    const olderKey = `${tk}-older`;
+    const createdIds: string[] = [];
+    const login = await fetch(`${base}/login`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    expect(login.status).toBe(200);
+    const cookie = (login.headers.get('set-cookie') ?? '').split(';')[0]!;
+    try {
+      await pool.query(
+        `INSERT INTO comments (id, translation_key, locale, name, body, status, created_at)
+         SELECT gen_random_uuid(), $1, 'de', 'Older reader', 'Older comment', 'approved', '2020-01-01'::timestamptz
+         FROM generate_series(1, 505)`, [olderKey],
+      );
+      const { rows } = await pool.query<{ id: string }>(
+        `INSERT INTO comments (id, translation_key, locale, name, body, status)
+         VALUES (gen_random_uuid(), $1, 'de', 'Integration reader', 'Dedicated parent', 'approved') RETURNING id`, [tk],
+      );
+      const parentId = rows[0]!.id;
+      createdIds.push(parentId);
+      const reply = await fetch(`${base}/moderation/comments/${parentId}/reply`, {
+        method: 'POST', headers: { 'content-type': 'application/json', cookie },
+        body: JSON.stringify({ body: 'Integrated author reply beyond the old cap.' }),
+      });
+      expect(reply.status).toBe(201);
+      const replyId = (await reply.json() as { id: string }).id;
+      createdIds.push(replyId);
+      const visible = commentsOf(await (await fetch(`${base}/comments?tk=${tk}`)).json());
+      const author = visible.find((row) => row.id === replyId)!;
+      expect(author.isAuthor).toBe(true);
+      expect(Object.keys(author).sort()).toEqual(['authorName', 'body', 'createdAt', 'id', 'isAuthor', 'postedLocale']);
+      const ids: unknown[] = [];
+      for (let offset = 0; ; offset += 50) {
+        const response = await fetch(`${base}/moderation/comments?status=approved&offset=${offset}`, { headers: { cookie } });
+        expect(response.status).toBe(200);
+        expect(response.headers.get('cache-control')).toBe('no-store');
+        const page = await response.json() as { comments: { id: string }[]; hasMore: boolean };
+        expect(page.comments.length).toBeLessThanOrEqual(50);
+        ids.push(...page.comments.map((row) => row.id));
+        if (!page.hasMore) break;
+        expect(offset).toBeLessThan(1000);
+      }
+      expect(ids.indexOf(replyId)).toBeGreaterThanOrEqual(505);
+      expect(new Set(ids).size).toBe(ids.length);
+      const removed = await fetch(`${base}/moderation/comments/${replyId}`, { method: 'DELETE', headers: { cookie } });
+      expect(removed.status).toBe(200);
+      expect(commentsOf(await (await fetch(`${base}/comments?tk=${tk}`)).json()).some((row) => row.id === replyId)).toBe(false);
+    } finally {
+      await pool.query('DELETE FROM comments WHERE translation_key = $1', [olderKey]);
+      await pool.query('DELETE FROM comments WHERE id = ANY($1::uuid[])', [createdIds]);
     }
   });
 
