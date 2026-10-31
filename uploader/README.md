@@ -70,12 +70,15 @@ cp uploader/.env.example .env
 
 # 3. Build the image (compose has no build: key, so `--build` is a no-op) and
 #    start the containers in the background:
-docker build -t ghcr.io/laboef1900/simonswanderlust-app:local .
+docker build -t ghcr.io/laboef1900/wanderlust-studio:local .
 IMAGE_TAG=local docker compose up -d
 
 # 4. First run — open /login to create the first admin account:
 open http://localhost:3000/login      # macOS (or just browse to the URL)
 ```
+
+After the local build, set `IMAGE_TAG=local` in your private `.env` for subsequent
+Compose commands. This tag exists locally only; do not try to pull it from GHCR.
 
 On first run, when no users exist, `/login` shows a "Create the first admin"
 form. Fill in a username and password to create the admin account; the form is
@@ -136,10 +139,14 @@ An empty `SITE_DIR` starts a build from `SITE_APP_DIR`, so check both paths befo
 1. Copy the repo to the server.
 2. From the monorepo root: `cp uploader/.env.example .env`, set a strong `POSTGRES_PASSWORD`, the
    matching `DATABASE_URL`, and `PUBLIC_BASE_URL=https://img.simonswanderlust.com`.
-3. Build and run: `docker build -t ghcr.io/laboef1900/simonswanderlust-app:local .` then
+3. Build and run: `docker build -t ghcr.io/laboef1900/wanderlust-studio:local .` then
    `IMAGE_TAG=local docker compose up -d` (compose has no `build:` key, so plain
-   `docker compose up -d --build` is a no-op) — or, to run the released GHCR image instead of
-   building: `docker compose pull && docker compose up -d`.
+   `docker compose up -d --build` is a no-op). To pull instead, first wait for the
+   owner-authorized initial release under `ghcr.io/laboef1900/wanderlust-studio`,
+   set `IMAGE_TAG` in `.env` to its published version, then run
+   `docker compose pull && docker compose up -d`. No release under the new name
+   is created by this source change. Historical `simonswanderlust-app` releases
+   stay under their original name; never substitute an old tag into the new name.
 4. Because the container runs non-root (uid 1000), make its data bind-mount writable once — this
    now covers image variants *and* the built blog output, since both live under the same `/data`
    volume: `mkdir -p uploader/data && sudo chown -R 1000:1000 uploader/data` (run from the
@@ -634,8 +641,9 @@ deploying: rollback is the older image + that dump + the `.pre-ai-registry` copy
 **Recovery:** v6 and later DB dumps include encrypted secrets, not the master key or settings.json.
 Escrow the master key separately offsite and keep historical keys for historical dumps.
 Absent secrets in legacy v1–v5 preserve live rows; an empty v6-or-later array intentionally clears
-them. Restore is still CLI-only, confirmed, with a pre-restore undo dump. Pause AI/settings
-edits during restore and reconcile the providers in settings.json before resuming; a restored
+them. Follow the [offline restore procedure](../ARCHITECTURE.md#database-dumps): stop every app
+and maintenance writer, confirm the CLI's target/counts, and retain its verified undo set.
+Reconcile the providers in settings.json before restarting remote use; a restored
 pre-registry `ai_api_key` row is never read — re-enter keys per provider.
 
 To rotate a provider key, replace it in that provider's form then revoke the old one externally.

@@ -61,6 +61,7 @@ import { ROUTE_ARCHIVE_RE } from './gpx-backup.js';
 import { StorageReadOnlyError } from './storage-owner.js';
 import { IdentityConflictError, type SiteIdentityStore } from './site-identity.js';
 import { IdentityError, neutralIdentity } from '../../site/src/lib/site-identity.js';
+import { registerIdentityAssetRoutes } from './site-identity-routes.js';
 import type { TrustPolicy } from './trusted-proxy.js';
 
 export interface ServerConfig {
@@ -269,7 +270,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     // it is what points at the new asset names.
     // Apply the fingerprint-specific policy after static serving; the rest of
     // the blog mount retains its native revalidation policy.
-    if (path.startsWith('/_astro/') && reply.statusCode < 400) {
+    if ((path.startsWith('/_astro/') || /^\/_identity\/(?:logo|favicon-32|favicon-192|apple-touch-180)-[a-f0-9]{16}\.png$/.test(path)) && reply.statusCode < 400) {
       reply.header('cache-control', 'public, max-age=31536000, immutable');
     }
   });
@@ -980,9 +981,10 @@ export function buildServer(cfg: ServerConfig): AppServer {
   const KEY_PARTIAL = 'API key change saved, but settings were not saved. Reload settings before retrying.';
   const PROVIDER_NOT_FOUND = { error: 'AI provider not found.' };
 
+  registerIdentityAssetRoutes(app, { store: cfg.identityStore, requireAdmin, workLock: cfg.workLock, storageDir, isWritable });
   app.get('/settings/identity', { preHandler: requireAdmin }, async (_req, reply) => {
     if (!cfg.identityStore) return reply.code(503).send({ error: 'Site identity unavailable.' });
-    return { ...cfg.identityStore.get(), locales: ['de', 'en'] };
+    return { ...cfg.identityStore.get(), assets: cfg.identityStore.getAssetState(), locales: ['de', 'en'] };
   });
   app.put('/settings/identity', { preHandler: requireAdmin }, async (req, reply) => {
     if (!cfg.identityStore) return reply.code(503).send({ error: 'Site identity unavailable.' });

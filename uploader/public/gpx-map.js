@@ -171,7 +171,7 @@
     } else {
       if (!sameOrigin('/map/basemap.pmtiles')) throw new Error('gpx_map_origin_invalid');
       if (!protocolRegistered) { gl.addProtocol('pmtiles', new pm.Protocol().tile); protocolRegistered = true; }
-      var style = { version: 8, glyphs: '/map/fonts/{fontstack}/{range}.pbf', sources: { protomaps: { type: 'vector', url: 'pmtiles:///map/basemap.pmtiles', attribution: '© OpenStreetMap' } }, layers: [
+      var style = { version: 8, glyphs: '/map/fonts/{fontstack}/{range}.pbf', sources: { protomaps: { type: 'vector', url: 'pmtiles:///map/basemap.pmtiles', attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' } }, layers: [
         { id: 'background', type: 'background', paint: { 'background-color': '#f2f3f4' } },
         { id: 'earth', type: 'fill', source: 'protomaps', 'source-layer': 'earth', paint: { 'fill-color': '#e7e5dc' } },
         { id: 'water', type: 'fill', source: 'protomaps', 'source-layer': 'water', paint: { 'fill-color': '#d9e8ed' } },

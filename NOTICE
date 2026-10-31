@@ -1,0 +1,83 @@
+Wanderlust Studio
+Copyright (C) 2026 Simon and contributors
+
+Original application code, tests, build scripts and technical documentation are
+licensed under the GNU Affero General Public License, version 3 only
+(SPDX: AGPL-3.0-only). You may copy, redistribute and modify that software under
+those terms. It comes WITHOUT ANY WARRANTY, to the extent permitted by law.
+See LICENSE.txt in the served legal directory, or LICENSE in the repository.
+
+Software source: https://github.com/laboef1900/simonswanderlust
+This upstream link is not a promise that an operator's modified version is
+identical to upstream. Distributors must provide the Corresponding Source for
+the version they convey under section 6. Operators of modified network versions
+must prominently offer that version's Corresponding Source, at no charge, to
+all remote users under section 13. Preserve modification notices and dates.
+Publish source directions alongside each image/release; a moving branch or an
+inventory alone does not establish correspondence to a particular image.
+Release legal indexes link the full commit recorded at image build time;
+source-release.json records its repository and revision. A local/unversioned
+build without that provenance explicitly identifies the missing source record.
+These links do not cover later operator modifications: update the static
+directions to offer the actual modified software without private application data.
+
+CONTENT AND BRAND ARE SEPARATE
+Authored stories, translations, MDX story content (including the stubs under
+site/src/content/trips/), uploaded photos, illustrations, reader submissions,
+site content and brand/logo artwork are not included in this software grant.
+They are not open-licensed by this project. Reuse needs permission from their
+respective rightsholders unless separately licensed or permitted by law.
+No ownership of users' or third parties' content is claimed. Uploading, storing
+or publishing content with this software does not itself license that content
+under AGPL. This statement changes no visibility, access or publication controls.
+AGPL section 2 governs when generated output itself constitutes a covered work;
+software embedded in an output retains its applicable license.
+
+The names Simon's Wanderlust and Wanderlust Studio and their logos are not
+licensed for branding a separate service by this software grant. Factual
+identification of this software must not imply endorsement. No trademark
+registration is asserted. The product name remains Wanderlust Studio.
+
+CONTRIBUTIONS
+Intentionally submitted original software contributions are accepted under
+AGPL-3.0-only (inbound = outbound), without a DCO or CLA. Submit only material
+you have authority to license, and preserve applicable third-party notices.
+This is not a copyright assignment or a claim to earlier contributors' rights.
+
+THIRD-PARTY MATERIAL
+Dependencies, fonts, map data and base-image components retain their own
+licenses. THIRD-PARTY-NOTICES.txt contains notices collected from installed npm
+packages and supplemental vendor notices. third-party-inventory.json records
+both locks, including optional/dev packages; third-party-evidence.json records
+reviewed sources, obligations and remaining artifact-specific limitations.
+Neither inventory nor this notice is legal clearance or a substitute for
+applicable license texts, corresponding source, or relinking obligations.
+
+Maps: OpenStreetMap contributors, https://www.openstreetmap.org/copyright
+OSM and OSM-derived coastlines: ODbL 1.0,
+https://opendatacommons.org/licenses/odbl/1-0/
+Protomaps data terms: https://github.com/protomaps/basemaps/blob/main/LICENSE_DATA.md
+Natural Earth: public domain, https://www.naturalearthdata.com/about/terms-of-use/
+Landcover, where displayed:
+© ESA WorldCover project 2020 / Contains modified Copernicus Sentinel data (2020)
+processed by ESA WorldCover consortium
+CC BY 4.0, https://creativecommons.org/licenses/by/4.0/
+Source: https://esa-worldcover.org/en/data-access
+Daylight remaps, denoises, smooths and vectorizes this source; Protomaps tiles it
+and this app extracts a low-zoom slice:
+https://daylightmap.org/2023/10/11/landcover.html
+The inspected 0.17.1 images carry planet 20261026 / Protomaps 4.15.2, whose
+documented input is Daylight landcover. This is a source year, not a release
+year. Recheck attribution when changing inputs; /map/BASEMAP_BUILD identifies
+the selected planet. See third-party-image-evidence.json for exact artifacts.
+Noto glyphs: Copyright 2022 The Noto Project Authors, SIL OFL 1.1;
+full notice /map/fonts/OFL.txt, source revision /map/GLYPHS_REVISION.
+
+Release inspection must cover native libraries (including sharp/libvips),
+base-image component notices/source and browser bundles, as well as already
+public images. New notices do not retroactively establish old-image compliance.
+The preserved Node 26.12.1 license and sharp-libvips 1.3.4 notice summary are
+version-specific supplements, not substitutes for a changed release's notices.
+LGPL-covered libraries may be modified/replaced and reverse engineered for
+debugging those modifications as permitted by their licenses; the software
+grant imposes no restriction on those rights.
