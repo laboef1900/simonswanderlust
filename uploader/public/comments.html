@@ -32,6 +32,7 @@
     <script src="/admin/editor-image-copy.js"></script>
     <script src="/admin/auth.js"></script>
     <script src="/admin/admin-confirm.js"></script>
+    <script src="/admin/language.js"></script>
     <script>
       // @ai-warning Reader text (name, email, body, post key) is UNTRUSTED and
       // is painted exclusively with createElement + textContent — never
@@ -119,6 +120,9 @@
         if (c.isAuthor) head.appendChild(el('span', ' (author)'));
         head.appendChild(el('span', ' · ' + c.translationKey + ' / ' + c.locale + ' · ' + new Date(c.createdAt).toLocaleString(), 'muted'));
         li.appendChild(head);
+        if (c.publicLocale === false) {
+          li.appendChild(el('p', SiteLanguage.text('CommentHidden', { language: SiteLanguage.names[c.locale] }), 'muted'));
+        }
         if (c.email) li.appendChild(el('p', c.email, 'muted'));
         for (const para of String(c.body).split(/\n{2,}/)) li.appendChild(el('p', para, 'comment__body'));
 

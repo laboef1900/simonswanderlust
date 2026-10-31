@@ -9,6 +9,7 @@ import { importWxr, prepareImport, rehostKey, ImportTooLargeError, ImportInsuffi
 import { memoryPostStore, PostError, type PostStore } from '../src/posts.js';
 import { createRehostResume, rehostImage, type RehostResult } from '../src/wp-images.js';
 import { FetchError, type LookupFn } from '../src/safe-fetch.js';
+import { memoryLanguageStore, type LanguageConfig } from '../src/language.js';
 import { renderMarkdown } from '../../site/src/lib/render-markdown.js';
 import { analyzeRenderedBody } from '../../site/src/lib/body-images.js';
 
@@ -106,6 +107,109 @@ const run = (
 ) => importWxr(body, {
   postStore: store, storageDir: '/tmp', baseUrl: 'https://img',
   rehost: h.rehost, sleep: h.sleep, now: h.now, delayMs: 0, retries: 0, ...extra,
+});
+
+describe('WXR language modes', () => {
+  const modes: LanguageConfig[] = [
+    { primary: 'de', locales: ['de', 'en'] }, { primary: 'en', locales: ['en', 'de'] },
+    { primary: 'de', locales: ['de'] }, { primary: 'en', locales: ['en'] },
+  ];
+
+  it.each(modes)('rejects new reserved slugs before image planning or fetching in %j', async (language) => {
+    const store = memoryPostStore({ language: memoryLanguageStore(language) });
+    const primaryWords = ['posts', 'map', 'language', 'de', 'en',
+      ...(language.primary === 'de' ? ['karte', 'uber-mich', 'reiseziele'] : ['travel-map', 'about-me', 'destinations'])];
+    for (const slug of primaryWords) {
+      const h = harness();
+      const summary = await run(wxr(item(language.primary, slug, 'reserved', imgs('https://wp/never.jpg'))), h,
+        { language, maxImages: 0 }, store);
+      expect(summary).toMatchObject({ imported: 0, rejected: 1, failed: 0, images: { total: 0 } });
+      expect(summary.warnings.join(' ')).toContain('reserved');
+      expect(h.calls).toEqual([]);
+    }
+    if (language.locales.length === 2) {
+      const secondary = language.primary === 'de' ? 'en' : 'de';
+      const secondaryWords = secondary === 'de' ? ['karte', 'reiseziele', 'uber-mich'] : ['map', 'destinations', 'about-me'];
+      for (const slug of secondaryWords) {
+        const h = harness();
+        const body = wxr(item(language.primary, 'valid-primary', 'reserved', '<p>Primary</p>')
+          + item(secondary, slug, 'reserved', imgs('https://wp/never.jpg')));
+        expect(await run(body, h, { language, maxImages: 0 }, store)).toMatchObject({ rejected: 1, imported: 0, failed: 0 });
+        expect(h.calls).toEqual([]);
+      }
+    }
+    expect(await store.list()).toEqual([]);
+  });
+
+  it.each(modes)('imports primary-only groups with explicit secondary coverage in %j', async (language) => {
+    const store = memoryPostStore({ language: memoryLanguageStore(language) });
+    const h = harness();
+    const secondary = language.primary === 'de' ? 'en' : 'de';
+    const body = wxr(item(language.primary, 'primary-story', 'g', '<p>Primary text</p>'));
+    const summary = await run(body, h, { language }, store);
+    expect(summary).toMatchObject({ imported: 1, rejected: 0, skippedLocale: 0, failed: 0 });
+    const saved = (await store.get((await store.list())[0]!.translationKey))!;
+    expect(saved[language.primary]).toMatchObject({ slug: 'primary-story', bodyMarkdown: 'Primary text', omitted: false });
+    expect(saved[secondary]).toMatchObject({ slug: '', title: '', bodyMarkdown: '', omitted: language.locales.length === 1 });
+    expect(saved.status).toBe('draft');
+    expect((await run(body, h, { language }, store)).updated).toBe(1);
+    expect(await store.list()).toHaveLength(1);
+  });
+
+  it.each(modes.filter((mode) => mode.locales.length === 1))('skips disabled tagged items before fetching and accounts for every outcome in %j', async (language) => {
+    const store = memoryPostStore({ language: memoryLanguageStore(language) });
+    const h = harness();
+    const secondary = language.primary === 'de' ? 'en' : 'de';
+    const body = wxr(item(language.primary, 'active', 'g', '<p>Text</p>')
+      + item(secondary, 'disabled', 'g', imgs('https://wp/private.jpg')));
+    const prepared = await prepareImport(body, { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', language, rehost: h.rehost });
+    const summary = await prepared.run();
+    expect(summary).toMatchObject({ imported: 1, skippedLocale: 1, rejected: 0, failed: 0 });
+    expect(summary.imported + summary.updated + summary.skippedPublished + summary.skippedLocale + summary.rejected + summary.failed).toBe(prepared.groups);
+    expect(summary.warnings.join(' ')).toContain('locale disabled');
+    expect(h.calls).toEqual([]);
+    expect((await store.list())[0]!.slugs[secondary]).toBe('');
+  });
+
+  it.each(modes)('assigns untagged items only in single-language mode %j', async (language) => {
+    const store = memoryPostStore({ language: memoryLanguageStore(language) });
+    const untagged = wxr(`<item><wp:post_id>42</wp:post_id><wp:post_type>post</wp:post_type>
+      <wp:status>publish</wp:status><wp:post_name>untagged</wp:post_name><title>Untagged</title>
+      <wp:post_date>2021-07-25 00:00:00</wp:post_date><content:encoded>Text</content:encoded></item>`);
+    const summary = await run(untagged, harness(), { language }, store);
+    if (language.locales.length === 1) {
+      expect(summary).toMatchObject({ imported: 1, rejected: 0, failed: 0 });
+      expect((await store.list())[0]!.slugs[language.primary]).toBe('untagged');
+    } else {
+      expect(summary).toMatchObject({ imported: 0, rejected: 1 });
+      expect(summary.warnings).toContain('untagged: no language — rejected');
+      expect(await store.list()).toEqual([]);
+    }
+  });
+
+  it.each(modes.filter((mode) => mode.locales.length === 2))('refuses a missing primary and a primary-only overlap with a translated story in %j', async (language) => {
+    const store = memoryPostStore({ language: memoryLanguageStore(language) });
+    const secondary = language.primary === 'de' ? 'en' : 'de';
+    expect((await run(wxr(item(secondary, 'orphan', 'g', '<p>x</p>')), harness(), { language }, store)).rejected).toBe(1);
+    await run(pairOf('existing', 'existing-de', 'existing-en', '<p>kept</p>'), harness(), { language }, store);
+    const h = harness();
+    const summary = await run(wxr(item(language.primary, `existing-${language.primary}`, 'g', imgs('https://wp/no.jpg'))), h, { language }, store);
+    expect(summary).toMatchObject({ rejected: 1, updated: 0 });
+    expect(h.calls).toEqual([]);
+    expect(await store.list()).toHaveLength(1);
+    expect((await store.list())[0]!.slugs[secondary]).toBe(`existing-${secondary}`);
+  });
+
+  it('revalidates prepared coverage against the current mode at the store write boundary', async () => {
+    const language = memoryLanguageStore({ primary: 'de', locales: ['de'] });
+    const store = memoryPostStore({ language });
+    const prepared = await prepareImport(wxr(item('de', 'draft', 'g', '<p>x</p>')), {
+      postStore: store, storageDir: '/tmp', baseUrl: 'https://img', language: await language.get(), rehost: stubRehost,
+    });
+    await language.update({ primary: 'en', locales: ['en'] });
+    expect(await prepared.run()).toMatchObject({ imported: 0, failed: 1 });
+    expect(await store.list()).toEqual([]);
+  });
 });
 
 describe('literal image re-host substitution', () => {
@@ -222,7 +326,7 @@ describe('importWxr', () => {
       const summary = await run(pairOf('bounded', de, en, content), h, {}, store);
       if (length <= 251) {
         expect(summary).toMatchObject({ imported: 1, rejected: 0, failed: 0 });
-        expect((await store.list())[0]).toMatchObject({ slugDe: de, slugEn: en });
+        expect((await store.list())[0]).toMatchObject({ slugs: { de, en } });
       } else {
         expect(summary).toMatchObject({ imported: 0, updated: 0, rejected: 1, failed: 0 });
         expect(summary.warnings.join(' ')).toContain(`${locale}.slug must be at most 251 ASCII bytes (received ${length})`);
@@ -311,7 +415,7 @@ describe('importWxr', () => {
     expect(s).toMatchObject({ imported: 1, updated: 0, skippedPublished: 0, rejected: 0, failed: 0 });
     const list = await store.list();
     const first = list[0]!;
-    expect(first).toMatchObject({ slugDe: 'rhodos-abenteuer', slugEn: 'rhodes-adventure', status: 'draft' });
+    expect(first).toMatchObject({ slugs: { de: 'rhodos-abenteuer', en: 'rhodes-adventure' }, status: 'draft' });
     const pair = await store.get(first.translationKey);
     expect(pair!.shared).toMatchObject({ date: '2021-07-25', countryCode: 'XX', region: 'europe' });
     // country is per-locale and left blank for the author to fill in per language.
@@ -513,6 +617,10 @@ ${['de', 'en']
     expect(await store.list()).toHaveLength(1);
     // publish it, then re-import → skippedPublished, content untouched
     const tk = (await store.list())[0]!.translationKey;
+    const draft = (await store.get(tk))!;
+    await store.upsertDraft({
+      ...draft, de: { ...draft.de, country: 'Griechenland' }, en: { ...draft.en, country: 'Greece' },
+    }, draft.updatedAt);
     await store.publish(tk, await publishTokens(store, tk));
     const third = await importWxr(xml, { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: stubRehost });
     expect(third).toMatchObject({ imported: 0, updated: 0, skippedPublished: 1, rejected: 0, failed: 0 });
@@ -551,7 +659,13 @@ describe('importWxr pair identity', () => {
   it('never binds a published post\'s protection to a cross-locale namesake (rejected, not skippedPublished)', async () => {
     const store = memoryPostStore();
     await seed(store, 'rhodos', 'rhodes-adventure');
-    await store.publish((await store.list())[0]!.translationKey, await publishTokens(store, (await store.list())[0]!.translationKey));
+    const draft = (await store.get((await store.list())[0]!.translationKey))!;
+    const heroImage = { src: 'https://img/hero', width: 100, height: 80, alt: 'Landscape' };
+    await store.upsertDraft({
+      ...draft, de: { ...draft.de, country: 'Griechenland', excerpt: 'Kurzfassung', heroImage },
+      en: { ...draft.en, country: 'Greece', excerpt: 'Summary', heroImage },
+    }, draft.updatedAt);
+    await store.publish(draft.translationKey, await publishTokens(store, draft.translationKey));
     const s = await importWxr(pairOf('g2', 'rhodos-2', 'rhodos', '<p>new de</p>'),
       { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: rehostSpy });
     expect(s).toMatchObject({ imported: 0, rejected: 1, skippedPublished: 0 });
@@ -565,7 +679,7 @@ describe('importWxr pair identity', () => {
     ].join('\n')), { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: stubRehost });
     expect(s).toMatchObject({ imported: 1, rejected: 1 });
     expect(s.warnings.join(' ')).toMatch(/kreta\/rhodos: slug conflict within this export \(also used by rhodos\/rhodes\)/);
-    expect((await store.list()).map((p) => `${p.slugDe}/${p.slugEn}`)).toEqual(['rhodos/rhodes']);
+    expect((await store.list()).map((p) => `${p.slugs.de}/${p.slugs.en}`)).toEqual(['rhodos/rhodes']);
   });
 
   it('accepts a pair whose DE and EN slugs are the same word (one trip, one namespace)', async () => {
@@ -594,7 +708,7 @@ describe('importWxr pair identity', () => {
     expect(s).toMatchObject({ imported: 0, updated: 0, skippedPublished: 0, rejected: 1, failed: 0 });
     expect(s.warnings.join(' ')).toMatch(/slug conflict/);
     const posts = await store.list();
-    expect(posts.map((p) => `${p.slugDe}/${p.slugEn}`).sort()).toEqual(['kreta/crete', 'rhodos/rhodes-adventure']);
+    expect(posts.map((p) => `${p.slugs.de}/${p.slugs.en}`).sort()).toEqual(['kreta/crete', 'rhodos/rhodes-adventure']);
     for (const p of posts) expect((await store.get(p.translationKey))!.de.bodyMarkdown).toContain('original de');
   });
 
@@ -605,7 +719,7 @@ describe('importWxr pair identity', () => {
     expect(s).toMatchObject({ imported: 0, updated: 0, rejected: 1, failed: 0 });
     const only = (await store.list());
     expect(only).toHaveLength(1);
-    expect(only[0]).toMatchObject({ slugDe: 'rhodos', slugEn: 'rhodes-adventure' });
+    expect(only[0]).toMatchObject({ slugs: { de: 'rhodos', en: 'rhodes-adventure' } });
   });
 });
 
@@ -1135,8 +1249,8 @@ describe('importWxr image cap', () => {
   it('does not count images from groups that will be rejected', async () => {
     const h = harness();
     const body = wxr([
-      // g1 is missing its en translation → rejected; its 3 images must not count.
-      item('de', 'de-1', 'g1', imgs('https://wp/a.jpg', 'https://wp/b.jpg', 'https://wp/c.jpg')),
+      // g1 is missing its primary translation → rejected; its images must not count.
+      item('en', 'en-1', 'g1', imgs('https://wp/a.jpg', 'https://wp/b.jpg', 'https://wp/c.jpg')),
       // g2 is valid with 1 image.
       item('de', 'de-2', 'g2', imgs('https://wp/d.jpg')),
       item('en', 'en-2', 'g2', '<p>x</p>'),
@@ -1268,18 +1382,17 @@ describe('importWxr reporting', () => {
       item('de', 'halb-de', 'g2', imgs('https://wp/incomplete.jpg')),
     ].join('\n')), { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: h.rehost, log: () => {} });
     expect(prepared.groups).toBe(3);
+    // #284: a group holding the primary language imports as a primary-only
+    // story with explicit secondary coverage; a groupless item never pairs.
     expect(prepared.planned).toEqual({
-      groups: { total: 1, done: 0 }, images: { planned: 0, hosted: 0, failed: 0 },
+      groups: { total: 2, done: 0 }, images: { planned: 1, hosted: 0, failed: 0 },
     });
     const s = await prepared.run();
-    expect(s).toMatchObject({ imported: 1, updated: 0, skippedPublished: 0, rejected: 2, failed: 0 });
+    expect(s).toMatchObject({ imported: 2, updated: 0, skippedPublished: 0, rejected: 1, failed: 0 });
     expect(s.imported + s.updated + s.skippedPublished + s.rejected + s.failed).toBe(prepared.groups);
-    expect(s.warnings).toEqual(expect.arrayContaining([
-      expect.stringContaining('nur-deutsch (de):'),
-      expect.stringContaining('missing en translation (halb-de)'),
-    ]));
-    expect(h.calls).toEqual([]);
-    expect((await store.list()).map((p) => p.slugDe)).toEqual(['de-1']);
+    expect(s.warnings).toEqual(expect.arrayContaining([expect.stringContaining('nur-deutsch (de):')]));
+    expect(h.calls).toEqual(['https://wp/incomplete.jpg']);
+    expect((await store.list()).map((p) => p.slugs.de).sort()).toEqual(['de-1', 'halb-de']);
   });
 
   it.each([false, true])('never pairs or writes groupless items, even with shared slugs and overwriteDrafts=%s', async (overwriteDrafts) => {
@@ -1298,20 +1411,22 @@ describe('importWxr reporting', () => {
       postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost, overwriteDrafts, log: () => {},
     });
     expect(prepared.groups).toBe(5);
+    // The tagged item is a primary-only group (#284); the four groupless items
+    // are rejected and never become its partner.
     expect(prepared.planned).toEqual({
-      groups: { total: 0, done: 0 }, images: { planned: 0, hosted: 0, failed: 0 },
+      groups: { total: 1, done: 0 }, images: { planned: 0, hosted: 0, failed: 0 },
     });
     const s = await prepared.run();
     expect(s).toMatchObject({
-      imported: 0, updated: 0, skippedPublished: 0, rejected: 5, failed: 0,
+      imported: 1, updated: 0, skippedPublished: 0, rejected: 4, failed: 0,
       images: { total: 0, hosted: 0, failed: 0 },
     });
-    expect(s.warnings).toHaveLength(5);
+    expect(s.warnings).toHaveLength(4);
     expect(s.warnings.filter((w) => w.startsWith('g1 (de):'))).toHaveLength(2);
     expect(s.warnings).toContain(`${slug} (en): no translation (untranslated post) — rejected`);
     expect(rehost).not.toHaveBeenCalled();
-    expect(upsert).not.toHaveBeenCalled();
-    expect(await store.list()).toEqual([]);
+    expect(upsert).toHaveBeenCalledTimes(1);
+    expect((await store.list()).map((p) => p.slugs)).toEqual([{ de: 'incomplete', en: '' }]);
   });
 
   it('caps untranslated warnings without dropping rejected units from the summary', async () => {
@@ -1335,8 +1450,8 @@ describe('importWxr reporting', () => {
       // g1: complete and new → imported.
       item('de', 'de-1', 'g1', '<p>a</p>'),
       item('en', 'en-1', 'g1', '<p>a</p>'),
-      // g2: no en translation → rejected.
-      item('de', 'de-2', 'g2', '<p>b</p>'),
+      // g2: no primary translation → rejected.
+      item('en', 'en-2', 'g2', '<p>b</p>'),
       // g3: path-traversal slug → rejected.
       item('de', '../evil', 'g3', '<p>c</p>'),
       item('en', 'en-3', 'g3', '<p>c</p>'),
@@ -1353,9 +1468,9 @@ describe('importWxr reporting', () => {
     const logged: string[] = [];
     const s = await run(body, h, { log: (m) => logged.push(m) }, refusing);
     expect(s).toMatchObject({ imported: 1, updated: 0, skippedPublished: 0, rejected: 2, failed: 1 });
-    expect(s.imported + s.updated + s.skippedPublished + s.rejected + s.failed).toBe(4);
+    expect(s.imported + s.updated + s.skippedPublished + s.skippedLocale + s.rejected + s.failed).toBe(4);
     // the buckets are honest: the store holds only the imported group.
-    expect((await refusing.list()).map((x) => x.slugDe)).toEqual(['de-1']);
+    expect((await refusing.list()).map((x) => x.slugs.de)).toEqual(['de-1']);
     // issue #143: a pg/infrastructure message goes to the log, never to the client.
     expect(s.warnings.find((w) => w.startsWith('de-4/en-4'))).toBe('de-4/en-4: could not be saved (see server logs)');
     expect(s.warnings.join(' ')).not.toContain('byte sequence');
@@ -1562,12 +1677,12 @@ describe('prepareImport', () => {
     expect(h.calls).toHaveLength(2);
   });
 
-  it('counts EVERY group in `groups`, including rejected and already-published ones, but plans only the pending', async () => {
+  it('counts rejected groups in `groups`, but plans only groups with the required primary locale', async () => {
     const h = harness();
     const store = memoryPostStore();
     const body = wxr([
       item('de', 'de-1', 'g1', imgs('https://wp/a.jpg')), item('en', 'en-1', 'g1', '<p>x</p>'),
-      item('de', 'lonely', 'g2', imgs('https://wp/b.jpg')), // no EN twin → rejected
+      item('en', 'lonely', 'g2', imgs('https://wp/b.jpg')), // no DE primary → rejected
     ].join('\n'));
     const p = await prep(body, h, {}, store);
     expect(p.groups).toBe(2);
@@ -1575,6 +1690,7 @@ describe('prepareImport', () => {
     expect(p.planned.images.planned).toBe(1);
     const s = await p.run();
     expect(s).toMatchObject({ imported: 1, rejected: 1 });
+    expect(h.calls).toEqual(['https://wp/a.jpg']);
   });
 
   it('reports progress after every image and every group, ending at the totals', async () => {

@@ -16,7 +16,7 @@ import type { RateLimiter } from './rate-limit.js';
  *
  * POST order is load-bearing and pinned by tests: rate limit (429) → honeypot
  * (204, no row, no log) → Origin/Referer origin equality (403) → validation
- * (400 `invalid_comment`) → published pair (404) → flags (409
+ * (400 `invalid_comment`) → published pair (404) → committed locale (400) → flags (409
  * `comments_disabled`) → insert `pending` → 201 `{ ok: true }` without echoing
  * the input or the new id.
  *
@@ -45,7 +45,6 @@ export const GET_LIMIT = 500;
 /** Translation keys are UUIDs today; 128 is generous and bounds the lookup. */
 export const TK_MAX = 128;
 
-const LOCALES: readonly Locale[] = ['de', 'en'];
 const isLocale = (v: unknown): v is Locale => v === 'de' || v === 'en';
 const isKey = (v: unknown): v is string =>
   typeof v === 'string' && v.length >= 1 && v.length <= TK_MAX && !/\p{C}/u.test(v);
@@ -111,10 +110,6 @@ export function registerPublicComments(app: FastifyInstance, opts: PublicComment
     console.error(`comments: ${where} failed: ${e instanceof Error ? e.message : String(e)}`);
     return reply.code(500).send({ error: 'internal server error' });
   };
-  const publishedPair = async (tk: string): Promise<StoredPostPair | null> => {
-    const pair = await opts.posts.get(tk);
-    return pair && pair.status === 'published' ? pair : null;
-  };
   const isEnabled = (pair: StoredPostPair) => opts.commentsEnabled() && pair.shared.commentsEnabled !== false;
 
   app.get('/comments', async (req, reply) => {
@@ -125,9 +120,11 @@ export function registerPublicComments(app: FastifyInstance, opts: PublicComment
     let pair: StoredPostPair | null;
     let rows: PublicCommentJson[];
     try {
-      pair = await publishedPair(tk);
+      const locales = await opts.posts.getPublishedLocales(tk);
+      if (locales.length === 0) return reply.code(404).send(NOT_FOUND);
+      pair = await opts.posts.get(tk);
       if (!pair) return reply.code(404).send(NOT_FOUND);
-      const perLocale = await Promise.all(LOCALES.map(async (loc) =>
+      const perLocale = await Promise.all(locales.map(async (loc) =>
         (await opts.comments!.listApproved(tk, loc)).map((c) => ({ c, loc }))));
       rows = perLocale.flat()
         .sort((a, b) => new Date(a.c.createdAt).getTime() - new Date(b.c.createdAt).getTime())
@@ -174,8 +171,11 @@ export function registerPublicComments(app: FastifyInstance, opts: PublicComment
     }
     if (!opts.comments) return unavailable(reply);
     try {
-      // 5. Published pair, 6. flags, 7. insert pending.
-      const pair = await publishedPair(tk);
+      // Committed publication precedes locale membership, which precedes flags.
+      const locales = await opts.posts.getPublishedLocales(tk);
+      if (locales.length === 0) return reply.code(404).send(NOT_FOUND);
+      if (!locales.includes(postedLocale)) return reply.code(400).send({ error: 'invalid_comment' });
+      const pair = await opts.posts.get(tk);
       if (!pair) return reply.code(404).send(NOT_FOUND);
       if (!isEnabled(pair)) return reply.code(409).send({ error: 'comments_disabled' });
       await opts.comments.create({ translationKey: tk, locale: postedLocale, name, body, email: null });

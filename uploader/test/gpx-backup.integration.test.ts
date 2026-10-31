@@ -15,7 +15,8 @@ import { createGpxFiles, safePairHash, sourceDigest, type GpxFiles } from '../sr
 import { GPX_LIMITS, type PrivateGeometry } from '../public/gpx-geometry.js';
 import { pgGpxStore } from '../src/gpx-store.js';
 import { createPublicTrackWorker } from '../src/gpx-public-worker.js';
-import { exportPost } from '../src/export.js';
+import { exportAll, exportPost } from '../src/export.js';
+import { DEFAULT_LANGUAGE, type LanguageConfig } from '../src/language.js';
 
 const url = process.env.TEST_DATABASE_URL;
 const maybe = url ? describe : describe.skip;
@@ -49,6 +50,7 @@ maybe('private v10 recovery with isolated PostgreSQL state', () => {
     await pool.query('DELETE FROM post_routes');
     await pool.query('DELETE FROM posts');
     await pool.query('DELETE FROM route_cleanup');
+    await pool.query("UPDATE site_language SET primary_locale='de', enabled_locales=ARRAY['de','en'], locked_at=NULL");
     root = await mkdtemp(join(await realpath(tmpdir()), 'gpx-backup-pg-'));
     files = createGpxFiles({ storageDir: join(root, 'images') });
     dir = join(root, 'backups');
@@ -65,9 +67,10 @@ maybe('private v10 recovery with isolated PostgreSQL state', () => {
     if (owner) { await owner.query(`DROP SCHEMA ${schema} CASCADE`); await owner.end(); }
   });
 
-  async function seed(detached = false): Promise<RouteDumpRow> {
+  async function seed(detached = false, language: LanguageConfig = DEFAULT_LANGUAGE, omitSecondary = false): Promise<RouteDumpRow> {
     const slug = randomUUID();
     const locale = (locale: 'de' | 'en'): PostLocale => ({ locale, slug: `${locale}-${slug}`, title: 'Synthetic recovery story',
+      omitted: !language.locales.includes(locale) || (omitSecondary && locale !== language.primary),
       excerpt: 'Synthetic recovery route.', country: 'Test', heroImage: { src: 'https://img.example/recovery', width: 1280, height: 800, alt: 'Synthetic landscape' }, bodyMarkdown: 'Synthetic body', images: {} });
     const pair = await pgPostStore(pool).upsertDraft({ translationKey: '', status: 'draft',
       shared: { date: '2026-01-01', countryCode: 'DE', region: 'europe', coordinates: { lat: 1, lng: 2 } }, de: locale('de'), en: locale('en') });
@@ -103,7 +106,7 @@ maybe('private v10 recovery with isolated PostgreSQL state', () => {
     try {
       const state = (await posts.getPublishState(row.translation_key))!;
       const published = await posts.publish(row.translation_key, {
-        baseUpdatedAt: state.pair.updatedAt, baseRouteVersion: state.routeVersion,
+        baseUpdatedAt: state.pair.updatedAt, baseRouteVersion: state.routeVersion, baseLanguageUpdatedAt: state.language.updatedAt,
       });
       const { path, dump } = await capture();
       for (const post of dump.tables.posts) {
@@ -125,21 +128,111 @@ maybe('private v10 recovery with isolated PostgreSQL state', () => {
       expect(restored.geometry).toEqual(geometry);
       expect(restored.source_id).not.toBe(row.source_id);
       expect((await files.inspectOriginal(source(restored))).bytes).toEqual(original);
-      expect(await posts.getPublishedTrack(row.translation_key)).toEqual(publicTrack);
+      expect((await posts.getPublishedTrack(row.translation_key)).track).toEqual(publicTrack);
       const restoredPair = (await posts.get(row.translation_key))!;
       await pgGpxStore(pool).detach(row.translation_key, {
         baseVersion: restored.version, baseUpdatedAt: restoredPair.updatedAt.toISOString(),
       });
       const ready = (await posts.getPublishState(row.translation_key))!;
       await posts.publish(row.translation_key, {
-        baseUpdatedAt: ready.pair.updatedAt, baseRouteVersion: ready.routeVersion,
+        baseUpdatedAt: ready.pair.updatedAt, baseRouteVersion: ready.routeVersion, baseLanguageUpdatedAt: ready.language.updatedAt,
       });
-      expect(await posts.getPublishedTrack(row.translation_key)).toBeUndefined();
+      expect((await posts.getPublishedTrack(row.translation_key)).track).toBeUndefined();
       const routeless = (await posts.get(row.translation_key))!;
       await exportPost(routeless, exportDir, await posts.getPublishedTrack(row.translation_key));
       for (const file of paths) expect(mdxTrack(await readFile(file, 'utf8'))).toBeUndefined();
       expect((await files.inspectOriginal(source(restored))).bytes).toEqual(original);
     } finally { await worker.close(); }
+  });
+
+  it.each<LanguageConfig>([
+    { primary: 'de', locales: ['de'] }, { primary: 'en', locales: ['en'] },
+    { primary: 'de', locales: ['de', 'en'] }, { primary: 'en', locales: ['en', 'de'] },
+  ])('round-trips actual snapshot coverage through export and recovery: $primary/$locales', async language => {
+    await pool.query('UPDATE site_language SET primary_locale=$1,enabled_locales=$2::text[]', [language.primary, language.locales]);
+    const row = await seed(false, language, true);
+    const worker = createPublicTrackWorker();
+    const posts = pgPostStore(pool, { publicTrackWorker: worker });
+    const secondary = language.primary === 'de' ? 'en' : 'de';
+    try {
+      const publish = async () => {
+        const state = (await posts.getPublishState(row.translation_key))!;
+        return posts.publish(row.translation_key, { baseUpdatedAt: state.pair.updatedAt, baseRouteVersion: state.routeVersion, baseLanguageUpdatedAt: state.language.updatedAt });
+      };
+      await publish();
+      let artifact = await posts.getPublishedTrack(row.translation_key);
+      expect(artifact).toMatchObject({ language, locales: [language.primary], track: publicTrack });
+      const first = await capture();
+      await restoreDatabase(pool, first.path, { routeFiles: files });
+      expect((await posts.getPublishedTrack(row.translation_key))).toEqual(artifact);
+      let pair = (await posts.get(row.translation_key))!;
+      let paths = await exportPost(pair, join(root, 'mode-mdx'), artifact);
+      expect(paths).toHaveLength(1);
+      expect(mdxTrack(await readFile(paths[0]!, 'utf8'))).toEqual(publicTrack);
+      if (language.locales.length === 2) {
+        pair[secondary].omitted = false;
+        await posts.upsertDraft(pair);
+        artifact = await posts.getPublishedTrack(row.translation_key);
+        expect(artifact.locales).toEqual([language.primary]);
+        pair = (await posts.get(row.translation_key))!;
+        paths = await exportAll([pair], join(root, 'mode-mdx'), tk => posts.getPublishedTrack(tk));
+        expect(paths).toHaveLength(2);
+        const secondaryFile = paths.find(path => path.includes(`/trips/${secondary}/`))!;
+        expect(mdxTrack(await readFile(secondaryFile, 'utf8'))).toBeUndefined();
+        const requested = await capture();
+        await restoreDatabase(pool, requested.path, { routeFiles: files });
+        expect((await posts.getPublishedTrack(row.translation_key)).locales).toEqual([language.primary]);
+        await publish();
+        artifact = await posts.getPublishedTrack(row.translation_key);
+        expect(new Set(artifact.locales)).toEqual(new Set(['de', 'en']));
+      }
+      await posts.unpublish(row.translation_key);
+      const retained = await capture();
+      await restoreDatabase(pool, retained.path, { routeFiles: files });
+      expect(await posts.getPublishedTrack(row.translation_key)).toEqual(artifact);
+      pair = (await posts.get(row.translation_key))!;
+      const route = (await pgGpxStore(pool).get(row.translation_key))!;
+      await pgGpxStore(pool).detach(row.translation_key, { baseVersion: route.version, baseUpdatedAt: pair.updatedAt.toISOString() });
+      expect(await posts.getPublishedTrack(row.translation_key)).toEqual(artifact);
+      paths = await exportAll([(await posts.get(row.translation_key))!], join(root, 'mode-mdx'), tk => posts.getPublishedTrack(tk));
+      for (const path of paths) expect(mdxTrack(await readFile(path, 'utf8'))).toEqual(publicTrack);
+    } finally { await worker.close(); }
+  });
+
+  it.each([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])('restores v%i into an upgraded EN-primary install atomically and survives restart', async version => {
+    const row = await seed(true);
+    const posts = pgPostStore(pool);
+    const state = (await posts.getPublishState(row.translation_key))!;
+    await posts.publish(row.translation_key, { baseUpdatedAt: state.pair.updatedAt, baseRouteVersion: state.routeVersion, baseLanguageUpdatedAt: state.language.updatedAt });
+    const { path, dump } = await capture();
+    dump.version = version;
+    delete dump.tables.site_language;
+    for (const post of dump.tables.posts) {
+      delete post.omitted;
+      if (version <= 2) { delete post.published_snapshot; delete post.published_at; }
+    }
+    if (version < 11) { delete dump.tables.site_identity; delete dump.tables.site_identity_assets; }
+    if (version < 10) { delete dump.tables.post_routes; delete dump.routeArchive; }
+    await writeFile(path, gzipSync(JSON.stringify(dump)));
+    await pool.query("UPDATE site_language SET primary_locale='en',enabled_locales=ARRAY['en','de'],locked_at=now()");
+    const beforeMode = (await pool.query('SELECT * FROM site_language')).rows;
+    const beforePosts = (await pool.query('SELECT * FROM posts ORDER BY locale')).rows;
+    let checks = 0;
+    await expect(restoreDatabase(pool, path, { routeFiles: files, assertOwner: async () => {
+      if (++checks === 2) throw new Error('synthetic pre-commit refusal');
+    } })).rejects.toThrow('synthetic pre-commit refusal');
+    expect((await pool.query('SELECT * FROM site_language')).rows).toEqual(beforeMode);
+    expect((await pool.query('SELECT * FROM posts ORDER BY locale')).rows).toEqual(beforePosts);
+    await restoreDatabase(pool, path, { routeFiles: files });
+    const mode = (await pool.query('SELECT * FROM site_language')).rows[0]!;
+    expect(mode).toMatchObject({ primary_locale: 'de', enabled_locales: ['de', 'en'], locked_at: expect.any(Date) });
+    expect((await pool.query('SELECT omitted FROM posts')).rows.every(post => post.omitted === false)).toBe(true);
+    const slugs = (await pool.query('SELECT locale,slug FROM posts ORDER BY locale')).rows;
+    expect(slugs).toEqual(beforePosts.map(post => ({ locale: post.locale, slug: post.slug })));
+    await ensureSchema(pool);
+    expect((await pool.query('SELECT * FROM site_language')).rows[0]).toEqual(mode);
+    expect((await pool.query('SELECT locale,slug FROM posts ORDER BY locale')).rows).toEqual(slugs);
+    expect((await posts.getPublishedTrack(row.translation_key)).track).toBeUndefined();
   });
 
   it.each(['private-field', 'different-route', 'missing-counterpart'] as const)(
@@ -148,6 +241,7 @@ maybe('private v10 recovery with isolated PostgreSQL state', () => {
       const { path, dump } = await capture();
       dump.tables.posts[0]!.published_snapshot = { track: publicTrack };
       dump.tables.posts[1]!.published_snapshot = { track: publicTrack };
+      for (const post of dump.tables.posts) post.published_at = now.toISOString();
       if (kind === 'private-field') {
         dump.tables.posts[1]!.published_snapshot = { track: { ...publicTrack, time: '2042-01-02T03:04:05Z' } };
       } else if (kind === 'different-route') {

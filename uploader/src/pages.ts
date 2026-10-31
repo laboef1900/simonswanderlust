@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { DbClient, DbPool } from './db.js';
 import { imagesMapError, normalizeGalleryFences, type ImageMeta } from './body-content.js';
 import { REVISION_CAP } from './posts.js';
+import { memoryLanguageStore, readLanguage, type LanguageStore, type LanguageState, type LanguageLocale } from './language.js';
 import type { GalleryWarning } from '../public/gallery-photo-line.js';
 
 export type Locale = 'de' | 'en';
@@ -19,12 +20,14 @@ export interface StoredPagePair extends PagePair { updatedAt: Date | null }
 export interface SavedPagePair extends StoredPagePair { galleryWarnings: GalleryWarning[] }
 /** Pre-save snapshot in the PUT-payload shape, so a restore round-trips through the editor. */
 export type PageRevisionSnapshot = Pick<PagePair, 'de' | 'en'>;
-export interface PageRevisionSummary { id: string; savedAt: Date; titleDe: string }
+export interface PageRevisionSummary { id: string; savedAt: Date; title: string }
 export interface PageRevision extends PageRevisionSummary { snapshot: PageRevisionSnapshot }
 
+type PageErrorCode = 'conflict' | 'invalid_page' | 'images_not_ready';
+
 export class PageError extends Error {
-  code?: 'conflict';
-  constructor(message: string, code?: 'conflict') { super(message); this.code = code; }
+  code?: PageErrorCode;
+  constructor(message: string, code?: PageErrorCode) { super(message); this.code = code; }
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -76,6 +79,24 @@ async function pageWithDefaults(pair: PagePair): Promise<{ pair: PagePair; galle
   return { pair: normalized, galleryWarnings };
 }
 
+export type PageUpdate = Pick<PagePair, 'key'> & Partial<Pick<PagePair, 'de' | 'en'>>;
+export interface PageSaveOptions {
+  prepareLocale?: LanguageLocale;
+  validate?: (pair: PagePair, language: LanguageState, client?: DbClient) => Promise<void>;
+}
+async function mergePageUpdate(update: PageUpdate, existing: StoredPagePair, language: LanguageState, options: PageSaveOptions): Promise<{ pair: PagePair; galleryWarnings: GalleryWarning[] }> {
+  const preparing = options.prepareLocale;
+  if (preparing && (language.locales.includes(preparing) || update[language.primary] !== undefined)) {
+    throw new PageError('Preparation edits only the inactive language.', 'invalid_page');
+  }
+  const pair = { key: update.key, de: existing.de, en: existing.en };
+  for (const locale of ['de', 'en'] as const) {
+    if (update[locale] !== undefined && (locale === preparing || (!preparing && language.locales.includes(locale)))) pair[locale] = update[locale]!;
+  }
+  validatePagePair(pair);
+  return pageWithDefaults(pair);
+}
+
 export interface PageStore {
   get(key: string): Promise<StoredPagePair>;
   /**
@@ -89,7 +110,7 @@ export interface PageStore {
    * write are one atomic step, every accepted save strictly advances
    * `updatedAt`, and the returned pair is THIS save's state and token.
    */
-  save(pair: PagePair, baseUpdatedAt?: Date): Promise<SavedPagePair>;
+  save(pair: PageUpdate, baseUpdatedAt?: Date, options?: PageSaveOptions): Promise<SavedPagePair>;
   /** All page keys that have ever been saved (either locale), sorted. */
   keys(): Promise<string[]>;
   /** Revision summaries for a page, newest first (at most REVISION_CAP). */
@@ -98,7 +119,7 @@ export interface PageStore {
   getRevision(key: string, id: string): Promise<PageRevision | null>;
 }
 
-export function memoryPageStore(): PageStore {
+export function memoryPageStore(language: LanguageStore = memoryLanguageStore()): PageStore {
   const byKeyLocale = new Map<string, PageContent>();
   const updatedAtByKey = new Map<string, Date>();
   // Oldest first (append order) — mirrors the pg store's page_revisions table.
@@ -115,14 +136,18 @@ export function memoryPageStore(): PageStore {
     async get(key) {
       return read(key);
     },
-    async save(pair, baseUpdatedAt) {
-      validatePagePair(pair);
-      const { pair: normalized, galleryWarnings } = await pageWithDefaults(pair);
+    async save(pair, baseUpdatedAt, options = {}) {
+      // The language queue serializes every memory save, so its read, stale
+      // check and write cannot interleave with another save (#344).
+      return language.runExclusive(async (mode) => {
       const existing = read(pair.key);
+      if (options.prepareLocale && existing.updatedAt && !baseUpdatedAt) throw new PageError('Reload the page before preparing a translation.', 'conflict');
       assertPageNotStale(existing.updatedAt, baseUpdatedAt);
+      const { pair: normalized, galleryWarnings } = await mergePageUpdate(pair, existing, mode, options);
+      await options.validate?.(normalized, mode);
       if (existing.updatedAt) {
         const revs = revisionsByKey.get(pair.key) ?? [];
-        revs.push({ id: randomUUID(), savedAt: new Date(), titleDe: existing.de.title, snapshot: { de: existing.de, en: existing.en } });
+        revs.push({ id: randomUUID(), savedAt: new Date(), title: existing[mode.primary].title, snapshot: { de: existing.de, en: existing.en } });
         if (revs.length > REVISION_CAP) revs.splice(0, revs.length - REVISION_CAP);
         revisionsByKey.set(pair.key, revs);
       }
@@ -134,6 +159,7 @@ export function memoryPageStore(): PageStore {
       const prev = existing.updatedAt?.getTime() ?? 0;
       updatedAtByKey.set(pair.key, new Date(Math.max(Date.now(), prev + 1)));
       return { ...read(pair.key), galleryWarnings };
+      });
     },
     async keys() {
       // Stored keys are `${key}:${locale}` and page keys cannot contain ':'.
@@ -141,13 +167,15 @@ export function memoryPageStore(): PageStore {
       return [...new Set(all)].sort();
     },
     async listRevisions(key) {
+      const mode = await language.get();
       return (revisionsByKey.get(key) ?? [])
-        .map(({ id, savedAt, titleDe }) => ({ id, savedAt, titleDe }))
+        .map(({ id, savedAt, snapshot }) => ({ id, savedAt, title: snapshot[mode.primary].title }))
         .reverse(); // newest first
     },
     async getRevision(key, id) {
       const rev = (revisionsByKey.get(key) ?? []).find((r) => r.id === id);
-      return rev ? structuredClone(rev) : null;
+      const mode = await language.get();
+      return rev ? structuredClone({ ...rev, title: rev.snapshot[mode.primary].title }) : null;
     },
   };
 }
@@ -171,12 +199,12 @@ async function readPage(db: DbPool | DbClient, key: string, lock = false): Promi
 export function pgPageStore(pool: DbPool): PageStore {
   return {
     get: (key) => readPage(pool, key),
-    async save(pair, baseUpdatedAt) {
-      validatePagePair(pair);
-      const { pair: normalized, galleryWarnings } = await pageWithDefaults(pair);
+    async save(pair, baseUpdatedAt, options = {}) {
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
+        // Lock order: language (shared), then the page (#284, #344).
+        const mode = await readLanguage(client, true);
         // @ai-warning (#344) The lock MUST precede the read: a check made on a
         // read taken outside it lets two saves from one base both pass and the
         // later commit erase the earlier one, which no revision ever captured.
@@ -186,7 +214,10 @@ export function pgPageStore(pool: DbPool): PageStore {
         // a hash collision would only serialize two unrelated saves.
         await client.query(`SELECT pg_advisory_xact_lock(hashtextextended('page:' || $1, 0))`, [pair.key]);
         const existing = await readPage(client, pair.key, true);
+        if (options.prepareLocale && existing.updatedAt && !baseUpdatedAt) throw new PageError('Reload the page before preparing a translation.', 'conflict');
         assertPageNotStale(existing.updatedAt, baseUpdatedAt);
+        const { pair: normalized, galleryWarnings } = await mergePageUpdate(pair, existing, mode, options);
+        await options.validate?.(normalized, mode, client);
         if (existing.updatedAt) {
           // clock_timestamp(), not the column default now(): now() is this
           // transaction's START, which for a save that queued on the lock
@@ -243,12 +274,12 @@ export function pgPageStore(pool: DbPool): PageStore {
     },
     async listRevisions(key) {
       // Summary fields only — bodies can be large.
-      const { rows } = await pool.query<{ id: string; saved_at: Date; title_de: string | null }>(
-        `SELECT id, saved_at, snapshot->'de'->>'title' AS title_de
-           FROM page_revisions WHERE key = $1 ORDER BY saved_at DESC, id DESC`,
+      const { rows } = await pool.query<{ id: string; saved_at: Date; title: string | null }>(
+        `SELECT r.id, r.saved_at, r.snapshot->l.primary_locale->>'title' AS title
+           FROM page_revisions r CROSS JOIN site_language l WHERE r.key = $1 AND l.id=true ORDER BY r.saved_at DESC, r.id DESC`,
         [key],
       );
-      return rows.map((r) => ({ id: r.id, savedAt: r.saved_at, titleDe: r.title_de ?? '' }));
+      return rows.map((r) => ({ id: r.id, savedAt: r.saved_at, title: r.title ?? '' }));
     },
     async getRevision(key, id) {
       // A malformed uuid parameter would raise 22P02 (a logged 500) instead of
@@ -259,7 +290,8 @@ export function pgPageStore(pool: DbPool): PageStore {
         [key, id],
       );
       const r = rows[0];
-      return r ? { id: r.id, savedAt: r.saved_at, titleDe: r.snapshot.de?.title ?? '', snapshot: r.snapshot } : null;
+      const mode = await readLanguage(pool);
+      return r ? { id: r.id, savedAt: r.saved_at, title: r.snapshot[mode.primary]?.title ?? '', snapshot: r.snapshot } : null;
     },
   };
 }

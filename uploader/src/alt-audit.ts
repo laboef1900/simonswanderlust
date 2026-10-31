@@ -100,20 +100,20 @@ async function bodyRefs(l: PostLocale, gallery: ReadonlyMap<string, { alt: strin
 }
 
 /**
- * Takes the stored pair, returns the undescribed photos of both locales
- * in a stable, author-visible order — DE before EN, each locale's hero first,
- * then its gallery photos, then its inline body photos. No store, no I/O.
+ * Takes the stored pair, returns the undescribed photos of the requested locales
+ * in their display order, each locale's hero first, then its gallery photos,
+ * then its inline body photos. No store, no I/O.
  *
  * @param galleryMetadata the library's current gallery descriptions
  *   (`loadGalleryMetadata`). Every server caller passes it: without it the
  *   audit judges the copy stored on the post, which the rendered page no
  *   longer shows for a library photo.
  */
-export async function auditAltText(pair: Pick<PostPair, 'de' | 'en'>, galleryMetadata?: LocaleGalleryMetadata): Promise<AltAudit> {
+export async function auditAltText(pair: Pick<PostPair, 'de' | 'en'>, galleryMetadata?: LocaleGalleryMetadata, locales: readonly Locale[] = ['de', 'en']): Promise<AltAudit> {
   const images: UndescribedImage[] = [];
-  for (const locale of ['de', 'en'] as const) {
+  for (const locale of locales) {
     const l = pair[locale];
-    if (!l) continue;
+    if (!l || l.omitted) continue;
     const title = l.title;
     // A locale nobody has written yet contributes nothing: the write-DE-first
     // workflow leaves EN as a blank title, a blank body and the placeholder

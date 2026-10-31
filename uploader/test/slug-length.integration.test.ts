@@ -124,7 +124,7 @@ maybe('slug length at real PostgreSQL boundaries (#353)', () => {
       expect(await rows()).toEqual(before);
       const response = await app.inject(mode === 'single'
         ? { method: 'POST', url: `/posts/${tk}/publish`, cookies, payload: await publishBody(posts, tk) }
-        : { method: 'POST', url: '/posts/bulk', cookies, payload: { action: 'publish', keys: [tk] } });
+        : { method: 'POST', url: '/posts/bulk', cookies, payload: { action: 'publish', keys: [tk], baseLanguageUpdatedAt: (await posts.language.get()).updatedAt.toISOString() } });
       if (mode === 'single') expect(response.statusCode).toBe(400);
       else expect(response.json()).toMatchObject({ succeeded: 0, failed: 1 });
       expect(response.body).toContain(`${locale}.slug must be at most 251 ASCII bytes (received 252)`);

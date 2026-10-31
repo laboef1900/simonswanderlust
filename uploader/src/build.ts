@@ -7,6 +7,7 @@ import { assertWorkWritable, cancellableSleep, createWorkCancellation, isWorkWri
 import type pg from 'pg';
 import { parseIdentitySnapshot } from '../../site/src/lib/site-identity.js';
 import { withBuildSnapshot, writeBuildAssets, type BuildSnapshot } from './build-snapshot.js';
+import { DEFAULT_LANGUAGE } from './language.js';
 
 export interface BuildOutcome { ok: boolean; release?: string; error?: string }
 
@@ -101,6 +102,7 @@ export function runChildBuild(
   const env: NodeJS.ProcessEnv = {
     ...process.env, ASTRO_TELEMETRY_DISABLED: '1',
     SITE_IDENTITY_JSON: JSON.stringify(opts.snapshot?.identity ?? parseIdentitySnapshot(undefined)),
+    SITE_LANGUAGE_JSON: JSON.stringify(opts.snapshot?.language ?? DEFAULT_LANGUAGE),
   };
   // Never inherit operator-supplied snapshot identifiers, including empty ones.
   delete env.SITE_DATABASE_SNAPSHOT;

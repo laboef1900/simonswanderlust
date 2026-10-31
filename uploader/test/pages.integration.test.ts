@@ -18,7 +18,12 @@ const maybe = url ? describe : describe.skip;
 
 maybe('pgPageStore (Postgres)', () => {
   let pool: DbPool;
-  beforeAll(async () => { pool = createPool(url as string); await ensureSchema(pool); });
+  beforeAll(async () => {
+    pool = createPool(url as string);
+    await ensureSchema(pool);
+    await pool.query(`UPDATE site_language SET primary_locale='de', enabled_locales=ARRAY['de','en'],
+      locked_at=(SELECT min(published_at) FROM posts), updated_at=clock_timestamp() WHERE id=true`);
+  });
   afterAll(async () => { await pool.end(); });
 
   it('keeps malformed metadata lossless and diagnostics transient in real page saves', async () => {
@@ -143,10 +148,10 @@ maybe('pgPageStore (Postgres)', () => {
     for (let i = 1; i <= REVISION_CAP + 1; i++) await store.save(about(`rev-${i}`));
     const revs = await store.listRevisions('about');
     expect(revs).toHaveLength(REVISION_CAP);
-    expect(revs[0]!.titleDe).toBe(`rev-${REVISION_CAP}`);
+    expect(revs[0]!.title).toBe(`rev-${REVISION_CAP}`);
     // The oldest survivor is rev-1 (the pre-loop state was pruned).
-    expect(revs.map((r) => r.titleDe)).not.toContain(before);
-    expect(revs[REVISION_CAP - 1]!.titleDe).toBe('rev-1');
+    expect(revs.map((r) => r.title)).not.toContain(before);
+    expect(revs[REVISION_CAP - 1]!.title).toBe('rev-1');
     const full = await store.getRevision('about', revs[0]!.id);
     expect(full!.snapshot.de.bodyMarkdown).toBe(`DE rev-${REVISION_CAP}`);
     expect(full!.snapshot.en.bodyMarkdown).toBe('EN body');
@@ -254,7 +259,7 @@ maybe('pgPageStore serializes saves of one page (Postgres, #344)', () => {
     await rowTokens(key, a.value.updatedAt!);
     // The true predecessor, snapshotted once; the refused save left no trace.
     const revs = await store.listRevisions(key);
-    expect(revs.map((r) => r.titleDe)).toEqual(['S0']);
+    expect(revs.map((r) => r.title)).toEqual(['S0']);
     expect((await store.getRevision(key, revs[0]!.id))!.snapshot).toEqual({ de: base.de, en: base.en });
   }, 20_000);
 
@@ -293,7 +298,7 @@ maybe('pgPageStore serializes saves of one page (Postgres, #344)', () => {
     expect({ ...await store.get(key), galleryWarnings: [] }).toEqual(b.value);
     await rowTokens(key, b.value.updatedAt!);
     const revs = await store.listRevisions(key);
-    expect(revs.map((r) => r.titleDe)).toEqual(['FIRST']);
+    expect(revs.map((r) => r.title)).toEqual(['FIRST']);
     expect((await store.getRevision(key, revs[0]!.id))!.snapshot).toEqual({ de: a.value.de, en: a.value.en });
   }, 20_000);
 
@@ -315,6 +320,6 @@ maybe('pgPageStore serializes saves of one page (Postgres, #344)', () => {
     }
     // The token a tab held two saves ago is stale now.
     await expect(store.save(page(key, 'stale'), new Date('2099-01-01T00:00:00.201Z'))).rejects.toMatchObject({ code: 'conflict' });
-    expect((await store.listRevisions(key)).map((r) => r.titleDe)).toEqual(['S1', 'S0']);
+    expect((await store.listRevisions(key)).map((r) => r.title)).toEqual(['S1', 'S0']);
   });
 });

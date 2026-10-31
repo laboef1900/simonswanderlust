@@ -454,7 +454,7 @@ maybe('restore rehearsal: app backup → fresh database → restore CLI → prod
     }
     const list = await fetch(`${restored.base}/posts`, { headers: { cookie: author } });
     expect((await list.json() as Record<string, unknown>[]).find((summary) => summary.translationKey === tk))
-      .toMatchObject({ status: 'published', slugDe: 'probe-am-bergsee', slugEn: 'rehearsal-at-the-lake' });
+      .toMatchObject({ status: 'published', slugs: { de: 'probe-am-bergsee', en: 'rehearsal-at-the-lake' } });
     expect(await (await fetch(`${restored.base}/pages/about`, { headers: { cookie: author } })).json()).toMatchObject({
       de: { title: 'Über die Probe' }, en: { title: 'About the rehearsal' },
     });

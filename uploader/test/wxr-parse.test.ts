@@ -17,6 +17,15 @@ describe('parseWxr', () => {
     expect(attachments.get('100')).toBe('https://wp.example/uploads/hero.jpg');
   });
 
+  it.each(['de', 'en'] as const)('keys untagged single-language posts by WordPress id in %s', (primary) => {
+    const body = `<rss><channel><item><wp:post_type>post</wp:post_type><wp:status>publish</wp:status>
+      <wp:post_id>123</wp:post_id><wp:post_name>story</wp:post_name><title>Story</title></item></channel></rss>`;
+    expect(parseWxr(body, { primary, locales: [primary] }).posts).toMatchObject([
+      { group: 'wp:123', locale: primary, slug: 'story' },
+    ]);
+    expect(parseWxr(body).rejected).toEqual([{ slug: 'story', reason: 'no language' }]);
+  });
+
   it('reassembles adjacent CDATA sections without adding separators to scalar fields', () => {
     const split = 'left,]]]]><![CDATA[> middle\nline, ]]]]><![CDATA[>right';
     const source = `<rss><channel>${(['de', 'en'] as const).map((locale) => `<item>
@@ -68,7 +77,7 @@ describe('parseWxr', () => {
   </channel>
 </rss>`;
     expect(parseWxr(noGroupWxr)).toEqual({
-      posts: [], attachments: new Map(),
+      posts: [], attachments: new Map(), skippedLocale: [], rejected: [],
       untranslated: [{ locale: 'de', slug: 'non-bilingual-post' }],
     });
   });
@@ -82,7 +91,7 @@ describe('parseWxr', () => {
       ${index ? '<category domain="post_translations" nicename=""/>' : ''}
     </item>`).join('');
     expect(parseWxr(`<rss><channel>${items}</channel></rss>`)).toEqual({
-      posts: [], attachments: new Map(),
+      posts: [], attachments: new Map(), skippedLocale: [], rejected: [],
       untranslated: slugs.map((slug, index) => ({ locale: index === 1 ? 'en' : 'de', slug })),
     });
   });

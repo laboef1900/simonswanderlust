@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { ui } from '../../site/src/i18n/ui.js';
 import { editorDocument, EditorEvent, type EditorElement } from './editor-dom-harness.js';
 
 const src = readFileSync('public/admin-confirm.js', 'utf8');
@@ -11,7 +12,7 @@ interface Api {
   urlsPlain(slugs: { de?: string; en?: string }): string;
 }
 
-function load(opts: { confirm?: () => boolean; prompt?: (msg: string, def?: string) => string | null; origin?: string } = {}): { api: Api; confirmedWith: string[]; promptedWith: string[] } {
+function load(opts: { confirm?: () => boolean; prompt?: (msg: string, def?: string) => string | null; origin?: string; language?: { primary: 'de' | 'en'; locales: ('de' | 'en')[] } } = {}): { api: Api; confirmedWith: string[]; promptedWith: string[] } {
   const confirmedWith: string[] = [];
   const promptedWith: string[] = [];
   const windowStub: { AdminConfirm?: Api; confirm?: (msg: string) => boolean; prompt?: (msg: string, def?: string) => string | null } = {};
@@ -34,7 +35,14 @@ function load(opts: { confirm?: () => boolean; prompt?: (msg: string, def?: stri
   };
   windowStub.confirm = ctx.confirm;
   windowStub.prompt = ctx.prompt;
-  vm.runInNewContext(src, ctx);
+  Object.assign(windowStub, { EditorCopy: { en: Object.fromEntries(Object.entries(ui.en)
+    .filter(([key]) => key.startsWith('editor.chrome.')).map(([key, value]) => [key.slice('editor.chrome.'.length), value])) } });
+  vm.createContext(ctx);
+  vm.runInContext(readFileSync('public/language.js', 'utf8'), ctx);
+  vm.runInContext(`SiteLanguage = window.SiteLanguage; SiteLanguage.accept(${JSON.stringify({
+    primary: 'de', locales: ['de', 'en'], ...opts.language, lockedAt: null, updatedAt: '2026-10-27T00:00:00.000Z',
+  })})`, ctx);
+  vm.runInContext(src, ctx);
   if (!windowStub.AdminConfirm) throw new Error('admin-confirm.js did not assign window.AdminConfirm');
   return { api: windowStub.AdminConfirm, confirmedWith, promptedWith };
 }
@@ -53,6 +61,18 @@ describe('AdminConfirm.liveUrls', () => {
     expect(api.liveUrls({ de: 'bukarest', en: '' })).toEqual({
       de: 'https://simonswanderlust.com/bukarest/',
       en: '',
+    });
+  });
+
+  it('uses the English root and never links disabled German content', () => {
+    const { api } = load({ language: { primary: 'en', locales: ['en'] } });
+    expect(api.liveUrls({ de: 'deutsch', en: 'english' })).toEqual({ de: '', en: 'https://simonswanderlust.com/english/' });
+  });
+
+  it('prefixes German when English is primary', () => {
+    const { api } = load({ language: { primary: 'en', locales: ['en', 'de'] } });
+    expect(api.liveUrls({ de: 'deutsch', en: 'english' })).toEqual({
+      de: 'https://simonswanderlust.com/de/deutsch/', en: 'https://simonswanderlust.com/english/',
     });
   });
 });
@@ -84,6 +104,13 @@ describe('AdminConfirm.ask typed fallback', () => {
     const { api } = load({ prompt: () => 'delete' });
     await expect(api.ask({ title: 'Delete?', typed: 'DELETE' })).resolves.toBe(false);
   });
+});
+
+it('presents the primary URL first in the publication confirmation', () => {
+  const { api } = load({ language: { primary: 'en', locales: ['en', 'de'] } });
+  expect(api.urlsPlain({ de: 'reise', en: 'journey' })).toBe(
+    'EN  https://simonswanderlust.com/journey/\nDE  https://simonswanderlust.com/de/reise/',
+  );
 });
 
 describe('AdminConfirm.ask native dialog', () => {

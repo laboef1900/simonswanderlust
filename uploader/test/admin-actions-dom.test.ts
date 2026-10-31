@@ -190,6 +190,9 @@ function loadPage(file: string, extraGlobals: Record<string, unknown>, scripts: 
   ctx.window = ctx;
   vm.createContext(ctx);
   vm.runInContext(renderGpxCopy(), ctx);
+  vm.runInContext(readFileSync('public/language.js', 'utf8'), ctx);
+  vm.runInContext(`SiteLanguage.accept({primary:'de',locales:['de','en'],lockedAt:null,updatedAt:'2026-10-27T00:00:00.000Z'});
+    SiteLanguage.get = async () => SiteLanguage.config();`, ctx);
   for (const dependency of scripts) vm.runInContext(readFileSync(dependency, 'utf8'), ctx, { filename: dependency });
   vm.runInContext(script, ctx);
   return { ctx, el, windowListeners };
@@ -233,7 +236,7 @@ describe('import.html rejection accounting', () => {
   });
 });
 
-const post = { translationKey: 'tk1', titleDe: 'Bukarest', slugDe: 'bukarest', slugEn: 'bucharest', status: 'published' };
+const post = { translationKey: 'tk1', title: 'Bukarest', slugs: { de: 'bukarest', en: 'bucharest' }, status: 'published' };
 
 describe('users.html failure recovery', () => {
   const user = { id: 2, username: 'author2', isAdmin: false };
@@ -467,8 +470,8 @@ describe('posts.html selection, recovery and disclosures', () => {
   it('keeps cross-filter selections visible, reviews every title, and clears them explicitly', async () => {
     const { ctx, el } = loadPosts({ PostsFilter: filterStub });
     const posts = [
-      { ...post, translationKey: 'draft', titleDe: 'Draft story', status: 'draft' },
-      { ...post, translationKey: 'live', titleDe: 'Live story', status: 'published' },
+      { ...post, translationKey: 'draft', title: 'Draft story', status: 'draft' },
+      { ...post, translationKey: 'live', title: 'Live story', status: 'published' },
     ];
     vm.runInContext(`me = { isAdmin: true }; allPosts = ${JSON.stringify(posts)};
       selected.add('draft'); selected.add('live');`, ctx);
@@ -500,32 +503,33 @@ describe('posts.html selection, recovery and disclosures', () => {
           return { status: 200, ok: true, json: async () => ({ succeeded: 2, failed: 0, results: [] }) };
         }
         return { status: 200, ok: true, json: async () => [
-          { ...post, translationKey: 'a', titleDe: 'Alpha' },
-          { ...post, translationKey: 'b', titleDe: 'Beta' },
-          { ...post, translationKey: 'c', titleDe: 'Gamma' },
+          { ...post, translationKey: 'a', title: 'Alpha' },
+          { ...post, translationKey: 'b', title: 'Beta' },
+          { ...post, translationKey: 'c', title: 'Gamma' },
         ] };
       },
     });
     const posts = [
-      { ...post, translationKey: 'a', titleDe: 'Alpha' },
-      { ...post, translationKey: 'b', titleDe: 'Beta' },
-      { ...post, translationKey: 'c', titleDe: 'Gamma' },
+      { ...post, translationKey: 'a', title: 'Alpha' },
+      { ...post, translationKey: 'b', title: 'Beta' },
+      { ...post, translationKey: 'c', title: 'Gamma' },
     ];
     vm.runInContext(`allPosts = ${JSON.stringify(posts)}; selected.add('a'); selected.add('b');`, ctx);
-    mutateSelection = () => vm.runInContext(`selected.clear(); selected.add('c');`, ctx);
+    mutateSelection = () => vm.runInContext(`selected.clear(); selected.add('c');
+      SiteLanguage.accept({primary:'en',locales:['en','de'],lockedAt:null,updatedAt:'2026-10-28T00:00:00.000Z'});`, ctx);
 
     await (vm.runInContext('runBulk', ctx) as (action: string) => Promise<void>)('publish');
 
     expect(confirmBody).toContain('"Alpha"');
     expect(confirmBody).toContain('"Beta"');
-    expect(JSON.parse(requestBody)).toEqual({ action: 'publish', keys: ['a', 'b'] });
+    expect(JSON.parse(requestBody)).toEqual({ action: 'publish', keys: ['a', 'b'], baseLanguageUpdatedAt: '2026-10-27T00:00:00.000Z' });
     expect(vm.runInContext('[...selected]', ctx)).toEqual(['c']);
   });
 
   it('retains only failed stories after a partial bulk result so they can be retried', async () => {
     const posts = [
-      { ...post, translationKey: 'a', titleDe: 'Alpha' },
-      { ...post, translationKey: 'b', titleDe: 'Beta' },
+      { ...post, translationKey: 'a', title: 'Alpha' },
+      { ...post, translationKey: 'b', title: 'Beta' },
     ];
     const { ctx, el } = loadPosts({
       fetch: async (url: string) => url === '/posts/bulk'
@@ -558,7 +562,7 @@ describe('posts.html selection, recovery and disclosures', () => {
   });
 
   it('reports actionable route failures without hiding unrelated bulk Publish errors', async () => {
-    const rows = ['limit', 'timeout', 'media'].map((key) => ({ ...post, translationKey: key, titleDe: key }));
+    const rows = ['limit', 'timeout', 'media'].map((key) => ({ ...post, translationKey: key, title: key }));
     const { ctx, el } = loadPosts({
       fetch: async (url: string) => ({
         status: 200, ok: true, json: async () => url === '/posts/bulk' ? {
@@ -593,15 +597,15 @@ describe('posts.html selection, recovery and disclosures', () => {
       },
     });
     el('fSearch').value = 'Rhodes & sun';
-    el('fStatus').value = 'missing-en';
+    el('fStatus').value = 'missing-secondary';
     const editorHref = vm.runInContext('editorHref', ctx) as (key?: string) => string;
     const href = new URL(editorHref('pair/key'), 'http://localhost');
     expect(href.searchParams.get('tk')).toBe('pair/key');
-    expect(href.searchParams.get('returnTo')).toBe('/admin/posts.html?q=Rhodes+%26+sun&status=missing-en');
+    expect(href.searchParams.get('returnTo')).toBe('/admin/posts.html?q=Rhodes+%26+sun&status=missing-secondary');
     (vm.runInContext('render', ctx) as (updateUrl?: boolean) => void)(true);
     const newHref = new URL(el('newPost').href, 'http://localhost');
     expect(newHref.searchParams.has('tk')).toBe(false);
-    expect(newHref.searchParams.get('returnTo')).toBe('/admin/posts.html?q=Rhodes+%26+sun&status=missing-en');
+    expect(newHref.searchParams.get('returnTo')).toBe('/admin/posts.html?q=Rhodes+%26+sun&status=missing-secondary');
   });
 
   it('removes stale actions on load failure and Retry reaches a clean loaded state', async () => {
@@ -1186,6 +1190,16 @@ describe('comments.html moderation view', () => {
     expect(el('out').textContent).toBe('');
   });
 
+  it.each(['de', 'en'])('keeps %s discussion visible to moderators and explains why it is not public', (locale) => {
+    const { ctx } = loadPage('public/comments.html', {});
+    const row = vm.runInContext('row', ctx) as (comment: unknown) => Element;
+    const rendered = row({ id: 'c1', name: '<reader>', translationKey: 'tk1', locale, createdAt: '2026-10-27T00:00:00Z', status: 'approved', body: 'Retained discussion', publicLocale: false });
+    expect(rendered.children.some((child) => child.textContent.includes('not published for this story'))).toBe(true);
+    expect(rendered.children.some((child) => child.textContent === 'Retained discussion')).toBe(true);
+    expect(rendered.children.find((child) => child.textContent.includes('not published for this story'))!.textContent)
+      .toContain(locale === 'de' ? 'German' : 'English');
+  });
+
   it('traverses beyond 500 approved rows in both directions, preserving drafts and navigation focus', async () => {
     const stored = Array.from({ length: 551 }, (_, i) => ({ ...comment(String(i)), status: 'approved' }));
     const page = commentsPage(async (url) => {
@@ -1382,10 +1396,10 @@ describe('posts.html status views and language states', () => {
     return windowStub.PostsFilter;
   };
   const library = [
-    { ...post, translationKey: 'a', titleDe: 'Altstadt', status: 'draft', country: 'Romania', region: 'europe', hasEnBody: true },
-    { ...post, translationKey: 'b', titleDe: 'Parks', status: 'published', hasUnpublishedChanges: true, country: 'Romania', region: 'europe', hasEnBody: false },
-    { ...post, translationKey: 'c', titleDe: 'Donau', status: 'published', country: 'Hungary', region: 'europe', hasEnBody: true },
-    { ...post, translationKey: 'd', titleDe: 'Burg', status: 'draft', country: 'Hungary', region: 'europe' },
+    { ...post, translationKey: 'a', title: 'Altstadt', status: 'draft', country: 'Romania', region: 'europe', secondaryStatus: 'started' },
+    { ...post, translationKey: 'b', title: 'Parks', status: 'published', hasUnpublishedChanges: true, country: 'Romania', region: 'europe', secondaryStatus: 'empty' },
+    { ...post, translationKey: 'c', title: 'Donau', status: 'published', country: 'Hungary', region: 'europe', secondaryStatus: 'started' },
+    { ...post, translationKey: 'd', title: 'Burg', status: 'draft', country: 'Hungary', region: 'europe' },
   ];
   const views = (el: (id: string) => Element) => el('statusViews').children.map((button) => ({
     status: button.attrs['data-status'],
@@ -1414,7 +1428,7 @@ describe('posts.html status views and language states', () => {
       { status: 'draft', pressed: 'false', count: '1' },
       { status: 'published', pressed: 'true', count: '1' },
       { status: 'unpublished', pressed: 'false', count: '1' },
-      { status: 'missing-en', pressed: 'false', count: '1' },
+      { status: 'missing-secondary', pressed: 'false', count: '1' },
     ]);
 
     el('fSearch').value = 'no such story';
@@ -1442,7 +1456,7 @@ describe('posts.html status views and language states', () => {
     expect(views(el).map((v) => v.count)).toEqual(['2', '1', '1', '1', '1']);
 
     // The select is the same state: changing it moves the pressed view.
-    el('fStatus').value = 'missing-en';
+    el('fStatus').value = 'missing-secondary';
     await el('fStatus').fire('input');
     expect(views(el).map((v) => v.pressed)).toEqual(['false', 'false', 'false', 'false', 'true']);
   });
@@ -1456,11 +1470,11 @@ describe('posts.html status views and language states', () => {
     expect(views(el).map((v) => v.count)).toEqual(['', '', '', '', '']);
   });
 
-  it('reports EN as present, missing or unknown only from hasEnBody, and keeps trip meta', () => {
+  it('reports secondary body state without claiming publish readiness, and keeps trip meta', () => {
     const { ctx, el } = loadPosts({ PostsFilter: realFilter() });
     const rows = [
-      { ...post, translationKey: 'p', country: 'Romania', date: '2024-05-01', hasEnBody: true },
-      { ...post, translationKey: 'm', country: 'Romania', date: '2024-05-01', hasEnBody: false },
+      { ...post, translationKey: 'p', country: 'Romania', date: '2024-05-01', secondaryStatus: 'started' },
+      { ...post, translationKey: 'm', country: 'Romania', date: '2024-05-01', secondaryStatus: 'empty' },
       { ...post, translationKey: 'u', country: 'Romania', date: '2024-05-01' },
     ];
     (vm.runInContext('renderRows', ctx) as (posts: unknown[]) => void)(rows);
@@ -1471,12 +1485,12 @@ describe('posts.html status views and language states', () => {
       return languages.children.map((badge) => ({ code: badge.textContent, className: badge.className, name: badge.attrs['aria-label'] }));
     });
     for (const rowBadges of badges) {
-      expect(rowBadges[0]).toEqual({ code: 'DE', className: 'post-language', name: EDITOR_COPY.postsGermanLocale });
+      expect(rowBadges[0]).toEqual({ code: 'DE', className: 'post-language', name: 'German: primary language' });
     }
     expect(badges.map((rowBadges) => rowBadges[1])).toEqual([
-      { code: 'EN', className: 'post-language', name: EDITOR_COPY.postsEnglishPresent },
-      { code: 'EN', className: 'post-language is-missing', name: EDITOR_COPY.postsEnglishMissing },
-      { code: 'EN', className: 'post-language is-unknown', name: EDITOR_COPY.postsEnglishUnknown },
+      { code: 'EN', className: 'post-language', name: ui.en['editor.chrome.languageBodyStarted'].replace('{language}', 'English') },
+      { code: 'EN', className: 'post-language is-missing', name: ui.en['editor.chrome.languageBodyEmpty'].replace('{language}', 'English') },
+      { code: 'EN', className: 'post-language', name: ui.en['editor.chrome.languageBodyUnknown'].replace('{language}', 'English') },
     ]);
 
     // Country and trip date survive under the title; only a confirmed missing
@@ -1488,6 +1502,19 @@ describe('posts.html status views and language states', () => {
       ['Romania', 'post-trip-sep', '2024-05-01', 'post-trip-sep', 'post-locale-state'],
       ['Romania', 'post-trip-sep', '2024-05-01'],
     ]);
+  });
+
+  it.each([{ locales: ['en'] }, { locales: ['en', 'de'] }])('shows only enabled language indicators in primary order: %j', ({ locales }) => {
+    const { ctx, el } = loadPosts();
+    vm.runInContext(`SiteLanguage.accept({primary:'en',locales:${JSON.stringify(locales)},lockedAt:null,updatedAt:'2026-10-27T00:00:00.000Z'})`, ctx);
+    const renderRows = vm.runInContext('renderRows', ctx) as (rows: unknown[]) => void;
+    renderRows([{ ...post, title: 'English title', secondaryStatus: locales.length === 1 ? 'none' : 'omitted' }]);
+    const cells = el('postsList').children[0]!.children;
+    const badges = cells.find((cell) => cell.className === 'col-languages')!.children[0]!.children;
+    expect(badges.map((badge) => badge.textContent)).toEqual(locales.map((locale) => locale.toUpperCase()));
+    expect(badges[0]!.attrs['aria-label']).toBe('English: primary language');
+    if (locales.length === 2) expect(badges[1]!.attrs['aria-label']).toBe('German: not requested for publication');
+    expect(cells.find((cell) => cell.className === 'col-title')!.children.some((child) => child.textContent === 'English title')).toBe(true);
   });
 });
 
@@ -1666,7 +1693,7 @@ async function apiPage(initial: SettingsResponse, opts: {
 const calls = (requests: ApiRequest[]) => requests.map((r) => r.method + ' ' + r.url);
 
 describe('settings.html tabs', () => {
-  const PANELS = ['panel-ai-models', 'panel-images', 'panel-comments', 'panel-identity', 'panel-site'];
+  const PANELS = ['panel-ai-models', 'panel-images', 'panel-comments', 'panel-identity', 'panel-language', 'panel-site'];
 
   function tabsPage(hash = '', narrow = false) {
     const replaced: string[] = [];
@@ -1708,6 +1735,14 @@ describe('settings.html tabs', () => {
     await t.el('tabbtn-identity').fire('keydown', { key: 'ArrowUp' });
     expect(t.visible()).toEqual(['panel-comments']);
     expect(t.replaced).toEqual(['#comments']);
+  });
+
+  it('opens language settings directly and includes the panel in keyboard navigation', async () => {
+    const t = tabsPage('#language');
+    expect(t.visible()).toEqual(['panel-language']);
+    expect(t.title()).toBe(' · Languages');
+    await t.el('tabbtn-language').fire('keydown', { key: 'ArrowDown' });
+    expect(t.visible()).toEqual(['panel-site']);
   });
 
   it('a vertical index moves with Up/Down, Home/End, and mirrors the tab in the hash and title', async () => {
@@ -3243,5 +3278,18 @@ describe('settings.html Compare quality', () => {
     await el('previewActual').fire('change');
     expect(el('previewResult').classList.contains('is-actual')).toBe(false);
     expect(el('previewOriginal').style.width).toBe('');
+  });
+});
+
+describe('import language summary', () => {
+  it('separates disabled-language skips from published skips, rejection, and failures', () => {
+    const { ctx, el } = loadPage('public/import.html', {});
+    const render = vm.runInContext('renderSummary', ctx) as (summary: unknown) => void;
+    render({ imported: 1, updated: 2, skippedPublished: 3, skippedLocale: 4, rejected: 5, failed: 6, warnings: [] });
+    expect(el('counts').textContent).toContain('Skipped (published): 3');
+    expect(el('counts').textContent).toContain('Skipped (disabled language): 4');
+    expect(el('counts').textContent).toContain('Rejected: 5');
+    expect(el('counts').textContent).toContain('Failed: 6');
+    expect(el('importRejected').textContent).toContain('missing primary-language story');
   });
 });

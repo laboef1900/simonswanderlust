@@ -97,6 +97,41 @@ suite('one PostgreSQL view for the complete build', () => {
     });
   });
 
+  it.each(['de', 'en'] as const)('keeps %s-primary bilingual child configuration and inactive page content on one snapshot', async primary => {
+    const secondary = primary === 'de' ? 'en' : 'de';
+    const root = await mkdtemp(join(tmpdir(), 'language-snapshot-'));
+    await pool.query('UPDATE site_language SET primary_locale=$1, enabled_locales=$2', [primary, [primary, secondary]]);
+    await pool.query("UPDATE pages SET body_markdown='Public before mode change' WHERE key='about'");
+    try {
+      await withBuildSnapshot(pool, { timeoutMs: 5000 }, async snapshot => {
+        expect(snapshot.language).toEqual({ primary, locales: [primary, secondary] });
+        // Capture is the barrier. These committed writes must not alter either
+        // the child route mode or content loaded under the older bilingual mode.
+        await pool.query('UPDATE site_language SET enabled_locales=$1', [[primary]]);
+        await pool.query("UPDATE pages SET body_markdown='PRIVATE INACTIVE TRANSLATION' WHERE key='about' AND locale=$1", [secondary]);
+        await runChildBuild(process.execPath, ['-e',
+          "require('node:fs').writeFileSync('language.json',JSON.stringify({language:JSON.parse(process.env.SITE_LANGUAGE_JSON),snapshot:process.env.SITE_DATABASE_SNAPSHOT}))",
+        ], root, 5000, undefined, { snapshot, signal: snapshot.signal });
+        expect(JSON.parse(await readFile(join(root, 'language.json'), 'utf8'))).toEqual({
+          language: { primary, locales: [primary, secondary] }, snapshot: snapshot.databaseSnapshot,
+        });
+        const captured = await withLoaderSnapshot(pool, async client => ({
+          language: (await client.query('SELECT primary_locale, enabled_locales FROM site_language')).rows,
+          pages: (await client.query("SELECT locale, body_markdown FROM pages WHERE key='about'")).rows,
+        }), snapshot.databaseSnapshot);
+        expect(captured.language).toEqual([{ primary_locale: primary, enabled_locales: [primary, secondary] }]);
+        expect(captured.pages).toHaveLength(2);
+        expect(captured.pages.every(row => row.body_markdown === 'Public before mode change')).toBe(true);
+      });
+      expect((await pool.query('SELECT enabled_locales FROM site_language')).rows).toEqual([{ enabled_locales: [primary] }]);
+      expect((await pool.query("SELECT body_markdown FROM pages WHERE key='about' AND locale=$1", [secondary])).rows)
+        .toEqual([{ body_markdown: 'PRIVATE INACTIVE TRANSLATION' }]);
+    } finally {
+      await pool.query("UPDATE site_language SET primary_locale='de', enabled_locales=ARRAY['de','en']");
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('writes all captured normalized assets and paths, not newer replacement bytes', async () => {
     const store = await pgSiteIdentityStore(pool);
     const normalize = async (background: string) => {

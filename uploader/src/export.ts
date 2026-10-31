@@ -4,6 +4,7 @@ import { galleryFencesToMdx, rewriteOutsideGalleries, unescapeAltText } from './
 import { markdownImages } from './wp-content.js';
 import { checkSlug, type HeroImage, type Locale, type PostLocale, type PostPair } from './posts.js';
 import { validatePublicTrack, type PublicTrack } from '../public/gpx-public-track.js';
+import type { PublishedTrackProjection } from './published-track.js';
 import { analyzeGallerySource } from '../../site/src/lib/gallery-source.js';
 import { galleryDiagnostics } from '../public/gallery-photo-line.js';
 
@@ -92,28 +93,28 @@ export async function renderPostToMdx(pair: PostPair, locale: Locale, track?: Pu
   return lines.join('\n');
 }
 
-export async function exportPost(pair: PostPair, baseDir: string, track?: PublicTrack): Promise<string[]> {
-  // Validate the entire pair before mkdir/write: a legacy EN slug must not
-  // leave a fresh DE backup behind, nor overwrite an existing one.
-  for (const locale of ['de', 'en'] as const) {
-    if (pair[locale].slug !== '') checkSlug(pair[locale].slug, locale);
+export async function exportPost(pair: PostPair, baseDir: string, projection: PublishedTrackProjection): Promise<string[]> {
+  // Resolve and validate every artifact before the first filesystem write. A
+  // legacy slug must not leave a partial backup behind, a later source-map
+  // failure must not export half a pair, and a newly requested translation must
+  // not inherit the primary's retained track.
+  const track = projection.track === undefined ? undefined : validatePublicTrack(projection.track);
+  const locales = projection.language.locales.filter(locale => !pair[locale].omitted && pair[locale].slug !== '');
+  for (const locale of locales) checkSlug(pair[locale].slug, locale);
+  const artifacts: { locale: Locale; slug: string; content: string }[] = [];
+  for (const locale of locales) {
+    artifacts.push({
+      locale,
+      slug: pair[locale].slug,
+      content: await renderPostToMdx(pair, locale, projection.locales.includes(locale) ? track : undefined),
+    });
   }
   const out: string[] = [];
-  // Analyze both locales before writing either file: a later source-map failure
-  // must not leave one half of a translation pair exported.
-  const rendered: Partial<Record<Locale, string>> = {};
-  for (const locale of ['de', 'en'] as const) {
-    if (pair[locale].slug !== '') rendered[locale] = await renderPostToMdx(pair, locale, track);
-  }
-  for (const locale of ['de', 'en'] as Locale[]) {
-    const slug = pair[locale].slug;
-    // An unset slug (DE-first draft without an EN title, issue #119) has no
-    // filename — writing `trips/en/.mdx` would just be a hidden file.
-    if (slug === '') continue;
+  for (const { locale, slug, content } of artifacts) {
     const dir = join(baseDir, 'trips', locale);
     await mkdir(dir, { recursive: true });
     const path = join(dir, `${slug}.mdx`);
-    await writeFile(path, rendered[locale]!, 'utf8');
+    await writeFile(path, content, 'utf8');
     out.push(path);
   }
   return out;
@@ -122,12 +123,12 @@ export async function exportPost(pair: PostPair, baseDir: string, track?: Public
 export async function exportAll(
   pairs: PostPair[],
   baseDir: string,
-  readTrack: (translationKey: string) => Promise<PublicTrack | undefined>,
+  readTrack: (translationKey: string) => Promise<PublishedTrackProjection>,
 ): Promise<string[]> {
   const out: string[] = [];
   for (const pair of pairs) {
-    // Snapshot retrieval validates BOTH locale artifacts before this pair writes
-    // anything. Working-copy route edits/detachment must never reach this path.
+    // The store validates the complete retained snapshot set, independently of
+    // working-copy route edits, detachment, or newly requested translations.
     const track = await readTrack(pair.translationKey);
     out.push(...(await exportPost(pair, baseDir, track)));
   }

@@ -7,7 +7,7 @@ import { memoryPostStore } from '../src/posts.js';
 const url = process.env.TEST_DATABASE_URL;
 const maybe = url ? describe : describe.skip;
 
-const OK: ImportSummary = { imported: 2, updated: 1, skippedPublished: 0, rejected: 0, failed: 0, images: { total: 5, hosted: 4, failed: 1 }, warnings: ['image x: blocked address'] };
+const OK: ImportSummary = { imported: 2, updated: 1, skippedPublished: 0, skippedLocale: 0, rejected: 0, failed: 0, images: { total: 5, hosted: 4, failed: 1 }, warnings: ['image x: blocked address'] };
 const job = (id: string, status: ImportJob['status'], startedAt: string): ImportJob => ({
   id, status, startedBy: 'simon', startedAt, updatedAt: startedAt, finishedAt: null,
   progress: { groups: { total: 3, done: 1 }, images: { planned: 5, hosted: 2, failed: 0 } }, summary: null, error: null,

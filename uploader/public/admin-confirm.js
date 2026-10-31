@@ -5,16 +5,19 @@
 window.AdminConfirm = (function () {
   function liveUrls(slugs) {
     const origin = (typeof location !== 'undefined' && location.origin) ? location.origin : '';
-    const de = slugs && slugs.de ? origin + '/' + slugs.de + '/' : '';
-    const en = slugs && slugs.en ? origin + '/en/' + slugs.en + '/' : '';
-    return { de, en };
+    const lang = SiteLanguage.config();
+    return Object.fromEntries(['de', 'en'].map((locale) => {
+      const path = SiteLanguage.publicPath(lang, locale, 'story', slugs && slugs[locale]);
+      return [locale, path ? origin + path : ''];
+    }));
   }
 
   function urlsPlain(slugs) {
     const u = liveUrls(slugs);
     const lines = [];
-    if (u.de) lines.push('DE  ' + u.de);
-    if (u.en) lines.push('EN  ' + u.en);
+    for (const locale of SiteLanguage.config().locales) {
+      if (u[locale]) lines.push(locale.toUpperCase() + '  ' + u[locale]);
+    }
     return lines.join('\n');
   }
 

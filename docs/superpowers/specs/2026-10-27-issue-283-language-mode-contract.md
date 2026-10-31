@@ -308,6 +308,14 @@ signed):
   since-published row is refused by the freeze rule (§7.3), never applied around it.
   `RevisionSummary.titleDe` becomes the primary-locale title (clean cutover of the field name in
   #284).
+  Draft-slug-change consent considers enabled locales only: an older revision's disabled
+  locale payload cannot demand confirmation for a value the save will ignore. Retained disabled
+  slug/body values stay unchanged; enabled draft renames still require consent and published
+  locale slugs stay locked.
+  The route passes the language token used for this consent check into `upsertDraft`.
+  Both stores recheck it under the language lock before writing. If activation enables the
+  submitted secondary between route precheck and transaction, Save returns 409 without changing
+  either locale; it cannot apply that newly enabled slug without the required confirmation.
 - **Published snapshot (#20):** unchanged per row. Omitted rows never get one (CHECK).
   A never-published, non-omitted secondary may also have no snapshot: it is a requested draft,
   not committed publication. A draft save leaves existing published snapshots/status unchanged.
@@ -731,6 +739,10 @@ CREATE TABLE IF NOT EXISTS site_language (
   the language row before pair locks too; no path may invert that order or validate against a
   cached mode. #287 page publish, published PUT and page mutations affecting activation preflight
   join the same language-first order so preflight cannot race a page save.
+  Publication/About image-readiness and activation-validation callbacks reuse that transaction's
+  checked-out client, including title-image existence checks. They never acquire a second pool
+  connection while holding the language row: other writers can consume the remaining pool
+  connections waiting for that row, otherwise deadlocking the validating writer.
 - No transaction above acquires or waits for the build/encode work lock. Release DB locks before
   calling the builder, which acquires the work lock **once**, opens the shared exported
   read snapshot below, and builds. The current work lock protects build/encode resource use;
@@ -985,3 +997,56 @@ F2–F6 remain correctness clarifications of the approved invariants, not new pr
   simonswanderlust.com URL or slug may be renamed.
 - **Review:** first EN-primary production install or 2027-10-27, whichever comes first.
 - Release, deployment and production/owner-content changes remain outside this authorization.
+
+## 21. #284 implementation qualification (2026-10-29)
+
+The isolated current-source qualification exercised all four language modes through the real
+authoring, publication and recovery paths. Retained evidence separates the original baseline
+(361 HTTP records / 48 screenshots), corrected phase (481 / 54), and final phase (210 / 12);
+the earlier evidence is not relabelled as proof of later fixes.
+
+- Readiness validation reuses the locked transaction client. Concurrent activation cannot bypass
+  draft-slug consent: both stores recheck the route's captured language token under that lock.
+- Mirrored first About preparation preserves an explicit `updatedAt: null`; actual browser saves
+  returned 200, preserved active content and did not activate the candidate. Stale replay returned
+  409. Ordinary boot seeds About rows, so the null boundary was exercised in backed-up synthetic
+  database clones with only their cloned default About rows removed—not called a fresh-boot state.
+- The final phase exercised GPX publication/export/archive/restore/restart in all four modes,
+  actual current CLI restores of dump formats 1–11, patched older-v10 reader rejection, populated
+  pre-language migration and public-comment/moderation locale workflows. Historical reader proof
+  is limited to patched v10; restoring older formats with the current CLI is not an older-binary test.
+- Uploader TypeScript and its complete PostgreSQL-enabled suite, site tests, Astro check and an
+  actual build passed after the null-token correction. Eight public desktop/mobile axe audits
+  reported zero violations; retained shared-shell best-practice and incomplete-audit observations
+  mean this is not a blanket WCAG claim.
+
+Reports and synthetic fixtures remain in the gitignored execution ledger. Final PR review/CI and
+downstream combined-source qualification are separate gates. Public routing belongs to #285,
+canonical origins to #276, and the page registry/navigation to #288/#289; this record does not
+claim those dependent stacks are merge-ready or authorize production changes.
+
+## 22. #284 current-dev integration (2026-11-01)
+
+Merged onto `dev` 65b110d (dump v11 → this change's v12). Decisions taken while
+integrating, each pinned by an updated or retained test:
+
+- **Namespace rollout (D2.6).** The read-only reverse-collision query ran against the
+  owner-confirmed content target on 2026-10-31: no story (working or published
+  snapshot) or page holds any reserved or newly proposed segment in DE-primary or
+  EN-primary mode. `dev` meanwhile gained the top-level `POST /gallery/analyze` route
+  (#354); the route-equality test therefore reserves `gallery` in `APP_SEGMENTS`, and the
+  same read-only query found no holder.
+- **Untranslated WXR items (#387).** In bilingual mode an item with a language but no
+  translation group stays an individually reported `untranslated` rejection; only an
+  item with no language at all is `no language`. Single-language mode still keys untagged
+  items by WordPress id. A group holding the primary imports primary-only.
+- **Publication body gate (#375).** The rendered-body analysis runs once per requested
+  locale on the reviewed pair before any mutation (H1 → 400, foreign images → 409). Under
+  the language lock only media readiness is re-read; the publish tokens prove the locked
+  pair is the analyzed one.
+- **Page saves (#344).** The Postgres store takes the shared language row first, then the
+  page's advisory lock, then reads; the memory store serializes saves on the language
+  queue. Saves of a language-limited payload return only the sent locales' gallery
+  warnings and leave the other locale's advisory state unchanged.
+- **Drafts.** Gallery normalization runs inside the post-pair lock, because a disabled
+  locale keeps the stored row read under that lock; its slug is not re-validated.

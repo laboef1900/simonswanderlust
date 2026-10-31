@@ -43,6 +43,7 @@ type Review = (baseUrl: string, model: string, prompt: string, story: ReviewStor
 type Fetch = (url: string, options?: RequestInit) => Promise<Response>;
 
 interface EditorOptions {
+  language?: { primary: 'de' | 'en'; locales: ('de' | 'en')[] };
   fetch?: Fetch;
   galleryFetch?: Fetch;
   review?: Review;
@@ -195,7 +196,7 @@ function loadEditor(options: EditorOptions = {}) {
   const ctx: Record<string, unknown> = {
     ...galleryCodecBindings,
     document: dom.document,
-    location: { search: options.search ?? '', pathname: '/admin/editor.html', href: 'http://localhost/admin/editor.html' + (options.search ?? ''), origin: 'http://localhost' },
+    location: { search: options.search ?? '', pathname: '/admin/editor.html', href: 'http://localhost/admin/editor.html' + (options.search ?? ''), origin: 'http://localhost', host: 'localhost' },
     history: { replaceState() {} },
     sessionStorage: storage(),
     localStorage: local,
@@ -282,7 +283,10 @@ function loadEditor(options: EditorOptions = {}) {
     AltSuggest: { wire() {}, suggestHosted: options.caption ?? (() => Promise.reject(new Error('no model in test'))) },
   };
   ctx.window = ctx;
+  ctx.languageFixture = { primary: 'de', locales: ['de', 'en'], ...options.language, lockedAt: null, updatedAt: '2026-10-27T00:00:00.000Z' };
   vm.createContext(ctx);
+  vm.runInContext(readFileSync('public/language.js', 'utf8'), ctx, { filename: 'language.js' });
+  vm.runInContext('SiteLanguage.accept(languageFixture)', ctx);
   vm.runInContext(readFileSync('public/draft-guard.js', 'utf8'), ctx, { filename: 'draft-guard.js' });
   const safety = ctx.DraftGuard as {
     createDraftGuard(options: { storageKey: string; collect: () => unknown; onChange?: (dirty: boolean) => void }): {
@@ -306,6 +310,8 @@ function loadEditor(options: EditorOptions = {}) {
   }
   if (options.review) (ctx.LLM as { reviewStory: Review }).reviewStory = options.review;
   vm.runInContext(script, ctx);
+  // Unit cases bypass authentication deliberately; give them the loaded configuration.
+  if (options.isAdmin === undefined) vm.runInContext('language = SiteLanguage.config(); loadBlocked = false', ctx);
   const api = vm.runInContext('({ populateForm, buildPayload, loadPost, doSaveDraft, renderAltAudit })', ctx) as EditorApi;
   return {
     api, el, editors, created: dom.created, document: dom.document, requests, galleryRequests, prompts, local, galleryPickers,
@@ -333,6 +339,71 @@ function fullPair(): PostPair {
   };
 }
 
+describe('editor language modes and translation coverage', () => {
+  it.each(['de', 'en'] as const)('opens only the enabled %s locale and ignores disabled-locale gaps', async (primary) => {
+    const secondary = primary === 'de' ? 'en' : 'de';
+    const pair = fullPair();
+    pair[secondary] = { ...pair[secondary], title: '', slug: '', bodyMarkdown: '', excerpt: '', country: '', omitted: true };
+    const h = loadEditor({
+      language: { primary, locales: [primary] }, isAdmin: true, search: '?tk=tk1',
+      fetch: async (url) => response(url === '/posts/tk1' ? pair : url.endsWith('/revisions') ? [] : { images: [] }),
+    });
+    await settle();
+    await settle();
+    expect(h.el('tabbtn-' + secondary).hidden).toBe(true);
+    expect(h.el('tabbtn-' + primary).parentElement!.hidden).toBe(true);
+    expect(h.el('tab-' + primary).hidden).toBe(false);
+    expect(h.el('tab-' + secondary).hidden).toBe(true);
+    expect(h.el(primary + 'Included').parentElement!.parentElement!.hidden).toBe(true);
+    expect(h.el('publishBtn').disabled).toBe(false);
+    expect(h.api.buildPayload()[secondary].omitted).toBe(true);
+    expect(h.el(primary === 'de' ? 'slugBaseDe' : 'slugBaseEn').textContent).toBe('localhost/');
+  });
+
+  it.each(['de', 'en'] as const)('lets %s-primary authors omit and retain an unfinished secondary', async (primary) => {
+    const secondary = primary === 'de' ? 'en' : 'de';
+    const pair = fullPair();
+    pair[secondary].excerpt = '';
+    const h = loadEditor({
+      language: { primary, locales: [primary, secondary] }, isAdmin: true, search: '?tk=tk1',
+      fetch: async (url) => response(url === '/posts/tk1' ? pair : url.endsWith('/revisions') ? [] : { images: [] }),
+    });
+    await settle();
+    await settle();
+    expect(h.el('publishBtn').disabled).toBe(true);
+    h.el('tabbtn-' + secondary).click();
+    const include = h.el(secondary + 'Included');
+    include.checked = false;
+    include.fire('change');
+    expect(h.el('publishBtn').disabled).toBe(false);
+    expect(h.api.buildPayload()[secondary]).toMatchObject({ omitted: true, bodyMarkdown: pair[secondary].bodyMarkdown });
+    include.checked = true;
+    include.fire('change');
+    expect(h.el('publishBtn').disabled).toBe(true);
+  });
+
+  it('locks only the locale with publication history, even after whole-story unpublish', async () => {
+    const pair = fullPair();
+    pair.status = 'draft';
+    pair.en.omitted = true;
+    pair.de.publishedAt = new Date('2026-10-25T00:00:00Z');
+    const h = loadEditor({ isAdmin: true, search: '?tk=tk1',
+      fetch: async (url) => response(url === '/posts/tk1' ? pair : url.endsWith('/revisions') ? [] : { images: [] }),
+    });
+    await settle();
+    await settle();
+    expect(h.el('slugFieldDe').disabled).toBe(true);
+    expect(h.el('slugFieldEn').disabled).toBe(false);
+    expect(h.el('enIncluded').disabled).toBe(false);
+    pair.en.omitted = false;
+    pair.en.publishedAt = new Date('2026-10-26T00:00:00Z');
+    await h.api.loadPost('tk1');
+    expect(h.el('enIncluded').disabled).toBe(true);
+    expect(h.el('enCoverageHelp').textContent).toContain('cannot be omitted');
+    expect(h.el('slugFieldEn').disabled).toBe(true);
+  });
+});
+
 // What DraftGuard actually stashes: buildPayload() deletes every empty/undefined
 // key, so a restore payload for a blank form carries no shared fields at all.
 type StashPayload = Omit<PostPair, 'shared' | 'de' | 'en'> & {
@@ -358,8 +429,12 @@ describe('serialized writes in the real editor', () => {
           ));
         }
         if (url === '/posts/tk1/publish') {
-          const tokens = JSON.parse(String(options!.body)) as { baseUpdatedAt: string; baseRouteVersion: string | null };
-          return response({ ...await posts.publish('tk1', { ...tokens, baseUpdatedAt: new Date(tokens.baseUpdatedAt) }), build: { ok: true } });
+          const tokens = JSON.parse(String(options!.body)) as { baseUpdatedAt: string; baseRouteVersion: string | null; baseLanguageUpdatedAt: string };
+          // The harness serves one fixed SiteLanguage revision; it stands for the
+          // store's current one here. Language-token refusal is pinned in posts/server tests.
+          expect(tokens.baseLanguageUpdatedAt).toBe('2026-10-27T00:00:00.000Z');
+          const baseLanguageUpdatedAt = (await posts.language.get()).updatedAt;
+          return response({ ...await posts.publish('tk1', { ...tokens, baseUpdatedAt: new Date(tokens.baseUpdatedAt), baseLanguageUpdatedAt }), build: { ok: true } });
         }
         if (url === '/posts/tk1/unpublish') return response(await posts.unpublish('tk1'));
         return response(url === '/posts/tk1' ? await posts.get('tk1') : []);
@@ -631,7 +706,9 @@ describe('unpublish concurrency token in the real editor', () => {
   });
 
   it('keeps the loaded token and published state when unpublish fails', async () => {
-    const post = { ...fullPair(), status: 'published', updatedAt: '2026-10-25T10:00:00.000Z' };
+    const published = { publishedAt: '2026-10-24T10:00:00.000Z' };
+    const post = { ...fullPair(), status: 'published', updatedAt: '2026-10-25T10:00:00.000Z',
+      de: { ...fullPair().de, ...published }, en: { ...fullPair().en, ...published } };
     const h = loadEditor({ confirm: true, fetch: async (url) => {
       if (url === '/posts/tk1/unpublish') return response({
         error: 'storage_read_only', updatedAt: '2026-10-25T11:00:00.000Z',
@@ -736,7 +813,7 @@ describe('explicit editor publish tokens', () => {
     for (let i = 0; i < 8; i++) await settle();
     const publish = h.requests.find(({ url }) => url.endsWith('/publish'));
     expect(publish).toBeDefined();
-    expect(JSON.parse(String(publish!.options.body))).toEqual({ baseUpdatedAt: saved, baseRouteVersion: routeVersion });
+    expect(JSON.parse(String(publish!.options.body))).toEqual({ baseUpdatedAt: saved, baseRouteVersion: routeVersion, baseLanguageUpdatedAt: '2026-10-27T00:00:00.000Z' });
     const save = h.requests.find(({ url, options }) => url === '/posts/tk1' && options.method === 'PUT');
     expect(h.requests.indexOf(save!)).toBeLessThan(h.requests.indexOf(publish!));
     expect(reviewed).toBe(1);
@@ -869,7 +946,7 @@ describe('editor.html inline script against its own markup', () => {
     expect(el('inspectorContent').hasAttribute('inert')).toBe(true);
 
     el('localeChip').querySelectorAll('button')
-      .find((button) => button.textContent.startsWith('EN missing country'))!.click();
+      .find((button) => button.textContent.startsWith('English missing country'))!.click();
     expect(document.body!.classList.contains('editor-inspector-collapsed')).toBe(false);
     expect(el('inspectorContent').hasAttribute('inert')).toBe(false);
     expect(el('inspectorClose').getAttribute('aria-expanded')).toBe('true');
@@ -940,7 +1017,7 @@ describe('editor.html inline script against its own markup', () => {
     pair.en.country = '';
     api.populateForm(pair);
     const jump = el('mobileLocaleChip').querySelectorAll('button')
-      .find((button) => button.textContent.startsWith('EN missing country'));
+      .find((button) => button.textContent.startsWith('English missing country'));
     expect(jump).toBeTruthy();
     el('editorActionsMenu').open = true;
     jump!.click();
@@ -956,7 +1033,7 @@ describe('editor.html inline script against its own markup', () => {
     pair.en.heroImage = { src: '', width: 0, height: 0, alt: '' };
     api.populateForm(pair);
     const heroJump = el('mobileLocaleChip').querySelectorAll('button')
-      .find((button) => button.textContent.includes('EN missing hero'));
+      .find((button) => button.textContent.includes('English missing hero'));
     el('editorActionsMenu').open = true;
     heroJump!.click();
     expect(el('editorActionsMenu').open).toBe(false);
@@ -1672,7 +1749,9 @@ describe('Story review in the real editor', () => {
     const pair = fullPair();
     pair.en.excerpt = '';
     h.api.populateForm(pair);
-    const englishGap = h.el('localeChip').querySelectorAll('button').find((button) => button.textContent.startsWith('EN '))!;
+    // This pair has exactly one missing field. Exercise its shortcut and the
+    // resulting locale/focus, without coupling the consumer to its label.
+    const englishGap = required(h.el('localeChip'), 'button');
     englishGap.click();
     expect(h.el('tab-en').hidden).toBe(false);
     expect(h.document.activeElement).toBe(h.el('enExcerpt'));
@@ -2012,7 +2091,7 @@ describe('inline gallery editing', () => {
     expect(edited).toContain('https://img/replacement');
     expect(edited).not.toContain('https://img/photo');
     expect(h.api.buildPayload().de.images).toEqual(pair.de.images);
-    expect(h.api.buildPayload().en).toEqual(pair.en);
+    expect(h.api.buildPayload().en).toEqual({ ...pair.en, omitted: false });
     const logical = (await analyzeGallerySource(edited)).blocks.find((entry) => entry.isGallery)!.content;
     expect(logical).toContain('alt="A &amp; &lt;view&gt;"');
     expect(editor.undoHistory).toEqual([body]);
@@ -2063,7 +2142,7 @@ describe('inline gallery editing', () => {
     fields[0]!.dispatchEvent(new EditorEvent('input', { bubbles: true }));
     await settleAll();
     expect(fields[1]!.value).toBe(fields[0]!.value);
-    expect(h.api.buildPayload().en).toEqual(pair.en);
+    expect(h.api.buildPayload().en).toEqual({ ...pair.en, omitted: false });
     expect((await normalizeGalleryFences(h.api.buildPayload().de.bodyMarkdown, pair.de.images)).images['https://img/photo']?.alt)
       .toBe('A \"quote\" | and\nnewline');
     fields[0]!.value = '';
@@ -2225,7 +2304,7 @@ describe('inline gallery editing', () => {
     expect(current.de.bodyMarkdown.startsWith('New introduction\n\nIntro')).toBe(true);
     expect((await normalizeGalleryFences(current.de.bodyMarkdown, current.de.images)).images['https://img/photo']?.alt)
       .toBe('Retained description');
-    expect(current.en).toEqual(pair.en);
+    expect(current.en).toEqual({ ...pair.en, omitted: false });
   });
 
   it('does not carry pending descriptions or an awaiting Save into a deliberately loaded post', async () => {
@@ -2257,7 +2336,7 @@ describe('inline gallery editing', () => {
     await settleAll();
     expect(await saving).toBe(false);
     expect(h.requests.some((request) => request.options.method === 'POST')).toBe(false);
-    expect(h.api.buildPayload().de).toEqual(next.de);
+    expect(h.api.buildPayload().de).toEqual({ ...next.de, omitted: false });
     expect(h.editors[0]!.undoHistory).toEqual([]);
   });
 
@@ -3314,7 +3393,10 @@ describe('restoring a local draft keeps the version it was edited against (#345)
   });
 
   it('keeps the live slugs of a post published since the stash, not stash slugs the author cannot edit', async () => {
-    const server = versionedServer({ ...serverV2(), status: 'published' });
+    const live = serverV2();
+    // Published locales carry their publication time (#284 locks slugs per locale).
+    const server = versionedServer({ ...live, status: 'published',
+      de: { ...live.de, publishedAt: new Date(V1) }, en: { ...live.en, publishedAt: new Date(V1) } });
     const stash = stashOf(V1);
     stash.de.slug = 'alter-entwurf';
     stash.en.slug = 'old-draft';

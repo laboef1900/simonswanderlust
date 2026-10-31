@@ -169,7 +169,7 @@
 
               <label for="slugFieldDe">DE permalink</label>
               <div class="slug-preview">
-                <span class="slug-base">simonswanderlust.com/</span>
+                <span class="slug-base" id="slugBaseDe"></span>
                 <input id="slugFieldDe" type="text" placeholder="derived-from-de-title" />
               </div>
 
@@ -247,7 +247,7 @@
 
               <label for="slugFieldEn">EN permalink</label>
               <div class="slug-preview">
-                <span class="slug-base">simonswanderlust.com/en/</span>
+                <span class="slug-base" id="slugBaseEn"></span>
                 <input id="slugFieldEn" type="text" placeholder="derived-from-en-title" />
               </div>
 
@@ -497,6 +497,7 @@
     <script src="/admin/editor-gpx.js"></script>
     <script src="/admin/editor-image-copy.js"></script>
     <script src="/admin/auth.js"></script>
+    <script src="/admin/language.js"></script>
     <script src="/admin/admin-confirm.js"></script>
     <script src="/admin/draft-guard.js"></script>
     <script src="/admin/vendor/easymde.min.js"></script>
@@ -530,11 +531,11 @@
 
       // ---- state ----
       let currentTk = null;       // translationKey, null = new post
-      let isPublished = false;    // slug is locked once published
+      let isPublished = false;    // current pair status; row history locks slugs
       // updatedAt of the pair as loaded/last saved in THIS tab. Echoed back on
       // every save so the server can 409 when another tab/user saved meanwhile.
       let loadedUpdatedAt = null;
-      let loadBlocked = false;
+      let loadBlocked = true;
       let recoveryDraft = null; // immutable pre-reload form while population is unsafe
       // A restored stash that records no usable base version (#345): its content
       // cannot be checked against what is stored, so it is never saved.
@@ -563,6 +564,21 @@
       const deImages = {};        // src → {width, height}
       const enImages = {};
       const galleryEditors = {};
+      let language = null;
+      const omitted = { de: false, en: false };
+      const publishedLocales = { de: false, en: false };
+      function requestedLocales() {
+        return language ? language.locales.filter((locale) => !omitted[locale]) : [];
+      }
+      function syncCoverage() {
+        for (const locale of ['de', 'en']) {
+          const control = $(locale + 'Coverage');
+          control.hidden = !language || language.locales.length < 2 || locale === language.primary;
+          $(locale + 'Included').checked = !omitted[locale];
+          $(locale + 'Included').disabled = publishedLocales[locale];
+          $(locale + 'CoverageHelp').textContent = SiteLanguage.text(publishedLocales[locale] ? 'CoverageLocked' : 'CoverageHelp');
+        }
+      }
 
       // ---- slugify ----
       const MAX_SLUG_BYTES = 251; // ASCII only; parity tested against posts.ts.
@@ -741,6 +757,30 @@
         onChange: activateLocale,
       });
       syncInspectorLocale(activeTab);
+      for (const locale of ['de', 'en']) {
+        const control = document.createElement('div');
+        control.id = locale + 'Coverage';
+        control.className = 'editor-card';
+        control.hidden = true;
+        const label = document.createElement('label');
+        label.className = 'check-field';
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.id = locale + 'Included';
+        input.checked = true;
+        input.setAttribute('aria-describedby', locale + 'CoverageHelp');
+        label.append(input, document.createTextNode(SiteLanguage.text('CoverageLabel', { language: SiteLanguage.names[locale] })));
+        const help = document.createElement('p');
+        help.id = locale + 'CoverageHelp';
+        help.className = 'muted';
+        control.append(label, help);
+        $('tab-' + locale).prepend(control);
+        input.addEventListener('change', () => {
+          omitted[locale] = !input.checked;
+          guard.markDirty();
+          updateLocaleChip();
+        });
+      }
       const galleryMetadataWarnings = GalleryMetadataWarnings.create({
         root: $('galleryMetadataWarnings'),
         editors: { de: deMDE.codemirror, en: enMDE.codemirror },
@@ -765,7 +805,7 @@
       const slugFieldFor = (locale) => $(locale === 'de' ? 'slugFieldDe' : 'slugFieldEn');
       for (const locale of ['de', 'en']) {
         $(locale + 'Title').addEventListener('input', () => {
-          if (isPublished || !slugAuto[locale]) return;
+          if (publishedLocales[locale] || !slugAuto[locale]) return;
           slugFieldFor(locale).value = slugify($(locale + 'Title').value);
         });
         slugFieldFor(locale).addEventListener('input', () => {
@@ -1523,6 +1563,7 @@
           const mde = loc === 'de' ? deMDE : enMDE;
           return {
             locale: loc,
+            omitted: omitted[loc],
             slug: $(slugFieldId).value.trim(),
             title: singleLineTitle($(loc + 'Title').value).trim(),
             excerpt: $(loc + 'Excerpt').value.trim(),
@@ -1608,7 +1649,8 @@
         return missing;
       }
       function allPublishGaps() {
-        return { de: localeGaps('de'), en: localeGaps('en'), trip: tripGaps() };
+        const requested = requestedLocales();
+        return { de: requested.includes('de') ? localeGaps('de') : [], en: requested.includes('en') ? localeGaps('en') : [], trip: tripGaps() };
       }
       function gapCount(g) { return g.de.length + g.en.length + g.trip.length; }
       function jumpToGap(kind, field) {
@@ -1649,10 +1691,10 @@
       }
       function renderLocaleChip(chip, g) {
         chip.replaceChildren();
-        chip.appendChild(chipPart('DE', 'de', g.de));
-        chip.appendChild(document.createTextNode(' · '));
-        chip.appendChild(chipPart('EN', 'en', g.en));
-        chip.appendChild(document.createTextNode(' · '));
+        for (const locale of requestedLocales()) {
+          chip.appendChild(chipPart(SiteLanguage.names[locale], locale, g[locale]));
+          chip.appendChild(document.createTextNode(' · '));
+        }
         chip.appendChild(chipPart('Trip', 'trip', g.trip));
         chip.classList.toggle('is-incomplete', gapCount(g) > 0);
       }
@@ -1667,7 +1709,7 @@
         if (details && g.trip.length) details.open = true;
         const pub = $('publishBtn');
         if (pub) {
-          const blocked = gapCount(g) > 0;
+          const blocked = !language || loadBlocked || gapCount(g) > 0;
           pub.disabled = blocked;
           pub.title = blocked ? 'Fill the missing fields before publishing.' : '';
         }
@@ -1682,9 +1724,7 @@
         el.appendChild(document.createTextNode(
           'Published' + (release ? ' (release ' + release + ')' : '') + '. Live: '
         ));
-        const links = [];
-        if (urls.de) links.push({ href: urls.de, label: 'DE' });
-        if (urls.en) links.push({ href: urls.en, label: 'EN' });
+        const links = language.locales.filter((locale) => urls[locale]).map((locale) => ({ href: urls[locale], label: locale.toUpperCase() }));
         if (!links.length) {
           el.appendChild(document.createTextNode('open the site from View site.'));
           return;
@@ -1757,7 +1797,7 @@
         const box = $('altAudit');
         const summary = $('altAuditSummary');
         const list = $('altAuditList');
-        const images = (audit && audit.images) || [];
+        const images = ((audit && audit.images) || []).filter((image) => requestedLocales().includes(image.locale));
         const auditFocused = box.contains(document.activeElement);
         const focused = list.contains(document.activeElement) ? document.activeElement : null;
         const focusKey = focused && focused.dataset.auditKey;
@@ -1872,9 +1912,11 @@
         // A slug change on an existing draft is deliberate or it does not happen
         // (#122): name the locale and both slugs, and only send the consent flag
         // the server requires (409 slug_change_unconfirmed otherwise) after OK.
-        const renamed = ['de', 'en'].filter((l) => currentTk && !isPublished && loadedSlugs[l] && payload[l].slug !== loadedSlugs[l]);
+        const renamed = language.locales.filter((l) => currentTk && !publishedLocales[l] && loadedSlugs[l] && payload[l].slug !== loadedSlugs[l]);
         if (renamed.length) {
-          const lines = renamed.map((l) => '  ' + l.toUpperCase() + ': /' + (l === 'en' ? 'en/' : '') + loadedSlugs[l] + '/  →  /' + (l === 'en' ? 'en/' : '') + payload[l].slug + '/');
+          const lines = renamed.map((l) => SiteLanguage.names[l] + ': '
+            + SiteLanguage.publicPath(language, l, 'story', loadedSlugs[l]) + ' → '
+            + SiteLanguage.publicPath(language, l, 'story', payload[l].slug));
           const ok = await AdminConfirm.ask({
             title: 'Change this post’s URL?',
             body: 'This save changes the post\'s URL:\n\n' + lines.join('\n') + '\n\nIf the old slug is a live WordPress URL, links and search rankings break.',
@@ -1916,7 +1958,7 @@
             if (reload) await loadPost(currentTk);
             return false;
           }
-          showErr((body.error || ('Save failed: ' + res.status)));
+          showErr(SiteLanguage.error(body) || ('Save failed: ' + res.status));
           return false;
         }
         if (!currentTk && body.translationKey) {
@@ -1967,18 +2009,17 @@
           updateLocaleChip();
           return;
         }
-        const titleDe = $('deTitle').value.trim() || '(untitled)';
-        const titleEn = $('enTitle').value.trim() || '(untitled)';
-        const slugs = { de: $('slugFieldDe').value.trim(), en: $('slugFieldEn').value.trim() };
+        const titles = requestedLocales().map((locale) => $(locale + 'Title').value.trim() || '(untitled)');
+        const slugs = Object.fromEntries(requestedLocales().map((locale) => [locale, slugFieldFor(locale).value.trim()]));
         const urlBlock = AdminConfirm.urlsPlain(slugs);
         const intent = await captureSaveIntent();
         if (!intent) return;
-        await enqueueWrite(() => publishNow(intent, reviewedRouteVersion, slugs, titleDe, titleEn, urlBlock));
+        await enqueueWrite(() => publishNow(intent, reviewedRouteVersion, slugs, titles, urlBlock));
       });
-      async function publishNow(intent, reviewedRouteVersion, slugs, titleDe, titleEn, urlBlock) {
+      async function publishNow(intent, reviewedRouteVersion, slugs, titles, urlBlock) {
         const ok = await AdminConfirm.ask({
           title: 'Publish to the live site?',
-          body: titleDe + ' / ' + titleEn + '\n\n'
+          body: titles.join(' / ') + '\n\n'
             + (urlBlock ? urlBlock + '\n\n' : '')
             + 'This rebuilds the public journal. It can take several minutes. The live pages stay unchanged until the rebuild finishes.',
           confirmLabel: 'Publish',
@@ -1997,14 +2038,14 @@
           const res = await fetch('/posts/' + encodeURIComponent(currentTk) + '/publish', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ baseUpdatedAt: loadedUpdatedAt, baseRouteVersion: reviewedRouteVersion }),
+            body: JSON.stringify({ baseUpdatedAt: loadedUpdatedAt, baseRouteVersion: reviewedRouteVersion, baseLanguageUpdatedAt: language.updatedAt }),
           });
           if (res.status === 401) { guard.redirectToLogin(); return; }
           const body = await res.json().catch(() => ({}));
           if (!res.ok) {
             const examples = Array.isArray(body.foreignImages) && body.foreignImages.length
               ? ' Examples: ' + body.foreignImages.join(', ') : '';
-            showErr(gpxEditor.publishError(body.code || body.error) || (body.error || ('Publish failed: ' + res.status)) + examples);
+            showErr(gpxEditor.publishError(body.code || body.error) || (SiteLanguage.error(body) || ('Publish failed: ' + res.status)) + examples);
             setStatus('');
             return;
           }
@@ -2018,8 +2059,11 @@
           const release = (body.build && body.build.release) ? body.build.release : '';
           setPublishedLive(slugs, release);
           isPublished = true;
-          $('slugFieldDe').disabled = true;
-          $('slugFieldEn').disabled = true;
+          for (const locale of requestedLocales()) {
+            publishedLocales[locale] = true;
+            slugFieldFor(locale).disabled = true;
+          }
+          syncCoverage();
           // The publish reply carries the audit of what actually went live.
           renderAltAudit(body.altAudit, true);
           updateLocaleChip();
@@ -2034,7 +2078,7 @@
       }
 
       $('unpublishBtn').addEventListener('click', async () => {
-        const title = $('deTitle').value.trim() || '(untitled)';
+        const title = $(language.primary + 'Title').value.trim() || '(untitled)';
         await enqueueWrite(() => unpublishNow(title));
       });
       async function unpublishNow(title) {
@@ -2059,8 +2103,7 @@
           if (body.previousUpdatedAt === loadedUpdatedAt && body.updatedAt) {
             loadedUpdatedAt = body.updatedAt;
           }
-          $('slugFieldDe').disabled = false;
-          $('slugFieldEn').disabled = false;
+          for (const locale of ['de', 'en']) slugFieldFor(locale).disabled = publishedLocales[locale];
           setStatus('Unpublished "' + title + '".');
           updateLocaleChip();
         } catch (e) {
@@ -2181,10 +2224,11 @@
           const slug = post[locale]?.slug || '';
           slugFieldFor(locale).value = slug;
           slugAuto[locale] = !slug;
+          omitted[locale] = !language.locales.includes(locale) || post[locale]?.omitted === true;
         }
 
-        $('slugFieldDe').disabled = isPublished;
-        $('slugFieldEn').disabled = isPublished;
+        for (const locale of ['de', 'en']) slugFieldFor(locale).disabled = publishedLocales[locale];
+        syncCoverage();
         countryCoords.reset();
         updateLocaleChip();
         for (const locale of ['de', 'en']) galleryEditors[locale]?.restoreAlts(post.galleryAlts?.[locale]);
@@ -2208,6 +2252,7 @@
             return true;
           }
           post = await res.json();
+          for (const locale of ['de', 'en']) publishedLocales[locale] = Boolean(post[locale]?.publishedAt);
         } catch (e) {
           showErr('Could not load post: ' + e);
           setStatus('');
@@ -2242,6 +2287,7 @@
         loadedSlugs.en = post.en?.slug || '';
         recoveryDraft = null;
         restoreBaseUnknown = false;
+        updateLocaleChip();
         $('pageTitle').textContent = 'Edit post';
         showErr('');
 
@@ -2261,6 +2307,8 @@
         // Explicit Reload holds the write queue closed across both reads.
         const routeReady = deferRouteRefresh || await gpxEditor.refresh();
         if (reloadEpoch === writeEpoch) loadBlocked = !routeReady;
+        // Publish availability follows the barrier (#284 disables it while blocked).
+        updateLocaleChip();
         return true;
       }
 
@@ -2279,7 +2327,7 @@
           li.className = 'revision-row';
           const label = document.createElement('span');
           label.textContent = new Date(rev.savedAt).toLocaleString() + ' — '
-            + (rev.titleDe || '(untitled)') + ' · ' + rev.status;
+            + (rev.title || '(untitled)') + ' · ' + rev.status;
           const btn = document.createElement('button');
           btn.type = 'button';
           btn.className = 'btn-secondary';
@@ -2319,13 +2367,11 @@
         // snapshot from before a slug change would make every Save 409
         // (slug_locked) with no way to correct the disabled field. Keep the
         // current live slugs; only the content is restored.
-        const keptSlugDe = isPublished ? $('slugFieldDe').value : null;
-        const keptSlugEn = isPublished ? $('slugFieldEn').value : null;
+        const keptSlugDe = publishedLocales.de ? $('slugFieldDe').value : null;
+        const keptSlugEn = publishedLocales.en ? $('slugFieldEn').value : null;
         populateForm(rev.snapshot);
-        if (isPublished) {
-          $('slugFieldDe').value = keptSlugDe;
-          $('slugFieldEn').value = keptSlugEn;
-        }
+        if (keptSlugDe !== null) $('slugFieldDe').value = keptSlugDe;
+        if (keptSlugEn !== null) $('slugFieldEn').value = keptSlugEn;
         guard.markDirty();
         setStatus('Restored the revision from ' + new Date(rev.savedAt).toLocaleString()
           + ' into the editor'
@@ -2394,6 +2440,24 @@
         if (!s) return;
         reviewIsAdmin = s.isAdmin === true;
         Auth.renderHeader(s);
+        try {
+          language = await SiteLanguage.get();
+          loadBlocked = false;
+          for (const locale of ['de', 'en']) omitted[locale] = !language.locales.includes(locale);
+          SiteLanguage.tabs(document.querySelector('[role="tablist"]'), language, tabsApi);
+          activateLocale(language.primary);
+          for (const locale of language.locales) {
+            $(locale === 'de' ? 'slugBaseDe' : 'slugBaseEn').textContent =
+              location.host + SiteLanguage.publicPath(language, locale, 'home');
+          }
+          syncCoverage();
+        } catch (error) {
+          loadBlocked = true;
+          $('saveDraft').disabled = true;
+          $('publishBtn').disabled = true;
+          showErr(error.message);
+          return;
+        }
 
         const params = new URLSearchParams(location.search);
         const tk = params.get('tk');

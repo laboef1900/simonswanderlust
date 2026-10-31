@@ -18,6 +18,7 @@
         <button type="button" role="tab" id="tabbtn-images" aria-controls="panel-images" aria-selected="false" tabindex="-1" data-tab="images">Images</button>
         <button type="button" role="tab" id="tabbtn-comments" aria-controls="panel-comments" aria-selected="false" tabindex="-1" data-tab="comments">Comments</button>
         <button type="button" role="tab" id="tabbtn-identity" aria-controls="panel-identity" aria-selected="false" tabindex="-1" data-tab="identity"></button>
+        <button type="button" role="tab" id="tabbtn-language" aria-controls="panel-language" aria-selected="false" tabindex="-1" data-tab="language" data-language-copy="Tab"></button>
         <button type="button" role="tab" id="tabbtn-site" aria-controls="panel-site" aria-selected="false" tabindex="-1" data-tab="site">Site &amp; backups</button>
       </div>
       <div class="settings-sections">
@@ -274,6 +275,31 @@
       </section>
       </section>
 
+      <section class="settings-panel" id="panel-language" role="tabpanel" aria-labelledby="tabbtn-language" hidden>
+        <section class="card">
+          <h2 class="card-heading" data-language-copy="Heading"></h2>
+          <p id="languageLock" class="muted" role="status" data-language-copy="Loading"></p>
+          <form id="languageForm">
+            <fieldset id="languageFields" disabled>
+              <label for="languageMode" data-language-copy="Mode"></label>
+              <select id="languageMode" aria-describedby="languageLock languageScope">
+                <option value="de:de,en" data-language-copy="ModeDeBoth"></option>
+                <option value="en:en,de" data-language-copy="ModeEnBoth"></option>
+                <option value="de:de" data-language-copy="ModeDeOnly"></option>
+                <option value="en:en" data-language-copy="ModeEnOnly"></option>
+              </select>
+              <p id="languageScope" class="muted" data-language-copy="Intro"></p>
+              <div class="form-actions"><button type="submit" data-language-copy="Save"></button></div>
+            </fieldset>
+          </form>
+          <p><a id="prepareLanguage" hidden></a></p>
+          <ul id="languageBlockers"></ul>
+          <p id="languageStatus" class="page-status" role="status" tabindex="-1"></p>
+          <button type="button" id="languageReload" class="btn-secondary" data-language-copy="Reload"></button>
+          <a href="#site" data-language-copy="RebuildLink"></a>
+        </section>
+      </section>
+
       <section class="settings-panel" id="panel-identity" role="tabpanel" aria-labelledby="tabbtn-identity" hidden>
         <section class="card">
           <h2 id="identityHeading" class="card-heading"></h2>
@@ -417,6 +443,8 @@
     <script src="/admin/llm.js"></script>
     <script src="/admin/tabs.js"></script>
     <script src="/admin/settings-identity.js"></script>
+    <script src="/admin/language.js"></script>
+    <script src="/admin/settings-language.js"></script>
     <script>
       const $ = (id) => document.getElementById(id);
       const copy = EditorCopy.en;
@@ -435,9 +463,10 @@
       })) $(id).textContent = copy[key];
       $('settingsTabs').setAttribute('aria-label', copy.settingsNav);
       $('tabbtn-identity').textContent = copy.identityTab;
+      SiteLanguage.localize(document);
 
       // ---- tabs: the active one is mirrored in the URL hash ------------------
-      const TABS = { 'ai-models': 'AI models', images: 'Images', comments: 'Comments', identity: copy.identityTab, site: 'Site & backups' };
+      const TABS = { 'ai-models': 'AI models', images: 'Images', comments: 'Comments', identity: copy.identityTab, language: SiteLanguage.text('Tab'), site: 'Site & backups' };
 
       function showTabTitle(name) {
         $('settingsTabTitle').textContent = ' · ' + TABS[name];
@@ -1567,6 +1596,7 @@
         if (!s) return;
         Auth.renderHeader(s);
         SettingsIdentity.init();
+        SettingsLanguage.init();
         await loadBackups();
         await init();
       })();

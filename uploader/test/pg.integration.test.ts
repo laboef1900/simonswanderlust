@@ -12,6 +12,17 @@ import * as bodyContent from '../src/body-content.js';
 const url = process.env.TEST_DATABASE_URL;
 const maybe = url ? describe : describe.skip;
 
+beforeAll(async () => {
+  if (!url) return;
+  const pool = createPool(url);
+  try {
+    await ensureSchema(pool);
+    // Sibling language suites may leave this shared scratch DB in any mode.
+    await pool.query(`UPDATE site_language SET primary_locale='de', enabled_locales=ARRAY['de','en'],
+      locked_at=(SELECT min(published_at) FROM posts), updated_at=clock_timestamp() WHERE id=true`);
+  } finally { await pool.end(); }
+});
+
 maybe('postgres stores (integration)', () => {
   let pool: DbPool;
   beforeAll(async () => {
@@ -364,12 +375,14 @@ maybe('pgPostStore (integration)', () => {
       en: { locale: 'en' as const, slug: 'en-slug', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
     };
     const created = await store.upsertDraft(base);
-    expect((await store.list()).find((p) => p.translationKey === created.translationKey)?.hasEnBody).toBe(true);
+    expect((await store.list()).find((p) => p.translationKey === created.translationKey)?.secondaryStatus).toBe('started');
     const published = await store.publish(created.translationKey, await publishTokens(store, created.translationKey));
     const unpublished = await store.unpublish(created.translationKey);
     expect(unpublished.previousUpdatedAt).toEqual(published.updatedAt);
     expect(unpublished.updatedAt.getTime()).toBeGreaterThan(published.updatedAt.getTime());
     expect(await store.get(created.translationKey)).toMatchObject({ status: 'draft', updatedAt: unpublished.updatedAt });
+    await expect(store.upsertDraft({ ...created, de: { ...created.de, slug: 'renamed-after-unpublish' } }, unpublished.updatedAt))
+      .rejects.toMatchObject({ code: 'slug_locked' });
     const saved = await store.upsertDraft({ ...created, de: { ...created.de, title: 'After unpublish' } }, unpublished.updatedAt);
     expect(saved.de.title).toBe('After unpublish');
     expect(saved.updatedAt.getTime()).toBeGreaterThan(unpublished.updatedAt.getTime());
@@ -568,7 +581,7 @@ maybe('pgPostStore (integration)', () => {
     // The second DE-first draft now saves — the 23505 backstop no longer fires on ''.
     const b = await store.upsertDraft(deFirst('second'));
     expect(b.translationKey).not.toBe(a.translationKey);
-    expect((await store.list()).map((p) => p.slugEn)).toEqual(['', '']);
+    expect((await store.list()).map((p) => p.slugs.en)).toEqual(['', '']);
     // A real slug is still unique, both at the pre-check and at the index.
     await store.upsertDraft({ ...a, en: { ...a.en, slug: 'taken' } });
     await expect(store.upsertDraft({ ...b, en: { ...b.en, slug: 'taken' } })).rejects.toMatchObject({ code: 'duplicate_slug' });
@@ -678,7 +691,7 @@ maybe('pgPostStore revisions + optimistic concurrency (integration)', () => {
 
     const revs = await store.listRevisions(tk);
     expect(revs).toHaveLength(1);
-    expect(revs[0]).toMatchObject({ titleDe: 'T', status: 'draft' });
+    expect(revs[0]).toMatchObject({ title: 'T', status: 'draft' });
     expect(revs[0]!.savedAt).toBeInstanceOf(Date);
     const rev = await store.getRevision(tk, revs[0]!.id);
     expect(rev?.snapshot.de.title).toBe('T');
@@ -757,8 +770,7 @@ maybe('pgPostStore revisions + optimistic concurrency (integration)', () => {
     expect(summary).toMatchObject({
       heroSrc: 'https://i/hero', heroWidth: 1600,
       date: '2024-10-03', country: 'Rumänien', region: 'europe',
-      // has_en_body is now computed in SQL, since body_markdown left the SELECT.
-      hasEnBody: false,
+      title: 'T', slugs: { de: 'sum-de', en: 'sum-en' }, secondaryStatus: 'empty',
     });
     await pool.end();
   });
@@ -806,8 +818,8 @@ maybe('pgPostStore revisions + optimistic concurrency (integration)', () => {
     }
     const revs = await store.listRevisions(tk);
     expect(revs).toHaveLength(REVISION_CAP);
-    expect(revs[0]!.titleDe).toBe(`v${REVISION_CAP + 5}`);
-    expect(revs.some((r) => r.titleDe === 'v5')).toBe(false); // oldest pruned
+    expect(revs[0]!.title).toBe(`v${REVISION_CAP + 5}`);
+    expect(revs.some((r) => r.title === 'v5')).toBe(false); // oldest pruned
     const count = await pool.query(`SELECT count(*)::int AS n FROM post_revisions WHERE translation_key=$1`, [tk]);
     expect(count.rows[0].n).toBe(REVISION_CAP);
   });

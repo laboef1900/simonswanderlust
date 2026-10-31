@@ -5,6 +5,7 @@ import { assertDatabaseSnapshot } from '../../site/src/lib/database-snapshot.js'
 import { toIdentitySnapshot, type IdentitySnapshot } from '../../site/src/lib/site-identity.js';
 import { identityFromRow, type IdentityRow } from './site-identity.js';
 import { validateIdentityAsset } from './site-identity-assets.js';
+import { readLanguage, type LanguageConfig } from './language.js';
 
 export interface BuildAsset {
   role: string;
@@ -16,6 +17,7 @@ export interface BuildAsset {
 export interface BuildSnapshot {
   databaseSnapshot: string;
   identity: IdentitySnapshot;
+  language: LanguageConfig;
   assets: readonly BuildAsset[];
   signal: AbortSignal;
 }
@@ -71,7 +73,9 @@ export async function withBuildSnapshot<T>(
     assertDatabaseSnapshot(databaseSnapshot);
     const { rows } = await client.query<IdentityRow>('SELECT * FROM site_identity WHERE id = true');
     if (rows.length !== 1) throw new Error('Site identity singleton missing');
-    const identity = toIdentitySnapshot(identityFromRow(rows[0]!));
+    const languageState = await readLanguage(client);
+    const language: LanguageConfig = { primary: languageState.primary, locales: languageState.locales };
+    const identity = toIdentitySnapshot(identityFromRow(rows[0]!), language.locales);
     const { rows: assetRows } = await client.query<AssetRow>('SELECT role, sha256, width, height, bytes FROM site_identity_assets ORDER BY role');
     const assets: BuildAsset[] = [];
     for (const row of assetRows) {
@@ -91,7 +95,7 @@ export async function withBuildSnapshot<T>(
     signal.throwIfAborted();
     consuming = Promise.resolve().then(() => {
       signal.throwIfAborted();
-      return consume({ databaseSnapshot, identity, assets, signal });
+      return consume({ databaseSnapshot, identity, language, assets, signal });
     });
     return consuming;
   };

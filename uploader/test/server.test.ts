@@ -105,12 +105,12 @@ interface Built {
 function build(extra: Partial<ServerConfig> = {}): Built {
   const users = (extra.users as UserStore) ?? memoryUserStore();
   const sessions = (extra.sessions as SessionStore) ?? memorySessionStore();
-  const posts = (extra.posts as PostStore) ?? memoryPostStore();
+  const posts = (extra.posts as PostStore) ?? memoryPostStore(extra.language ? { language: extra.language } : undefined);
   const media = (extra.media as MediaStore) ?? memoryMediaStore({ baseUrl: 'https://img.simonswanderlust.com' });
   const q = stubQueue();
   const encodeQueue = (extra.encodeQueue as EncodeQueue) ?? q.queue;
   const importJobs = (extra.importJobs as ImportRunner) ?? createImportRunner({ store: memoryImportJobStore(), log: () => {} });
-  const pages = (extra.pages as PageStore) ?? memoryPageStore();
+  const pages = (extra.pages as PageStore) ?? memoryPageStore(extra.language ?? posts.language);
   const built = buildServer({
     trustProxy: TEST_TRUST,
     storageDir: dir, baseUrl: 'https://img.simonswanderlust.com',
@@ -2547,7 +2547,7 @@ describe('POST /posts/bulk', () => {
     return res.json().translationKey;
   };
   const bulk = async (b: Built, cookie: { sid: string } | undefined, payload: Record<string, unknown>) =>
-    b.app.inject({ method: 'POST', url: '/posts/bulk', headers: { 'content-type': 'application/json' }, ...(cookie ? { cookies: cookie } : {}), payload });
+    b.app.inject({ method: 'POST', url: '/posts/bulk', headers: { 'content-type': 'application/json' }, ...(cookie ? { cookies: cookie } : {}), payload: { ...(payload.action === 'publish' ? { baseLanguageUpdatedAt: (await b.posts.language.get()).updatedAt.toISOString() } : {}), ...payload } });
 
   it('is admin-only: 401 anonymous, 403 for a non-admin author', async () => {
     const b = build();
@@ -2687,7 +2687,7 @@ describe('publish gate (encode status)', () => {
       const single = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
       expect(single.statusCode).toBe(409);
       expect(single.json().notReady).toContain(key);
-      const bulk = await b.app.inject({ method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [tk] } });
+      const bulk = await b.app.inject({ method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [tk], baseLanguageUpdatedAt: (await b.posts.language.get()).updatedAt.toISOString() } });
       expect(bulk.json().results[0].ok).toBe(false);
       expect((await b.posts.get(tk))?.status).toBe('draft');
     } finally { await b.app.close(); }
@@ -2800,7 +2800,7 @@ describe('publish gate (encode status)', () => {
     const tk = await create(b, cookie, pairUsing(`${IMG}/trips/g/hero`));
     const res = await b.app.inject({
       method: 'POST', url: '/posts/bulk', headers: { 'content-type': 'application/json' }, cookies: cookie,
-      payload: { action: 'publish', keys: [tk] },
+      payload: { action: 'publish', keys: [tk], baseLanguageUpdatedAt: (await b.posts.language.get()).updatedAt.toISOString() },
     });
     expect(res.json()).toMatchObject({ succeeded: 0, failed: 1 });
     expect(res.json().results[0].error).toMatch(/still processing/);
@@ -2824,7 +2824,7 @@ describe('publish gate (encode status)', () => {
             const single = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
             expect(single.statusCode).toBe(409);
             expect(single.json().notReady).toEqual([key]);
-            const bulk = await b.app.inject({ method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [tk] } });
+            const bulk = await b.app.inject({ method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [tk], baseLanguageUpdatedAt: (await b.posts.language.get()).updatedAt.toISOString() } });
             expect(bulk.json()).toMatchObject({ succeeded: 0, failed: 1 });
             expect((await b.posts.get(tk))?.status).toBe('draft');
             expect((await b.posts.usageRows()).filter(row => row.translationKey === tk && row.source === 'published')).toEqual([]);
@@ -2848,7 +2848,7 @@ describe('publish gate (encode status)', () => {
       const tk = await create(b, cookie, { ...p, de: { ...p.de, bodyMarkdown } });
       const response = mode === 'single'
         ? await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) })
-        : await b.app.inject({ method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [tk] } });
+        : await b.app.inject({ method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [tk], baseLanguageUpdatedAt: (await b.posts.language.get()).updatedAt.toISOString() } });
       expect(response.statusCode).toBe(200);
       if (mode === 'bulk') expect(response.json()).toMatchObject({ succeeded: 1, failed: 0 });
       expect((await b.posts.get(tk))?.status).toBe('published');
@@ -3012,7 +3012,7 @@ describe('publish body gates (#91, #375)', () => {
           render.mockClear();
           const response = await b.app.inject(mode === 'single'
             ? { method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) }
-            : { method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [tk] } });
+            : { method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [tk], baseLanguageUpdatedAt: (await b.posts.language.get()).updatedAt.toISOString() } });
           const error = `${locale}: body must not contain an H1; the story hero provides the page H1`;
           if (mode === 'single') {
             expect(response.statusCode, body).toBe(400);
@@ -3059,7 +3059,7 @@ describe('publish body gates (#91, #375)', () => {
           render.mockClear();
           const response = await b.app.inject(mode === 'single'
             ? { method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) }
-            : { method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [tk] } });
+            : { method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [tk], baseLanguageUpdatedAt: (await b.posts.language.get()).updatedAt.toISOString() } });
           expect(response.statusCode, body).toBe(200);
           if (mode === 'bulk') expect(response.json()).toMatchObject({ succeeded: 1, failed: 0 });
           expect(render).toHaveBeenCalledTimes(2);
@@ -3087,7 +3087,7 @@ describe('publish body gates (#91, #375)', () => {
       goodPair.de.slug = 'good-de';
       goodPair.en.slug = 'good-en';
       const good = await create(b, cookie, goodPair);
-      const response = await b.app.inject({ method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [bad, good] } });
+      const response = await b.app.inject({ method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [bad, good], baseLanguageUpdatedAt: (await b.posts.language.get()).updatedAt.toISOString() } });
       expect(response.statusCode).toBe(200);
       expect(response.json()).toMatchObject({
         succeeded: 1, failed: 1,
@@ -3118,7 +3118,7 @@ describe('publish body gates (#91, #375)', () => {
       render.mockRejectedValueOnce(new Error('private renderer failure'));
       const response = await b.app.inject(mode === 'single'
         ? { method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) }
-        : { method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [tk] } });
+        : { method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [tk], baseLanguageUpdatedAt: (await b.posts.language.get()).updatedAt.toISOString() } });
       if (mode === 'single') expect(response.statusCode).toBe(500);
       else expect(response.json()).toMatchObject({ succeeded: 0, failed: 1, results: [{ key: tk, ok: false, error: 'internal error' }] });
       expect(response.body).not.toMatch(/private renderer failure|H1/);
@@ -3162,7 +3162,7 @@ describe('publish body gates (#91, #375)', () => {
     const tk = await create(b, cookie, pairWithBody('![p](https://old.example/a.jpg)'));
     const res = await b.app.inject({
       method: 'POST', url: '/posts/bulk', headers: { 'content-type': 'application/json' }, cookies: cookie,
-      payload: { action: 'publish', keys: [tk] },
+      payload: { action: 'publish', keys: [tk], baseLanguageUpdatedAt: (await b.posts.language.get()).updatedAt.toISOString() },
     });
     expect(res.json()).toMatchObject({ succeeded: 0, failed: 1 });
   });
@@ -3274,7 +3274,8 @@ describe('posts editor', () => {
     const tokens = await publishBody(b.posts, saved.translationKey);
     const bodies = [undefined, {}, { baseUpdatedAt: tokens.baseUpdatedAt }, { ...tokens, extra: true },
       { ...tokens, baseUpdatedAt: 'not-a-date' }, { ...tokens, baseRouteVersion: '' },
-      { ...tokens, baseRouteVersion: 1 }];
+      { ...tokens, baseRouteVersion: 1 }, { baseUpdatedAt: tokens.baseUpdatedAt, baseRouteVersion: tokens.baseRouteVersion },
+      { ...tokens, baseLanguageUpdatedAt: 'not-a-date' }, { ...tokens, baseLanguageUpdatedAt: '2026-10-27' }];
     for (const payload of bodies) {
       const response = await b.app.inject({ method: 'POST', url, cookies: cookie, ...(payload === undefined ? {} : { payload }) });
       expect(response.statusCode).toBe(400);
@@ -3286,24 +3287,69 @@ describe('posts editor', () => {
     expect((await b.posts.get(saved.translationKey))!.status).toBe('draft');
   });
 
-  it.each(['single', 'bulk'] as const)('%s refuses a text change while publish gates are checking the reviewed pair', async (mode) => {
+  it.each(['single', 'bulk'] as const)('%s refuses a text change committed between review and the publication lock', async (mode) => {
     const s = stubBuilder();
     const b = build({ builder: s.builder }); const { cookie } = await authed(b);
     const saved = await b.posts.upsertDraft({ ...sample(), status: 'draft',
       de: { ...sample().de, locale: 'de', heroImage: { ...sample().de.heroImage, src: 'https://img.simonswanderlust.com/photo' } },
       en: { ...sample().en, locale: 'en' } });
     const tokens = await publishBody(b.posts, saved.translationKey);
-    vi.spyOn(b.media, 'notReadyKeys').mockImplementationOnce(async () => {
+    const publish = b.posts.publish.bind(b.posts);
+    vi.spyOn(b.posts, 'publish').mockImplementationOnce(async (...args) => {
       await b.posts.upsertDraft({ ...saved, de: { ...saved.de, bodyMarkdown: '![foreign](https://old.example/private.jpg)' } });
-      return new Set<string>();
+      return publish(...args);
     });
     const response = await b.app.inject(mode === 'single'
       ? { method: 'POST', url: `/posts/${saved.translationKey}/publish`, cookies: cookie, payload: tokens }
-      : { method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [saved.translationKey] } });
+      : { method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [saved.translationKey], baseLanguageUpdatedAt: tokens.baseLanguageUpdatedAt } });
     if (mode === 'single') { expect(response.statusCode).toBe(409); expect(response.json().code).toBe('conflict'); }
     else expect(response.json()).toMatchObject({ succeeded: 0, failed: 1 });
     expect((await b.posts.get(saved.translationKey))!.status).toBe('draft');
     expect(s.calls).toHaveLength(0);
+  });
+
+  it.each(['single', 'bulk'] as const)('%s holds the reviewed pair stable while image gates run', async (mode) => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder }); const { cookie } = await authed(b);
+    const saved = await b.posts.upsertDraft({ ...sample(), status: 'draft',
+      de: { ...sample().de, locale: 'de', heroImage: { ...sample().de.heroImage, src: 'https://img.simonswanderlust.com/photo' } },
+      en: { ...sample().en, locale: 'en' } });
+    const tokens = await publishBody(b.posts, saved.translationKey);
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    vi.spyOn(b.media, 'notReadyKeys').mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      return new Set<string>();
+    });
+    const request = b.app.inject(mode === 'single'
+      ? { method: 'POST', url: `/posts/${saved.translationKey}/publish`, cookies: cookie, payload: tokens }
+      : { method: 'POST', url: '/posts/bulk', cookies: cookie,
+          payload: { action: 'publish', keys: [saved.translationKey], baseLanguageUpdatedAt: tokens.baseLanguageUpdatedAt } }).then(response => response);
+    await entered.promise;
+    let settled = false;
+    const save = b.posts.upsertDraft({ ...saved, de: { ...saved.de, bodyMarkdown: '![foreign](https://old.example/private.jpg)' } })
+      .then(value => { settled = true; return value; });
+    try {
+      // Give the queued writer a turn while the publication gate remains held.
+      const turn = Promise.withResolvers<void>();
+      setImmediate(turn.resolve);
+      await turn.promise;
+      expect(settled).toBe(false);
+    } finally { release.resolve(); }
+    const [response, edited] = await Promise.all([request, save]);
+    expect(response.statusCode).toBe(200);
+    if (mode === 'single') expect(response.json().published).toBe(true);
+    else expect(response.json()).toMatchObject({ succeeded: 1, failed: 0 });
+    // The later edit is only a working copy, not part of the committed snapshot.
+    expect(edited.status).toBe('published');
+    expect(edited.hasUnpublishedChanges).toBe(true);
+    expect(s.calls).toHaveLength(1);
+    const retry = await b.app.inject({ method: 'POST', url: `/posts/${saved.translationKey}/publish`,
+      cookies: cookie, payload: await publishBody(b.posts, saved.translationKey) });
+    expect(retry.statusCode).toBe(409);
+    expect(retry.json().code).toBe('foreign_images');
+    expect(s.calls).toHaveLength(1);
   });
 
   it('returns the committed publish timestamp even when a draft save happens during its build', async () => {
@@ -3779,7 +3825,7 @@ describe('post revisions endpoints', () => {
     });
     list = (await b.app.inject({ method: 'GET', url: `/posts/${tk}/revisions`, cookies: cookie })).json();
     expect(list).toHaveLength(1);
-    expect(list[0]).toMatchObject({ titleDe: 'T', status: 'draft' });
+    expect(list[0]).toMatchObject({ title: 'T', status: 'draft' });
     expect(typeof list[0].savedAt).toBe('string');
     expect(list[0].snapshot).toBeUndefined(); // summaries stay light
 
@@ -4016,7 +4062,7 @@ ${(['de', 'en'] as const).map((loc) => `  <item>
     expect(warnings).not.toMatch(/ECONNREFUSED|refusing to fetch/);
   });
 
-  const OK: ImportSummary = { imported: 1, updated: 0, skippedPublished: 0, rejected: 0, failed: 0, images: { total: 0, hosted: 0, failed: 0 }, warnings: [] };
+  const OK: ImportSummary = { imported: 1, updated: 0, skippedPublished: 0, skippedLocale: 0, rejected: 0, failed: 0, images: { total: 0, hosted: 0, failed: 0 }, warnings: [] };
   const PLANNED: ImportProgress = { groups: { total: 1, done: 0 }, images: { planned: 0, hosted: 0, failed: 0 } };
   /** A pre-flight stub: one group, whose run() is `run` (default: instant OK). */
   const prepared = (run: PreparedImport['run'] = async () => OK, groups = 1): PreparedImport => ({ groups, planned: PLANNED, run });
@@ -4316,13 +4362,14 @@ describe('pages routes', () => {
     const b = build({ builder: s.builder });
     try {
       const { cookie } = await authed(b);
-      const line = 'https://i/gallery | 30x20 | caption="Rom | Tag 2"';
+      // A hosted photo: page saves publish immediately, so #284 refuses foreign images.
+      const line = 'https://img.simonswanderlust.com/pages/about/gallery | 30x20 | caption="Rom | Tag 2"';
       const input = {
         de: { locale: 'de', title: 'Über mich', bodyMarkdown: `~~~gallery\n${line}\n~~~`, images: {} },
         en: { locale: 'en', title: 'About', bodyMarkdown: 'Keep', images: {} },
       };
       const response = await b.app.inject({ method: 'PUT', url: '/pages/about', cookies: cookie, payload: input });
-      expect(response.statusCode).toBe(200);
+      expect(response.statusCode, response.body).toBe(200);
       expect(response.json().build).toEqual(outcome);
       expect(response.json().saved).toMatchObject({ key: 'about', de: input.de, en: input.en });
       expect(response.json().saved).not.toHaveProperty('galleryWarnings');
@@ -4447,7 +4494,7 @@ describe('pages routes', () => {
     const list = await b.app.inject({ method: 'GET', url: '/pages/about/revisions', cookies: author.cookie });
     expect(list.statusCode).toBe(200);
     // The first save of a key produces no revision; v1 and v2 were overwritten.
-    expect(list.json().map((r: { titleDe: string }) => r.titleDe)).toEqual(['v2', 'v1']);
+    expect(list.json().map((r: { title: string }) => r.title)).toEqual(['v2', 'v1']);
     const rev = await b.app.inject({ method: 'GET', url: `/pages/about/revisions/${list.json()[1].id}`, cookies: author.cookie });
     expect(rev.statusCode).toBe(200);
     expect(rev.json().snapshot.de.bodyMarkdown).toBe('Hallo v1');

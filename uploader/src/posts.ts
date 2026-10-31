@@ -8,7 +8,9 @@ import { validatePublicTrack, type PublicTrack } from '../public/gpx-public-trac
 import type { PrivateGeometry } from '../public/gpx-geometry.js';
 import type { PublicTrackWorker } from './gpx-public-worker.js';
 import { GpxError } from './gpx-errors.js';
-import { publishedTrackOf, type PublishedTrackRow } from './published-track.js';
+import { publishedTrackOf, type PublishedTrackRow, type PublishedTrackProjection } from './published-track.js';
+import { DEFAULT_LANGUAGE, assertLanguageNamespace, memoryLanguageStore, pgLanguageStore, readLanguage, type LanguageConfig, type LanguageState, type LanguageStore } from './language.js';
+import { namespaceOf, reservation } from '../../site/src/lib/reserved-routes.js';
 
 export type Locale = 'de' | 'en';
 /**
@@ -45,6 +47,9 @@ export interface PostLocale {
   heroImage: HeroImage; bodyMarkdown: string; images: Record<string, ImageDims>;
   titleImage?: HeroImage;
   keyFacts?: Record<string, string>;
+  omitted?: boolean;
+  /** Store-owned publication history; payload values never change it. */
+  publishedAt?: Date | null;
 }
 export interface PostShared {
   date: string; countryCode: string; region: string;
@@ -92,17 +97,16 @@ export interface SavedPostPair extends StoredPostPair { galleryWarnings: Gallery
 /** Whole-pair snapshot of the working copy just BEFORE a save overwrote it (issue #28). */
 export type RevisionSnapshot = Pick<PostPair, 'status' | 'shared' | 'de' | 'en'>;
 export interface RevisionSummary {
-  id: string; savedAt: Date; titleDe: string; status: PostStatus;
+  id: string; savedAt: Date; title: string; status: PostStatus;
 }
 export interface PostRevision extends RevisionSummary { snapshot: RevisionSnapshot }
 
 /** How many revisions upsertDraft keeps per translation_key (oldest pruned first). */
 export const REVISION_CAP = 20;
 export interface PostSummary {
-  translationKey: string; titleDe: string; slugDe: string; slugEn: string;
+  translationKey: string; title: string; slugs: Record<Locale, string>;
   status: PostStatus; updatedAt: Date; hasUnpublishedChanges: boolean;
-  /** EN-completeness hint for the write-DE-first workflow (true when the EN body is non-blank). */
-  hasEnBody: boolean;
+  secondaryStatus: 'none' | 'omitted' | 'empty' | 'started';
   /**
    * Hero base URL, intrinsic width and optional JPEG-only marker for the list
    * thumbnail. Omitted format means the existing AVIF + WebP pair; the client
@@ -145,35 +149,51 @@ export interface PostUsageRow {
 }
 export class PostError extends Error {
   code?: string;
-  constructor(message: string, code?: string) { super(message); this.code = code; }
+  constructor(message: string, code?: string, public readonly owner?: { type: 'app' | 'site' | 'locale' | 'legacy' | 'page'; name: string }) {
+    super(message); this.code = code;
+  }
 }
 
-export interface PublishTokens { baseUpdatedAt: Date; baseRouteVersion: string | null }
-export interface PublishState { pair: StoredPostPair; routeVersion: string | null }
+export interface PublishTokens { baseUpdatedAt: Date; baseRouteVersion: string | null; baseLanguageUpdatedAt: Date }
+export interface PublishState { pair: StoredPostPair; routeVersion: string | null; language: LanguageState }
+/** SQL validation must reuse the locked transaction, never borrow another pool connection. */
+export type PublishValidation = (pair: StoredPostPair, language: LanguageState, client?: DbClient) => Promise<void>;
 
 /** Publish uses exact reviewed tokens, not save's older-than comparison. */
 export function assertPublishTokens(state: PublishState, tokens: PublishTokens): void {
   if (!(tokens?.baseUpdatedAt instanceof Date)
     || tokens.baseUpdatedAt.getTime() !== state.pair.updatedAt.getTime()
-    || tokens.baseRouteVersion !== state.routeVersion) {
-    throw new PostError('post or route changed since review; reload before publishing', 'conflict');
+    || tokens.baseRouteVersion !== state.routeVersion
+    || !(tokens.baseLanguageUpdatedAt instanceof Date)
+    || tokens.baseLanguageUpdatedAt.getTime() !== state.language.updatedAt.getTime()) {
+    throw new PostError('post, route or language changed since review; reload before publishing', 'conflict');
+  }
+}
+
+function assertDraftLanguage(language: LanguageState, baseUpdatedAt?: Date): void {
+  if (baseUpdatedAt && language.updatedAt.getTime() !== baseUpdatedAt.getTime()) {
+    throw new PostError('language changed since validation; reload before saving', 'conflict');
   }
 }
 
 export interface PostStore {
+  readonly language: LanguageStore;
   list(): Promise<PostSummary[]>;
   get(translationKey: string): Promise<StoredPostPair | null>;
   getPublishState(translationKey: string): Promise<PublishState | null>;
-  getPublishedTrack(translationKey: string): Promise<PublicTrack | undefined>;
+  getPublishedTrack(translationKey: string): Promise<PublishedTrackProjection>;
+  getPublishedLocales(translationKey: string): Promise<Locale[]>;
   /**
    * Create or overwrite the working copy. When `baseUpdatedAt` is given (the
    * `updatedAt` the editor loaded), the save is rejected with PostError code
    * 'conflict' if the stored pair was modified since — optimistic concurrency.
    * Omitting it skips the check (new posts, WP importer). Every overwrite of
    * an existing pair first snapshots the pre-save state into the revisions.
+   * Route-level slug consent uses this language token; recheck it under the
+   * language lock before a newly enabled locale can become writable.
    */
-  upsertDraft(pair: PostPair, baseUpdatedAt?: Date): Promise<SavedPostPair>;
-  publish(translationKey: string, tokens: PublishTokens): Promise<{ updatedAt: Date }>;
+  upsertDraft(pair: PostPair, baseUpdatedAt?: Date, baseLanguageUpdatedAt?: Date): Promise<SavedPostPair>;
+  publish(translationKey: string, tokens: PublishTokens, validate?: PublishValidation): Promise<{ updatedAt: Date }>;
   /** Flip a pair back to draft (the "emergency brake" — the live site drops it on the next build). */
   unpublish(translationKey: string): Promise<{ previousUpdatedAt: Date; updatedAt: Date }>;
   /** Hard-delete both locale rows, freeing their slugs for reuse. */
@@ -221,13 +241,8 @@ export function assertNotStale(storedUpdatedAt: Date, baseUpdatedAt: Date | unde
 
 interface Stored extends PostPair {
   updatedAt: Date;
-  publishedAt?: Date;
-  // Deep-cloned copy of { shared, de, en } as of the last publish() — mirrors
-  // the pg store's published_snapshot column so both stores share semantics.
-  publishedSnapshot?: Pick<PostPair, 'shared' | 'de' | 'en'>;
-  // Explicit flag (instead of comparing updatedAt > publishedAt like the pg
-  // store) because Date's millisecond resolution makes a publish-then-save
-  // within the same tick indistinguishable in-process.
+  rowStatus: Record<Locale, PostStatus>;
+  publishedSnapshot: Partial<Record<Locale, PostLocale>>;
   hasUnpublishedChanges: boolean;
 }
 
@@ -284,7 +299,7 @@ function optStringArray(o: Record<string, unknown>, field: string, path: string)
  * stores (plus the partial unique index in db.ts); validateForPublish still
  * demands a real slug per locale.
  */
-export function validateDraft(pair: unknown): asserts pair is PostPair {
+export function validateDraft(pair: unknown, language: LanguageConfig = DEFAULT_LANGUAGE): asserts pair is PostPair {
   if (!isPlainObject(pair)) throw new PostError('post payload must be an object');
   if (pair.confirmSlugChange !== undefined && typeof pair.confirmSlugChange !== 'boolean') throw new PostError('confirmSlugChange must be a boolean');
   const shared = pair.shared;
@@ -318,6 +333,8 @@ export function validateDraft(pair: unknown): asserts pair is PostPair {
   for (const locale of ['de', 'en'] as Locale[]) {
     const l = pair[locale];
     if (!isPlainObject(l)) throw new PostError(`${locale} must be an object`);
+    if (l.omitted !== undefined && typeof l.omitted !== 'boolean') throw new PostError(`${locale}.omitted must be a boolean`, 'invalid_post');
+    if (locale === language.primary && l.omitted === true) throw new PostError('primary locale cannot be omitted', 'invalid_post');
     for (const f of ['slug', 'title', 'excerpt', 'country', 'bodyMarkdown']) optString(l, f, locale);
     if (l.heroImage !== undefined && !isPlainObject(l.heroImage)) throw new PostError(`${locale}.heroImage must be an object`);
     if (l.titleImage !== undefined && !isPlainObject(l.titleImage)) throw new PostError(`${locale}.titleImage must be an object`);
@@ -327,19 +344,27 @@ export function validateDraft(pair: unknown): asserts pair is PostPair {
     }
     const slug = l.slug ?? '';
     if (slug !== '') checkSlug(slug as string, locale);
-    if (locale === 'de' && !(typeof l.title === 'string' && l.title.trim())) throw new PostError('a German title is required to start a draft');
+    if (locale === language.primary && !(typeof l.title === 'string' && l.title.trim())) throw new PostError(`a ${localeName(locale)} title is required to start a draft`, 'invalid_post');
   }
 }
 
+function localeName(locale: Locale): string { return locale === 'de' ? 'German' : 'English'; }
+
+export function requestedLocales(pair: PostPair, language: LanguageConfig): Locale[] {
+  if (pair[language.primary].omitted) throw new PostError('primary locale cannot be omitted', 'invalid_post');
+  return language.locales.filter((locale) => !pair[locale].omitted);
+}
+
 function validateLocale(p: PostLocale): void {
+  const name = localeName(p.locale);
   checkSlug(p.slug, p.locale);
-  if (!p.title.trim()) throw new PostError(`${p.locale}: title required`);
-  if (!p.excerpt.trim()) throw new PostError(`${p.locale}: excerpt required`);
-  if (!p.country.trim()) throw new PostError(`${p.locale}: country required`);
-  if (!p.bodyMarkdown.trim()) throw new PostError(`${p.locale}: body required`);
-  if (!p.heroImage) throw new PostError(`${p.locale}: heroImage required`);
-  validatePublishedImage(p.heroImage, `${p.locale}: heroImage`);
-  if (p.titleImage !== undefined) validatePublishedImage(p.titleImage, `${p.locale}: titleImage`);
+  if (!p.title.trim()) throw new PostError(`${name}: title required`);
+  if (!p.excerpt.trim()) throw new PostError(`${name}: excerpt required`);
+  if (!p.country.trim()) throw new PostError(`${name}: country required`);
+  if (!p.bodyMarkdown.trim()) throw new PostError(`${name}: body required`);
+  if (!p.heroImage) throw new PostError(`${name}: heroImage required`);
+  validatePublishedImage(p.heroImage, `${name}: heroImage`);
+  if (p.titleImage !== undefined) validatePublishedImage(p.titleImage, `${name}: titleImage`);
 }
 
 function validatePublishedImage(h: HeroImage, field: string, requireAlt = true): void {
@@ -354,7 +379,7 @@ function validatePublishedImage(h: HeroImage, field: string, requireAlt = true):
  * Synchronous structural validation only. Full publication eligibility also
  * requires the async rendered-body and image-readiness gates in server.ts.
  */
-export function validateForPublish(pair: PostPair): void {
+export function validateForPublish(pair: PostPair, language: LanguageConfig = DEFAULT_LANGUAGE): void {
   const s = pair.shared;
   if (s.countryCode.length !== 2) throw new PostError('countryCode must be 2 letters');
   if (!REGION_KEYS.includes(s.region)) throw new PostError(`region must be one of ${REGIONS.join(', ')}`);
@@ -385,8 +410,8 @@ export function validateForPublish(pair: PostPair): void {
     });
   }
   if (!s.date.trim()) throw new PostError('date required');
-  validateLocale(pair.de);
-  validateLocale(pair.en);
+  // Rendered-body H1s are refused by the publish gate on the sanitized tree (#375).
+  for (const locale of requestedLocales(pair, language)) validateLocale(pair[locale]);
 }
 
 const PLACEHOLDER_HERO: HeroImage = { src: '', width: 0, height: 0, alt: '' };
@@ -473,13 +498,17 @@ export async function normalizeBodyImages(
  * post's `images` map unchecked. See body-content.ts `imagesMapError` for why
  * an unchecked map is an XSS vector rather than a tidiness problem.
  */
-async function draftWithDefaults(pair: PostPair): Promise<{ pair: PostPair; galleryWarnings: GalleryWarning[] }> {
+async function draftWithDefaults(pair: PostPair, language: LanguageConfig, existing?: PostPair | null): Promise<{ pair: PostPair; galleryWarnings: GalleryWarning[] }> {
   const galleryWarnings: GalleryWarning[] = [];
   // The locale is passed in rather than read off `l`: a partial draft payload
   // can omit `locale` at runtime despite the TS type, and the error message
   // must still name which side failed.
   const fillLocale = async (l: PostLocale, locale: Locale): Promise<PostLocale> => {
-    if ((l.slug ?? '') !== '') checkSlug(l.slug, locale);
+    if (!language.locales.includes(locale)) {
+      // A disabled locale keeps its stored row; it is never re-validated here.
+      l = existing?.[locale] ?? { locale, slug: '', title: '', excerpt: '', country: '',
+        heroImage: PLACEHOLDER_HERO, bodyMarkdown: '', images: {} };
+    } else if ((l.slug ?? '') !== '') checkSlug(l.slug, locale);
     const err = imagesMapError(l.images) ?? heroImageError(l.heroImage);
     if (err) throw new PostError(`${locale}: ${err}`);
     const titleError = heroImageError(l.titleImage);
@@ -494,8 +523,11 @@ async function draftWithDefaults(pair: PostPair): Promise<{ pair: PostPair; gall
       }
     }
     const filled: PostLocale = {
-      ...l,
+      ...(l.titleImage !== undefined ? { titleImage: l.titleImage } : {}),
+      ...(l.keyFacts !== undefined ? { keyFacts: l.keyFacts } : {}),
       locale,
+      omitted: !language.locales.includes(locale) || (l.omitted ?? false),
+      publishedAt: null,
       slug: l.slug ?? '', title: l.title ?? '', excerpt: l.excerpt ?? '', country: l.country ?? '',
       heroImage: l.heroImage ?? PLACEHOLDER_HERO,
       bodyMarkdown: l.bodyMarkdown ?? '',
@@ -536,10 +568,29 @@ async function draftWithDefaults(pair: PostPair): Promise<{ pair: PostPair; gall
  */
 export interface MemoryPostStoreOptions {
   comments?: { removeByTranslationKey(translationKey: string): Promise<unknown> | unknown };
+  language?: LanguageStore;
 }
 
 export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
   const byKey = new Map<string, Stored>();
+  const language = opts.language ?? memoryLanguageStore();
+  language.onChange((current, next) => {
+    assertLanguageNamespace(current, next, [...byKey.values()].flatMap((p) =>
+      (['de', 'en'] as const).map((locale) => ({ locale, slug: p[locale].slug }))));
+    for (const p of byKey.values()) {
+      let changed = false;
+      for (const locale of ['de', 'en'] as const) {
+        const omitted = locale === next.primary ? false : !next.locales.includes(locale) ? true : p[locale].omitted;
+        if (omitted !== p[locale].omitted) { p[locale].omitted = omitted; changed = true; }
+      }
+      if (changed) p.updatedAt = nextTime(p.updatedAt);
+      p.status = p.rowStatus[next.primary];
+    }
+  });
+  const publicPair = (p: Stored): StoredPostPair => structuredClone({
+    translationKey: p.translationKey, status: p.status, shared: p.shared, de: p.de, en: p.en,
+    hasUnpublishedChanges: p.hasUnpublishedChanges, updatedAt: p.updatedAt,
+  });
   // Revisions per translation_key, oldest first (append order) — mirrors the
   // pg store's post_revisions table so server tests exercise the same semantics.
   const revisionsByKey = new Map<string, PostRevision[]>();
@@ -556,68 +607,101 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
   const nextTime = (previous?: Date) => new Date(Math.max(Date.now(), (previous?.getTime() ?? 0) + 1));
 
   return {
+    language,
     async list() {
+      return language.runExclusive(async (mode) => {
+      const secondary = mode.locales.find((locale) => locale !== mode.primary);
       return [...byKey.values()]
         .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
         .map((p) => {
-          // DE hero with an EN fallback: the list is DE-led (titleDe), but a
-          // pair may have only the EN hero filled in.
-          const hero = p.de.heroImage?.src ? p.de.heroImage : p.en.heroImage;
+          const primary = p[mode.primary];
+          const other = secondary ? p[secondary] : undefined;
+          const hero = primary.heroImage?.src ? primary.heroImage : other?.heroImage;
           return {
-            translationKey: p.translationKey, titleDe: p.de.title, slugDe: p.de.slug, slugEn: p.en.slug,
+            translationKey: p.translationKey, title: primary.title, slugs: { de: p.de.slug, en: p.en.slug },
             status: p.status, updatedAt: p.updatedAt, hasUnpublishedChanges: p.hasUnpublishedChanges,
-            hasEnBody: Boolean(p.en.bodyMarkdown && p.en.bodyMarkdown.trim()),
+            secondaryStatus: !other ? 'none' as const : other.omitted ? 'omitted' as const : other.bodyMarkdown.trim() ? 'started' as const : 'empty' as const,
             heroSrc: hero?.src ?? '', heroWidth: hero?.width ?? 0,
             ...(hero?.format === 'jpeg' ? { heroFormat: hero.format } : {}),
-            // DE-led with an EN fallback, same precedent as the hero above — a
-            // pair may have only the EN row's country filled in.
-            date: p.shared.date ?? '', country: p.de.country || p.en.country || '', region: p.shared.region ?? '',
+            date: p.shared.date ?? '', country: primary.country || other?.country || '', region: p.shared.region ?? '',
             categories: p.shared.categories ?? [],
             tags: p.shared.tags ?? [],
             scheduledAt: p.shared.scheduledAt ?? null,
           };
         });
-    },
-    async get(tk) {
-      const p = byKey.get(tk);
-      return p ? structuredClone({ translationKey: p.translationKey, status: p.status, shared: p.shared, de: p.de, en: p.en, hasUnpublishedChanges: p.hasUnpublishedChanges, updatedAt: p.updatedAt }) : null;
-    },
-    async getPublishState(tk) {
-      const pair = await this.get(tk);
-      return pair ? { pair, routeVersion: null } : null;
-    },
-    async getPublishedTrack() { return undefined; },
-    async usageRows() {
-      return [...byKey.values()].flatMap((p) => {
-        const sources: { source: PostUsageRow['source']; from: Pick<PostPair, 'de' | 'en'> }[] = [{ source: 'working', from: p }];
-        if (p.status === 'published' && p.publishedSnapshot) sources.push({ source: 'published', from: p.publishedSnapshot });
-        return sources.flatMap(({ source, from }) => (['de', 'en'] as const).map((loc) => structuredClone({
-          translationKey: p.translationKey, locale: loc, source, title: from[loc].title,
-          heroImage: from[loc].heroImage, bodyMarkdown: from[loc].bodyMarkdown, images: from[loc].images,
-          ...(from[loc].titleImage ? { titleImage: from[loc].titleImage } : {}),
-        })));
       });
     },
-    async upsertDraft(pair, baseUpdatedAt) {
+    async get(tk) {
+      return language.runExclusive(() => {
+        const p = byKey.get(tk);
+        return Promise.resolve(p ? publicPair(p) : null);
+      });
+    },
+    async getPublishState(tk) {
+      return language.runExclusive(async (mode) => {
+        const p = byKey.get(tk);
+        return p ? { pair: publicPair(p), routeVersion: null, language: structuredClone(mode) } : null;
+      });
+    },
+    async getPublishedTrack(tk) {
+      return language.runExclusive(async (mode) => {
+        const p = byKey.get(tk);
+        if (!p) throw new PostError('post not found', 'not_found');
+        return publishedTrackOf((['de', 'en'] as const).map((locale) => ({
+          locale, status: p.rowStatus[locale], omitted: p[locale].omitted ?? false,
+          published_at: p[locale].publishedAt ?? null,
+          published_snapshot: p.publishedSnapshot[locale] ?? null,
+        })), { primary: mode.primary, locales: [...mode.locales] });
+      });
+    },
+    async getPublishedLocales(tk) {
+      return language.runExclusive(async (mode) => {
+        const p = byKey.get(tk);
+        if (!p || p.rowStatus[mode.primary] !== 'published' || !p.publishedSnapshot[mode.primary]) return [];
+        return mode.locales.filter((locale) => p.rowStatus[locale] === 'published' && !!p.publishedSnapshot[locale]);
+      });
+    },
+    async usageRows() {
+      return [...byKey.values()].flatMap((p) => {
+        return (['de', 'en'] as const).flatMap((loc) => {
+          const sources: { source: PostUsageRow['source']; from: PostLocale }[] = [{ source: 'working', from: p[loc] }];
+          const snapshot = p.publishedSnapshot[loc];
+          if (p.rowStatus[loc] === 'published' && snapshot) sources.push({ source: 'published', from: snapshot });
+          return sources.map(({ source, from }) => structuredClone({
+            translationKey: p.translationKey, locale: loc, source, title: from.title,
+            heroImage: from.heroImage, bodyMarkdown: from.bodyMarkdown, images: from.images,
+            ...(from.titleImage ? { titleImage: from.titleImage } : {}),
+          }));
+        });
+      });
+    },
+    async upsertDraft(pair, baseUpdatedAt, baseLanguageUpdatedAt) {
       const key = pair.translationKey || randomUUID();
-      return withPair(key, async () => {
-        // Reserve save order before asynchronous analysis; a later Publish must
-        // not overtake this edit. Both locales still normalize before any write.
-        const normalized = await draftWithDefaults(pair);
-        pair = normalized.pair;
+      return language.runExclusive((mode) => withPair(key, async () => {
+        assertDraftLanguage(mode, baseLanguageUpdatedAt);
+        validateDraft(pair, mode);
         const existing = byKey.get(key);
+        const normalized = await draftWithDefaults(pair, mode, existing);
+        pair = normalized.pair;
         if (!existing && baseUpdatedAt) throw new PostError('post not found', 'not_found');
         if (existing) assertNotStale(existing.updatedAt, baseUpdatedAt);
         for (const locale of ['de', 'en'] as Locale[]) {
+          if (existing?.[locale].publishedAt && pair[locale].omitted) throw new PostError('cannot omit a previously published locale', 'locale_published');
           if (slugTaken(locale, pair[locale].slug, key)) throw new PostError(`slug "${pair[locale].slug}" already in use for ${locale}`, 'duplicate_slug');
-          if (existing && existing.status === 'published' && existing[locale].slug !== pair[locale].slug) {
+          if (existing?.[locale].publishedAt && existing[locale].slug !== pair[locale].slug) {
             throw new PostError('cannot change the slug of a published post', 'slug_locked');
           }
+          const reserved = pair[locale].slug && pair[locale].slug !== existing?.[locale].slug
+            ? reservation(namespaceOf(locale, mode), pair[locale].slug, mode) : null;
+          if (reserved) {
+            throw new PostError(`${localeName(locale)}: slug is reserved`, 'reserved_slug', { type: reserved.owner, name: reserved.pageKind ?? reserved.segment });
+          }
+          pair[locale].publishedAt = existing?.[locale].publishedAt ?? null;
         }
         if (existing) {
           const revs = revisionsByKey.get(key) ?? [];
           revs.push({
-            id: randomUUID(), savedAt: new Date(), titleDe: existing.de.title, status: existing.status,
+            id: randomUUID(), savedAt: new Date(), title: existing[mode.primary].title, status: existing.status,
             snapshot: structuredClone({ status: existing.status, shared: existing.shared, de: existing.de, en: existing.en }),
           });
           if (revs.length > REVISION_CAP) revs.splice(0, revs.length - REVISION_CAP);
@@ -626,56 +710,63 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
         const status = existing?.status ?? 'draft';
         const stored: Stored = {
           ...structuredClone(pair), translationKey: key, status, updatedAt: nextTime(existing?.updatedAt),
-          // A route lives outside this object; a text revision cannot restore it.
-          publishedAt: existing?.publishedAt, publishedSnapshot: existing?.publishedSnapshot,
+          rowStatus: existing?.rowStatus ?? { de: 'draft', en: 'draft' },
+          publishedSnapshot: existing?.publishedSnapshot ?? {},
           hasUnpublishedChanges: status === 'published',
         };
         byKey.set(key, stored);
-        return { ...structuredClone(stored), galleryWarnings: normalized.galleryWarnings };
-      });
+        return { ...publicPair(stored), galleryWarnings: normalized.galleryWarnings };
+      }));
     },
-    async publish(tk, tokens) {
-      const state = await this.getPublishState(tk);
-      if (!state) throw new PostError('post not found', 'not_found');
-      assertPublishTokens(state, tokens);
-      return withPair(tk, () => {
+    async publish(tk, tokens, validate) {
+      return language.runExclusive((mode) => withPair(tk, async () => {
         const p = byKey.get(tk);
         if (!p) throw new PostError('post not found', 'not_found');
-        assertPublishTokens({ pair: p, routeVersion: null }, tokens);
-        p.status = 'published';
-        p.publishedSnapshot = structuredClone({ shared: p.shared, de: p.de, en: p.en });
-        p.publishedAt = nextTime(p.updatedAt);
-        p.updatedAt = p.publishedAt;
+        assertPublishTokens({ pair: p, routeVersion: null, language: mode }, tokens);
+        validateForPublish(p, mode);
+        await validate?.(publicPair(p), structuredClone(mode));
+        await language.markPublished();
+        p.updatedAt = nextTime(p.updatedAt);
+        for (const locale of requestedLocales(p, mode)) {
+          p.rowStatus[locale] = 'published';
+          p[locale].publishedAt = new Date(p.updatedAt);
+          p.publishedSnapshot[locale] = structuredClone(p[locale]);
+        }
+        p.status = p.rowStatus[mode.primary];
         p.hasUnpublishedChanges = false;
         return { updatedAt: new Date(p.updatedAt) };
-      });
+      }));
     },
     async unpublish(tk) {
-      return withPair(tk, () => {
+      return language.runExclusive(() => withPair(tk, () => {
         const p = byKey.get(tk);
         if (!p) throw new PostError('post not found');
         const previousUpdatedAt = new Date(p.updatedAt);
         p.status = 'draft';
+        p.rowStatus = { de: 'draft', en: 'draft' };
+        p.hasUnpublishedChanges = false;
         p.updatedAt = nextTime(p.updatedAt);
         return { previousUpdatedAt, updatedAt: new Date(p.updatedAt) };
-      });
+      }));
     },
     async remove(tk) {
-      return withPair(tk, async () => {
+      return language.runExclusive(() => withPair(tk, async () => {
         if (!byKey.has(tk)) throw new PostError('post not found');
         await opts.comments?.removeByTranslationKey(tk);
         byKey.delete(tk);
         revisionsByKey.delete(tk);
-      });
+      }));
     },
     async listRevisions(tk) {
+      const mode = await language.get();
       return (revisionsByKey.get(tk) ?? [])
-        .map(({ id, savedAt, titleDe, status }) => ({ id, savedAt, titleDe, status }))
-        .reverse(); // newest first
+        .map(({ id, savedAt, snapshot, status }) => ({ id, savedAt, title: snapshot[mode.primary].title, status }))
+        .reverse();
     },
     async getRevision(tk, id) {
+      const mode = await language.get();
       const rev = (revisionsByKey.get(tk) ?? []).find((r) => r.id === id);
-      return rev ? structuredClone(rev) : null;
+      return rev ? structuredClone({ ...rev, title: rev.snapshot[mode.primary].title }) : null;
     },
     async listCategories() {
       const counts = new Map<string, number>();
@@ -725,6 +816,8 @@ interface PostRow {
   stops: PostShared['stops'] | null; route: string | null; key_facts: Record<string, string> | null;
   body_markdown: string; images: Record<string, ImageDims>; status: PostStatus; updated_at: Date;
   published_at: Date | null;
+  omitted: boolean;
+  published_snapshot: unknown | null;
   categories: string[] | null;
   tags: string[] | null;
   scheduled_at: Date | string | null;
@@ -737,6 +830,8 @@ interface PostListRow {
   status: PostStatus; updated_at: Date; published_at: Date | null;
   hero_image: HeroImage | null; date: Date | string; country: string; region: string;
   has_body: boolean;
+  omitted: boolean;
+  has_snapshot: boolean;
   categories: string[] | null;
   tags: string[] | null;
   scheduled_at: Date | string | null;
@@ -751,6 +846,15 @@ function rowHasUnpublishedChanges(
   return !!r && r.status === 'published' && r.published_at !== null && r.updated_at.getTime() > r.published_at.getTime();
 }
 
+function rowsHaveUnpublishedChanges(rows: { locale: Locale; omitted: boolean; status: PostStatus; published_at: Date | null; updated_at: Date; has_snapshot: boolean }[], language: LanguageConfig): boolean {
+  if (rows.find((row) => row.locale === language.primary)?.status !== 'published') return false;
+  return rows.some((row) => {
+    const requested = language.locales.includes(row.locale) && !row.omitted;
+    const committed = language.locales.includes(row.locale) && row.status === 'published' && row.has_snapshot;
+    return requested !== committed || (requested && rowHasUnpublishedChanges(row));
+  });
+}
+
 function dateText(date: Date | string | null | undefined): string {
   if (date instanceof Date) {
     const pad = (n: number) => String(n).padStart(2, '0');
@@ -760,7 +864,7 @@ function dateText(date: Date | string | null | undefined): string {
 }
 
 function rowLocale(r: PostRow): PostLocale {
-  return { locale: r.locale, slug: r.slug, title: r.title, excerpt: r.excerpt, country: r.country, heroImage: r.hero_image, ...(r.title_image ? { titleImage: r.title_image } : {}), bodyMarkdown: r.body_markdown, images: r.images ?? {}, ...(r.key_facts ? { keyFacts: r.key_facts } : {}) };
+  return { locale: r.locale, omitted: r.omitted, publishedAt: r.published_at, slug: r.slug, title: r.title, excerpt: r.excerpt, country: r.country, heroImage: r.hero_image, ...(r.title_image ? { titleImage: r.title_image } : {}), bodyMarkdown: r.body_markdown, images: r.images ?? {}, ...(r.key_facts ? { keyFacts: r.key_facts } : {}) };
 }
 function rowShared(r: PostRow): PostShared {
   const d = dateText(r.date);
@@ -796,37 +900,38 @@ function localeParams(tk: string, status: string, shared: PostShared, p: PostLoc
     shared.stops?.length ? JSON.stringify(shared.stops) : null, shared.route ?? null, p.keyFacts ? JSON.stringify(p.keyFacts) : null,
     p.bodyMarkdown, JSON.stringify(p.images), status,
     shared.categories ?? [], shared.tags ?? [], shared.scheduledAt ? new Date(shared.scheduledAt) : null,
-    shared.featured ?? false, shared.commentsEnabled ?? true, p.titleImage ? JSON.stringify(p.titleImage) : null];
+    shared.featured ?? false, shared.commentsEnabled ?? true, p.titleImage ? JSON.stringify(p.titleImage) : null, p.omitted ?? false];
 }
 
-async function readPostPair(client: DbPool | DbClient, tk: string, lock = false): Promise<StoredPostPair | null> {
+async function readPostPair(client: DbPool | DbClient, tk: string, language: LanguageConfig, lock = false): Promise<StoredPostPair | null> {
   const { rows } = await client.query<PostRow>(
     `SELECT * FROM posts WHERE translation_key=$1 ORDER BY locale${lock ? ' FOR UPDATE' : ''}`, [tk],
   );
-  return postPairFromRows(tk, rows);
+  return postPairFromRows(tk, rows, language);
 }
 
-function postPairFromRows(tk: string, rows: PostRow[]): StoredPostPair | null {
+function postPairFromRows(tk: string, rows: PostRow[], language: LanguageConfig): StoredPostPair | null {
   const de = rows.find((row) => row.locale === 'de');
   const en = rows.find((row) => row.locale === 'en');
   if (!de || !en) return null;
+  const primary = language.primary === 'de' ? de : en;
   return {
-    translationKey: tk, status: de.status, shared: rowShared(de), de: rowLocale(de), en: rowLocale(en),
-    hasUnpublishedChanges: rowHasUnpublishedChanges(de) || rowHasUnpublishedChanges(en),
+    translationKey: tk, status: primary.status, shared: rowShared(primary), de: rowLocale(de), en: rowLocale(en),
+    hasUnpublishedChanges: rowsHaveUnpublishedChanges(rows.map((row) => ({ ...row, has_snapshot: row.published_snapshot !== null })), language),
     updatedAt: new Date(Math.max(de.updated_at.getTime(), en.updated_at.getTime())),
   };
 }
 
 /** One statement sees both locales and the route version at the same MVCC snapshot. */
-async function readPublishState(client: DbPool | DbClient, tk: string, geometry = false) {
+async function readPublishState(client: DbPool | DbClient, tk: string, language: LanguageState, geometry = false) {
   const { rows } = await client.query<PostRow & { route_version: string | null; route_geometry?: PrivateGeometry | null }>(
     `SELECT p.*, r.version AS route_version${geometry ? ', r.geometry AS route_geometry' : ''}
        FROM posts p LEFT JOIN post_routes r USING (translation_key)
       WHERE p.translation_key=$1 ORDER BY p.locale`, [tk],
   );
-  const pair = postPairFromRows(tk, rows);
+  const pair = postPairFromRows(tk, rows, language);
   const row = rows[0];
-  return pair && row ? { pair, routeVersion: row.route_version, geometry: row.route_geometry ?? null } : null;
+  return pair && row ? { pair, routeVersion: row.route_version, geometry: row.route_geometry ?? null, language } : null;
 }
 
 interface PgPostStoreOptions {
@@ -839,6 +944,18 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
   const writable = () => {
     if (options.isWritable && !options.isWritable()) throw new PostError('Storage is read-only; restart the app after database recovery.', 'storage_read_only');
   };
+  async function consistentRead<T>(read: (client: DbClient, language: LanguageState) => Promise<T>): Promise<T> {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+      const result = await read(client, await readLanguage(client));
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw error;
+    } finally { client.release(); }
+  }
   // Plain INSERT: a (locale, slug) collision surfaces as 23505 from
   // posts_locale_slug_idx and is mapped to duplicate_slug by the caller — never
   // ON CONFLICT DO UPDATE, which re-assigned another pair's row (issue #106).
@@ -846,8 +963,8 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
     await client.query(
       `INSERT INTO posts (translation_key, locale, slug, title, date, country, country_code, region,
          excerpt, hero_image, coordinates, stops, route, key_facts, body_markdown, images, status,
-         categories, tags, scheduled_at, featured, comments_enabled, title_image, id, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24, now())`,
+         categories, tags, scheduled_at, featured, comments_enabled, title_image, omitted, id, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25, now())`,
       [...localeParams(tk, status, shared, p), randomUUID()],
     );
   }
@@ -858,7 +975,7 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
     const res = await client.query(
       `UPDATE posts SET slug=$3, title=$4, date=$5, country=$6, country_code=$7, region=$8, excerpt=$9,
          hero_image=$10, coordinates=$11, stops=$12, route=$13, key_facts=$14, body_markdown=$15, images=$16,
-         status=$17, categories=$18, tags=$19, scheduled_at=$20, featured=$21, comments_enabled=$22, title_image=$23
+         status=$17, categories=$18, tags=$19, scheduled_at=$20, featured=$21, comments_enabled=$22, title_image=$23, omitted=$24
        WHERE translation_key=$1 AND locale=$2`,
       localeParams(tk, status, shared, p),
     );
@@ -866,9 +983,11 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
     if (res.rowCount !== 1) throw new PostError('post not found');
   }
   return {
+    language: pgLanguageStore(pool),
     async list() {
-      const { rows } = await pool.query<PostListRow>(
-        `SELECT translation_key, locale, slug, title, status, updated_at, published_at,
+      return consistentRead(async (client, language) => {
+      const { rows } = await client.query<PostListRow>(
+        `SELECT translation_key, locale, slug, title, status, updated_at, published_at, omitted, published_snapshot IS NOT NULL AS has_snapshot,
                 hero_image, date, country, region, btrim(body_markdown) <> '' AS has_body,
                 categories, tags, scheduled_at
            FROM posts ORDER BY updated_at DESC`,
@@ -876,34 +995,52 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
       const byKey = new Map<string, { de?: PostListRow; en?: PostListRow }>();
       for (const r of rows) { const e = byKey.get(r.translation_key) ?? {}; e[r.locale] = r; byKey.set(r.translation_key, e); }
       return [...byKey.entries()].map(([tk, e]) => {
-        const hero = e.de?.hero_image?.src ? e.de.hero_image : e.en?.hero_image;
-        const shared = e.de ?? e.en;
+        const shared = e[language.primary];
+        const secondary = language.locales.find((locale) => locale !== language.primary);
+        const other = secondary ? e[secondary] : undefined;
+        const hero = shared?.hero_image?.src ? shared.hero_image : other?.hero_image;
         return {
-          translationKey: tk, titleDe: e.de?.title ?? '', slugDe: e.de?.slug ?? '', slugEn: e.en?.slug ?? '',
-          status: (e.de?.status ?? e.en?.status ?? 'draft') as PostStatus,
+          translationKey: tk, title: shared?.title ?? '', slugs: { de: e.de?.slug ?? '', en: e.en?.slug ?? '' },
+          status: shared?.status ?? 'draft',
           updatedAt: new Date(Math.max(e.de?.updated_at?.getTime() ?? 0, e.en?.updated_at?.getTime() ?? 0)),
-          hasUnpublishedChanges: rowHasUnpublishedChanges(e.de) || rowHasUnpublishedChanges(e.en),
-          hasEnBody: Boolean(e.en?.has_body),
+          hasUnpublishedChanges: rowsHaveUnpublishedChanges(Object.values(e), language),
+          secondaryStatus: !other ? 'none' as const : other.omitted ? 'omitted' as const : other.has_body ? 'started' as const : 'empty' as const,
           heroSrc: hero?.src ?? '', heroWidth: hero?.width ?? 0,
           ...(hero?.format === 'jpeg' ? { heroFormat: hero.format } : {}),
-          date: dateText(shared?.date), country: e.de?.country || e.en?.country || '', region: shared?.region ?? '',
+          date: dateText(shared?.date), country: shared?.country || other?.country || '', region: shared?.region ?? '',
           categories: shared?.categories ?? [],
           tags: shared?.tags ?? [],
           scheduledAt: shared?.scheduled_at ? new Date(shared.scheduled_at).toISOString() : null,
         };
       });
+      });
     },
-    get: (tk) => readPostPair(pool, tk),
+    get: (tk) => consistentRead((client, language) => readPostPair(client, tk, language)),
     async getPublishState(tk) {
-      const state = await readPublishState(pool, tk);
-      return state ? { pair: state.pair, routeVersion: state.routeVersion } : null;
+      return consistentRead(async (client, language) => {
+        const state = await readPublishState(client, tk, language);
+        return state ? { pair: state.pair, routeVersion: state.routeVersion, language } : null;
+      });
     },
     async getPublishedTrack(tk) {
-      const { rows } = await pool.query<PublishedTrackRow>(
-        'SELECT locale, published_snapshot FROM posts WHERE translation_key=$1 ORDER BY locale', [tk],
-      );
-      try { return publishedTrackOf(rows); }
-      catch { throw new PostError('invalid published route snapshots', 'invalid_published_track'); }
+      return consistentRead(async (client, language) => {
+        const { rows } = await client.query<PublishedTrackRow>(
+          'SELECT locale, status, omitted, published_at, published_snapshot FROM posts WHERE translation_key=$1 ORDER BY locale', [tk],
+        );
+        if (!rows.length) throw new PostError('post not found', 'not_found');
+        try { return publishedTrackOf(rows, language); }
+        catch { throw new PostError('invalid published route snapshots', 'invalid_published_track'); }
+      });
+    },
+    async getPublishedLocales(tk) {
+      return consistentRead(async (client, language) => {
+        const { rows } = await client.query<{ locale: Locale }>(
+          `SELECT locale FROM posts WHERE translation_key=$1 AND locale=ANY($2::text[])
+             AND status='published' AND published_snapshot IS NOT NULL ORDER BY locale`, [tk, language.locales],
+        );
+        const locales = rows.map((row) => row.locale);
+        return locales.includes(language.primary) ? language.locales.filter((locale) => locales.includes(locale)) : [];
+      });
     },
     async usageRows() {
       // The second SELECT mirrors the site loader's filter (postgres-loader.ts:
@@ -924,26 +1061,36 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
         ...(r.title_image ? { titleImage: r.title_image } : {}),
       }));
     },
-    async upsertDraft(pair, baseUpdatedAt) {
-      const normalized = await draftWithDefaults(pair);
-      pair = normalized.pair;
+    async upsertDraft(pair, baseUpdatedAt, baseLanguageUpdatedAt) {
       const tk = pair.translationKey || randomUUID();
       writable();
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
+        const language = await readLanguage(client, true);
+        assertDraftLanguage(language, baseLanguageUpdatedAt);
+        validateDraft(pair, language);
         await lockPostPair(client, tk);
-        const existing = await readPostPair(client, tk, true);
+        const existing = await readPostPair(client, tk, language, true);
+        // Inside the pair lock: a disabled locale keeps the row read here.
+        const normalized = await draftWithDefaults(pair, language, existing);
+        pair = normalized.pair;
         if (!existing && baseUpdatedAt) throw new PostError('post not found', 'not_found');
         if (existing) assertNotStale(existing.updatedAt, baseUpdatedAt);
         const status = existing?.status ?? 'draft';
         for (const locale of ['de', 'en'] as Locale[]) {
           const slug = pair[locale].slug;
+          if (existing?.[locale].publishedAt && pair[locale].omitted) throw new PostError('cannot omit a previously published locale', 'locale_published');
           if (slug !== '') {
             const { rows } = await client.query<{ translation_key: string }>(`SELECT translation_key FROM posts WHERE locale=$1 AND slug=$2`, [locale, slug]);
             if (rows[0] && rows[0].translation_key !== tk) throw new PostError(`slug "${slug}" already in use for ${locale}`, 'duplicate_slug');
           }
-          if (existing && existing.status === 'published' && existing[locale].slug !== slug) throw new PostError('cannot change the slug of a published post', 'slug_locked');
+          if (existing?.[locale].publishedAt && existing[locale].slug !== slug) throw new PostError('cannot change the slug of a published post', 'slug_locked');
+          const reserved = slug && slug !== existing?.[locale].slug
+            ? reservation(namespaceOf(locale, language), slug, language) : null;
+          if (reserved) {
+            throw new PostError(`${localeName(locale)}: slug is reserved`, 'reserved_slug', { type: reserved.owner, name: reserved.pageKind ?? reserved.segment });
+          }
         }
         if (existing) {
           await client.query(
@@ -957,15 +1104,17 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
                  ORDER BY saved_at DESC, id DESC LIMIT $2)`,
             [tk, REVISION_CAP],
           );
-          await updateLocale(client, tk, status, pair.shared, { ...pair.de, locale: 'de' });
-          await updateLocale(client, tk, status, pair.shared, { ...pair.en, locale: 'en' });
+          for (const locale of ['de', 'en'] as const) {
+            const rowStatus = status === 'published' && existing[locale].publishedAt ? 'published' : 'draft';
+            await updateLocale(client, tk, rowStatus, pair.shared, pair[locale]);
+          }
         } else {
           await insertLocale(client, tk, status, pair.shared, { ...pair.de, locale: 'de' });
           await insertLocale(client, tk, status, pair.shared, { ...pair.en, locale: 'en' });
         }
         await touchPostPair(client, tk);
         // Return this save's token, not a later writer's post-COMMIT read.
-        const saved = await readPostPair(client, tk);
+        const saved = await readPostPair(client, tk, language);
         if (!saved) throw new PostError('failed to save post');
         writable();
         await client.query('COMMIT');
@@ -976,9 +1125,9 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
         throw e;
       } finally { client.release(); }
     },
-    async publish(tk, tokens) {
+    async publish(tk, tokens, validate) {
       writable();
-      const state = await readPublishState(pool, tk, true);
+      const state = await consistentRead((client, language) => readPublishState(client, tk, language, true));
       if (!state) throw new PostError('post not found', 'not_found');
       assertPublishTokens(state, tokens);
       let track: PublicTrack | undefined;
@@ -989,21 +1138,25 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
+        const language = await readLanguage(client, true);
         await lockPostPair(client, tk);
-        const pair = await readPostPair(client, tk, true);
+        const pair = await readPostPair(client, tk, language, true);
         if (!pair) throw new PostError('post not found', 'not_found');
         const route = await client.query<{ version: string }>(
           'SELECT version FROM post_routes WHERE translation_key=$1 FOR UPDATE', [tk],
         );
-        assertPublishTokens({ pair, routeVersion: route.rows[0]?.version ?? null }, tokens);
+        assertPublishTokens({ pair, routeVersion: route.rows[0]?.version ?? null, language }, tokens);
+        validateForPublish(pair, language);
+        await validate?.(pair, language, client);
         const updatedAt = await touchPostPair(client, tk);
         // This merge exists ONLY at explicit Publish; legacy backfills stay route-free.
         await client.query(
           `UPDATE posts SET status='published',
              published_snapshot=${POST_SNAPSHOT_SQL} || $3::jsonb, published_at=$2
-           WHERE translation_key=$1`,
-          [tk, updatedAt, JSON.stringify(track ? { track } : {})],
+           WHERE translation_key=$1 AND locale=ANY($4::text[]) AND NOT omitted`,
+          [tk, updatedAt, JSON.stringify(track ? { track } : {}), requestedLocales(pair, language)],
         );
+        await client.query('UPDATE site_language SET locked_at=COALESCE(locked_at, now()) WHERE id=true');
         writable();
         await client.query('COMMIT');
         return { updatedAt };
@@ -1017,8 +1170,9 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
+        const language = await readLanguage(client, true);
         await lockPostPair(client, tk);
-        const pair = await readPostPair(client, tk, true);
+        const pair = await readPostPair(client, tk, language, true);
         if (!pair) throw new PostError('post not found');
         const updatedAt = await touchPostPair(client, tk);
         await client.query(`UPDATE posts SET status='draft' WHERE translation_key=$1`, [tk]);
@@ -1040,6 +1194,7 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
         const client = await pool.connect();
         try {
           await client.query('BEGIN');
+          await readLanguage(client, true);
           await lockPostPair(client, tk);
           const rows = await client.query('SELECT locale FROM posts WHERE translation_key=$1 ORDER BY locale FOR UPDATE', [tk]);
           if (rows.rowCount === 0) throw new PostError('post not found', 'not_found');
@@ -1062,28 +1217,31 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
       else await remove();
     },
     async listRevisions(tk) {
-      // Pull only the summary fields out of the jsonb — bodies can be large.
-      const { rows } = await pool.query<{ id: string; saved_at: Date; title_de: string | null; status: string }>(
-        `SELECT id, saved_at, snapshot->'de'->>'title' AS title_de, snapshot->>'status' AS status
-           FROM post_revisions WHERE translation_key = $1 ORDER BY saved_at DESC, id DESC`,
-        [tk],
-      );
-      return rows.map((r) => ({
-        id: r.id, savedAt: r.saved_at, titleDe: r.title_de ?? '',
-        status: r.status === 'published' ? 'published' as const : 'draft' as const,
-      }));
+      return consistentRead(async (client, language) => {
+        const { rows } = await client.query<{ id: string; saved_at: Date; title: string | null; status: string }>(
+          `SELECT id, saved_at, snapshot->$2->>'title' AS title, snapshot->>'status' AS status
+             FROM post_revisions WHERE translation_key = $1 ORDER BY saved_at DESC, id DESC`,
+          [tk, language.primary],
+        );
+        return rows.map((r) => ({
+          id: r.id, savedAt: r.saved_at, title: r.title ?? '',
+          status: r.status === 'published' ? 'published' as const : 'draft' as const,
+        }));
+      });
     },
     async getRevision(tk, id) {
       // Reject non-UUID ids before querying: a malformed uuid parameter raises
       // Postgres 22P02 (a logged 500) instead of the 404 the route wants.
       if (!UUID_RE.test(id)) return null;
-      const { rows } = await pool.query<{ id: string; saved_at: Date; snapshot: RevisionSnapshot }>(
-        `SELECT id, saved_at, snapshot FROM post_revisions WHERE translation_key = $1 AND id = $2`,
-        [tk, id],
-      );
-      const r = rows[0];
-      if (!r) return null;
-      return { id: r.id, savedAt: r.saved_at, titleDe: r.snapshot.de.title, status: r.snapshot.status as PostStatus, snapshot: r.snapshot };
+      return consistentRead(async (client, language) => {
+        const { rows } = await client.query<{ id: string; saved_at: Date; snapshot: RevisionSnapshot }>(
+          `SELECT id, saved_at, snapshot FROM post_revisions WHERE translation_key = $1 AND id = $2`,
+          [tk, id],
+        );
+        const r = rows[0];
+        if (!r) return null;
+        return { id: r.id, savedAt: r.saved_at, title: r.snapshot[language.primary].title, status: r.snapshot.status, snapshot: r.snapshot };
+      });
     },
     async listCategories() {
       const { rows } = await pool.query<{ category: string; count: string }>(
@@ -1101,7 +1259,7 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
     },
     async getCmsStats() {
       const { rows: postStats } = await pool.query<{ status: string; count: string }>(
-        `SELECT status, COUNT(DISTINCT translation_key) AS count FROM posts GROUP BY status`,
+        `SELECT p.status, COUNT(*) AS count FROM posts p JOIN site_language l ON l.id=true AND p.locale=l.primary_locale GROUP BY p.status`,
       );
       let total = 0, draft = 0, published = 0;
       for (const r of postStats) {

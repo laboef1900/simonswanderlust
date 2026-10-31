@@ -185,7 +185,7 @@ describe('memoryPageStore', () => {
     expect(a.value).toEqual({ ...stored, galleryWarnings: [] });
     expect(a.value.updatedAt!.getTime()).toBeGreaterThan(base.updatedAt!.getTime());
     // One revision: the true predecessor, taken once.
-    expect((await s.listRevisions('about')).map((r) => r.titleDe)).toEqual(['Über mich']);
+    expect((await s.listRevisions('about')).map((r) => r.title)).toEqual(['Über mich']);
   });
 
   it('overlapping token-less saves are both accepted in order, and the overwritten one is a revision (#344)', async () => {
@@ -197,7 +197,7 @@ describe('memoryPageStore', () => {
     expect(b.updatedAt!.getTime()).toBeGreaterThan(a.updatedAt!.getTime());
     expect({ ...await s.get('fresh'), galleryWarnings: [] }).toEqual(b);
     const revs = await s.listRevisions('fresh');
-    expect(revs.map((r) => r.titleDe)).toEqual(['first']);
+    expect(revs.map((r) => r.title)).toEqual(['first']);
     expect((await s.getRevision('fresh', revs[0]!.id))!.snapshot.de.title).toBe('first');
   });
 
@@ -212,8 +212,8 @@ describe('memoryPageStore', () => {
     expect(revs).toHaveLength(REVISION_CAP);
     // The newest revision is the state the LAST save overwrote (v21), the
     // oldest survivors dropped the seed and v1.
-    expect(revs[0]!.titleDe).toBe(`v${REVISION_CAP + 1}`);
-    expect(revs[REVISION_CAP - 1]!.titleDe).toBe('v2');
+    expect(revs[0]!.title).toBe(`v${REVISION_CAP + 1}`);
+    expect(revs[REVISION_CAP - 1]!.title).toBe('v2');
     const full = await s.getRevision('about', revs[0]!.id);
     expect(full!.snapshot).toEqual({ de: { ...pair().de, title: `v${REVISION_CAP + 1}`, bodyMarkdown: `body ${REVISION_CAP + 1}` }, en: pair().en });
     expect(await s.getRevision('about', 'nope')).toBeNull();

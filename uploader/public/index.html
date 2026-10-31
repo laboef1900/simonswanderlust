@@ -37,6 +37,7 @@
 
     <script src="/admin/editor-image-copy.js"></script>
     <script src="/admin/auth.js"></script>
+    <script src="/admin/language.js"></script>
     <script src="/admin/posts-filter.js"></script>
     <script src="/admin/desk.js"></script>
     <script>
@@ -91,7 +92,7 @@
       function tripLink(post, label) {
         const a = el('a', 'desk-title');
         a.href = editorHref(post.translationKey);
-        a.textContent = label || post.titleDe || '(German title not set)';
+        a.textContent = label || post.title || SiteLanguage.text('Untitled');
         return a;
       }
 
@@ -134,7 +135,7 @@
         const bits = [
           post.country,
           post.region,
-          Desk.englishBodyLabel(post.hasEnBody),
+          Desk.secondaryBodyLabel(post.secondaryStatus, SiteLanguage.config()),
         ].filter(Boolean);
         const edited = Desk.formatUpdatedAt(post.updatedAt);
         if (edited) bits.push('Last edited ' + edited);
@@ -288,6 +289,8 @@
         const s = await Auth.ensureAuthed();
         if (!s) return;
         Auth.renderHeader(s);
+        try { await SiteLanguage.get(); }
+        catch (error) { $('deskError').hidden = false; $('deskError').textContent = error.message; return; }
         await loadDesk();
       })();
     </script>

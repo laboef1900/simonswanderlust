@@ -1,6 +1,7 @@
 import type pg from 'pg';
 import { IdentityError, IDENTITY_LOCALIZED_FIELDS, normalizeIdentity, neutralIdentity, type Identity, type IdentityLocale } from '../../site/src/lib/site-identity.js';
 import { LEGACY_IDENTITY } from './site-identity-legacy.js';
+import { memoryLanguageStore, readLanguage, type LanguageStore } from './language.js';
 import { identityAssetRoles, validateIdentityAssetGroup, type IdentityAssetGroup, type StoredIdentityAsset } from './site-identity-assets.js';
 
 export type IdentitySeedSource = 'neutral' | 'legacy' | 'restored-legacy';
@@ -126,10 +127,11 @@ export async function pgSiteIdentityStore(pool: pg.Pool): Promise<SiteIdentitySt
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
+        const language = await readLanguage(client, true);
         const locked = await client.query<IdentityRow>('SELECT * FROM site_identity WHERE id = true FOR UPDATE');
         const row = locked.rows[0];
         if (!row || row.revision !== revision) throw new IdentityConflictError();
-        const next = mergeIdentityEdit(identityFromRow(row), input);
+        const next = mergeIdentityEdit(identityFromRow(row), input, language.locales);
         const result = await client.query<IdentityRow>(`UPDATE site_identity SET site_name=$1, author_name=$2,
           localized=$3::jsonb, social_links=$4::jsonb, revision=revision+1, saved_at=now(), updated_at=now()
           WHERE id = true RETURNING *`, [next.siteName, next.authorName, JSON.stringify(localized(next)), JSON.stringify(next.socialLinks)]);
@@ -146,7 +148,7 @@ export async function pgSiteIdentityStore(pool: pg.Pool): Promise<SiteIdentitySt
   };
 }
 /** In-memory implementation shares the exact write validator for route/unit fixtures. */
-export function memorySiteIdentityStore(identity: Identity = neutralIdentity()): SiteIdentityStore {
+export function memorySiteIdentityStore(identity: Identity = neutralIdentity(), language: LanguageStore = memoryLanguageStore()): SiteIdentityStore {
   let current: IdentityRecord = { revision: 1, savedAt: null, seedSource: 'neutral', identity: normalizeIdentity(identity) };
   let assets: IdentityAssetState = { logo: false, favicon: false };
   return {
@@ -160,9 +162,11 @@ export function memorySiteIdentityStore(identity: Identity = neutralIdentity()):
       return structuredClone(current);
     },
     async update(revision, input) {
+      return language.runExclusive(async (mode) => {
       if (revision !== current.revision) throw new IdentityConflictError();
-      current = { ...current, revision: revision + 1, savedAt: new Date().toISOString(), identity: mergeIdentityEdit(current.identity, input) };
+      current = { ...current, revision: revision + 1, savedAt: new Date().toISOString(), identity: mergeIdentityEdit(current.identity, input, mode.locales) };
       return structuredClone(current);
+      });
     },
   };
 }

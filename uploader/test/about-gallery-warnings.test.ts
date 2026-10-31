@@ -22,7 +22,7 @@ const drain = async () => {
   }
 };
 
-function loadPage(save: (payload: PagePayload) => Promise<Response>) {
+async function loadPage(save: (payload: PagePayload) => Promise<Response>) {
   const dom = editorDocument(markup);
   const editors: BodyEditor[] = [];
   class BodyEditor {
@@ -57,15 +57,20 @@ function loadPage(save: (payload: PagePayload) => Promise<Response>) {
   const context: Record<string, unknown> = {
     ...galleryCodecBindings, document: dom.document, EasyMDE: BodyEditor,
     AbortController, setTimeout, clearTimeout, console,
-    location: { origin: 'http://localhost' },
-    Auth: { ensureAuthed: async () => null, renderHeader() {} },
+    location: { origin: 'http://localhost', search: '' }, URLSearchParams,
+    Auth: { ensureAuthed: async () => ({ isAdmin: true }), renderHeader() {} },
+    EditorCopy: { en: Object.fromEntries(Object.entries(ui.en).filter(([key]) => key.startsWith('editor.chrome.')).map(([key, value]) => [key.slice('editor.chrome.'.length), value])) },
     AdminConfirm: { ask: async () => true },
-    DraftGuard: { createDraftGuard: () => ({ snapshot: () => 'snapshot', markDirty() {}, markClean() {}, redirectToLogin() {} }) },
+    DraftGuard: { createDraftGuard: () => ({ snapshot: () => 'snapshot', markDirty() {}, markClean() {}, redirectToLogin() {}, tryRestore: () => null }) },
     EditorGalleryCopy: Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [locale,
       Object.fromEntries(Object.entries(strings).filter(([key]) => key.startsWith('editor.gallery.'))
         .map(([key, value]) => [key.slice('editor.gallery.'.length), value])),
     ])),
     fetch: async (url: string, init?: RequestInit) => {
+      // The page loads its language mode (#284) before it can save.
+      if (url === '/language') return response({ primary: 'de', locales: ['de', 'en'], lockedAt: null, updatedAt: '2026-10-27T00:00:00.000Z' });
+      if (url === '/pages/about' && !init?.method) return response({ key: 'about', updatedAt: null,
+        de: { locale: 'de', title: '', bodyMarkdown: '', images: {} }, en: { locale: 'en', title: '', bodyMarkdown: '', images: {} } });
       if (url === '/gallery/analyze') return response(await analyzeGallerySource(JSON.parse(String(init?.body)).bodyMarkdown));
       if (url === '/pages/about' && init?.method === 'PUT') return save(JSON.parse(String(init.body)) as PagePayload);
       return response([]);
@@ -73,9 +78,11 @@ function loadPage(save: (payload: PagePayload) => Promise<Response>) {
   };
   context.window = context;
   vm.createContext(context);
-  for (const file of ['tabs.js', 'gallery-fence.js', 'gallery-metadata-warnings.js']) vm.runInContext(browserScript(file), context);
+  for (const file of ['language.js', 'tabs.js', 'gallery-fence.js', 'gallery-metadata-warnings.js']) vm.runInContext(browserScript(file), context);
   vm.runInContext(script, context);
   const api = vm.runInContext('({ fill })', context) as { fill(locale: string, data: { title: string; bodyMarkdown: string }): void };
+  // Let initialization (language + stored page) settle before the test edits.
+  await drain();
   return { api, editors, el, document: dom.document };
 }
 
@@ -90,7 +97,7 @@ const source = '<BodyImage\n src="https://img/intro"\n width={10}\n height={20}\
 describe('About page saved gallery warnings', () => {
   it('reopens advisories and retains honest saved warnings when rebuilding or a later write fails', async () => {
     let failWrite = false;
-    const h = loadPage(async (payload) => failWrite ? response({ error: 'not saved' }, 500) : successful(payload, false));
+    const h = await loadPage(async (payload) => failWrite ? response({ error: 'not saved' }, 500) : successful(payload, false));
     h.api.fill('de', { title: 'Über mich', bodyMarkdown: source });
     h.api.fill('en', { title: 'About', bodyMarkdown: source });
     await drain();
@@ -115,7 +122,7 @@ describe('About page saved gallery warnings', () => {
     const pending = Promise.withResolvers<Response>();
     let captured: PagePayload | undefined;
     let hold = true;
-    const h = loadPage(async (payload) => { captured = payload; return hold ? pending.promise : successful(payload); });
+    const h = await loadPage(async (payload) => { captured = payload; return hold ? pending.promise : successful(payload); });
     h.api.fill('de', { title: 'Über mich', bodyMarkdown: '' });
     h.api.fill('en', { title: 'About', bodyMarkdown: source });
     h.el('saveBtn').click();

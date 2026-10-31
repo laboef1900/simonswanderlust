@@ -4,7 +4,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { SESSION_COOKIE } from './authn.js';
 import { normalizeProcessOptions, processImage, type ProcessOptions } from './pipeline.js';
 import { contentHashKey, storeVariants, type StorageOptions, type StoredImage } from './storage.js';
-import { BACKUP_FILE_RE, BackupError, dumpDatabase, readDump, resolveBackupDir, restoreDatabase, validateIdentityAssets, IDENTITY_DUMP_VERSION, type Dump } from './backup.js';
+import { BACKUP_FILE_RE, BackupError, dumpDatabase, dumpLanguage, readDump, resolveBackupDir, restoreDatabase, validateIdentityAssets, IDENTITY_DUMP_VERSION, type Dump } from './backup.js';
 import { passwordPolicyViolation, type UserStore } from './users.js';
 import type { SessionStore } from './sessions.js';
 import { createSettingsStore, defaultSettings } from './settings.js';
@@ -12,6 +12,7 @@ import { acquireStorageOwner, StorageReadOnlyError, type StorageOwner } from './
 import { createGpxFiles } from './gpx-files.js';
 import { verifyRouteArchive, routeRecoverySummary } from './gpx-backup.js';
 import type { DbPool } from './db.js';
+import { readLanguage, type LanguageConfig } from './language.js';
 
 /** Reusable: process an in-memory image and store its variants.
  * Keys are content-hash versioned like POST /upload, so a re-upload mints a
@@ -52,7 +53,7 @@ function describeDatabase(databaseUrl: string): string {
   }
 }
 
-const RESTORE_TABLES = ['users', 'posts', 'pages', 'media', 'media_folders', 'comments', 'post_routes', 'site_identity', 'site_identity_assets'] as const;
+const RESTORE_TABLES = ['users', 'posts', 'pages', 'media', 'media_folders', 'comments', 'post_routes', 'site_identity', 'site_identity_assets', 'site_language'] as const;
 type RowCounts = Record<(typeof RESTORE_TABLES)[number], number>;
 
 /** `users 3, posts 12, …` — the same shape for the dump and for the live rows,
@@ -61,11 +62,22 @@ function formatCounts(c: RowCounts): string {
   return RESTORE_TABLES.map((t) => `${t} ${c[t]}`).join(', ');
 }
 
-/** Parse `restore [--yes] <file>`; the flag may appear on either side of the path. */
-export function parseRestoreArgs(args: string[]): { yes: boolean; file: string | undefined } {
+/** Restore flags may appear on either side of the path. */
+export function parseRestoreArgs(args: string[]): { yes: boolean; acceptLanguageChange: boolean; file: string | undefined } {
   const yes = args.includes('--yes');
-  const rest = args.filter((a) => a !== '--yes');
-  return { yes, file: rest[0] };
+  const acceptLanguageChange = args.includes('--accept-language-change');
+  const rest = args.filter((a) => a !== '--yes' && a !== '--accept-language-change');
+  return { yes, acceptLanguageChange, file: rest[0] };
+}
+
+export function requiresLanguageAcceptance(live: LanguageConfig & { lockedAt: Date | null }, restored: LanguageConfig): boolean {
+  return live.lockedAt !== null && (live.primary !== restored.primary
+    || live.locales.length !== restored.locales.length
+    || live.locales.some(locale => !restored.locales.includes(locale)));
+}
+
+function describeLanguage(language: LanguageConfig): string {
+  return `${language.locales.map(locale => locale.toUpperCase()).join('+')}, ${language.primary.toUpperCase()} primary`;
 }
 
 /**
@@ -74,13 +86,13 @@ export function parseRestoreArgs(args: string[]): { yes: boolean; file: string |
  * rows transactionally. The owner stops the app first and restarts it afterward.
  */
 async function restoreMain(args: string[]): Promise<void> {
-  const { yes, file } = parseRestoreArgs(args);
+  const { yes, acceptLanguageChange, file } = parseRestoreArgs(args);
   if (!file) {
     console.error(
       'usage: docker compose stop app\n' +
-      '       docker compose run --rm --no-deps --entrypoint node app --import tsx src/cli.ts restore [--yes] /data/backup/db/db-YYYYMMDD-HHmmss.json.gz\n' +
-      '       (bare dev: stop the app, then node --import tsx src/cli.ts restore [--yes] <file>)\n' +
-      '       --yes skips confirmation, never exclusive ownership or the verified pre-restore backup.',
+      '       docker compose run --rm --no-deps --entrypoint node app --import tsx src/cli.ts restore [--yes] [--accept-language-change] /data/backup/db/db-YYYYMMDD-HHmmss.json.gz\n' +
+      '       (bare dev: stop the app, then node --import tsx src/cli.ts restore [--yes] [--accept-language-change] <file>)\n' +
+      '       --yes skips confirmation, never exclusive ownership, language-change acceptance or the verified pre-restore backup.',
     );
     process.exit(1);
   }
@@ -111,6 +123,7 @@ async function restoreMain(args: string[]): Promise<void> {
     post_routes: dump.tables.post_routes?.length ?? 0,
     site_identity: dump.version < IDENTITY_DUMP_VERSION ? 1 : dump.tables.site_identity!.length,
     site_identity_assets: dump.tables.site_identity_assets?.length ?? 0,
+    site_language: 1,
   };
   const { createPool } = await import('./db.js');
   let owner: StorageOwner | undefined;
@@ -131,6 +144,11 @@ async function restoreMain(args: string[]): Promise<void> {
     for (const t of RESTORE_TABLES) {
       live[t] = Number((await pool.query(`SELECT count(*) AS n FROM ${t}`)).rows[0].n);
     }
+    const liveLanguage = await readLanguage(pool);
+    if (liveLanguage.lockedAt === null) {
+      liveLanguage.lockedAt = (await pool.query<{ published_at: Date | null }>('SELECT min(published_at) AS published_at FROM posts')).rows[0]?.published_at ?? null;
+    }
+    const restoredLanguage = dumpLanguage(dump);
     console.log(`target database: ${describeDatabase(databaseUrl)}`);
     console.log(`dump:            ${file} (v${dump.version}, created ${dump.createdAt}) — ${formatCounts(dumpCounts)}`);
     console.log(`about to REPLACE the live rows: ${formatCounts(live)} — and invalidate every session.`);
@@ -141,6 +159,12 @@ async function restoreMain(args: string[]): Promise<void> {
     console.log(dump.version < IDENTITY_DUMP_VERSION
       ? 'identity: will restore the legacy brand (dump predates identity), keep the live canonical origin if set, and remove identity assets.'
       : 'identity: will replace the complete stored identity and assets, including retained locale values.');
+    console.log(`language: live ${describeLanguage(liveLanguage)} (${liveLanguage.lockedAt ? 'locked' : 'unlocked'}); dump ${describeLanguage(restoredLanguage)}.`);
+    if (requiresLanguageAcceptance(liveLanguage, restoredLanguage) && !acceptLanguageChange) {
+      console.error('refusing a language-mode change on a locked install: pass --accept-language-change in addition to yes/--yes. nothing was changed.');
+      process.exitCode = 1;
+      return;
+    }
     const recovery = routeRecoverySummary(dump.routeArchive);
     console.log(`Private routes: ${dumpCounts.post_routes}; originals: ${recovery.status} ` +
       `(present ${recovery.present}, missing ${recovery.missing}, corrupt ${recovery.corrupt}, unreadable ${recovery.unreadable}, oversized ${recovery.oversized}).`);
@@ -177,7 +201,7 @@ async function restoreMain(args: string[]): Promise<void> {
     console.log(dump.version < IDENTITY_DUMP_VERSION
       ? 'identity: restored legacy brand (dump predates identity). Review Settings → Site identity'
       : 'identity: restored stored identity and assets. Public output updates at the next rebuild.');
-    console.log(`to undo: restore --yes ${preDump}`);
+    console.log(`to undo: restore --yes --accept-language-change ${preDump}`);
     console.log('Restart the app with the same data/settings configuration, then rebuild through /admin/settings.html → \"Rebuild site now\".');
   } catch (e) {
     // Only admission is guaranteed not to have written anything. Later restore

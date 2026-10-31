@@ -29,6 +29,16 @@ function post(de: Partial<PostLocale>, en: Partial<PostLocale> = {}) {
 const hero = (alt: string) => ({ heroImage: { src: `${IMG}/trips/rhodos/hero`, width: 3000, height: 2000, alt } });
 const dims: ImageDims = { width: 3000, height: 2000 };
 
+describe('auditAltText — requested languages', () => {
+  it('does not report retained omitted content and follows primary-first order', async () => {
+    const pair = post({ title: 'Rhodos', ...hero(''), omitted: true }, { title: 'Rhodes', ...hero('') });
+    expect((await auditAltText(pair, undefined, ['en', 'de'])).images.map((image) => image.locale)).toEqual(['en']);
+    pair.de.omitted = false;
+    expect((await auditAltText(pair, undefined, ['en'])).images.map((image) => image.locale)).toEqual(['en']);
+    expect((await auditAltText(pair, undefined, ['en', 'de'])).images.map((image) => image.locale)).toEqual(['en', 'de']);
+  });
+});
+
 describe('auditAltText — hero', () => {
   it('reports a hero whose alt only repeats the title, and passes a real description', async () => {
     const repeated = (await auditAltText(post({ title: 'Rhodos', ...hero('Rhodos') })));

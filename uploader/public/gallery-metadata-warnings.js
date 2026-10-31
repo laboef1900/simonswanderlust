@@ -84,6 +84,9 @@ window.GalleryMetadataWarnings = (function () {
       saved(warnings, payload) {
         ++navigation;
         for (const locale of ['de', 'en']) {
+          // A language-mode save (#284) carries only its editable locales;
+          // a locale it did not send keeps its current advisory state.
+          if (!payload[locale]) continue;
           ++versions[locale];
           states.set(locale, { snapshot: payload[locale].bodyMarkdown, saved: true,
             warnings: (warnings || []).filter((warning) => warning.locale === locale) });

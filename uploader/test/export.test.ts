@@ -2,10 +2,14 @@ import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
-import { exportPost, renderPostToMdx } from '../src/export.js';
+import { exportAll, exportPost, renderPostToMdx } from '../src/export.js';
 import { normalizeBodyImages, type PostPair } from '../src/posts.js';
 import { escapeMeta } from '../public/gallery-photo-line.js';
 import * as bodyContent from '../src/body-content.js';
+import { DEFAULT_LANGUAGE, type LanguageConfig } from '../src/language.js';
+import { publishedTrackOf, type PublishedTrackRow } from '../src/published-track.js';
+
+const NO_TRACK = { language: DEFAULT_LANGUAGE, locales: [] };
 
 const pair: PostPair = {
   translationKey: 'k1', status: 'published',
@@ -233,7 +237,7 @@ describe('exportPost', () => {
       return render(body, images);
     });
     try {
-      await expect(exportPost(pair, dir)).rejects.toThrow('source mapping unavailable');
+      await expect(exportPost(pair, dir, NO_TRACK)).rejects.toThrow('source mapping unavailable');
       expect(await readdir(dir)).toEqual([]);
     } finally { analysis.mockRestore(); }
   });
@@ -244,7 +248,7 @@ describe('exportPost', () => {
     const input = structuredClone(pair);
     input.de.slug = 'd'.repeat(length);
     input.en.slug = 'e'.repeat(length);
-    const written = await exportPost(input, dir);
+    const written = await exportPost(input, dir, NO_TRACK);
     expect(written).toEqual(['de', 'en'].map(locale => join(dir, 'trips', locale, `${input[locale as 'de' | 'en'].slug}.mdx`)));
     for (const locale of ['de', 'en'] as const) {
       expect(await readFile(join(dir, 'trips', locale, `${input[locale as 'de' | 'en'].slug}.mdx`), 'utf8')).toBe(await renderPostToMdx(input, locale));
@@ -257,11 +261,11 @@ describe('exportPost', () => {
       dirs.push(dir);
       const input = structuredClone(pair);
       input[locale].slug = slug;
-      await expect(exportPost(input, dir)).rejects.toThrow(`${locale}.slug`);
+      await expect(exportPost(input, dir, NO_TRACK)).rejects.toThrow(`${locale}.slug`);
       expect(await readdir(dir)).toEqual([]);
-      const existing = await exportPost(pair, dir);
+      const existing = await exportPost(pair, dir, NO_TRACK);
       input.de.bodyMarkdown = 'Must not overwrite the existing DE file';
-      await expect(exportPost(input, dir)).rejects.toThrow(`${locale}.slug`);
+      await expect(exportPost(input, dir, NO_TRACK)).rejects.toThrow(`${locale}.slug`);
       for (const [index, language] of (['de', 'en'] as const).entries()) {
         expect(await readFile(existing[index]!, 'utf8')).toBe(await renderPostToMdx(pair, language));
       }
@@ -274,8 +278,48 @@ describe('exportPost', () => {
     const dir = await mkdtemp(join(tmpdir(), 'sw-export-'));
     dirs.push(dir);
     const deOnly: PostPair = { ...pair, en: { ...pair.en, slug: '', title: '', bodyMarkdown: '' } };
-    const written = await exportPost(deOnly, dir);
+    const written = await exportPost(deOnly, dir, { language: DEFAULT_LANGUAGE, locales: [] });
     expect(written).toEqual([join(dir, 'trips', 'de', 'bukarest.mdx')]);
     expect(await readdir(join(dir, 'trips'))).toEqual(['de']);
+  });
+
+  it.each<LanguageConfig>([
+    { primary: 'de', locales: ['de'] }, { primary: 'en', locales: ['en'] },
+    { primary: 'de', locales: ['de', 'en'] }, { primary: 'en', locales: ['en', 'de'] },
+  ])('exports only working coverage, with tracks only on snapshot-bearing rows: $primary/$locales', async language => {
+    const dir = await mkdtemp(join(tmpdir(), 'sw-export-mode-'));
+    dirs.push(dir);
+    const secondary = language.primary === 'de' ? 'en' : 'de';
+    const track = { version: 1, type: 'MultiLineString', coordinates: [[[1, 2], [3, 4]]] };
+    const rows: PublishedTrackRow[] = (['de', 'en'] as const).map(locale => ({
+      locale, status: locale === language.primary ? 'published' : 'draft', omitted: locale === secondary,
+      published_at: locale === language.primary ? new Date() : null,
+      published_snapshot: locale === language.primary ? { track } : null,
+    }));
+    const projection = publishedTrackOf(rows, language);
+    const omitted = structuredClone(pair);
+    omitted[secondary].omitted = true;
+    let files = await exportPost(omitted, dir, projection);
+    expect(files).toEqual([join(dir, 'trips', language.primary, `${pair[language.primary].slug}.mdx`)]);
+    expect(await readFile(files[0]!, 'utf8')).toContain('\ntrack: ');
+    // Saved translation is eligible for working backup but not the last-published track.
+    omitted[secondary].omitted = false;
+    rows.find(row => row.locale === secondary)!.omitted = false;
+    files = await exportAll([omitted], dir, async () => publishedTrackOf(rows, language));
+    expect(files).toHaveLength(language.locales.length);
+    if (language.locales.includes(secondary)) {
+      expect(await readFile(join(dir, 'trips', secondary, `${pair[secondary].slug}.mdx`), 'utf8')).not.toContain('\ntrack: ');
+    }
+  });
+
+  it('refuses a corrupt counterpart before writing either locale', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'sw-export-refused-'));
+    dirs.push(dir);
+    const rows: PublishedTrackRow[] = (['de', 'en'] as const).map(locale => ({
+      locale, status: 'draft', omitted: false, published_at: new Date(),
+      published_snapshot: locale === 'de' ? { track: { version: 1, type: 'MultiLineString', coordinates: [[[1, 2], [3, 4]]] } } : {},
+    }));
+    await expect(exportAll([pair], dir, async () => publishedTrackOf(rows, DEFAULT_LANGUAGE))).rejects.toThrow('invalid_published_track');
+    expect(await readdir(dir)).toEqual([]);
   });
 });
