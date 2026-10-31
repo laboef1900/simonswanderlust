@@ -1363,12 +1363,10 @@ export function buildServer(cfg: ServerConfig): AppServer {
   app.delete('/users/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const id = (req.params as { id: string }).id;
     if (req.authUser && req.authUser.id === id) return reply.code(409).send({ error: 'you cannot delete your own account' });
-    const target = await users.findById(id);
-    if (!target) return reply.code(404).send({ error: 'user not found' });
-    if (target.isAdmin && (await users.countAdmins()) <= 1) {
-      return reply.code(409).send({ error: 'cannot remove the last admin' });
-    }
-    await users.remove(id);
+    const outcome = await users.remove(id);
+    if (outcome === 'not_found') return reply.code(404).send({ error: 'user not found' });
+    if (outcome === 'last_admin') return reply.code(409).send({ error: 'cannot remove the last admin' });
+    await sessions.destroyAllForUser(id);
     return reply.send({ ok: true });
   });
 
