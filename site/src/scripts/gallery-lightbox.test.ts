@@ -113,9 +113,10 @@ describe('initGalleries — lightbox', () => {
   it('shows the decoded grid candidate until the larger image loads', () => {
     mountJustified(1);
     const gridImage = photos()[0]!.querySelector('img')!;
-    Object.defineProperty(gridImage, 'currentSrc', {
-      configurable: true,
-      value: 'https://img.test/p0-640.webp',
+    Object.defineProperties(gridImage, {
+      currentSrc: { value: 'https://img.test/p0-640.webp' },
+      complete: { value: true },
+      naturalWidth: { value: 640 },
     });
     initGalleries(document, labels);
     click(photos()[0]!);
@@ -129,6 +130,26 @@ describe('initGalleries — lightbox', () => {
 
     large?.dispatchEvent(new Event('load'));
     expect(frame?.classList.contains('is-ready')).toBe(true);
+  });
+
+  it.each([
+    { state: 'unrequested lazy image', currentSrc: '', complete: false, naturalWidth: 0 },
+    { state: 'loading candidate', currentSrc: 'https://img.test/p1-640.webp', complete: false, naturalWidth: 640 },
+    { state: 'broken candidate', currentSrc: 'https://img.test/p1-640.webp', complete: true, naturalWidth: 0 },
+    { state: 'missing candidate URL', currentSrc: '', complete: true, naturalWidth: 640 },
+  ])('omits the thumbnail for $state on navigation', ({ currentSrc, complete, naturalWidth }) => {
+    mountJustified(2);
+    Object.defineProperties(photos()[1]!.querySelector('img')!, {
+      currentSrc: { value: currentSrc },
+      complete: { value: complete },
+      naturalWidth: { value: naturalWidth },
+    });
+    initGalleries(document, labels);
+    click(photos()[0]!);
+    press('ArrowRight');
+    expect(dialog()?.querySelector('.jgal__lb-thumb')).toBeNull();
+    expect(shownSrc()).toBe('https://img.test/p1-1280.webp');
+    expect(liveText()).toBe('Photo 2 of 2');
   });
 
   it('carries alt and caption across, and hides an empty caption', () => {
@@ -236,6 +257,12 @@ describe('initGalleries — lightbox', () => {
     'keeps the lightbox open when clicking %s',
     (selector) => {
       mountJustified(2);
+      // The thumbnail exists only for an already-decoded grid candidate.
+      Object.defineProperties(photos()[0]!.querySelector('img')!, {
+        currentSrc: { value: 'https://img.test/p0-640.webp' },
+        complete: { value: true },
+        naturalWidth: { value: 640 },
+      });
       initGalleries(document, labels);
       click(photos()[0]!);
       click(dialog()!.querySelector(selector)!);
