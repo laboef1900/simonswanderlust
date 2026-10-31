@@ -55,13 +55,94 @@ describe('htmlToMarkdown', () => {
     expect(md).toBe('## Santa Cruz — Between Lava Fields and Sea Lions');
   });
 
-  it('turns hard breaks in the opening copy into paragraphs without splitting fact rows', () => {
-    const md = htmlToMarkdown(
-      '<h2>Opening</h2><p>First thought.<br>Second thought.<br>Third thought.</p>' +
-        '<h3>Key data</h3><p>Population:<br>10,000</p>',
+  it.each(['Eckdaten', 'Key data', 'Key facts', 'kEy FaCtS'])(
+    'splits only ordinary opening paragraphs before %s, keeping fact rows intact',
+    (facts) => {
+      const md = htmlToMarkdown(
+        '<h2>Opening</h2><p>First thought.<br>Second thought.<br>Third thought.</p>' +
+          `<h3>${facts}</h3><p>Population:<br>10,000</p>`,
+      );
+      expect(md).toBe(
+        `## Opening\n\nFirst thought.\n\nSecond thought.\n\nThird thought.\n\n### ${facts}\n\nPopulation:  \n10,000`,
+      );
+    },
+  );
+
+  it('preserves every hard break without a facts heading, including later lists and quotes', () => {
+    expect(htmlToMarkdown(
+      '<p>Intro line<br>second</p><h2>Unterwegs</h2>' +
+      '<p>Öffnungszeiten:<br>Mo–Fr 9–17<br>Sa 10–14</p>' +
+      '<ul><li>Bus<br>Linie 5</li><li>Taxi</li></ul>' +
+      '<blockquote><p>Zitat eins<br>Zitat zwei</p></blockquote>',
+    )).toBe(
+      'Intro line  \nsecond\n\n## Unterwegs\n\nÖffnungszeiten:  \nMo–Fr 9–17  \nSa 10–14\n\n' +
+      '- Bus  \n    Linie 5\n- Taxi\n\n> Zitat eins  \n> Zitat zwei',
     );
-    expect(md).toContain('First thought.\n\nSecond thought.\n\nThird thought.');
-    expect(md).toContain('### Key data\n\nPopulation:  \n10,000');
+  });
+
+  it('does not infer paragraphs from hard breaks in a body with no headings', () => {
+    expect(htmlToMarkdown('<p>Address:<br>First street<br>Second town</p>'))
+      .toBe('Address:  \nFirst street  \nSecond town');
+  });
+
+  it.each(['h2', 'h3', 'h4'])('treats nested Elementor wrappers as transparent around a %s facts boundary', (tag) => {
+    expect(htmlToMarkdown(
+      '<div class="elementor-section"><div class="elementor-widget"><h2>Opening</h2></div>' +
+      '<div class="elementor-widget-text-editor"><div><p>One<br>Two</p><p>Three<br>Four</p></div></div>' +
+      `<div><${tag}>Eckdaten</${tag}></div><div><p>Fact<br>Value</p></div></div>`,
+    )).toBe(`## Opening\n\nOne\n\nTwo\n\nThree\n\nFour\n\n${'#'.repeat(Number(tag[1]))} Eckdaten\n\nFact  \nValue`);
+  });
+
+  it.each(['h2', 'h3', 'h4'])('stops at an intervening %s section even when facts appear later', (tag) => {
+    expect(htmlToMarkdown(
+      '<div><h2>Opening</h2><p>One<br>Two</p></div>' +
+      `<div><${tag}>On the road</${tag}><p>Three<br>Four</p></div><h3>Key facts</h3>`,
+    )).toBe(`## Opening\n\nOne  \nTwo\n\n${'#'.repeat(Number(tag[1]))} On the road\n\nThree  \nFour\n\n### Key facts`);
+  });
+
+  it('never splits lists, continuation paragraphs, quotes, code, headings or gallery text before facts', () => {
+    expect(htmlToMarkdown(
+      '<h2>Opening<br>Subtitle</h2><p>One<br>Two</p>' +
+      '<ul><li>Bus<br>Line 5<p>Continuation<br>Still the same item</p></li></ul>' +
+      '<blockquote><p>Quote<br>Another line</p></blockquote>' +
+      '<pre><code>literal  \nline</code></pre>' +
+      '<p><code>inline<br>code</code></p>' +
+      '<div class="elementor-widget-gallery"><p>Gallery text<br>Second line</p>' +
+      '<a href="https://wp/a.jpg" data-elementor-lightbox-slideshow="g" ' +
+      'data-elementor-lightbox-title="Key facts&#10;second line"></a></div>' +
+      '<h3>Key facts</h3>',
+    )).toBe(
+      '## Opening  \nSubtitle\n\nOne\n\nTwo\n\n' +
+      '- Bus  \n    Line 5\n    \n    Continuation  \n    Still the same item\n    \n\n' +
+      '> Quote  \n> Another line\n\n```' + '\nliteral  \nline\n```\n\n' +
+      '`inline   code`\n\nGallery text  \nSecond line\n\n' +
+      '```gallery\nhttps://wp/a.jpg | alt="Key facts second line"\n```\n### Key facts',
+    );
+  });
+
+  it.each([
+    '<p>## Key facts</p>',
+    '<pre><code>&lt;h3&gt;Key facts&lt;/h3&gt;</code></pre>',
+    '<blockquote><h3>Key facts</h3></blockquote>',
+    '<ul><li><h3>Key facts</h3></li></ul>',
+    '<h5>Key facts</h5>',
+    '<h3>Key factual notes</h3>',
+  ])('does not treat %s as a qualifying facts boundary', (html) => {
+    expect(htmlToMarkdown(`<p>One<br>Two</p>${html}`)).toMatch(/^One {2}\nTwo\n\n/);
+  });
+
+  it('does not treat facts rows themselves as opening copy when facts come first', () => {
+    expect(htmlToMarkdown('<h3>Key data</h3><p>Fact<br>Value</p><h3>Eckdaten</h3>'))
+      .toBe('### Key data\n\nFact  \nValue\n\n### Eckdaten');
+  });
+
+  it('isolates facts-boundary state across consecutive DE and EN conversions', () => {
+    for (const facts of ['Eckdaten', 'Key data', 'Key facts']) {
+      expect(htmlToMarkdown(`<p>One<br>Two</p><h3>${facts}</h3>`))
+        .toBe(`One\n\nTwo\n\n### ${facts}`);
+      expect(htmlToMarkdown('<p>Three<br>Four</p><h2>Unterwegs</h2>'))
+        .toBe('Three  \nFour\n\n## Unterwegs');
+    }
   });
 
   it('drops an empty legacy TOC slot but preserves a real authored contents section', () => {

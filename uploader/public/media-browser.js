@@ -84,13 +84,26 @@
       foregroundMessage = msg;
     }
     try {
-      var res = await client.list({
+      var query = {
         folder: state.folder, recursive: state.recursive, q: state.q, tag: state.tag,
         status: state.status, sort: state.sort, order: state.order,
         page: state.page, pageSize: state.pageSize,
-      });
+      };
+      var res;
+      while (true) {
+        res = await client.list(query);
+        if (!loads.isCurrent(ticket)) return;
+        var lastPage = Math.max(1, Math.ceil(res.total / query.pageSize));
+        if (query.page <= lastPage) break;
+        // Deletions, moves and status changes can remove the current page.
+        // Only move backwards: concurrent shrinkage may need another correction,
+        // but cannot keep this load chasing an ever-growing page count.
+        query.page = lastPage;
+        if (res.total === 0) break;
+      }
       var folders = await client.folders();
       if (!loads.isCurrent(ticket)) return;
+      state.page = query.page;
       state.items = res.items;
       state.total = res.total;
       state.folders = folders;

@@ -3,6 +3,14 @@ export type Locale = (typeof locales)[number];
 export const defaultLocale: Locale = 'de';
 
 const de = {
+  'editor.chrome.commentsPrevious': 'Zurück',
+  'editor.chrome.commentsNext': 'Weiter',
+  'editor.chrome.commentsPagination': 'Kommentarseiten',
+  'editor.chrome.commentsPage': 'Seite {page}',
+  'editor.chrome.commentsEmptyPage': 'Auf dieser Seite sind keine Kommentare mehr. Zur vorherigen Seite wechseln oder die Ansicht neu wählen.',
+  'editor.chrome.commentsPaginationError': 'Diese Kommentarseite konnte nicht geladen werden. Ansicht neu wählen und erneut versuchen.',
+  'editor.chrome.commentsDeleteBody': 'Der Kommentar von „{name}“ wird dauerhaft gelöscht. Das kann nicht rückgängig gemacht werden.',
+  'editor.chrome.commentsDeleteApprovedBody': 'Der Kommentar von „{name}“ wird dauerhaft gelöscht und fehlt sofort beim nächsten öffentlichen Abruf der Kommentare. Ein Neuaufbau der Website ist nicht nötig. Das kann nicht rückgängig gemacht werden.',
   'editor.chrome.usersReload': 'Benutzerliste neu laden',
   'editor.chrome.usersLoading': 'Benutzer werden geladen…',
   'editor.chrome.usersLoaded': 'Benutzerliste geladen: {count} Konten.',
@@ -446,6 +454,14 @@ const de = {
 export type UIKey = keyof typeof de;
 
 const en: Record<UIKey, string> = {
+  'editor.chrome.commentsPrevious': 'Previous',
+  'editor.chrome.commentsNext': 'Next',
+  'editor.chrome.commentsPagination': 'Comment pages',
+  'editor.chrome.commentsPage': 'Page {page}',
+  'editor.chrome.commentsEmptyPage': 'No comments remain on this page. Go to the previous page or select the view again.',
+  'editor.chrome.commentsPaginationError': 'This comment page could not be loaded. Select the view again and retry.',
+  'editor.chrome.commentsDeleteBody': 'This comment by “{name}” is permanently deleted. This cannot be undone.',
+  'editor.chrome.commentsDeleteApprovedBody': 'This comment by “{name}” is permanently deleted and disappears immediately on the next public comments request. No site rebuild is needed. This cannot be undone.',
   'editor.chrome.usersReload': 'Reload users',
   'editor.chrome.usersLoading': 'Loading users…',
   'editor.chrome.usersLoaded': 'User list loaded: {count} accounts.',
