@@ -3,6 +3,7 @@ import Base from '../../layouts/Base.astro';
 import GalleryIsland from '../GalleryIsland.astro';
 import { getCollection, getEntry, render } from 'astro:content';
 import { useTranslations, type Locale } from '../../i18n/ui';
+import { countLabel } from '../../i18n/count';
 import { aboutPath } from '../../lib/paths';
 import { byLocale, tripStats } from '../../lib/trips';
 import { identity } from '../../lib/build-identity';
@@ -51,15 +52,15 @@ const description = entry?.data.description || t('about.title');
 
         <div class="mt-6 border-t border-navy/10 pt-4 space-y-3 font-mono text-xs text-ink/80">
           <div class="flex justify-between">
-            <span class="text-navy/60 uppercase tracking-wider">{t('stats.trips')}</span>
+            <span class="text-navy/60 uppercase tracking-wider">{countLabel(stats.trips, t('stats.trip'), t('stats.trips'))}</span>
             <span class="font-bold text-navy">{stats.trips}</span>
           </div>
           <div class="flex justify-between">
-            <span class="text-navy/60 uppercase tracking-wider">{t('stats.countries')}</span>
+            <span class="text-navy/60 uppercase tracking-wider">{countLabel(stats.countries, t('stats.country'), t('stats.countries'))}</span>
             <span class="font-bold text-navy">{stats.countries}</span>
           </div>
           <div class="flex justify-between">
-            <span class="text-navy/60 uppercase tracking-wider">{t('stats.continents')}</span>
+            <span class="text-navy/60 uppercase tracking-wider">{countLabel(stats.continents, t('stats.continent'), t('stats.continents'))}</span>
             <span class="font-bold text-navy">{stats.continents}</span>
           </div>
         </div>

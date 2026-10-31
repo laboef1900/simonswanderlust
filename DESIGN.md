@@ -347,6 +347,15 @@ Extend those roles with a size or a weight when needed — never
 a tracking value, and never a coloured plate, which is what the card's date
 line used to be.
 
+**Count grammar.** Public DE/EN labels use the singular only for exactly one:
+`1 REISE` / `1 TRIP`, `1 LAND` / `1 COUNTRY`, `1 KONTINENT` / `1 CONTINENT`,
+`1 Pin-Standort` / `1 pin location`, and `1 Kommentar` / `1 comment`.
+The homepage map band, region kicker, map page, About statistics and comment
+thread share this rule through `countLabel`; translated forms stay in `ui.ts`.
+Zero and two or more use plural labels. Existing empty states take precedence:
+the homepage omits its map band without stories, empty regions have no page,
+and an empty comment thread says “Noch keine Kommentare.” / “No comments yet.”
+
 **Where the entry number belongs.** `N°09` is a signature mark and it earns
 its place where it says something: the homepage hero's entry, where it
 introduces the latest story as one of a numbered series. It was also on every
@@ -354,6 +363,13 @@ grid card, nine of them down one index, restating an order the grid's own
 newest-first sequence already shows, and on the story page, where the reader
 has already arrived and the number told them nothing they act on. Spending
 the mark where it carries meaning is not a retreat from the identity.
+
+**Equal-date stories keep one order (#377).** `byLocale` orders trip dates
+newest first, then the pair's shared `translationKey` ascending by code-point
+comparison. Localized titles, slugs and save chronology never decide ties.
+The homepage cover (including competing featured stories), its entry number,
+home/region grids, previous/next links, footer latest list and RSS share that
+rule, so DE and EN retain the same pair order after saves and rebuilds.
 
 ### Named Rules
 
@@ -384,15 +400,29 @@ box — 10% wider at the owner's request (2026-10-19). Inside the spread the
 rail is a fixed `18rem`, the gap `3rem`, and the column takes the available
 remainder — up to `45rem` (720px) — so the three always sum to the spread
 (`--container-story-column` / `--container-story-rail`). The rail holds
-the story's furniture — contents, key facts, the route map — open in a stack
-that stays `0.5rem` from the viewport top while the *opening* is in view.
-The stack never scrolls internally: a second scrollbar beside the page's was
-the owner's objection, and a rail taller than the spread simply sets the
-spread's height and stays put.
+the story's furniture — contents, key facts, the route map — open in a stack.
+The rail is static by default and sticks `0.5rem` from the viewport top only
+when its measured height plus that offset fits the viewport. A ResizeObserver
+and viewport resize listener update `data-sticky-fit` as disclosures, fonts,
+lazy map content or the viewport change. An oversized rail scrolls with the
+page, so its lower facts and map controls remain reachable before the opening
+ends, including by keyboard. The stack never scrolls internally: a second
+scrollbar beside the page's was the owner's objection. Without JavaScript or
+ResizeObserver it stays nonsticky; native disclosures remain usable (initially
+collapsed without JavaScript). A rail taller than the opening still sets the
+spread's height.
 The opening is the body's first section — everything before the first
-top-level heading that has content in front of it (`story-opening.ts`), so
-an intro heading, its paragraphs and its first photograph sit beside the
-rail. The rest of the story then runs **centred on the same 1056px**, with
+root-level heading at the shallowest root heading depth that has content in
+front of it (`story-opening.ts`), so an intro heading, its paragraphs and its
+first photograph sit beside the rail. Headings inside blockquotes or list
+items never become cut points or determine that depth: the complete quote or
+list stays in the opening, followed by any introductory paragraphs. Stacked
+intro headings stay together until there is content before a later heading.
+The HTML tree locates original source offsets, without reserializing the
+sanitized body; concatenating the two fragments reproduces it exactly. With
+no eligible heading, or root heading IDs/depths that disagree with renderer
+metadata, the whole body remains the opening rather than guessing a cut.
+The rest of the story then runs **centred on the same 1056px**, with
 the route divider and pagination on the same measure. Matching the edges
 and the owner's requested wider reading area take precedence over a
 shorter line measure. The spread wrapper is a
@@ -657,7 +687,14 @@ heading. Both are gone; see Story card below, and do not reintroduce either.
   the list, focuses the heading and preserves native fragment/history
   navigation, and Escape returns focus to the summary. In the rail (`lg`) it
   starts open, is static and fully expanded, flush with the disclosures under
-  it, and a section link focuses the heading without closing anything. Summary
+  it, and a section link focuses the heading without closing anything. Crossing
+  the `64rem` boundary without a reload resets all three rail disclosures:
+  Contents, Key Facts and Route map close below it and open at or above it.
+  Resizing within either layout preserves the reader's manual toggles. A
+  real published DE/EN story with 20 contents entries confirmed this through
+  repeated 1180×820 ↔ 820×1180 rotations and the exact 1023/1024px boundary;
+  the collapsed mobile strip measured `47px` high at `top: 8px` while scrolling,
+  with keyboard section focus and Escape-to-summary preserved. Summary
   and links have at least `44px` targets. Without JavaScript the links still
   work and heading margins clear the expanded strip; the rail simply starts
   collapsed.
@@ -668,6 +705,12 @@ heading. Both are gone; see Story card below, and do not reintroduce either.
 - **Route map:** the story's mini-map is the third disclosure, in the same
   dress as Key Facts. It mounts lazily on intersection, which a closed
   disclosure never reports — opening it is what mounts the map.
+  WebGL2 is probed before MapLibre construction and checked again on its real
+  canvas. If either fails, no empty focusable canvas survives: trackless stories
+  retain their localized map link at its natural height; tracked stories hide
+  the empty map slot and retain the published route summary, endpoints, stops
+  and map link. On the full map page, initialization failure hides the entire
+  map wrapper (including its `70vh` allocation), leaving the story-link list.
 - **Story pagination:** chronological links with `80px` square, lazy-loaded
   photo thumbnails and full wrapped titles. A sole link spans the reading
   column; two split from `768px`. No empty placeholder cell, border or shadow;
@@ -759,6 +802,14 @@ rotation are hashed from the country code, so a country always stamps the same
 way. `mix-blend-mode: multiply` at full opacity on an opaque canvas chip; the
 chip stays square while the ink is rotated.
 
+The date is the stored trip's **calendar date**, not a UTC instant: `Stamp.astro`
+reads local day/month/year, matching the loader's local-midnight convention and
+the hero/card date formatters. Do not use UTC getters here. Runtime rebuilds via
+the app's `/rebuild` endpoint were verified in UTC, Europe/Zurich and
+America/Los_Angeles with unchanged `2024-01-01` and `2024-03-01` synthetic
+published stories: both DE and EN stamps retain `01 01 2024` and `01 03 2024`
+respectively (#400).
+
 ### Route Divider (signature)
 
 Filled `brand-red` dot → dashed 2px navy rule → a 16px compass arrow at
@@ -802,6 +853,13 @@ so a 37-photo gallery grows taller than it is wide instead of
 becoming a contact sheet. The one cap left is on a row that would stand taller
 than the square — a lone portrait — held at the square's own height as a
 **percentage** of the container so it scales with it.
+
+**Lightbox dismissal follows the visible content, not its containers.** In all
+three modes, clicking or tapping the dark space around a photo closes the native
+dialog, even when that space hit-tests to its full-viewport figure. Only the
+photo, caption and controls are excluded from backdrop dismissal — never the
+whole figure or frame. Photo and caption clicks keep it open; arrows navigate;
+Close and Escape dismiss and return focus to the gallery link.
 
 ## Do's and Don'ts
 
