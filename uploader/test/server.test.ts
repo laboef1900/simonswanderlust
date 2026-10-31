@@ -5,6 +5,7 @@ import { mkdtemp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
+import { setImmediate as nextTurn } from 'node:timers/promises';
 import type { BackupState, DbBackup } from '../src/backup.js';
 import sharp from 'sharp';
 import FormData from 'form-data';
@@ -2135,6 +2136,156 @@ describe('user management', () => {
     await b.app.inject({ method: 'POST', url: '/users', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: { username: 'bob', password: 'password123456', isAdmin: false } });
     const dup = await b.app.inject({ method: 'POST', url: '/users', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: { username: 'BOB', password: 'password123456', isAdmin: false } });
     expect(dup.statusCode).toBe(409);
+  });
+});
+
+describe('auth rate-limit refusals with async onSend (#372)', () => {
+  const refusal = { error: 'too many attempts, please wait and try again' };
+
+  function buildWithAsyncSend(extra: Partial<ServerConfig> = {}) {
+    const b = build(extra);
+    // Install before readiness, without changing the production hook chain.
+    b.app.addHook('onSend', async (_req, _reply, payload) => { await Promise.resolve(); return payload; });
+    return b;
+  }
+
+  it.each(['password123456', 'wrong-password'])('refused login with %s neither verifies nor mutates sessions/account failures', async (password) => {
+    const accountLimiter = accountLockoutLimiter({ max: 3 });
+    const b = buildWithAsyncSend({
+      loginLimiter: fixedWindowLimiter({ max: 1, windowMs: 60_000 }),
+      accountLimiter,
+    });
+    try {
+      const { user, cookie } = await authed(b);
+      const hash = user.passwordHash;
+      const login = (password: string) => b.app.inject({
+        method: 'POST', url: '/login', payload: { username: user.username, password },
+      });
+      // A real admitted failure seeds the account counter and exhausts this IP.
+      expect((await login('wrong-password')).statusCode).toBe(401);
+      const lookup = vi.spyOn(b.users, 'findByUsername');
+      const createSession = vi.spyOn(b.sessions, 'create');
+      const failure = vi.spyOn(accountLimiter, 'recordFailure');
+      const success = vi.spyOn(accountLimiter, 'recordSuccess');
+
+      const denied = await login(password);
+      // Injection can finish before an incorrectly admitted async handler does.
+      // Let memory-store continuations finish before observing durable effects.
+      await nextTurn();
+      expect(denied.statusCode).toBe(429);
+      expect(denied.json()).toEqual(refusal);
+      expect(denied.headers['set-cookie']).toBeUndefined();
+      expect(lookup).not.toHaveBeenCalled(); // No stored hash read or scrypt either.
+      expect(createSession).not.toHaveBeenCalled();
+      expect(failure).not.toHaveBeenCalled();
+      expect(success).not.toHaveBeenCalled();
+      expect(await b.sessions.find(cookie.sid)).toMatchObject({ userId: user.id });
+      expect((await b.users.findById(user.id))?.passwordHash).toBe(hash);
+      // Observe the real limiter's state, not just method forwarding: neither
+      // an extra failure nor a successful-login reset may have happened.
+      accountLimiter.recordFailure(user.username);
+      expect(accountLimiter.isLocked(user.username)).toBe(false);
+      accountLimiter.recordFailure(user.username);
+      expect(accountLimiter.isLocked(user.username)).toBe(true);
+    } finally {
+      await b.app.close();
+    }
+  });
+
+  it.each(['password123456', 'wrong-password'])('refused password change with %s leaves hashes, sessions and account budget intact', async (currentPassword) => {
+    const passwordLimiter = accountLockoutLimiter({ max: 3 });
+    const b = buildWithAsyncSend({
+      loginLimiter: fixedWindowLimiter({ max: 2, windowMs: 60_000 }),
+      passwordLimiter,
+    });
+    try {
+      const { user, cookie } = await authed(b);
+      const otherToken = await b.sessions.create(user.id, 60_000);
+      const hash = user.passwordHash;
+      const change = (currentPassword: string, cookies?: Record<string, string>) => b.app.inject({
+        method: 'POST', url: '/users/me/password', ...(cookies ? { cookies } : {}),
+        payload: { currentPassword, newPassword: 'brand-new-password123' },
+      });
+      // The admitted path still requires both authentication and password proof.
+      expect((await change('password123456')).statusCode).toBe(401);
+      const wrong = await change('wrong-password', cookie);
+      expect(wrong.statusCode).toBe(400);
+      expect(wrong.json()).toEqual({ error: 'current password is incorrect' });
+      const findSession = vi.spyOn(b.sessions, 'find');
+      const createSession = vi.spyOn(b.sessions, 'create');
+      const destroySessions = vi.spyOn(b.sessions, 'destroyAllForUser');
+      const setPassword = vi.spyOn(b.users, 'setPassword');
+      const lookup = vi.spyOn(b.users, 'findById');
+      const failure = vi.spyOn(passwordLimiter, 'recordFailure');
+      const success = vi.spyOn(passwordLimiter, 'recordSuccess');
+
+      const denied = await change(currentPassword, cookie);
+      await nextTurn();
+      expect(denied.statusCode).toBe(429);
+      expect(denied.json()).toEqual(refusal);
+      expect(denied.headers['set-cookie']).toBeUndefined();
+      expect(findSession).not.toHaveBeenCalled(); // Stops the following requireAuth too.
+      expect(lookup).not.toHaveBeenCalled();
+      expect(setPassword).not.toHaveBeenCalled();
+      expect(createSession).not.toHaveBeenCalled();
+      expect(destroySessions).not.toHaveBeenCalled();
+      expect(failure).not.toHaveBeenCalled();
+      expect(success).not.toHaveBeenCalled();
+      expect((await b.users.findById(user.id))?.passwordHash).toBe(hash);
+      expect(await b.sessions.find(cookie.sid)).toMatchObject({ userId: user.id });
+      expect(await b.sessions.find(otherToken)).toMatchObject({ userId: user.id });
+      passwordLimiter.recordFailure(user.id);
+      expect(passwordLimiter.isLocked(user.id)).toBe(false);
+      passwordLimiter.recordFailure(user.id);
+      expect(passwordLimiter.isLocked(user.id)).toBe(true);
+    } finally {
+      await b.app.close();
+    }
+  });
+
+  it('refused setup creates no admin or session; after the window it succeeds only once', async () => {
+    let now = 0;
+    const b = buildWithAsyncSend({
+      loginLimiter: fixedWindowLimiter({ max: 2, windowMs: 60_000, now: () => now }),
+    });
+    try {
+      // Exhaust the SHARED bucket via login while leaving the user store empty.
+      for (let i = 0; i < 2; i++) {
+        expect((await b.app.inject({
+          method: 'POST', url: '/login', payload: { username: 'missing', password: 'wrong-password' },
+        })).statusCode).toBe(401);
+      }
+      const createUser = vi.spyOn(b.users, 'create');
+      const createSession = vi.spyOn(b.sessions, 'create');
+      const setup = () => b.app.inject({
+        method: 'POST', url: '/setup', payload: { username: 'first-admin', password: 'password123456' },
+      });
+      const denied = await setup();
+      await nextTurn();
+      expect(denied.statusCode).toBe(429);
+      expect(denied.json()).toEqual(refusal);
+      expect(denied.headers['set-cookie']).toBeUndefined();
+      expect(createUser).not.toHaveBeenCalled();
+      expect(createSession).not.toHaveBeenCalled();
+      expect(await b.users.count()).toBe(0);
+      expect(await b.users.findByUsername('first-admin')).toBeNull();
+
+      now = 60_000;
+      const allowed = await setup();
+      expect(allowed.statusCode).toBe(200);
+      expect(allowed.json()).toEqual({ username: 'first-admin', isAdmin: true });
+      const admin = await b.users.findByUsername('first-admin');
+      expect(admin).toMatchObject({ isAdmin: true });
+      const token = allowed.cookies.find((cookie) => cookie.name === 'sid')?.value;
+      expect(token).toBeDefined();
+      expect(await b.sessions.find(token ?? '')).toMatchObject({ userId: admin?.id });
+      expect((await setup()).statusCode).toBe(409);
+      expect(await b.users.count()).toBe(1);
+      expect(createUser).toHaveBeenCalledTimes(1);
+      expect(createSession).toHaveBeenCalledTimes(1);
+    } finally {
+      await b.app.close();
+    }
   });
 });
 
