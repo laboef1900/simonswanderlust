@@ -679,7 +679,14 @@ heading. Both are gone; see Story card below, and do not reintroduce either.
   the list, focuses the heading and preserves native fragment/history
   navigation, and Escape returns focus to the summary. In the rail (`lg`) it
   starts open, is static and fully expanded, flush with the disclosures under
-  it, and a section link focuses the heading without closing anything. Summary
+  it, and a section link focuses the heading without closing anything. Crossing
+  the `64rem` boundary without a reload resets all three rail disclosures:
+  Contents, Key Facts and Route map close below it and open at or above it.
+  Resizing within either layout preserves the reader's manual toggles. A
+  real published DE/EN story with 20 contents entries confirmed this through
+  repeated 1180×820 ↔ 820×1180 rotations and the exact 1023/1024px boundary;
+  the collapsed mobile strip measured `47px` high at `top: 8px` while scrolling,
+  with keyboard section focus and Escape-to-summary preserved. Summary
   and links have at least `44px` targets. Without JavaScript the links still
   work and heading margins clear the expanded strip; the rail simply starts
   collapsed.
