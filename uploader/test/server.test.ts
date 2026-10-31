@@ -2020,12 +2020,114 @@ describe('user management', () => {
     expect((await b.app.inject({ method: 'DELETE', url: `/users/${bobId}`, cookies: cookie })).statusCode).toBe(200);
   });
 
-  it('rejects deleting yourself and the last admin', async () => {
+  it('rejects deleting yourself without changing accounts or sessions', async () => {
     const b = build();
     const me = await b.users.create({ username: 'admin', password: 'password123456', isAdmin: true });
-    const token = await b.sessions.create(me.id, 60_000);
-    const res = await b.app.inject({ method: 'DELETE', url: `/users/${me.id}`, cookies: { sid: token } });
-    expect(res.statusCode).toBe(409);
+    const tokens = await Promise.all([b.sessions.create(me.id, 60_000), b.sessions.create(me.id, 60_000)]);
+    const remove = vi.spyOn(b.users, 'remove');
+    const invalidate = vi.spyOn(b.sessions, 'destroyAllForUser');
+    try {
+      const res = await b.app.inject({ method: 'DELETE', url: `/users/${me.id}`, cookies: { sid: tokens[0]! } });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({ error: 'you cannot delete your own account' });
+      expect(remove).not.toHaveBeenCalled();
+      expect(invalidate).not.toHaveBeenCalled();
+      expect(await b.users.list()).toEqual([me]);
+      for (const token of tokens) expect((await b.sessions.find(token))?.userId).toBe(me.id);
+    } finally { await b.app.close(); }
+  });
+
+  it('authenticates and authorizes deletion before validating an id', async () => {
+    const b = build();
+    const { cookie } = await authed(b, { isAdmin: false, username: 'author' });
+    const remove = vi.spyOn(b.users, 'remove');
+    try {
+      expect((await b.app.inject({ method: 'DELETE', url: '/users/not-a-uuid' })).statusCode).toBe(401);
+      expect((await b.app.inject({ method: 'DELETE', url: '/users/not-a-uuid', cookies: cookie })).statusCode).toBe(403);
+      expect(remove).not.toHaveBeenCalled();
+    } finally { await b.app.close(); }
+  });
+
+  it('cross-deletion preserves the surviving admin and invalidates only the removed account', async () => {
+    const users = memoryUserStore();
+    const sessions = memorySessionStore();
+    const remove = users.remove;
+    let arrivals = 0;
+    const { promise: bothAuthenticated, resolve: release } = Promise.withResolvers<void>();
+    users.remove = async (id) => {
+      if (++arrivals === 2) release();
+      await bothAuthenticated;
+      return remove(id);
+    };
+    const invalidate = vi.spyOn(sessions, 'destroyAllForUser');
+    const b = build({ users, sessions });
+    const a = await authed(b, { username: 'admin-a' });
+    const c = await authed(b, { username: 'admin-b' });
+    const extraA = await sessions.create(a.user.id, 60_000);
+    const extraC = await sessions.create(c.user.id, 60_000);
+    try {
+      const results = await Promise.all([
+        b.app.inject({ method: 'DELETE', url: `/users/${c.user.id}`, cookies: a.cookie }),
+        b.app.inject({ method: 'DELETE', url: `/users/${a.user.id}`, cookies: c.cookie }),
+      ]);
+      expect(results.map((res) => res.statusCode).sort()).toEqual([200, 409]);
+      expect(results.find((res) => res.statusCode === 409)!.json()).toEqual({ error: 'cannot remove the last admin' });
+      const survivor = (await users.list())[0]!;
+      expect(await users.countAdmins()).toBe(1);
+      const deleted = survivor.id === a.user.id ? c : a;
+      expect(invalidate.mock.calls).toEqual([[deleted.user.id]]);
+      for (const [account, tokens] of [[a, [a.cookie.sid, extraA]], [c, [c.cookie.sid, extraC]]] as const) {
+        for (const token of tokens) {
+          expect((await sessions.find(token))?.userId ?? null).toBe(account.user.id === survivor.id ? survivor.id : null);
+        }
+      }
+      expect((await b.app.inject({ method: 'DELETE', url: `/users/${survivor.id}`, cookies: deleted.cookie })).statusCode).toBe(401);
+      expect((await b.app.inject({ method: 'GET', url: '/auth/status' })).json()).toEqual({ authenticated: false, needsSetup: false });
+      expect((await b.app.inject({ method: 'POST', url: '/setup', payload: { username: 'new', password: 'password123456' } })).statusCode).toBe(409);
+    } finally { release(); await b.app.close(); }
+  });
+
+  it('does not invalidate sessions for missing users or failed removals', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const target = await b.users.create({ username: 'target', password: 'password123456', isAdmin: false });
+    const token = await b.sessions.create(target.id, 60_000);
+    const invalidate = vi.spyOn(b.sessions, 'destroyAllForUser');
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      for (const id of ['not-a-uuid', randomUUID()]) {
+        const res = await b.app.inject({ method: 'DELETE', url: `/users/${id}`, cookies: cookie });
+        expect(res.statusCode).toBe(404);
+        expect(res.json()).toEqual({ error: 'user not found' });
+      }
+      vi.spyOn(b.users, 'remove').mockRejectedValueOnce(new Error('private transaction failure'));
+      const failed = await b.app.inject({ method: 'DELETE', url: `/users/${target.id}`, cookies: cookie });
+      expect(failed.statusCode).toBe(500);
+      expect(failed.json()).toEqual({ error: 'internal server error' });
+      expect(invalidate).not.toHaveBeenCalled();
+      expect(await b.users.findById(target.id)).toEqual(target);
+      expect((await b.sessions.find(token))?.userId).toBe(target.id);
+    } finally { log.mockRestore(); await b.app.close(); }
+  });
+
+  it('does not restore a deleted user when follow-up session invalidation fails', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const target = await b.users.create({ username: 'target', password: 'password123456', isAdmin: false });
+    const token = await b.sessions.create(target.id, 60_000);
+    vi.spyOn(b.sessions, 'destroyAllForUser').mockImplementation(async (id) => {
+      expect(await b.users.findById(id)).toBeNull();
+      throw new Error('private session-store failure');
+    });
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const failed = await b.app.inject({ method: 'DELETE', url: `/users/${target.id}`, cookies: cookie });
+      expect(failed.statusCode).toBe(500);
+      expect(failed.json()).toEqual({ error: 'internal server error' });
+      expect(await b.users.findById(target.id)).toBeNull();
+      expect((await b.sessions.find(token))?.userId).toBe(target.id);
+      expect((await b.app.inject({ method: 'GET', url: '/users', cookies: { sid: token } })).statusCode).toBe(401);
+    } finally { log.mockRestore(); await b.app.close(); }
   });
 
   it('POST /users 409 on duplicate username', async () => {

@@ -116,6 +116,18 @@ an owner-authorized safe rebuild/release switch and cache assessment. No safety 
   "logged out". Spec: `docs/superpowers/specs/2026-09-06-lazy-session-resolution-design.md`.
 - **First-admin setup** (`/setup`) is only available while no users exist, and is **serialized**
   with a per-process lock so two concurrent requests cannot both create an admin (TOCTOU closed).
+- **Account removal** (#368) preserves at least one administrator in a configured installation.
+  `UserStore.remove` takes a short Postgres `SHARE ROW EXCLUSIVE` users-table lock before reading
+  the target/count and deleting in the same transaction; the memory store makes the same decision
+  without an intervening await. Concurrent authenticated cross-deletions yield one 200 and one
+  409 `cannot remove the last admin`, not an empty users table that reopens setup. Only a removed
+  account loses sessions (Postgres FK cascade; explicit invalidation only after `removed`).
+  Self-delete remains 409; a later request using a deleted account's cookie remains 401.
+  Password policy, lazy session resolution and setup rate limiting are unchanged.
+  Verified over real `main.ts` TCP routes against isolated Postgres with two admins, then with
+  extra authors; both sessions of each survivor remained usable and `/setup` stayed 409.
+  Approval, lock-barrier evidence and rollback containment:
+  `docs/superpowers/specs/2026-10-27-issue-368-atomic-last-admin-design.md`.
 - **Password changes** — `POST /users/me/password` lets an authenticated user rotate their own
   password after re-proving the **current** one (rate-limited, so a hijacked session cannot
   brute-force it — see *Rate limiting*). On success **all of that user's sessions are destroyed**
