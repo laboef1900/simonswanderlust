@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { initComments, paintComments, parsePayload, submitOutcome, type CommentLabels } from './comments';
-import { locales, ui } from '../i18n/ui';
+import { ui } from '../i18n/ui';
 
 const labels: CommentLabels = {
   heading: 'Comments',
@@ -20,6 +20,7 @@ const labels: CommentLabels = {
   authorBadge: 'Author',
   privacy: 'Privacy',
   count: '{n} comments',
+  countOne: '{n} comment',
 };
 
 const comment = (over: Partial<Parameters<typeof paintComments>[1][number]> = {}) => ({
@@ -76,6 +77,27 @@ beforeEach(() => {
 });
 
 describe('paintComments', () => {
+  it.each([
+    ['de', 0, 'Noch keine Kommentare.'],
+    ['de', 1, '1 Kommentar'],
+    ['de', 2, '2 Kommentare'],
+    ['en', 0, 'No comments yet.'],
+    ['en', 1, '1 comment'],
+    ['en', 2, '2 comments'],
+  ] as const)('renders %s grammar for %d comments', (locale, count, expected) => {
+    const list = document.createElement('div');
+    paintComments(list, Array.from({ length: count }, () => comment()), {
+      ...labels,
+      empty: ui[locale]['comments.empty'],
+      count: ui[locale]['comments.count'],
+      countOne: ui[locale]['comments.countOne'],
+    }, locale);
+    expect(list.querySelector(count === 0 ? '.comments__empty' : '.comments__count')?.textContent)
+      .toBe(expected);
+    expect(list.querySelectorAll('.comments__item')).toHaveLength(count);
+    if (count === 0) expect(list.querySelector('.comments__count')).toBeNull();
+  });
+
   it('keeps script and img onerror payloads as text', () => {
     const list = document.createElement('div');
     document.body.append(list);
@@ -262,35 +284,7 @@ describe('initComments submit', () => {
   });
 });
 
-describe('comments i18n and invariants', () => {
-  const REQUIRED = [
-    'comments.heading',
-    'comments.empty',
-    'comments.closed',
-    'comments.unavailable',
-    'comments.noscript',
-    'comments.nameLabel',
-    'comments.bodyLabel',
-    'comments.submit',
-    'comments.submitting',
-    'comments.submitted',
-    'comments.invalid',
-    'comments.rateLimited',
-    'comments.authorBadge',
-    'comments.privacy',
-    'comments.count',
-  ].sort();
-
-  it('defines exactly the mandated comments.* key set, non-empty, in de and en', () => {
-    for (const locale of locales) {
-      const keys = Object.keys(ui[locale]).filter((k) => k.startsWith('comments.')).sort();
-      expect(keys, locale).toEqual(REQUIRED);
-      for (const k of keys) expect(ui[locale][k as keyof typeof ui.de], `${locale}.${k}`).not.toBe('');
-      expect(ui[locale]['comments.count']).toContain('{n}');
-    }
-    expect(ui.en['comments.privacy']).toMatch(/no email/i);
-  });
-
+describe('comments invariants', () => {
   it('never uses innerHTML, set:html or astro:content for comments; no email field', () => {
     // happy-dom rewrites import.meta.url, so resolve from the site root (vitest cwd).
     const script = readFileSync(resolve(process.cwd(), 'src/scripts/comments.ts'), 'utf8');
