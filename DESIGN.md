@@ -412,9 +412,17 @@ ResizeObserver it stays nonsticky; native disclosures remain usable (initially
 collapsed without JavaScript). A rail taller than the opening still sets the
 spread's height.
 The opening is the body's first section — everything before the first
-top-level heading that has content in front of it (`story-opening.ts`), so
-an intro heading, its paragraphs and its first photograph sit beside the
-rail. The rest of the story then runs **centred on the same 1056px**, with
+root-level heading at the shallowest root heading depth that has content in
+front of it (`story-opening.ts`), so an intro heading, its paragraphs and its
+first photograph sit beside the rail. Headings inside blockquotes or list
+items never become cut points or determine that depth: the complete quote or
+list stays in the opening, followed by any introductory paragraphs. Stacked
+intro headings stay together until there is content before a later heading.
+The HTML tree locates original source offsets, without reserializing the
+sanitized body; concatenating the two fragments reproduces it exactly. With
+no eligible heading, or root heading IDs/depths that disagree with renderer
+metadata, the whole body remains the opening rather than guessing a cut.
+The rest of the story then runs **centred on the same 1056px**, with
 the route divider and pagination on the same measure. Matching the edges
 and the owner's requested wider reading area take precedence over a
 shorter line measure. The spread wrapper is a
