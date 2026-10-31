@@ -164,7 +164,7 @@ describe('GET /comments (SPEC-API-001)', () => {
         createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, i)) });
     }
     const tk = await published(b);
-    const reply = await b.comments.replyAsAuthor({ translationKey: tk, body: 'Thanks!', postedLocale: 'en' });
+    const reply = await b.comments.replyAsAuthor({ translationKey: tk, body: 'Thanks!', postedLocale: 'en' }, 'Simon');
     admin.add({ ...reply, status: 'approved' });
     const res = await b.app.inject({ method: 'GET', url: `/comments?tk=${tk}` });
     expect(res.statusCode).toBe(200);
@@ -182,7 +182,7 @@ describe('GET /comments (SPEC-API-001)', () => {
       ...admin, list: async () => { throw new Error('Moderation unavailable'); },
     } } : {});
     const tk = await published(b);
-    const reply = await b.comments.replyAsAuthor({ translationKey: tk, body: 'Author reply' });
+    const reply = await b.comments.replyAsAuthor({ translationKey: tk, body: 'Author reply' }, 'Simon');
     const reader = await b.comments.create({ translationKey: tk, locale: 'de', name: reply.name, body: 'Reader reply' });
     await b.comments.approve(reader.id);
     const res = await b.app.inject({ method: 'GET', url: `/comments?tk=${tk}` });
