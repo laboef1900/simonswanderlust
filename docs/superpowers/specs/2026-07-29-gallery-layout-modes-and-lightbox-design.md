@@ -196,13 +196,29 @@ page has no gallery.
   `html:has(dialog.jgal__lb[open]) { overflow: hidden }`. No ancestor sets `overflow-x: hidden` on
   the story route, so the document element is the scroller and this works.
 - Arrow keys and `Home`/`End` navigate; backdrop click closes; position announced via a polite live
-  region; `prefers-reduced-motion` respected.
+  region; `prefers-reduced-motion` respected. Backdrop means the empty space outside the photo,
+  caption and controls, including empty figure/frame space: the full-viewport figure must not
+  be excluded from dismissal (#357). Photo/caption clicks keep the viewer open, arrows navigate
+  without closing, and backdrop, Close and Escape return focus to the originating gallery link.
 - **Degradation:** every photo is a real `<a>` to its largest variant. JS off → clicking opens the
   full-resolution image, and the grid is already correctly laid out by CSS alone.
 - **The script never touches the layout** — no measuring, no class toggling that affects flow — or
   CLS returns.
 - All strings come from `site/src/i18n/ui.ts` via data attributes, mirroring `data-readstory`
   (Golden Rule 7).
+
+**#357 browser proof (2026-10-27):** the real uploader published a synthetic DE/EN story
+(column and breakout galleries) and saved a DE/EN About page (slider), with generated PNGs
+uploaded and encoded through the real media queue. Managed Chromium at 1440×1000 and
+390×844 exercised all twelve locale/surface/viewport combinations using trusted mouse
+clicks or touch taps, not dispatched dialog events. Empty dark points hit-tested to
+`FIGURE.jgal__lb-fig` and changed `dialog.open` from true to false; photo/caption clicks
+and both arrows kept it true, and backdrop/Close/Escape restored the exact opener's focus.
+Additional side/bottom backdrop points dismissed in all combinations. Captures waited for
+loaded responsive images and completed opening animations. The fitted frame had no substantial
+empty area in these fixtures, so this proof does not claim a separate frame-target pointer hit.
+Local evidence: `.issue-runtime/lightbox-evidence.json` and
+`.issue-runtime/{desktop,mobile}-{de,en}-{column,breakout,slider}.png` in the issue worktree.
 
 ### Slider controls and accessibility
 

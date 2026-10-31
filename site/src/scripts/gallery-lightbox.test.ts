@@ -220,14 +220,48 @@ describe('initGalleries — lightbox', () => {
     expect(document.activeElement).toBe(lbButton('close'));
   });
 
-  it('closes on the close button and on a backdrop click, but not on the figure', () => {
+  it.each(['.jgal__lb-fig', '.jgal__lb-frame', '.jgal__lb-picture'])(
+    'closes when the empty backdrop belongs to %s',
+    (selector) => {
+      mountJustified(2);
+      initGalleries(document, labels);
+      click(photos()[0]!);
+      // Real empty-space hits land on these containers, not the dialog root.
+      click(dialog()!.querySelector(selector)!);
+      expect(dialog()?.open).toBe(false);
+    },
+  );
+
+  it.each(['.jgal__lb-thumb', '.jgal__lb-img', '.jgal__lb-cap'])(
+    'keeps the lightbox open when clicking %s',
+    (selector) => {
+      mountJustified(2);
+      initGalleries(document, labels);
+      click(photos()[0]!);
+      click(dialog()!.querySelector(selector)!);
+      expect(dialog()?.open).toBe(true);
+      expect(liveText()).toBe('Photo 1 of 2');
+    },
+  );
+
+  it('keeps navigation controls interactive without treating them as backdrop', () => {
     mountJustified(2);
     initGalleries(document, labels);
     click(photos()[0]!);
-    click(dialog()!.querySelector('.jgal__lb-fig')!);
+    const glyph = document.createElement('span');
+    glyph.textContent = '›';
+    lbButton('next')!.replaceChildren(glyph);
+    click(glyph);
     expect(dialog()?.open).toBe(true);
-    click(dialog()!);
-    expect(dialog()?.open).toBe(false);
+    expect(liveText()).toBe('Photo 2 of 2');
+    click(lbButton('prev')!);
+    expect(dialog()?.open).toBe(true);
+    expect(liveText()).toBe('Photo 1 of 2');
+  });
+
+  it('closes on the close button', () => {
+    mountJustified(2);
+    initGalleries(document, labels);
     click(photos()[0]!);
     click(lbButton('close')!);
     expect(dialog()?.open).toBe(false);
