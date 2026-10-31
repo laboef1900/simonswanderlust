@@ -125,6 +125,13 @@ function loadPage(file: string, extraGlobals: Record<string, unknown>, scripts: 
   };
   // ARIA tabs carry their state in markup that tabs.js reads; mirror just that.
   const attr = (tag: string, name: string): string | undefined => new RegExp(`\\s${name}="([^"]*)"`).exec(tag)?.[1];
+  for (const [tag] of markup.matchAll(/<[a-z]+\b[^>]*\bid="[^"]+"[^>]*>/g)) {
+    const node = el(attr(tag, 'id')!);
+    for (const name of ['role', 'aria-describedby']) {
+      const value = attr(tag, name);
+      if (value) node.attrs[name] = value;
+    }
+  }
   const tabs = [...markup.matchAll(/<button\b[^>]*\brole="tab"[^>]*>/g)].map(([tag]) => {
     const tab = el(attr(tag, 'id')!);
     tab.dataset.tab = attr(tag, 'data-tab') ?? '';
@@ -226,6 +233,169 @@ describe('import.html rejection accounting', () => {
 });
 
 const post = { translationKey: 'tk1', titleDe: 'Bukarest', slugDe: 'bukarest', slugEn: 'bucharest', status: 'published' };
+
+describe('users.html failure recovery', () => {
+  const user = { id: 2, username: 'author2', isAdmin: false };
+
+  it.each(['http', 'network'] as const)('recovers the user list after a %s failure without clearing form entries', async (failure) => {
+    const pending = Promise.withResolvers<Response>();
+    const fetcher = vi.fn()
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValueOnce(Response.json([user]))
+      .mockResolvedValueOnce(Response.json({ error: 'unavailable' }, { status: 500 }))
+      .mockResolvedValueOnce(Response.json([]));
+    const { el } = loadPage('public/users.html', { fetch: fetcher });
+    el('username').value = 'unsaved-author';
+    el('password').value = 'unsaved-password';
+    const loading = el('reloadUsers').click();
+    expect(el('reloadUsers').disabled).toBe(true);
+    await el('reloadUsers').click();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    if (failure === 'http') pending.resolve(Response.json({ error: 'unavailable' }, { status: 500 }));
+    else pending.reject(NETWORK_DOWN);
+    await loading;
+    expect(el('list').children).toHaveLength(0);
+    expect(el('reloadUsers').disabled).toBe(false);
+
+    await el('reloadUsers').click();
+    expect(el('list').children.map((row) => row.children[0]?.textContent)).toEqual([user.username]);
+    // A failed refresh must not retain actionable rows from an obsolete list.
+    await el('reloadUsers').click();
+    expect(el('list').children).toHaveLength(0);
+    expect(el('listout').textContent).toBe(ui.en['editor.chrome.usersLoadFailed'].replace('{status}', '500'));
+    await el('reloadUsers').click();
+    expect(el('list').children).toHaveLength(0);
+    expect(el('username').value).toBe('unsaved-author');
+    expect(el('password').value).toBe('unsaved-password');
+  });
+
+  it('refreshes after Add even while an older user list is pending', async () => {
+    const stale = Promise.withResolvers<Response>();
+    const fresh = Promise.withResolvers<Response>();
+    const fetcher = vi.fn()
+      .mockReturnValueOnce(stale.promise)
+      .mockResolvedValueOnce(Response.json(user, { status: 201 }))
+      .mockReturnValueOnce(fresh.promise);
+    const { el } = loadPage('public/users.html', { fetch: fetcher });
+    const oldLoad = el('reloadUsers').click();
+    el('username').value = user.username;
+    el('password').value = 'fixture-new-password';
+    const add = el('addForm').fire('submit');
+    await Promise.resolve();
+    await Promise.resolve();
+    stale.resolve(Response.json([]));
+    await oldLoad;
+    expect(el('reloadUsers').disabled).toBe(true);
+    expect(el('listout').textContent).toBe(ui.en['editor.chrome.usersLoading']);
+    fresh.resolve(Response.json([user]));
+    await add;
+    expect(el('list').children.map((row) => row.children[0]?.textContent)).toEqual([user.username]);
+    expect(el('reloadUsers').disabled).toBe(false);
+  });
+
+  it('does not restore a removed account when an older reload completes last', async () => {
+    const deletion = Promise.withResolvers<Response>();
+    const stale = Promise.withResolvers<Response>();
+    const deletionStarted = Promise.withResolvers<void>();
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(Response.json([user]))
+      .mockImplementationOnce(() => { deletionStarted.resolve(); return deletion.promise; })
+      .mockReturnValueOnce(stale.promise)
+      .mockResolvedValueOnce(Response.json([]));
+    const { el } = loadPage('public/users.html', { fetch: fetcher });
+    await el('reloadUsers').click();
+    const remove = el('list').children[0]!.children[2]!.click();
+    await deletionStarted.promise;
+    const oldLoad = el('reloadUsers').click();
+    deletion.resolve(new Response(null, { status: 204 }));
+    await remove;
+    // The successful mutation's fresh read must finish independently of the old GET.
+    for (let index = 0; index < 12; index++) await Promise.resolve();
+    expect(el('listout').textContent).toBe(ui.en['editor.chrome.usersLoaded'].replace('{count}', '0'));
+    stale.resolve(Response.json([user]));
+    await oldLoad;
+    expect(el('list').children).toHaveLength(0);
+    expect(el('listout').textContent).toBe(ui.en['editor.chrome.usersLoaded'].replace('{count}', '0'));
+  });
+
+  const actions = [
+    { form: 'addForm', button: 'add', status: 'out',
+      fields: [['username', 'author2'], ['password', 'fixture-new-password']] },
+    { form: 'pwForm', button: 'changepw', status: 'pwout',
+      fields: [['curpw', 'fixture-current-password'], ['newpw', 'fixture-new-password']] },
+  ] as const;
+
+  it.each(actions)('$form preserves entries on rejection, prevents duplicate submission, and permits a successful retry', async (action) => {
+    const pending = Promise.withResolvers<Response>();
+    const fetcher = vi.fn()
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValueOnce(Response.json({ ok: true }))
+      .mockResolvedValueOnce(Response.json([user]));
+    const logger = { log: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const { el } = loadPage('public/users.html', { fetch: fetcher, console: logger });
+    for (const [id, value] of action.fields) el(id).value = value;
+    el('isAdmin').checked = true;
+    const submitting = el(action.form).fire('submit');
+    expect(el(action.button).disabled).toBe(true);
+    await el(action.form).fire('submit');
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    pending.reject(new Error('Transport failed: ' + action.fields.map(([, value]) => value).join(' ')));
+    await submitting;
+    expect(el(action.button).disabled).toBe(false);
+    for (const [id, value] of action.fields) {
+      expect(el(id).value).toBe(value);
+      if (id !== 'username') expect(el(action.status).textContent).not.toContain(value);
+    }
+    expect(el('isAdmin').checked).toBe(true);
+    for (const log of Object.values(logger)) expect(log).not.toHaveBeenCalled();
+
+    await el(action.form).fire('submit');
+    expect(el(action.button).disabled).toBe(false);
+    for (const [id] of action.fields) expect(el(id).value).toBe('');
+    if (action.form === 'addForm') {
+      expect(el('isAdmin').checked).toBe(false);
+      expect(el('list').children[0]?.children[0]?.textContent).toBe(user.username);
+    }
+  });
+
+  it.each(actions)('$form keeps entries after an HTTP refusal and retains newer edits when a retry succeeds', async (action) => {
+    const pending = Promise.withResolvers<Response>();
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValueOnce(Response.json([user]));
+    const { el } = loadPage('public/users.html', { fetch: fetcher });
+    for (const [id, value] of action.fields) el(id).value = value;
+    await el(action.form).fire('submit');
+    expect(el(action.button).disabled).toBe(false);
+    for (const [id, value] of action.fields) expect(el(id).value).toBe(value);
+
+    const retry = el(action.form).fire('submit');
+    for (const [id] of action.fields) el(id).value = 'newer-unsaved-entry';
+    pending.resolve(Response.json({ ok: true }));
+    await retry;
+    expect(el(action.button).disabled).toBe(false);
+    for (const [id] of action.fields) expect(el(id).value).toBe('newer-unsaved-entry');
+  });
+
+  it('keeps confirmed account creation separate from a failed list refresh', async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(Response.json({ ok: true }, { status: 201 }))
+      .mockResolvedValueOnce(Response.json({ error: 'unavailable' }, { status: 500 }))
+      .mockResolvedValueOnce(Response.json([user]));
+    const { el } = loadPage('public/users.html', { fetch: fetcher });
+    el('username').value = user.username;
+    el('password').value = 'fixture-new-password';
+    await el('addForm').fire('submit');
+    expect(el('username').value).toBe('');
+    expect(el('password').value).toBe('');
+    expect(el('add').disabled).toBe(false);
+    expect(el('reloadUsers').disabled).toBe(false);
+    await el('reloadUsers').click();
+    expect(el('list').children[0]?.children[0]?.textContent).toBe(user.username);
+    expect(fetcher.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
+  });
+});
 
 describe('posts.html actions survive a dropped connection', () => {
   it('deletePost re-enables the row button and names the failure', async () => {
@@ -1023,8 +1193,8 @@ async function chooseModel(el: (id: string) => Element, id: string, label: strin
 
 /** settings.html over a contract-shaped fake API. `route` answers first; /settings is served from `state`. */
 async function apiPage(initial: SettingsResponse, opts: {
-  confirm?: (question: Question) => boolean;
-  route?: (request: ApiRequest, setState: (next: SettingsResponse) => void) => Response | undefined;
+  confirm?: (question: Question) => boolean | Promise<boolean>;
+  route?: (request: ApiRequest, setState: (next: SettingsResponse) => void) => Response | undefined | Promise<Response | undefined>;
   listModels?: (baseUrl: string, apiKey: string | null) => Promise<string[]>;
   mixedContentWarning?: (url: string, protocol: string) => string;
   hash?: string;
@@ -1033,13 +1203,14 @@ async function apiPage(initial: SettingsResponse, opts: {
   const setState = (next: SettingsResponse) => { state = next; };
   const requests: ApiRequest[] = [];
   const questions: Question[] = [];
+  const storageWrite = vi.fn();
   const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
     const request: ApiRequest = {
       url, method: init?.method ?? 'GET',
       ...(typeof init?.body === 'string' ? { body: JSON.parse(init.body) as Record<string, unknown> } : {}),
     };
     requests.push(request);
-    const routed = opts.route?.(request, setState);
+    const routed = await opts.route?.(request, setState);
     if (routed) return routed;
     if (url === '/settings' && request.method === 'POST') state = { ...state, ...(request.body as Partial<SettingsResponse>) };
     if (url === '/settings') return Response.json(state);
@@ -1049,6 +1220,7 @@ async function apiPage(initial: SettingsResponse, opts: {
   const listModels = vi.fn(opts.listModels ?? listedByDefault);
   const page = loadSettingsPage({
     fetch: fetcher,
+    localStorage: { setItem: storageWrite }, sessionStorage: { setItem: storageWrite },
     LLM: { mixedContentWarning: opts.mixedContentWarning ?? (() => ''), listModels },
     AdminConfirm: {
       ask: async (question: Question) => { questions.push(question); return opts.confirm ? opts.confirm(question) : true; },
@@ -1061,7 +1233,7 @@ async function apiPage(initial: SettingsResponse, opts: {
     }),
   });
   await callPage(page.ctx, 'fill', state);
-  return { ...page, requests, questions, listModels, fetcher };
+  return { ...page, requests, questions, listModels, fetcher, storageWrite };
 }
 
 const calls = (requests: ApiRequest[]) => requests.map((r) => r.method + ' ' + r.url);
@@ -1176,6 +1348,335 @@ describe('settings.html actions survive a dropped connection', () => {
 });
 
 describe('settings.html providers', () => {
+  it.each(['default', 'ai', 'delete'] as const)('preserves an unsubmitted Add form across unrelated %s work', async (action) => {
+    const state = settingsResponse({ aiProviders: [LOCAL, ROUTER, DEEPSEEK] });
+    const page = await apiPage(state, {
+      route: (request, setState) => {
+        if (request.method === 'DELETE') {
+          const next = { ...state, aiProviders: [LOCAL, ROUTER] };
+          setState(next);
+          return Response.json(next);
+        }
+        if (request.url === '/ai-providers' && request.method === 'POST') return Response.json(state, { status: 201 });
+        return undefined;
+      },
+    });
+    const { el } = page;
+    await el('addProvider').click();
+    const formNode = el('providerForm');
+    el('providerName').value = 'Pending provider';
+    el('providerBaseUrl').value = 'https://pending.example/v1';
+    el('providerApiKey').value = 'fixture-unsubmitted-add';
+    if (action === 'default') await rowButton(providerRow(el, ROUTER.name), 'Set default').click();
+    else if (action === 'ai') await el('saveAi').click();
+    else await rowButton(providerRow(el, DEEPSEEK.name), 'Delete').click();
+    expect(el('providerForm')).toBe(formNode);
+    expect(formNode.hidden).toBe(false);
+    expect(el('providerName').value).toBe('Pending provider');
+    expect(el('providerBaseUrl').value).toBe('https://pending.example/v1');
+    expect(el('providerKind').value).toBe('openrouter');
+    expect(el('providerApiKey').value).toBe('fixture-unsubmitted-add');
+    expect(page.requests.every((r) => !r.body || !Object.hasOwn(r.body, 'apiKey'))).toBe(true);
+    await el('providerForm').fire('submit');
+    const writes = page.requests.filter((r) => r.body && Object.hasOwn(r.body, 'apiKey'));
+    expect(writes).toEqual([{
+      url: '/ai-providers', method: 'POST',
+      body: { name: 'Pending provider', kind: 'openrouter', baseUrl: 'https://pending.example/v1', apiKey: 'fixture-unsubmitted-add' },
+    }]);
+    expect(el('providerApiKey').value).toBe('');
+    expect(pageText(el)).not.toContain('fixture-unsubmitted-add');
+    expect(page.storageWrite).not.toHaveBeenCalled();
+  });
+
+  it.each(['default', 'ai'] as const)('keeps an Edit replacement bound to its original provider after %s', async (action) => {
+    const state = settingsResponse({ aiProviders: [LOCAL, ROUTER, DEEPSEEK] });
+    const page = await apiPage(state, {
+      route: (request) => request.method === 'PUT' ? Response.json(state) : undefined,
+    });
+    const { el } = page;
+    await rowButton(providerRow(el, ROUTER.name), 'Edit').click();
+    el('providerName').value = 'Pending rename';
+    el('providerBaseUrl').value = 'https://replacement.example/v1';
+    el('providerApiKey').value = 'fixture-bound-replacement';
+    if (action === 'default') await rowButton(providerRow(el, DEEPSEEK.name), 'Set default').click();
+    else await el('saveAi').click();
+    expect(providerRow(el, ROUTER.name).children).toContain(el('providerForm'));
+    expect(el('providerApiKey').value).toBe('fixture-bound-replacement');
+    expect(el('providerKeyMoveWarning').hidden).toBe(true);
+    page.questions.length = 0;
+    await el('providerForm').fire('submit');
+    expect(page.questions).toEqual([]);
+    expect(page.requests.filter((r) => r.body && Object.hasOwn(r.body, 'apiKey'))).toEqual([{
+      url: '/ai-providers/openrouter', method: 'PUT',
+      body: { name: 'Pending rename', baseUrl: 'https://replacement.example/v1', apiKey: 'fixture-bound-replacement' },
+    }]);
+    expect(page.listModels.mock.calls.some((args) => args.includes('fixture-bound-replacement'))).toBe(false);
+    expect(pageText(el)).not.toContain('fixture-bound-replacement');
+    expect(page.storageWrite).not.toHaveBeenCalled();
+  });
+
+  it.each(['refused', 'network'] as const)('retains a pending key after unrelated %s failure and successful refresh', async (failure) => {
+    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER] }), {
+      route: (request) => {
+        if (request.method !== 'POST') return undefined;
+        if (failure === 'network') throw NETWORK_DOWN;
+        return Response.json({ error: 'Settings refused.' }, { status: 409 });
+      },
+    });
+    await rowButton(providerRow(page.el, ROUTER.name), 'Edit').click();
+    page.el('providerApiKey').value = 'fixture-retained-on-failure';
+    await page.el('saveAi').click();
+    expect(page.el('providerApiKey').value).toBe('fixture-retained-on-failure');
+    expect(page.el('providerForm').hidden).toBe(false);
+    expect(page.el('saveProvider').disabled).toBe(false);
+    expect(calls(page.requests)).toEqual(['POST /settings', 'GET /settings']);
+    expect(page.el('aiOut').textContent).toContain(failure === 'network' ? 'outcome is unknown' : 'Settings refused.');
+  });
+
+  it('retains and blocks an Edit form on failed refresh without interpreting it as Add', async () => {
+    let failRefresh = true;
+    const state = settingsResponse({ aiProviders: [LOCAL, ROUTER, DEEPSEEK] });
+    const page = await apiPage(state, {
+      route: (request) => {
+        if (request.method === 'GET' && request.url === '/settings' && failRefresh) throw NETWORK_DOWN;
+        if (request.method === 'PUT') return Response.json(state);
+        return undefined;
+      },
+    });
+    const { el } = page;
+    await rowButton(providerRow(el, ROUTER.name), 'Edit').click();
+    const staleAction = rowButton(providerRow(el, DEEPSEEK.name), 'Set default');
+    el('providerName').value = 'Pending edit';
+    el('providerBaseUrl').value = 'https://pending.example/v1';
+    el('providerApiKey').value = 'fixture-blocked-key';
+    await staleAction.click();
+    expect(el('providerForm').hidden).toBe(false);
+    expect(el('providerApiKey').value).toBe('fixture-blocked-key');
+    expect(el('providerName').value).toBe('Pending edit');
+    expect(el('providerBaseUrl').value).toBe('https://pending.example/v1');
+    expect(el('providerKindField').hidden).toBe(true);
+    expect(el('providersOut').textContent).toBe(EDITOR_COPY.settingsRegistryUnavailable);
+    for (const id of ['saveProvider', 'removeProviderKey', 'testProviderForm', 'addProvider', 'saveAi']) {
+      expect(el(id).disabled).toBe(true);
+    }
+    const before = page.requests.length;
+    await el('providerForm').fire('submit');
+    await el('removeProviderKey').click();
+    await el('testProviderForm').click();
+    await el('saveAi').click();
+    await staleAction.click();
+    expect(page.requests).toHaveLength(before);
+    failRefresh = false;
+    await callPage(page.ctx, 'reloadSettings');
+    expect(el('saveProvider').disabled).toBe(false);
+    expect(el('providersOut').textContent).toBe('');
+    expect(el('providerFormOut').textContent).toBe('');
+    expect(el('providerApiKey').value).toBe('fixture-blocked-key');
+    await el('providerForm').fire('submit');
+    expect(page.requests.find((r) => r.method === 'PUT')).toMatchObject({
+      url: '/ai-providers/openrouter', body: { apiKey: 'fixture-blocked-key', baseUrl: 'https://pending.example/v1' },
+    });
+    expect(page.requests.some((r) => r.url === '/ai-providers')).toBe(false);
+    expect(page.storageWrite).not.toHaveBeenCalled();
+  });
+
+  it('still confirms a genuinely blank-key URL move after unrelated work and retains edits when declined', async () => {
+    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER, DEEPSEEK] }), {
+      confirm: (question) => question.confirmLabel !== 'Save new URL',
+    });
+    const { el } = page;
+    await rowButton(providerRow(el, ROUTER.name), 'Edit').click();
+    el('providerName').value = 'Pending URL edit';
+    el('providerBaseUrl').value = 'https://blank-key.example/v1';
+    await el('saveAi').click();
+    expect(el('providerKeyMoveWarning').hidden).toBe(false);
+    const before = page.requests.length;
+    await el('providerForm').fire('submit');
+    expect(page.requests).toHaveLength(before);
+    expect(page.questions).toHaveLength(1);
+    expect(page.questions[0]!.body).toContain(ROUTER.baseUrl);
+    expect(page.questions[0]!.body).toContain('https://blank-key.example/v1');
+    expect(el('providerName').value).toBe('Pending URL edit');
+    expect(el('providerBaseUrl').value).toBe('https://blank-key.example/v1');
+    expect(el('providerApiKey').value).toBe('');
+    expect(el('providerForm').hidden).toBe(false);
+  });
+
+  it('does not erase input typed while an unrelated settings response is pending', async () => {
+    const pending = Promise.withResolvers<Response>();
+    const state = settingsResponse({ aiProviders: [LOCAL, ROUTER] });
+    const page = await apiPage(state, {
+      route: (request) => request.method === 'POST' ? pending.promise : undefined,
+    });
+    await page.el('addProvider').click();
+    const saving = page.el('saveAi').click();
+    page.el('providerName').value = 'Typed while saving';
+    page.el('providerBaseUrl').value = 'https://later.example/v1';
+    page.el('providerApiKey').value = 'fixture-later-key';
+    pending.resolve(Response.json(state));
+    await saving;
+    expect(page.el('providerApiKey').value).toBe('fixture-later-key');
+    expect(page.el('providerName').value).toBe('Typed while saving');
+    expect(page.el('providerBaseUrl').value).toBe('https://later.example/v1');
+  });
+
+  it.each([200, 409, 500])('keeps a replacement form intact when an older provider save returns %s', async (status) => {
+    const pending = Promise.withResolvers<Response>();
+    const state = settingsResponse({ aiProviders: [LOCAL, ROUTER, DEEPSEEK] });
+    const page = await apiPage(state, {
+      route: (request) => request.method === 'PUT' ? pending.promise : undefined,
+    });
+    const { el } = page;
+    await rowButton(providerRow(el, ROUTER.name), 'Edit').click();
+    el('providerBaseUrl').value = 'https://original-operation.example/v1';
+    el('providerApiKey').value = 'fixture-submitted-snapshot';
+    const saving = el('providerForm').fire('submit');
+    expect(el('providerApiKey').value).toBe('');
+    await rowButton(providerRow(el, DEEPSEEK.name), 'Edit').click();
+    el('providerName').value = 'New pending form';
+    el('providerBaseUrl').value = 'https://new-form.example/v1';
+    el('providerApiKey').value = 'fixture-new-form-key';
+    pending.resolve(Response.json(status === 200 ? state : {
+      code: status === 500 ? 'settings_partial_failure' : 'refused',
+      error: 'Original operation failed. Reload settings before retrying.',
+    }, { status }));
+    await saving;
+    expect(el('providerForm').hidden).toBe(false);
+    expect(providerRow(el, DEEPSEEK.name).children).toContain(el('providerForm'));
+    expect(el('providerApiKey').value).toBe('fixture-new-form-key');
+    expect(el('providerName').value).toBe('New pending form');
+    expect(el('providerBaseUrl').value).toBe('https://new-form.example/v1');
+    expect(el('providerFormOut').textContent).toBe('');
+    expect(el('saveProvider').disabled).toBe(false);
+    expect(page.requests[0]).toMatchObject({
+      url: '/ai-providers/openrouter',
+      body: { baseUrl: 'https://original-operation.example/v1', apiKey: 'fixture-submitted-snapshot' },
+    });
+    expect(el('providersOut').textContent).toContain(status === 200 ? 'Saved' : 'Original operation failed');
+    expect(pageText(el)).not.toContain('fixture-');
+  });
+
+  it('clears a submitted key before a 401 and follows login without persistence', async () => {
+    const page = await apiPage(settingsResponse(), {
+      route: (request) => request.method === 'POST' ? Response.json({}, { status: 401 }) : undefined,
+    });
+    await page.el('addProvider').click();
+    page.el('providerApiKey').value = 'fixture-auth-loss';
+    const saving = page.el('providerForm').fire('submit');
+    expect(page.el('providerApiKey').value).toBe('');
+    await saving;
+    expect(page.ctx.location).toMatchObject({ href: '/login' });
+    expect(calls(page.requests)).toEqual(['POST /ai-providers']);
+    expect(page.storageWrite).not.toHaveBeenCalled();
+  });
+
+  it('retains keys on local validation and declined removal, but clears intentional Cancel', async () => {
+    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER] }), { confirm: () => false });
+    await rowButton(providerRow(page.el, ROUTER.name), 'Edit').click();
+    page.el('providerName').value = '';
+    page.el('providerApiKey').value = 'fixture-not-submitted';
+    await page.el('providerForm').fire('submit');
+    await page.el('removeProviderKey').click();
+    expect(page.el('providerApiKey').value).toBe('fixture-not-submitted');
+    expect(page.requests).toEqual([]);
+    await page.el('cancelProvider').click();
+    expect(page.el('providerApiKey').value).toBe('');
+  });
+
+  it('reports a partial provider failure even when its refresh also fails', async () => {
+    const error = 'API key change saved, but settings were not saved. Reload settings before retrying.';
+    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER] }), {
+      route: (request) => request.method === 'PUT'
+        ? Response.json({ code: 'settings_partial_failure', error }, { status: 500 })
+        : Response.json({}, { status: 503 }),
+    });
+    await rowButton(providerRow(page.el, ROUTER.name), 'Edit').click();
+    page.el('providerApiKey').value = 'fixture-partial-refresh-failure';
+    await page.el('providerForm').fire('submit');
+    expect(page.el('providerApiKey').value).toBe('');
+    expect(page.el('providersOut').textContent).toContain(error);
+    expect(page.el('providersOut').textContent).toContain(EDITOR_COPY.settingsRegistryUnavailable);
+    expect(calls(page.requests)).toEqual(['PUT /ai-providers/openrouter', 'GET /settings']);
+  });
+
+  it('does not let a confirmed operation from a replaced form consume its new key', async () => {
+    const confirmation = Promise.withResolvers<boolean>();
+    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER, DEEPSEEK] }), {
+      confirm: () => confirmation.promise,
+    });
+    const { el } = page;
+    await rowButton(providerRow(el, ROUTER.name), 'Edit').click();
+    el('providerApiKey').value = 'fixture-original-pending';
+    const removing = el('removeProviderKey').click();
+    await rowButton(providerRow(el, DEEPSEEK.name), 'Edit').click();
+    expect(el('providerApiKey').value).toBe('');
+    el('providerApiKey').value = 'fixture-after-confirmation-opened';
+    confirmation.resolve(true);
+    await removing;
+    expect(page.requests).toEqual([]);
+    expect(el('providerApiKey').value).toBe('fixture-after-confirmation-opened');
+    expect(el('providerForm').hidden).toBe(false);
+  });
+
+  it('clears confirmed removal at handoff and leaves a later form intact on completion', async () => {
+    const response = Promise.withResolvers<Response>();
+    const started = Promise.withResolvers<void>();
+    const state = settingsResponse({ aiProviders: [LOCAL, ROUTER, DEEPSEEK] });
+    const page = await apiPage(state, {
+      route: (request) => {
+        if (request.method !== 'PUT') return undefined;
+        started.resolve();
+        return response.promise;
+      },
+    });
+    const { el } = page;
+    await rowButton(providerRow(el, ROUTER.name), 'Edit').click();
+    el('providerApiKey').value = 'fixture-discard-on-remove';
+    const removing = el('removeProviderKey').click();
+    await started.promise;
+    expect(el('providerApiKey').value).toBe('');
+    await rowButton(providerRow(el, DEEPSEEK.name), 'Edit').click();
+    el('providerApiKey').value = 'fixture-after-remove-handoff';
+    response.resolve(Response.json(state));
+    await removing;
+    expect(page.requests[0]).toEqual({ method: 'PUT', url: '/ai-providers/openrouter', body: { apiKey: null } });
+    expect(el('providerApiKey').value).toBe('fixture-after-remove-handoff');
+    expect(el('providerForm').hidden).toBe(false);
+  });
+
+  it('does not place an older form Test result into a different form', async () => {
+    const models = Promise.withResolvers<string[]>();
+    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER, DEEPSEEK] }), {
+      listModels: () => models.promise,
+    });
+    const { el } = page;
+    await rowButton(providerRow(el, ROUTER.name), 'Edit').click();
+    el('providerApiKey').value = 'fixture-test-original';
+    const testing = el('testProviderForm').click();
+    await rowButton(providerRow(el, DEEPSEEK.name), 'Edit').click();
+    el('providerApiKey').value = 'fixture-test-next-form';
+    models.resolve(['model']);
+    await testing;
+    expect(el('providerFormOut').textContent).toBe('');
+    expect(el('providerApiKey').value).toBe('fixture-test-next-form');
+    expect(page.listModels.mock.calls).toEqual([[ROUTER.baseUrl, 'fixture-test-original']]);
+  });
+
+  it('explains discarding an edited provider only when fresh settings prove it was removed', async () => {
+    const state = settingsResponse({ aiProviders: [LOCAL, ROUTER, DEEPSEEK] });
+    const page = await apiPage(state, {
+      route: (request) => request.method === 'GET' && request.url === '/settings'
+        ? Response.json({ ...state, aiProviders: [LOCAL, DEEPSEEK] }) : undefined,
+    });
+    await rowButton(providerRow(page.el, ROUTER.name), 'Edit').click();
+    page.el('providerApiKey').value = 'fixture-removed-provider';
+    await rowButton(providerRow(page.el, DEEPSEEK.name), 'Set default').click();
+    expect(page.el('providerForm').hidden).toBe(true);
+    expect(page.el('providerApiKey').value).toBe('');
+    expect(page.el('providersOut').textContent).toContain(EDITOR_COPY.settingsProviderRemoved);
+    expect(page.requests.every((r) => !r.body || !Object.hasOwn(r.body, 'apiKey'))).toBe(true);
+  });
+
   it('renders names and URLs as text only, with the default badge, kind and key state', async () => {
     const hostile = '<img src=x onerror=alert(1)>';
     const { el } = await apiPage(settingsResponse({
@@ -1963,6 +2464,57 @@ describe('settings.html against the real settings and provider routes', () => {
     };
     return { ...page, app, cookies, settings, secrets, fetcher, questions, refill, createProvider };
   }
+
+  it.each(['default', 'ai'] as const)('stores the pending Edit key only in A’s slot after unrelated %s work', async (action) => {
+    const page = await realPage();
+    const { el, app, cookies, secrets, settings, ctx } = page;
+    const a = await page.createProvider('fixture-a-original');
+    const createdB = await app.inject({
+      url: '/ai-providers', method: 'POST', cookies,
+      payload: { name: 'Provider B', kind: 'custom', baseUrl: 'https://b.example/v1', apiKey: 'fixture-b-unchanged' },
+    });
+    expect(createdB.statusCode).toBe(201);
+    const b = createdB.json<SettingsResponse>().aiProviders.find((p) => p.name === 'Provider B')!;
+    await page.refill();
+    await rowButton(providerRow(el, 'Router'), 'Edit').click();
+    el('providerName').value = 'Provider A edited';
+    el('providerBaseUrl').value = 'https://a-new.example/v1';
+    el('providerApiKey').value = 'fixture-a-replacement';
+    if (action === 'default') await rowButton(providerRow(el, b.name), 'Set default').click();
+    else await el('saveAi').click();
+    await callPage(ctx, 'ensureModels');
+    expect(el('providerApiKey').value).toBe('fixture-a-replacement');
+    expect(el('providerName').value).toBe('Provider A edited');
+    expect(el('providerBaseUrl').value).toBe('https://a-new.example/v1');
+    expect(el('providerKeyMoveWarning').hidden).toBe(true);
+    page.questions.length = 0;
+    await el('providerForm').fire('submit');
+    expect(page.questions).toEqual([]);
+    expect(await secrets.get('ai_provider_key:' + a.id)).toBe('fixture-a-replacement');
+    expect(await secrets.get('ai_provider_key:' + b.id)).toBe('fixture-b-unchanged');
+    expect(settings.get().aiProviders.find((p) => p.id === a.id)).toMatchObject({
+      name: 'Provider A edited', baseUrl: 'https://a-new.example/v1',
+    });
+    expect(el('providerApiKey').value).toBe('');
+    expect(pageText(el)).not.toContain('fixture-');
+    const writesWithReplacement = page.fetcher.mock.calls.filter(([, init]) =>
+      typeof init?.body === 'string' && init.body.includes('fixture-a-replacement'));
+    expect(writesWithReplacement).toHaveLength(1);
+    expect(writesWithReplacement[0]![0]).toBe('/ai-providers/' + a.id);
+    expect(page.fetcher.mock.calls.some(([, init]) =>
+      new Headers(init?.headers).get('authorization') === 'Bearer fixture-a-replacement')).toBe(false);
+    const response = await app.inject({ url: '/settings', cookies });
+    expect(response.body).not.toContain('fixture-');
+    expect(response.json<SettingsResponse>().aiProviders.find((p) => p.id === a.id)?.hasApiKey).toBe(true);
+    // Exercise the actual bilingual admin-copy projection, not a second test dictionary.
+    const copyResponse = await app.inject({ url: '/admin/editor-image-copy.js' });
+    vm.runInContext(copyResponse.body, ctx);
+    const delivered = ctx.EditorCopy as Record<'de' | 'en', Record<string, string>>;
+    for (const locale of ['de', 'en'] as const) {
+      expect(delivered[locale].settingsRegistryUnavailable).toBe(ui[locale]['editor.chrome.settingsRegistryUnavailable']);
+      expect(delivered[locale].settingsProviderRemoved).toBe(ui[locale]['editor.chrome.settingsProviderRemoved']);
+    }
+  });
 
   it('a provider added with a key and assigned to review is what /ai-config hands out, and only to review', async () => {
     const { el, ctx, fetcher, app, cookies, settings, secrets } = await realPage();
