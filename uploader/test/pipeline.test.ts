@@ -9,14 +9,14 @@ import { processImage } from '../src/pipeline.js';
  * A previous comment claimed otherwise and settled for asserting only that
  * "the EXIF container is intact" — which is why the GPS leak went unnoticed.
  */
-async function fixture(width: number, height: number): Promise<Buffer> {
+async function fixture(width: number, height: number, photo?: Record<string, string>): Promise<Buffer> {
   return sharp({
     create: { width, height, channels: 3, background: { r: 120, g: 120, b: 120 } },
   })
     .withIccProfile('srgb')
     .withExif({
       IFD0: { ImageDescription: 'fixture', Make: 'Leica Camera AG', Model: 'LEICA Q2' },
-      IFD2: { DateTimeOriginal: '2026:07:04 18:23:11', ExposureTime: '1/250' },
+      IFD2: { DateTimeOriginal: '2026:07:04 18:23:11', ExposureTime: '1/250', ...photo },
       IFD3: {
         GPSLatitudeRef: 'N', GPSLatitude: '63/1 4/1 3312/100',
         GPSLongitudeRef: 'E', GPSLongitude: '10/1 23/1 1944/100',
@@ -148,6 +148,43 @@ describe('processImage', () => {
       expect(tags.Image?.Model).toBe('LEICA Q2');
       expect(tags.Photo?.DateTimeOriginal?.toISOString()).toBe('2026-07-04T18:23:11.000Z');
       expect(tags.Photo?.ExposureTime).toBeCloseTo(0.004, 6);
+    }
+  });
+
+  it.each([
+    { exposure: '4/5', value: 0.8 },
+    { exposure: '2/5', value: 0.4 },
+    { exposure: '3/5', value: 0.6 },
+    { exposure: '1/8000', value: 1 / 8000 },
+  ])('preserves $exposure exposure and sub-unit aperture across output profiles', async ({ exposure, value }) => {
+    const original = await fixture(800, 600, { ExposureTime: exposure, FNumber: '19/20' });
+    const inputExif = (await sharp(original).metadata()).exif;
+    expect(inputExif).toBeDefined();
+    const input = exifReader(inputExif!);
+    expect(input.Photo?.ExposureTime).toBeCloseTo(value, 10);
+    expect(input.Photo?.FNumber).toBeCloseTo(0.95, 10);
+    expect(input.GPSInfo).toBeDefined();
+
+    for (const convertJpeg of [true, false]) {
+      const result = await processImage(original, { convertJpeg });
+      expect(result.original.data.equals(original)).toBe(true);
+      expect(new Set(result.variants.map((variant) => `${variant.width}:${variant.format}`))).toEqual(
+        new Set(convertJpeg
+          ? ['640:avif', '640:webp', '800:avif', '800:webp']
+          : ['640:jpeg', '800:jpeg']),
+      );
+      for (const variant of result.variants) {
+        const exif = (await sharp(variant.data).metadata()).exif;
+        expect(exif).toBeDefined();
+        const tags = exifReader(exif!);
+        expect(tags.Photo?.ExposureTime).toBeCloseTo(value, 10);
+        expect(tags.Photo?.FNumber).toBeCloseTo(0.95, 10);
+        expect(tags.Image?.Make).toBe('Leica Camera AG');
+        expect(tags.Image?.Model).toBe('LEICA Q2');
+        expect(tags.GPSInfo ?? null).toBeNull();
+        expect(tags.Image?.ImageDescription).toBeUndefined();
+        expect(tags.Image?.Orientation === undefined || tags.Image.Orientation === 1).toBe(true);
+      }
     }
   });
 
