@@ -220,6 +220,16 @@ ASVS L1 exception record: `docs/superpowers/specs/2026-09-14-comments-design.md`
   are ignored, never stored.
 - **Hold-for-moderation.** Every accepted comment is `pending`; nothing is public until an admin
   approves it on `/admin/comments.html` (`requireAdmin`, see below). Deletion is erasure.
+- **Bounded, complete admin traversal (#350).** The separate admin list returns 50 rows
+  plus `hasMore`, using one-row lookahead and oldest-first `(created_at, id)` ordering.
+  Pending and Approved both support nonnegative safe-integer offsets, validated after
+  `requireAdmin` and before a list query; responses are `no-store`. Previous/Next reaches
+  comments beyond the old 500-row admin ceiling, including erasure targets. A successful
+  moderation action restarts at page one; concurrent external changes can shift offsets,
+  so traversal is not a snapshot and must restart to see the new state. Deletion and
+  unapproval remove a comment from the next public GET immediately, without rebuilding.
+  The public six-key shape, oldest-500 per-story response cap, author flag projection,
+  admin-only permissions and ASVS exception remain unchanged.
 - **Rate limit:** 5 `POST`s per address per 15 minutes plus a process-wide 200 per hour, keyed on
   `req.ip` under the address-validated, immediate-peer policy below — never on the reader-chosen
   name, which would let anyone DoS a name. See *Rate limiting* for the separate limiter maps.

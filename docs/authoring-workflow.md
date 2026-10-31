@@ -603,21 +603,30 @@ into the static site, so none of the switches below need a Publish or a rebuild.
    Their localized **Autor / Author** badge follows the reply's stored author flag, independent
    of the number of approved comments elsewhere on the site. This does not change the current
    limit of the oldest 500 approved comments returned for one story.
+   Both moderation views show the oldest comments first, **50 per page**. Use **Previous**
+   and **Next** to reach every comment, including those beyond the old 500-row queue.
+   The page indicator identifies the current page; a filter change or successful Approve,
+   Unapprove, Delete, Spam or Reply returns to page one. Cancelling a confirmation leaves
+   the current page untouched. Other moderators can shift the pages while you browse:
+   restart at page one to see the new state. If the last page becomes empty, Previous
+   remains available.
    Switching **Show** or refreshing after moderation immediately removes the old rows and
    actions while the selected view loads. Only the newest request can update the list,
    loading indicator or error message; a delayed response from an earlier view cannot
-   replace it. A failed refresh leaves no stale rows. Switch views to try loading again.
-   Unsent replies stay attached to their comment for this page session, including after a
-   failed refresh or a filter change; navigating away or reloading the page discards them.
+   replace it. A failed refresh leaves no stale rows or usable stale paging controls.
+   Switch views to try loading again. Unsent replies stay attached to their comment for
+   this page session, including after a failed refresh, paging or a filter change;
+   navigating away or reloading the page discards them.
    A successful reply clears only its submitted draft, not newer text written meanwhile.
    Concurrent actions in the same filter each refresh after success, even when another
-   action has already refreshed the list. A real filter change retires those old-view
-   completions; it does not discard the current view's unsent reply or keyboard focus.
+   action has already refreshed the list. A real filter or page change retires those
+   old-view completions; paging focuses the page indicator, without discarding drafts.
    If those refreshes overlap, the newest one retains the last focused reply and its
    selection. Moving focus elsewhere cancels restoration, including when you then
    blur that control; a delayed response does not pull focus back.
-4. **No rebuild** — closing or opening comments (either switch) takes effect on the next request.
-   It does not require **Publish** and never triggers a site build.
+4. **No rebuild** — closing or opening comments (either switch), approval, unapproval and
+   deletion take effect on the next public request. A confirmed Delete or Spam is permanent.
+   None requires **Publish** or triggers a site build.
 5. **Deleting a post deletes its comments** — the thread is removed in the same transaction as the
    post and its revisions; there is no undo.
 
