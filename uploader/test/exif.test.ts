@@ -33,26 +33,42 @@ const rawExif = async (buf: Buffer): Promise<Buffer | undefined> =>
   (await sharp(buf).metadata()).exif;
 
 describe('toRational', () => {
-  it('encodes sub-second exposures as reciprocals without losing precision', () => {
-    expect(toRational(0.004)).toBe('1/250');
-    expect(toRational(1 / 8000)).toBe('1/8000');
+  function numeric(value: number): number {
+    const encoded = toRational(value);
+    expect(encoded).toMatch(/^\d+\/[1-9]\d*$/);
+    if (encoded === null) throw new Error('Expected a supported EXIF rational');
+    const [numerator, denominator] = encoded.split('/').map(Number);
+    if (numerator === undefined || denominator === undefined) throw new Error('Missing rational component');
+    return numerator / denominator;
+  }
+
+  it.each([0, 0.3, 0.4, 0.5, 0.6, 0.8, 0.95, 0.004, 1 / 8000, 2.8, 28])(
+    'preserves the decoded value of %s',
+    (value) => { expect(numeric(value)).toBe(value); },
+  );
+
+  it('uses reciprocal approximation only within one percent', () => {
+    expect(numeric(0.4975)).toBe(0.5);
+    expect(numeric(0.49)).toBe(0.49);
+    expect(numeric(0.495)).toBe(0.495);
+    expect(numeric(0.4951)).toBe(0.5);
+    expect(Math.abs(numeric(0.71234) - 0.71234)).toBeLessThanOrEqual(0.0005);
   });
 
-  it('encodes values >= 1 with a fixed denominator', () => {
-    expect(toRational(2.8)).toBe('2800/1000');
-    expect(toRational(28)).toBe('28000/1000');
+  it('preserves supported tiny values and refuses out-of-range rationals', () => {
+    expect(numeric(1 / 4_000_000)).toBe(1 / 4_000_000);
+    expect(toRational(1 / 4_000_001)).toBeNull();
+    expect(numeric(4_000_000)).toBe(4_000_000);
+    expect(toRational(4_000_001)).toBeNull();
   });
 
   it('rejects non-finite, negative and non-numeric input', () => {
     expect(toRational(Number.NaN)).toBeNull();
     expect(toRational(Number.POSITIVE_INFINITY)).toBeNull();
+    expect(toRational(Number.NEGATIVE_INFINITY)).toBeNull();
     expect(toRational(-1)).toBeNull();
     expect(toRational('1/250')).toBeNull();
     expect(toRational(undefined)).toBeNull();
-  });
-
-  it('encodes zero without dividing by it', () => {
-    expect(toRational(0)).toBe('0/1');
   });
 });
 
