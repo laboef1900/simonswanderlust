@@ -49,7 +49,7 @@ export function postgresPagesLoader(): Loader {
             id: input.id,
             data: { ...input.data, description: proseDescription(rendered.html, '') },
           });
-          rendered.html = transformBodyImages(rendered.html, input.images, galleryOrigin);
+          rendered.html = await transformBodyImages(rendered.html, input.images, galleryOrigin);
           store.set({ id: input.id, data, body: input.body, rendered });
         }
         logger.info(`postgres-pages: loaded ${rows.length} entries`);

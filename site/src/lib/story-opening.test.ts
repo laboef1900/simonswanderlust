@@ -112,10 +112,10 @@ describe('splitOpening', () => {
       if (nestedSlug) {
         expect(rendered.metadata.headings.some((heading) => heading.slug === nestedSlug)).toBe(true);
       }
-      const html = sanitize(rendered.code);
+      const html = await sanitize(rendered.code);
       const { opening, rest } = splitOpening(html, rendered.metadata.headings);
-      expect(elements(opening)).toEqual(elements(sanitize((await markdown.render(intro)).code)));
-      expect(elements(rest)).toEqual(elements(sanitize((await markdown.render(remaining)).code)));
+      expect(elements(opening)).toEqual(elements(await sanitize((await markdown.render(intro)).code)));
+      expect(elements(rest)).toEqual(elements(await sanitize((await markdown.render(remaining)).code)));
       expect(opening + rest).toBe(html);
       // An incomplete quote/list would be repaired on parsing either fragment,
       // changing its serialized HTML rather than round-tripping it unchanged.
@@ -125,7 +125,7 @@ describe('splitOpening', () => {
 
     it('keeps the whole body when all its headings are nested', async () => {
       const rendered = await (await renderer).render('> ## Zitat des Tages\n> Ein Satz.\n\nIntro-Absatz.');
-      const html = sanitize(rendered.code);
+      const html = await sanitize(rendered.code);
       expect(splitOpening(html, rendered.metadata.headings)).toEqual({ opening: html, rest: '' });
     });
   });

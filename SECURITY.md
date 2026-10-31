@@ -811,6 +811,26 @@ No Markdown is rewritten and About/page publication gains no H1 restriction. Pre
 foreign sources and post-transform readiness references retain their existing policies.
 See [the approved heading contract](docs/superpowers/specs/2026-10-27-rendered-body-h1-gate-design.md).
 
+**Gallery partition availability** (#356, owner-approved 2026-10-28). Preview and
+publication analysis await the same exact legal-edge optimizer used by static builds.
+Reachability and conservative height intervals prune impossible/noncompetitive counts;
+request callers inject `node:timers/promises.setImmediate` after at most 4096 accounted
+edge/state/photo operations, including preparation and reconstruction. Builds drain that
+same kernel without scheduling. The synchronous HAST visitor only queues request-local
+gallery replacements; every replacement is awaited before serialization.
+
+This does not change accepted photos, row order, the evenness/square objective, ties or
+the height floor. Origin equality, dimension/format guards, string coercion/escaping,
+sanitization order, preview CSP, authorization and EXIF policy are reconfirmed unchanged.
+Remaining total work is **O(n³ B)** (bounds O(n² B), B the legal row-length bound), with
+O(n² + nB) peak optimizer memory. A scheduling quantum is not a wall-clock or memory cap:
+allocation/GC, Markdown parsing, sanitization and HTML emission remain outside this
+optimizer's cooperative-work guarantee. No content cap or approximate fallback was added.
+Authenticated disposable 400-photo preview and actual publication/build returned 200;
+an unrelated static HTTP 200 completed before the last partition yield in both cases.
+See [the exact-search specification and measured evidence](docs/superpowers/specs/2026-10-27-gallery-partition-work-design.md).
+
+
 ## Output sanitization (stored XSS)
 
 Post bodies are DB-stored Markdown rendered to HTML at build time. Before that HTML reaches the

@@ -1,3 +1,4 @@
+import { setImmediate } from 'node:timers/promises';
 import { describe, expect, it } from 'vitest';
 import { analyzeRenderedBody, transformBodyImages } from './body-images.js';
 import { escapeMeta } from './gallery-layout.js';
@@ -12,10 +13,10 @@ describe('gallery library descriptions', () => {
   const src = `${ORIGIN}/trips/photo`;
   const stored = { [src]: { width: 1600, height: 1000, alt: 'Stored alt', caption: 'Stored caption' } };
 
-  it('uses library text only for galleries, including deliberate clears', () => {
+  it('uses library text only for galleries, including deliberate clears', async () => {
     const html = fence(src) + `<p><img src="${src}" alt="Inline alt"></p>`;
     const metadata = new Map([[src, { alt: '', caption: '' }]]);
-    const out = transformBodyImages(html, stored, ORIGIN, metadata);
+    const out = (await transformBodyImages(html, stored, ORIGIN, metadata));
     expect(out).toContain('alt=""');
     expect(out).toContain('alt="Inline alt"');
     expect(out).not.toContain('Stored alt');
@@ -23,14 +24,14 @@ describe('gallery library descriptions', () => {
     expect(stored[src].alt).toBe('Stored alt');
   });
 
-  it('escapes library descriptions after sanitization and does not relax URL guards', () => {
+  it('escapes library descriptions after sanitization and does not relax URL guards', async () => {
     const evil = 'https://img.simonswanderlust.com.evil.example/trips/photo';
     const metadata = new Map([
       [src, { alt: '" onerror="alert(1)', caption: '<script>alert(1)</script>' }],
       [evil, { alt: 'Foreign metadata', caption: 'Foreign caption' }],
     ]);
-    const out = transformBodyImages(fence(`${src}\n${evil}`),
-      { ...stored, [evil]: stored[src] }, ORIGIN, metadata);
+    const out = (await transformBodyImages(fence(`${src}\n${evil}`),
+      { ...stored, [evil]: stored[src] }, ORIGIN, metadata));
     expect(out).toContain('alt="&#x22; onerror=&#x22;alert(1)"');
     expect(out).toContain('&#x3C;script>alert(1)&#x3C;/script>');
     expect(out).not.toContain('<script');
@@ -46,9 +47,8 @@ describe('gallery-local caption controls', () => {
   const captions = (html: string) =>
     [...html.matchAll(/<figcaption class="jgal__cap">([^<]*)<\/figcaption>/g)].map((m) => m[1]);
 
-  it('lets a line override win over the library, in that gallery only', () => {
-    const out = transformBodyImages(
-      fence(`${src} | caption-override="Only here"`) + fence(src), stored, ORIGIN, library);
+  it('lets a line override win over the library, in that gallery only', async () => {
+    const out = (await transformBodyImages(fence(`${src} | caption-override="Only here"`) + fence(src), stored, ORIGIN, library));
     // Same URL, two galleries: the second still follows the library.
     expect(captions(out)).toEqual(['Only here', 'Library caption']);
     // Alt is never taken from the line — it stays library-authoritative.
@@ -56,79 +56,77 @@ describe('gallery-local caption controls', () => {
     expect(out.match(/alt="Library alt"/g)).toHaveLength(2);
   });
 
-  it('treats an empty override as a deliberate clear and a missing one as inherit', () => {
-    const out = transformBodyImages(fence(`${src} | caption-override=""\n${src}`), stored, ORIGIN, library);
+  it('treats an empty override as a deliberate clear and a missing one as inherit', async () => {
+    const out = (await transformBodyImages(fence(`${src} | caption-override=""\n${src}`), stored, ORIGIN, library));
     expect(captions(out)).toEqual(['Library caption']);
     // No library row: inherit falls back to the stored caption.
-    expect(captions(transformBodyImages(fence(src), stored, ORIGIN))).toEqual(['Stored caption']);
+    expect(captions((await transformBodyImages(fence(src), stored, ORIGIN)))).toEqual(['Stored caption']);
   });
 
-  it('hides every caption of a #captions: hidden gallery, overrides included, and only that gallery', () => {
+  it('hides every caption of a #captions: hidden gallery, overrides included, and only that gallery', async () => {
     const hidden = fence(`#captions: hidden\n${src} | caption-override="Kept text"\n${src}`);
-    const out = transformBodyImages(hidden + fence(src), stored, ORIGIN, library);
+    const out = (await transformBodyImages(hidden + fence(src), stored, ORIGIN, library));
     expect(captions(out)).toEqual(['Library caption']); // the second gallery only
     expect(out).not.toContain('Kept text');
     expect(out).not.toContain('#captions');
     // The lightbox reads `.jgal__cap` back out of each figure, so no figcaption = none there.
-    expect(transformBodyImages(hidden, stored, ORIGIN, library)).not.toContain('figcaption');
+    expect((await transformBodyImages(hidden, stored, ORIGIN, library))).not.toContain('figcaption');
   });
 
-  it('restores the retained override when the directive is removed', () => {
-    const out = transformBodyImages(fence(`${src} | caption-override="Kept text"`), stored, ORIGIN, library);
+  it('restores the retained override when the directive is removed', async () => {
+    const out = (await transformBodyImages(fence(`${src} | caption-override="Kept text"`), stored, ORIGIN, library));
     expect(captions(out)).toEqual(['Kept text']);
   });
 
-  it('treats unknown values as visible and lets the first directive win', () => {
+  it('treats unknown values as visible and lets the first directive win', async () => {
     for (const directives of ['#captions: off', '#captions:', '#captions: shown\n#captions: hidden']) {
-      const out = transformBodyImages(fence(`${directives}\n${src}`), stored, ORIGIN, library);
+      const out = (await transformBodyImages(fence(`${directives}\n${src}`), stored, ORIGIN, library));
       expect(captions(out)).toEqual(['Library caption']);
     }
-    const out = transformBodyImages(fence(`#CAPTIONS : Hidden\n#captions: visible\n${src}`), stored, ORIGIN, library);
+    const out = (await transformBodyImages(fence(`#CAPTIONS : Hidden\n#captions: visible\n${src}`), stored, ORIGIN, library));
     expect(out).not.toContain('figcaption');
   });
 
   it('renders HTML and fence syntax in an override as text, through the real Markdown pipeline', async () => {
     const hostile = 'a <img src=x onerror=alert(1)> & "q" | ```\nb';
     const body = ['```gallery', `${src} | caption-override="${escapeMeta(hostile)}"`, '```'].join('\n');
-    const out = transformBodyImages(await renderMarkdown(body), stored, ORIGIN, library);
+    const out = (await transformBodyImages(await renderMarkdown(body), stored, ORIGIN, library));
     expect(out).not.toContain('<img src="x"');
     expect(out).not.toContain('<img src=x');
     expect(out).toContain('<figcaption class="jgal__cap">a &#x3C;img src=x onerror=alert(1)> &#x26; "q" | ```\nb</figcaption>');
   });
 
-  it('never lets an override smuggle a photo past the URL guards', () => {
+  it('never lets an override smuggle a photo past the URL guards', async () => {
     const evil = 'https://img.simonswanderlust.com.evil.example/trips/photo';
-    const out = transformBodyImages(fence(`${evil} | caption-override="Foreign"`),
-      { [evil]: stored[src] }, ORIGIN, library);
+    const out = (await transformBodyImages(fence(`${evil} | caption-override="Foreign"`),
+      { [evil]: stored[src] }, ORIGIN, library));
     expect(out).not.toContain('jgal');
     expect(out).not.toContain('<figcaption');
   });
 });
 
 describe('transformBodyImages — sanitization', () => {
-  it('strips <script> from author body HTML', () => {
-    const out = transformBodyImages('<p>hello</p><script>alert(1)</script>', {}, ORIGIN);
+  it('strips <script> from author body HTML', async () => {
+    const out = (await transformBodyImages('<p>hello</p><script>alert(1)</script>', {}, ORIGIN));
     expect(out).not.toContain('<script');
     expect(out).toContain('hello');
   });
 
-  it('strips inline event handlers and javascript: URLs', () => {
-    const out = transformBodyImages('<img src="https://img/x" onerror="alert(1)"><a href="javascript:alert(1)">x</a>', {}, ORIGIN);
+  it('strips inline event handlers and javascript: URLs', async () => {
+    const out = (await transformBodyImages('<img src="https://img/x" onerror="alert(1)"><a href="javascript:alert(1)">x</a>', {}, ORIGIN));
     expect(out).not.toContain('onerror');
     expect(out.toLowerCase()).not.toContain('javascript:');
   });
 
   // Issue #124: an author-typed style could overlay every reader page and
   // fire a third-party request per view. No element gets to keep one.
-  it('strips inline style from every element, including the ones Shiki used to need it on', () => {
-    const out = transformBodyImages(
-      '<p style="position:fixed;inset:0;background:url(https://evil.example/px.png)">x</p>' +
-        '<img src="https://img/x" style="width:100vw">' +
-        '<span style="color:#abc">y</span>' +
-        '<pre style="color:red"><code style="font-weight:bold">z</code></pre>',
-      {},
-      ORIGIN,
-    );
+  it('strips inline style from every element, including the ones Shiki used to need it on', async () => {
+    const out = (await transformBodyImages('<p style="position:fixed;inset:0;background:url(https://evil.example/px.png)">x</p>' +
+      '<img src="https://img/x" style="width:100vw">' +
+      '<span style="color:#abc">y</span>' +
+      '<pre style="color:red"><code style="font-weight:bold">z</code></pre>',
+    {},
+    ORIGIN,));
     expect(out).not.toContain('style=');
     expect(out).not.toContain('evil.example');
     expect(out).toContain('<p>x</p>');
@@ -140,7 +138,7 @@ describe('transformBodyImages — sanitization', () => {
       '<div style="background:url(https://evil.example/pixel)" onclick="alert(1)">Opening</div>\n\n' +
       '```js\nconst answer = 42;\n```\n\n<script>alert(1)</script>',
     );
-    const out = transformBodyImages(html, {}, ORIGIN);
+    const out = await transformBodyImages(html, {}, ORIGIN);
     expect(out).toContain('Opening');
     expect(out).toContain('astro-code');
     expect(out).not.toContain('style=');
@@ -155,31 +153,29 @@ describe('transformBodyImages — sanitization', () => {
 });
 
 describe('transformBodyImages — responsive images', () => {
-  it('preserves the injected <picture> (with its attrs) for known body images', () => {
-    const out = transformBodyImages('<p><img src="https://img/x"></p>', { 'https://img/x': { width: 800, height: 600 } }, ORIGIN);
+  it('preserves the injected <picture> (with its attrs) for known body images', async () => {
+    const out = (await transformBodyImages('<p><img src="https://img/x"></p>', { 'https://img/x': { width: 800, height: 600 } }, ORIGIN));
     expect(out).toContain('<picture>');
     expect(out).toContain('type="image/avif"');
     expect(out).toContain('srcset');
     expect(out).toContain('loading="lazy"');
   });
 
-  it('leaves ordinary paragraphs intact', () => {
-    const out = transformBodyImages('<p>A normal <strong>paragraph</strong>.</p>', {}, ORIGIN);
+  it('leaves ordinary paragraphs intact', async () => {
+    const out = (await transformBodyImages('<p>A normal <strong>paragraph</strong>.</p>', {}, ORIGIN));
     expect(out).toContain('<strong>paragraph</strong>');
   });
 
-  it('preserves heading ids un-prefixed so TOC #slug anchors still resolve', () => {
-    const out = transformBodyImages('<h2 id="etappe-1">Etappe 1</h2>', {}, ORIGIN);
+  it('preserves heading ids un-prefixed so TOC #slug anchors still resolve', async () => {
+    const out = (await transformBodyImages('<h2 id="etappe-1">Etappe 1</h2>', {}, ORIGIN));
     expect(out).toContain('id="etappe-1"');
     expect(out).not.toContain('user-content-');
   });
 
-  it('keeps the classes a Shiki block carries in place of inline styles', () => {
-    const out = transformBodyImages(
-      '<pre class="astro-code github-dark sh-bg-24292e sh-c-e1e4e8"><code><span class="line"><span class="sh-c-f97583">const</span></span></code></pre>',
-      {},
-      ORIGIN,
-    );
+  it('keeps the classes a Shiki block carries in place of inline styles', async () => {
+    const out = (await transformBodyImages('<pre class="astro-code github-dark sh-bg-24292e sh-c-e1e4e8"><code><span class="line"><span class="sh-c-f97583">const</span></span></code></pre>',
+    {},
+    ORIGIN,));
     expect(out).toContain('class="astro-code github-dark sh-bg-24292e sh-c-e1e4e8"');
     expect(out).toContain('<span class="sh-c-f97583">const</span>');
   });
@@ -188,8 +184,8 @@ describe('transformBodyImages — responsive images', () => {
 const images = { 'https://img/x/y': { width: 1600, height: 1067 } };
 
 describe('transformBodyImages — responsive <picture>', () => {
-  it('replaces a known <img> with a responsive <picture> inside a figure', () => {
-    const out = transformBodyImages('<p><img src="https://img/x/y" alt="A caption"></p>', images, ORIGIN);
+  it('replaces a known <img> with a responsive <picture> inside a figure', async () => {
+    const out = (await transformBodyImages('<p><img src="https://img/x/y" alt="A caption"></p>', images, ORIGIN));
     expect(out).toContain('<figure class="my-8">');
     expect(out).toContain('<source type="image/avif"');
     expect(out).toContain('<source type="image/webp"');
@@ -199,26 +195,24 @@ describe('transformBodyImages — responsive <picture>', () => {
     expect(out).toContain('alt="A caption"');
     expect(out).toContain('class="block w-full rounded-lg"');
   });
-  it('renders JPEG-only body images without inventing AVIF or WebP URLs', () => {
+  it('renders JPEG-only body images without inventing AVIF or WebP URLs', async () => {
     const src = 'https://img/x/jpeg-only';
-    const out = transformBodyImages(
-      `<p><img src="${src}" alt="JPEG"></p>`,
-      { [src]: { width: 1600, height: 1067, format: 'jpeg' } },
-      ORIGIN,
-    );
+    const out = (await transformBodyImages(`<p><img src="${src}" alt="JPEG"></p>`,
+    { [src]: { width: 1600, height: 1067, format: 'jpeg' } },
+    ORIGIN,));
     expect(out).toContain('<source type="image/jpeg"');
     expect(out).toContain(`${src}-1280.jpeg`);
     expect(out).not.toContain(`${src}-640.avif`);
     expect(out).not.toContain(`${src}-640.webp`);
   });
-  it('unwraps the <p> when a known <img> is its sole meaningful child', () => {
-    const out = transformBodyImages('<p><img src="https://img/x/y" alt="A caption"></p>', images, ORIGIN);
+  it('unwraps the <p> when a known <img> is its sole meaningful child', async () => {
+    const out = (await transformBodyImages('<p><img src="https://img/x/y" alt="A caption"></p>', images, ORIGIN));
     expect(out).toContain('<figure');
     expect(out).not.toMatch(/<p>\s*<figure/);
     expect(out).not.toContain('<img src="https://img/x/y"');
   });
-  it('leaves an unknown image untouched', () => {
-    const out = transformBodyImages('<img src="https://other/z" alt="z">', {}, ORIGIN);
+  it('leaves an unknown image untouched', async () => {
+    const out = (await transformBodyImages('<img src="https://other/z" alt="z">', {}, ORIGIN));
     expect(out).toContain('<img src="https://other/z"');
     expect(out).not.toContain('<picture>');
   });
@@ -234,8 +228,8 @@ const gallery = {
 };
 
 describe('transformBodyImages — gallery fence', () => {
-  it('turns a fence into a grid of figures', () => {
-    const out = transformBodyImages(fence(`${A}\n${B}`), gallery, ORIGIN);
+  it('turns a fence into a grid of figures', async () => {
+    const out = (await transformBodyImages(fence(`${A}\n${B}`), gallery, ORIGIN));
     expect(out).toContain('<div class="jgal jgal--column not-prose">');
     expect(out).not.toContain('<pre>');
     expect(items(out)).toHaveLength(2);
@@ -246,12 +240,12 @@ describe('transformBodyImages — gallery fence', () => {
     expect(out).toContain('height="3000"');
   });
 
-  it('keeps JPEG-only and modern gallery photos on their own generated formats', () => {
+  it('keeps JPEG-only and modern gallery photos on their own generated formats', async () => {
     const mixed = {
       ...gallery,
       [A]: { ...gallery[A], format: 'jpeg' as const },
     };
-    const out = transformBodyImages(fence(`${A}\n${B}`), mixed, ORIGIN);
+    const out = (await transformBodyImages(fence(`${A}\n${B}`), mixed, ORIGIN));
     expect(out).toContain(`href="${A}-3000.jpeg"`);
     expect(out).toContain(`${A}-1280.jpeg`);
     expect(out).not.toContain(`${A}-640.avif`);
@@ -260,32 +254,32 @@ describe('transformBodyImages — gallery fence', () => {
     expect(out).toContain(`${B}-640.avif`);
   });
 
-  it('omits the figcaption when the photo has no caption', () => {
-    const out = transformBodyImages(fence(B), gallery, ORIGIN);
+  it('omits the figcaption when the photo has no caption', async () => {
+    const out = (await transformBodyImages(fence(B), gallery, ORIGIN));
     expect(out).toContain('alt="The pass"');
     expect(out).not.toContain('figcaption');
   });
 
-  it('ignores blank and #-prefixed lines and keeps line order', () => {
-    const out = transformBodyImages(fence(`# a comment\n\n${B}\n${A}`), gallery, ORIGIN);
+  it('ignores blank and #-prefixed lines and keeps line order', async () => {
+    const out = (await transformBodyImages(fence(`# a comment\n\n${B}\n${A}`), gallery, ORIGIN));
     expect(out).not.toContain('a comment');
     expect(out.indexOf(`${B}-`)).toBeLessThan(out.indexOf(`${A}-`));
   });
 
-  it('tolerates leftover per-line metadata (a body that never hit the save chokepoint)', () => {
-    const out = transformBodyImages(fence(`${A} | 3000x2000 | alt="x"`), gallery, ORIGIN);
+  it('tolerates leftover per-line metadata (a body that never hit the save chokepoint)', async () => {
+    const out = (await transformBodyImages(fence(`${A} | 3000x2000 | alt="x"`), gallery, ORIGIN));
     expect(out).toContain('<div class="jgal jgal--column not-prose">');
     // Metadata comes from the images map, not the line.
     expect(out).toContain('alt="Sunrise over the towers"');
   });
 
-  it('skips a URL with no images entry', () => {
-    const out = transformBodyImages(fence(`${A}\n${ORIGIN}/unknown`), gallery, ORIGIN);
+  it('skips a URL with no images entry', async () => {
+    const out = (await transformBodyImages(fence(`${A}\n${ORIGIN}/unknown`), gallery, ORIGIN));
     expect(items(out)).toHaveLength(1);
   });
 
-  it('leaves the <pre> in place when nothing in the fence resolves', () => {
-    const out = transformBodyImages(fence(`${ORIGIN}/unknown`), gallery, ORIGIN);
+  it('leaves the <pre> in place when nothing in the fence resolves', async () => {
+    const out = (await transformBodyImages(fence(`${ORIGIN}/unknown`), gallery, ORIGIN));
     expect(out).toContain('language-gallery');
     expect(out).not.toContain('jgal');
   });
@@ -299,13 +293,13 @@ describe('transformBodyImages — gallery layout modes', () => {
   const manyFence = (directive = '') =>
     fence([directive, ...Object.keys(many)].filter(Boolean).join('\n'));
 
-  it('defaults to the column width when the fence carries no directive', () => {
-    const out = transformBodyImages(fence(A), gallery, ORIGIN);
+  it('defaults to the column width when the fence carries no directive', async () => {
+    const out = (await transformBodyImages(fence(A), gallery, ORIGIN));
     expect(out).toContain('class="jgal jgal--column not-prose"');
   });
 
-  it('nests photos in rows and emits a ratio per photo', () => {
-    const out = transformBodyImages(manyFence('#layout: breakout'), many, ORIGIN);
+  it('nests photos in rows and emits a ratio per photo', async () => {
+    const out = (await transformBodyImages(manyFence('#layout: breakout'), many, ORIGIN));
     // flex-wrap: nowrap on one container would put all seven on one line —
     // the rows are the layout.
     expect(out.match(/<div class="jgal__row/g) ?? []).toHaveLength(3); // 2 + 2 + 3
@@ -313,29 +307,29 @@ describe('transformBodyImages — gallery layout modes', () => {
     expect(items(out)).toHaveLength(7);
   });
 
-  it('lets every row fill the container — no capped remainder', () => {
-    const out = transformBodyImages(manyFence('#layout: breakout'), many, ORIGIN);
+  it('lets every row fill the container — no capped remainder', async () => {
+    const out = (await transformBodyImages(manyFence('#layout: breakout'), many, ORIGIN));
     expect(out).not.toContain('--jgal-maxw');
   });
 
-  it('caps a lone portrait at the square, as a container percentage', () => {
+  it('caps a lone portrait at the square, as a container percentage', async () => {
     const portrait = { [`${ORIGIN}/trips/x/tall`]: { width: 2000, height: 3000, alt: 'tall' } };
-    const out = transformBodyImages(fence(`${ORIGIN}/trips/x/tall`), portrait, ORIGIN);
+    const out = (await transformBodyImages(fence(`${ORIGIN}/trips/x/tall`), portrait, ORIGIN));
     // 1056 tall × 2/3 = 704 wide of 1056 — as wide as it is tall. A percentage,
     // not pixels, so it stays square-bounded as the container resizes.
     expect(out).toContain('--jgal-maxw:66.67%');
   });
 
-  it('switches to the break-out width on #layout: breakout', () => {
-    const wide = transformBodyImages(manyFence('#layout: breakout'), many, ORIGIN);
+  it('switches to the break-out width on #layout: breakout', async () => {
+    const wide = (await transformBodyImages(manyFence('#layout: breakout'), many, ORIGIN));
     expect(wide).toContain('class="jgal jgal--breakout not-prose"');
     // The wider container asks the browser for a wider source per photo.
     expect(wide).toContain('(min-width: 1112px) 550px');
-    expect(transformBodyImages(manyFence(), many, ORIGIN)).toContain('(min-width: 1056px) 344px');
+    expect((await transformBodyImages(manyFence(), many, ORIGIN))).toContain('(min-width: 1056px) 344px');
   });
 
-  it('renders a keyboard-scrollable track with hidden controls on #layout: slider', () => {
-    const out = transformBodyImages(manyFence('#layout: slider'), many, ORIGIN);
+  it('renders a keyboard-scrollable track with hidden controls on #layout: slider', async () => {
+    const out = (await transformBodyImages(manyFence('#layout: slider'), many, ORIGIN));
     expect(out).toContain('class="jgal jgal--slider not-prose"');
     expect(out).toContain('<div class="jgal__track" tabindex="0">');
     expect(out).not.toContain('jgal__row');
@@ -345,21 +339,21 @@ describe('transformBodyImages — gallery layout modes', () => {
     expect(out).toContain('hidden data-jgal-nav="next"');
   });
 
-  it('falls back to the column on an unknown mode rather than dropping the gallery', () => {
-    const out = transformBodyImages(manyFence('#layout: carousel'), many, ORIGIN);
+  it('falls back to the column on an unknown mode rather than dropping the gallery', async () => {
+    const out = (await transformBodyImages(manyFence('#layout: carousel'), many, ORIGIN));
     expect(out).toContain('class="jgal jgal--column not-prose"');
     expect(items(out)).toHaveLength(7);
   });
 
-  it('never renders the directive as a photo or as text', () => {
-    const out = transformBodyImages(fence(`#layout: slider\n${A}`), gallery, ORIGIN);
+  it('never renders the directive as a photo or as text', async () => {
+    const out = (await transformBodyImages(fence(`#layout: slider\n${A}`), gallery, ORIGIN));
     expect(out).not.toContain('#layout');
     expect(items(out)).toHaveLength(1);
   });
 
-  it('derives sizes per photo, so a full-width panorama is not served a thumbnail', () => {
+  it('derives sizes per photo, so a full-width panorama is not served a thumbnail', async () => {
     const pano = `${ORIGIN}/trips/x/pano`;
-    const out = transformBodyImages(fence(`#layout: breakout\n${pano}`), { [pano]: { width: 4000, height: 1000, alt: 'p' } }, ORIGIN);
+    const out = (await transformBodyImages(fence(`#layout: breakout\n${pano}`), { [pano]: { width: 4000, height: 1000, alt: 'p' } }, ORIGIN));
     // Alone on its row at 4:1 it renders 1112 wide in break-out — the hint must say so.
     expect(out).toContain('sizes="(min-width: 1112px) 1112px');
   });
@@ -368,52 +362,52 @@ describe('transformBodyImages — gallery layout modes', () => {
 describe('transformBodyImages — gallery URL allow-list', () => {
   const withEntry = (url: string) => ({ [url]: { width: 800, height: 600, alt: 'x' } });
 
-  it('rejects a javascript: URL even when the images map vouches for it', () => {
+  it('rejects a javascript: URL even when the images map vouches for it', async () => {
     const url = 'javascript:alert(1)';
-    const out = transformBodyImages(fence(url), withEntry(url), ORIGIN);
+    const out = (await transformBodyImages(fence(url), withEntry(url), ORIGIN));
     expect(out.toLowerCase()).not.toContain('href="javascript:');
     expect(out).not.toContain('jgal');
   });
 
-  it('rejects a data: URL', () => {
+  it('rejects a data: URL', async () => {
     const url = 'data:text/html,<script>alert(1)</script>';
-    const out = transformBodyImages(fence(url), withEntry(url), ORIGIN);
+    const out = (await transformBodyImages(fence(url), withEntry(url), ORIGIN));
     expect(out).not.toContain('jgal');
   });
 
   // @ai-warning: both of these pass `raw.startsWith(ORIGIN)`. Origin equality
   // is the only correct test — never reintroduce a prefix match.
-  it('rejects a suffix-confusion host (img.simonswanderlust.com.evil.com)', () => {
+  it('rejects a suffix-confusion host (img.simonswanderlust.com.evil.com)', async () => {
     const url = 'https://img.simonswanderlust.com.evil.com/x';
-    const out = transformBodyImages(fence(url), withEntry(url), ORIGIN);
+    const out = (await transformBodyImages(fence(url), withEntry(url), ORIGIN));
     // The URL stays visible as <pre> text (nothing disappears silently) — what
     // must not happen is it becoming a live href/srcset.
     expect(out).not.toContain('href=');
     expect(out).not.toContain('jgal');
   });
 
-  it('rejects a userinfo-confusion URL (img.simonswanderlust.com@evil.com)', () => {
+  it('rejects a userinfo-confusion URL (img.simonswanderlust.com@evil.com)', async () => {
     const url = 'https://img.simonswanderlust.com@evil.com/x';
-    const out = transformBodyImages(fence(url), withEntry(url), ORIGIN);
+    const out = (await transformBodyImages(fence(url), withEntry(url), ORIGIN));
     expect(out).not.toContain('jgal');
   });
 
-  it('rejects an off-origin URL — the dev/CI fail-safe when PUBLIC_BASE_URL is unset', () => {
+  it('rejects an off-origin URL — the dev/CI fail-safe when PUBLIC_BASE_URL is unset', async () => {
     const url = 'http://localhost:3000/trips/x/a-1a2b3c4d';
-    const out = transformBodyImages(fence(url), withEntry(url), ORIGIN);
+    const out = (await transformBodyImages(fence(url), withEntry(url), ORIGIN));
     expect(out).toContain('language-gallery'); // the bare <pre> survives
     expect(out).not.toContain('jgal');
   });
 
-  it('accepts the same origin on a different port only when it matches exactly', () => {
+  it('accepts the same origin on a different port only when it matches exactly', async () => {
     const url = 'http://localhost:3000/trips/x/a-1a2b3c4d';
-    const out = transformBodyImages(fence(url), withEntry(url), 'http://localhost:3000');
+    const out = (await transformBodyImages(fence(url), withEntry(url), 'http://localhost:3000'));
     expect(out).toContain('jgal');
   });
 });
 
 describe('transformBodyImages — gallery value coercion', () => {
-  it('cannot be made to emit markup from a node-shaped alt or caption', () => {
+  it('cannot be made to emit markup from a node-shaped alt or caption', async () => {
     // hastscript treats a node-shaped object in a children array AS A NODE, and
     // the stringifier runs with allowDangerousHtml — so this must be String()d.
     const hostile = {
@@ -424,20 +418,20 @@ describe('transformBodyImages — gallery value coercion', () => {
         caption: { type: 'raw', value: '<img src=x onerror=alert(2)>' },
       },
     } as unknown as Record<string, { width: number; height: number }>;
-    const out = transformBodyImages(fence(A), hostile, ORIGIN);
+    const out = (await transformBodyImages(fence(A), hostile, ORIGIN));
     expect(out).not.toContain('<script');
     expect(out).not.toContain('onerror');
     expect(out).toContain('[object Object]'); // coerced, inert
   });
 
-  it('skips an item whose dimensions are not positive integers', () => {
+  it('skips an item whose dimensions are not positive integers', async () => {
     for (const dims of [
       { width: '1;} html{display:none}/*', height: 600 },
       { width: 800, height: 0 },
       { width: 1.5, height: 600 },
       { width: -800, height: 600 },
     ]) {
-      const out = transformBodyImages(fence(A), { [A]: dims } as unknown as Record<string, { width: number; height: number }>, ORIGIN);
+      const out = (await transformBodyImages(fence(A), { [A]: dims } as unknown as Record<string, { width: number; height: number }>, ORIGIN));
       expect(out).not.toContain('jgal');
       expect(out).toContain('language-gallery');
     }
@@ -471,5 +465,41 @@ describe('analyzeRenderedBody — sanitized heading and image semantics', () => 
     ['<h2 title="<h1>">Section</h2>', false],
   ])('detects only surviving H1 elements in %s', (html, hasH1) => {
     expect(analyzeRenderedBody(html).hasH1).toBe(hasH1);
+  });
+});
+
+describe('transformBodyImages — awaited gallery scheduling', () => {
+  it('awaits every gallery before serialization and preserves per-request metadata', async () => {
+    const src = `${ORIGIN}/trips/scheduled/photo`;
+    const images = { [src]: { width: 1500, height: 1000 } };
+    const large = fence(Array.from({ length: 100 }, () => src).join('\n'));
+    let yields = 0;
+    const options = { schedule: async (work: { operations: number }) => {
+      expect(work.operations).toBeLessThanOrEqual(4096);
+      yields++;
+      await setImmediate();
+    } };
+    const [first, second] = await Promise.all([
+      transformBodyImages(large + '<p>between</p>' + large, images, ORIGIN, new Map([[src, { alt: 'First', caption: 'First caption' }]]), options),
+      transformBodyImages(large, images, ORIGIN, new Map([[src, { alt: 'Second', caption: 'Second caption' }]]), options),
+    ]);
+    expect(yields).toBeGreaterThan(0);
+    expect((first.match(/class="jgal__item"/g) ?? [])).toHaveLength(200);
+    expect((second.match(/class="jgal__item"/g) ?? [])).toHaveLength(100);
+    expect(first).toContain('<p>between</p>');
+    expect(first).not.toContain('Second');
+    expect(second).not.toContain('First');
+    expect(first + second).not.toContain('[object Promise]');
+    expect(first).toBe(await transformBodyImages(large + '<p>between</p>' + large, images, ORIGIN, new Map([[src, { alt: 'First', caption: 'First caption' }]])));
+  });
+
+  it('does not partition slider galleries', async () => {
+    const src = `${ORIGIN}/trips/scheduled/photo`;
+    let scheduled = false;
+    const html = await transformBodyImages(fence(`#layout: slider\n${src}`), { [src]: { width: 600, height: 400 } }, ORIGIN, undefined, {
+      schedule: async () => { scheduled = true; },
+    });
+    expect(scheduled).toBe(false);
+    expect(html).toContain('jgal--slider');
   });
 });

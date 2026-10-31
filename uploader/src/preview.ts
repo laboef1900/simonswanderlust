@@ -9,6 +9,7 @@
 // including the sanitize-then-inject <picture> XSS defense. Their deps
 // (@astrojs/markdown-satteri, unified, rehype-*) resolve from site/node_modules,
 // so typecheck/tests here need `npm ci` in site/ too (CI does this).
+import { setImmediate } from 'node:timers/promises';
 import { renderMarkdown } from '../../site/src/lib/render-markdown.js';
 import { transformBodyImages, type GalleryMetadata } from '../../site/src/lib/body-images.js';
 import { SHIKI_CSS } from '../../site/src/lib/shiki-classes.js';
@@ -186,7 +187,9 @@ export async function renderPreviewHtml(
 ): Promise<string> {
   const post = pair[locale];
   const shared = pair.shared;
-  const body = transformBodyImages(await renderMarkdown(post.bodyMarkdown), post.images, imageOrigin, galleryMetadata);
+  const body = await transformBodyImages(await renderMarkdown(post.bodyMarkdown), post.images, imageOrigin, galleryMetadata, {
+    schedule: () => setImmediate(),
+  });
 
   const parsedDate = shared.date ? new Date(shared.date) : undefined;
   const metaParts = [
