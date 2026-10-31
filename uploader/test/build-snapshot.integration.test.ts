@@ -1,4 +1,5 @@
-import { randomUUID, createHash } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
+import { existsSync, realpathSync } from 'node:fs';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,6 +14,8 @@ import { withLoaderSnapshot } from '../../site/src/lib/loader-pool.js';
 import { postgresTripsLoader } from '../../site/src/lib/postgres-loader.js';
 import { postgresPagesLoader } from '../../site/src/lib/pages-loader.js';
 import { createWorkLock } from '../src/work-lock.js';
+import { pgSiteIdentityStore } from '../src/site-identity.js';
+import { normalizeIdentityUpload } from '../src/site-identity-assets.js';
 
 const url = process.env.TEST_DATABASE_URL;
 const suite = url ? describe : describe.skip;
@@ -129,18 +132,65 @@ suite('one PostgreSQL view for the complete build', () => {
     }
   });
 
-  it('writes captured asset bytes rather than fetching a replacement after child completion', async () => {
-    const bytes = await sharp({ create: { width: 32, height: 32, channels: 4, background: '#123456' } }).png().toBuffer();
-    const sha = createHash('sha256').update(bytes).digest('hex');
-    await pool.query("INSERT INTO site_identity_assets(role,sha256,width,height,bytes) VALUES('logo',$1,32,32,$2)", [sha, bytes]);
+  it('writes all captured normalized assets and paths, not newer replacement bytes', async () => {
+    const store = await pgSiteIdentityStore(pool);
+    const normalize = async (background: string) => {
+      const source = await sharp({ create: { width: 360, height: 180, channels: 4, background } })
+        .withMetadata().webp().toBuffer();
+      return {
+        logo: await normalizeIdentityUpload(source, 'logo'),
+        favicon: await normalizeIdentityUpload(source, 'favicon'),
+      };
+    };
+    const captured = await normalize('#12345680');
+    const newer = await normalize('#fedcba80');
+    await store.replaceAssets(store.get().revision, 'logo', captured.logo);
+    await store.replaceAssets(store.get().revision, 'favicon', captured.favicon);
+    const pathFor = (asset: { role: string; sha256: string }) => `/_identity/${asset.role}-${asset.sha256.slice(0, 16)}.png`;
     const root = await mkdtemp(join(tmpdir(), 'identity-build-assets-'));
     try {
       await withBuildSnapshot(pool, { timeoutMs: 5000 }, async (snapshot) => {
-        await pool.query("DELETE FROM site_identity_assets WHERE role='logo'");
+        await store.replaceAssets(store.get().revision, 'logo', newer.logo);
+        await store.replaceAssets(store.get().revision, 'favicon', newer.favicon);
+        expect(snapshot.identity.assets).toEqual({
+          logo: { path: pathFor(captured.logo[0]!), width: captured.logo[0]!.width, height: captured.logo[0]!.height },
+          favicon: {
+            png32: pathFor(captured.favicon.find(asset => asset.role === 'favicon-32')!),
+            png192: pathFor(captured.favicon.find(asset => asset.role === 'favicon-192')!),
+            appleTouch180: pathFor(captured.favicon.find(asset => asset.role === 'apple-touch-180')!),
+          },
+        });
         await writeBuildAssets(root, snapshot);
-        expect(await readFile(join(root, '_identity', `logo-${sha.slice(0, 16)}.png`))).toEqual(bytes);
+        expect(snapshot.assets).toHaveLength(4);
+        for (const asset of [...captured.logo, ...captured.favicon]) {
+          expect(await readFile(join(root, pathFor(asset).slice(1)))).toEqual(asset.bytes);
+        }
+        for (const asset of [...newer.logo, ...newer.favicon]) {
+          await expect(readFile(join(root, pathFor(asset).slice(1)))).rejects.toMatchObject({ code: 'ENOENT' });
+        }
       });
-    } finally { await rm(root, { recursive: true, force: true }); }
+      await withBuildSnapshot(pool, { timeoutMs: 5000 }, async (snapshot) => {
+        expect(snapshot.assets.map(asset => asset.path).sort()).toEqual([...newer.logo, ...newer.favicon].map(pathFor).sort());
+        for (const asset of snapshot.assets) {
+          expect(asset.bytes).toEqual([...newer.logo, ...newer.favicon].find(row => row.role === asset.role)!.bytes);
+        }
+      });
+      await store.replaceAssets(store.get().revision, 'logo', []);
+      await store.replaceAssets(store.get().revision, 'favicon', []);
+      await withBuildSnapshot(pool, { timeoutMs: 5000 }, async (snapshot) => {
+        expect(snapshot.assets).toEqual([]);
+        expect(snapshot.identity.assets).toEqual({ logo: null, favicon: null });
+        const emptyRelease = join(root, 'empty');
+        await writeBuildAssets(emptyRelease, snapshot);
+        await expect(readFile(join(emptyRelease, pathFor(captured.logo[0]!).slice(1)))).rejects.toMatchObject({ code: 'ENOENT' });
+        // Removing the saved roles must not rewrite bytes in an existing release.
+        expect(await readFile(join(root, pathFor(captured.logo[0]!).slice(1)))).toEqual(captured.logo[0]!.bytes);
+      });
+    } finally {
+      await store.replaceAssets(store.get().revision, 'logo', []);
+      await store.replaceAssets(store.get().revision, 'favicon', []);
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('a failed capture leaves the prior release live and never invokes the child', async () => {
@@ -164,6 +214,38 @@ suite('one PostgreSQL view for the complete build', () => {
       expect(await readFile(join(root, 'site', 'current', 'index.html'), 'utf8')).toBe('previous release');
     } finally {
       await pool.query("UPDATE site_identity SET localized='{}'");
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reports a committed promotion as published when the snapshot is cancelled during cleanup (#397)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'promotion-cancel-'));
+    const siteAppDir = join(root, 'app');
+    const releasesRoot = join(root, 'site');
+    await mkdir(siteAppDir);
+    await mkdir(join(releasesRoot, 'releases', '0-old'), { recursive: true });
+    const controller = new AbortController();
+    // Cleanup asks for writability before removing the old release: lose the
+    // lease exactly there, after `current` already names the new release.
+    const isWritable = () => {
+      if (!controller.signal.aborted && existsSync(join(releasesRoot, 'current'))) controller.abort(new Error('lease lost'));
+      return !controller.signal.aborted;
+    };
+    const builder = createSiteBuilder({
+      pool, siteAppDir, releasesRoot, keep: 1, signal: controller.signal, isWritable,
+      runBuild: async (outDir) => {
+        await mkdir(outDir, { recursive: true });
+        await writeFile(join(outDir, 'index.html'), 'new release');
+      },
+    });
+    try {
+      const outcome = await builder.build();
+      expect(outcome).toMatchObject({ ok: true });
+      expect(await readFile(join(releasesRoot, 'current', 'index.html'), 'utf8')).toBe('new release');
+      expect(realpathSync(join(releasesRoot, 'current'))).toBe(realpathSync(join(releasesRoot, 'releases', outcome.release!)));
+      // No cleanup write after the lease was lost.
+      expect(existsSync(join(releasesRoot, 'releases', '0-old'))).toBe(true);
+    } finally {
       await rm(root, { recursive: true, force: true });
     }
   });

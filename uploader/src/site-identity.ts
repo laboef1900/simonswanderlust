@@ -2,6 +2,7 @@ import type pg from 'pg';
 import { IdentityError, IDENTITY_LOCALIZED_FIELDS, normalizeIdentity, neutralIdentity, type Identity, type IdentityLocale } from '../../site/src/lib/site-identity.js';
 import { LEGACY_IDENTITY } from './site-identity-legacy.js';
 import { memoryLanguageStore, readLanguage, type LanguageStore } from './language.js';
+import { identityAssetRoles, validateIdentityAssetGroup, type IdentityAssetGroup, type StoredIdentityAsset } from './site-identity-assets.js';
 
 export type IdentitySeedSource = 'neutral' | 'legacy' | 'restored-legacy';
 export interface IdentityRow {
@@ -22,10 +23,16 @@ export interface IdentityRecord {
   seedSource: IdentitySeedSource;
   identity: Identity;
 }
+export interface IdentityAssetState { logo: boolean; favicon: boolean }
+function assetState(roles: readonly string[]): IdentityAssetState {
+  return { logo: roles.includes('logo'), favicon: identityAssetRoles('favicon').every((role) => roles.includes(role)) };
+}
 export interface SiteIdentityStore {
   /** A detached cached record; request-time reads never touch Postgres. */
   get(): IdentityRecord;
   update(revision: number, input: unknown): Promise<IdentityRecord>;
+  getAssetState(): IdentityAssetState;
+  replaceAssets(revision: number, group: IdentityAssetGroup, assets: readonly StoredIdentityAsset[]): Promise<IdentityRecord>;
 }
 export class IdentityConflictError extends Error {
   readonly code = 'identity_conflict';
@@ -85,8 +92,37 @@ export async function pgSiteIdentityStore(pool: pg.Pool): Promise<SiteIdentitySt
   const initial = await pool.query<IdentityRow>('SELECT * FROM site_identity WHERE id = true');
   if (!initial.rows[0]) throw new IdentityError('identity');
   let current = fromRow(initial.rows[0]);
+  const initialAssets = await pool.query<{ role: string }>('SELECT role FROM site_identity_assets');
+  let assets = assetState(initialAssets.rows.map((row) => row.role));
+  let assetRevision = current.revision;
   return {
     get: () => structuredClone(current),
+    getAssetState: () => ({ ...assets }),
+    async replaceAssets(revision, group, replacements) {
+      await validateIdentityAssetGroup(group, replacements);
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const locked = await client.query<IdentityRow>('SELECT * FROM site_identity WHERE id = true FOR UPDATE');
+        if (locked.rows[0]?.revision !== revision) throw new IdentityConflictError();
+        await client.query('DELETE FROM site_identity_assets WHERE role = ANY($1::text[])', [identityAssetRoles(group)]);
+        for (const asset of replacements) {
+          await client.query('INSERT INTO site_identity_assets (role, sha256, width, height, bytes) VALUES ($1,$2,$3,$4,$5)',
+            [asset.role, asset.sha256, asset.width, asset.height, asset.bytes]);
+        }
+        const result = await client.query<IdentityRow>('UPDATE site_identity SET revision=revision+1, updated_at=now() WHERE id=true RETURNING *');
+        const saved = fromRow(result.rows[0]!);
+        const roles = await client.query<{ role: string }>('SELECT role FROM site_identity_assets');
+        const nextAssets = assetState(roles.rows.map((row) => row.role));
+        await client.query('COMMIT');
+        if (saved.revision > current.revision) current = saved;
+        if (saved.revision > assetRevision) { assets = nextAssets; assetRevision = saved.revision; }
+        return structuredClone(saved);
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally { client.release(); }
+    },
     async update(revision, input) {
       const client = await pool.connect();
       try {
@@ -114,8 +150,17 @@ export async function pgSiteIdentityStore(pool: pg.Pool): Promise<SiteIdentitySt
 /** In-memory implementation shares the exact write validator for route/unit fixtures. */
 export function memorySiteIdentityStore(identity: Identity = neutralIdentity(), language: LanguageStore = memoryLanguageStore()): SiteIdentityStore {
   let current: IdentityRecord = { revision: 1, savedAt: null, seedSource: 'neutral', identity: normalizeIdentity(identity) };
+  let assets: IdentityAssetState = { logo: false, favicon: false };
   return {
     get: () => structuredClone(current),
+    getAssetState: () => ({ ...assets }),
+    async replaceAssets(revision, group, replacements) {
+      await validateIdentityAssetGroup(group, replacements);
+      if (revision !== current.revision) throw new IdentityConflictError();
+      assets = { ...assets, [group]: replacements.length > 0 };
+      current = { ...current, revision: revision + 1 };
+      return structuredClone(current);
+    },
     async update(revision, input) {
       return language.runExclusive(async (mode) => {
       if (revision !== current.revision) throw new IdentityConflictError();

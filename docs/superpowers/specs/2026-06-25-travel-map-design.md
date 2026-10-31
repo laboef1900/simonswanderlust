@@ -102,9 +102,18 @@ A single client module that:
 ## Error handling / progressive enhancement
 
 Every map is an enhancement layered over a usable static page:
-- No JS, MapLibre throw, or missing/unreachable basemap → the static fallback remains (map page = trip
-  list; mini-map = link; teaser = static strip + CTA). The map container is only revealed after a
-  successful `map.on('load')`.
+- Without JS the server-rendered links/text remain usable. With JS, a WebGL2
+  probe runs before MapLibre construction and the real canvas is checked afterward
+  (#364): MapLibre 6 can return a painter-less instance instead of throwing.
+  Failed construction discards partial DOM even if `remove()` itself throws.
+- On initialization failure, trackless mini-maps restore the localized map link
+  and collapse to its natural height. Tracked mini-maps hide the empty canvas
+  slot; the published textual route summary, endpoints, stops and link remain.
+  The full-map wrapper is hidden so no dead `70vh` region or focusable canvas
+  precedes the always-visible story-link list.
+- Basemap absence is distinct from WebGL unavailability: mini-maps retain real
+  overlays on a plain background without requesting external tiles. The full
+  map's story links remain usable independently of tile availability.
 - The build never depends on the basemap file (it's a runtime asset) — `astro build` succeeds without it.
 
 ## Testing
@@ -115,6 +124,38 @@ Every map is an enhancement layered over a usable static page:
 - The MapLibre island is client-only — verified visually (`npm run dev`): pins for all trips, popups
   link to the correct story per locale, fit-bounds, mini-map per story, no-JS fallback (disable JS).
 - `npx astro check` + `npm test` green (note: both need a reachable Postgres for the loader).
+
+### Issue #364 runtime proof — 2026-10-27
+
+An isolated Postgres-backed app on port 33464 published two synthetic DE/EN story
+pairs through the real API. One was trackless; the other used an actual GPX
+upload and private route attachment before Publish built the static release.
+Managed Chromium exercised all four stories and `/karte/` + `/en/map/`.
+
+- **Explicit fault injection:** document-start instrumentation returned `null`
+  from canvas `getContext('webgl2')`; neither the map constructor nor responses
+  were mocked. All six pages left zero canvases. Trackless links occupied 56px,
+  tracked slots 0px, and full-map wrappers 0px instead of 630px at a 900px viewport.
+  Tab from each story's map summary reached the localized fallback link; Enter
+  navigated to the correct map page. Full-map list links likewise navigated by
+  keyboard to the corresponding localized story.
+- At 390px width, each story disclosure started closed with no WebGL probe;
+  keyboard Enter opened it, triggered fallback, and Tab reached its map link.
+- **Post-probe failure injection:** the detached probe received a real WebGL2
+  context, but the real `.maplibregl-canvas` received `null`. The unchanged
+  MapLibre constructor returned its partial instance; cleanup removed the
+  canvas and map class, restored the trackless link, retained tracked text,
+  and collapsed both full-map wrappers. Expected GPU/init diagnostics were
+  logged, with no unhandled page errors.
+- **Uninjected control:** all four mini-maps reached `data-ready="true"` with
+  a real 288×256 WebGL2 canvas; both full maps retained real 1110×630 canvases
+  and reached ready. The isolated worktree had no basemap archive, so its
+  actual `/map/basemap.pmtiles` requests returned 404. This proves enhancement
+  is not always disabled, not successful basemap rendering. No external or
+  fabricated tiles were supplied; no unhandled page errors occurred.
+
+Screenshots and API/browser geometry, focus, navigation and diagnostic evidence
+are retained in the issue worktree's ignored `.issue-runtime/` directory.
 
 ## Dependencies
 
