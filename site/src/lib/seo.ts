@@ -2,11 +2,9 @@ import type { Root, RootContent } from 'hast';
 import { unified } from 'unified';
 import rehypeParse from 'rehype-parse';
 import { largestVariant } from './images.js';
-
 import type { Locale } from '../i18n/ui.js';
-
 import { identity } from './build-identity.js';
-import { siteLanguage, type SiteLanguage } from './site-language';
+import { siteLanguage, type SiteLanguage } from './site-language.js';
 
 export type Alternates = Record<Locale, string>;
 
