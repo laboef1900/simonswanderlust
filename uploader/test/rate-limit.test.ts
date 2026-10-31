@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { fixedWindowLimiter, accountLockoutLimiter, MAX_KEY_LENGTH } from '../src/rate-limit.js';
+import Fastify from 'fastify';
+import { fixedWindowLimiter, rateLimitPreHandler, accountLockoutLimiter, MAX_KEY_LENGTH } from '../src/rate-limit.js';
 
 describe('fixedWindowLimiter', () => {
   it('allows up to max per window, then blocks', () => {
@@ -57,6 +58,38 @@ describe('fixedWindowLimiter', () => {
     expect(lim.check('k49999')).toBe(false); // newest still tracked
     expect(lim.check('k0')).toBe(true); // oldest long evicted
     expect(lim.check('k48999')).toBe(true); // 1000th-newest evicted by the insert above
+  });
+});
+
+describe('rateLimitPreHandler', () => {
+  it.each([false, true])('finishes an async-send refusal before downstream work (array: %s)', async (array) => {
+    let now = 0;
+    let handlerRuns = 0;
+    let subsequentRuns = 0;
+    const app = Fastify();
+    app.addHook('onSend', async (_req, _reply, payload) => { await Promise.resolve(); return payload; });
+    const guard = rateLimitPreHandler(fixedWindowLimiter({ max: 1, windowMs: 100, now: () => now }));
+    app.post('/', {
+      preHandler: array ? [guard, async () => { subsequentRuns++; }] : guard,
+    }, async () => { handlerRuns++; return { ok: true }; });
+    try {
+      expect((await app.inject({ method: 'POST', url: '/' })).statusCode).toBe(200);
+      expect(handlerRuns).toBe(1);
+      expect(subsequentRuns).toBe(array ? 1 : 0);
+
+      const refused = await app.inject({ method: 'POST', url: '/' });
+      expect(refused.statusCode).toBe(429);
+      expect(refused.json()).toEqual({ error: 'too many attempts, please wait and try again' });
+      expect(handlerRuns).toBe(1);
+      expect(subsequentRuns).toBe(array ? 1 : 0);
+
+      now = 100;
+      expect((await app.inject({ method: 'POST', url: '/' })).statusCode).toBe(200);
+      expect(handlerRuns).toBe(2);
+      expect(subsequentRuns).toBe(array ? 2 : 0);
+    } finally {
+      await app.close();
+    }
   });
 });
 

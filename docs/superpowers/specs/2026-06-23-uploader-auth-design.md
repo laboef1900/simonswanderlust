@@ -153,6 +153,13 @@ CREATE INDEX IF NOT EXISTS sessions_user_id_idx ON sessions (user_id);
   - `requireAdmin`: `GET /users`, `POST /users`, `DELETE /users/:id`.
   - `GET /auth/status` and `GET /login` are **public** (status drives first-run + redirects).
   - Guards: cannot delete **yourself**, cannot delete the **last admin** (→ `409`).
+  - **Atomic removal update (#368, 2026-10-27):** the last-admin decision belongs to
+    `UserStore.remove`, not an unlocked route pre-check. Postgres locks the users table in
+    `SHARE ROW EXCLUSIVE` mode before reading/counting/deleting in one transaction; the memory
+    implementation makes the decision synchronously. Only `removed` triggers session
+    invalidation; `last_admin` returns 409 without affecting the survivor's sessions or reopening
+    setup. Existing self-delete and authentication rules are unchanged. See the approved
+    `2026-10-27-issue-368-atomic-last-admin-design.md` for the contract and runtime proof.
 
 ## HTTP endpoints (new/changed)
 
