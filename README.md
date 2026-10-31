@@ -163,8 +163,13 @@ and append or overwrite `X-Forwarded-For` so the rightmost entry is its accepted
 Compose exposes port 3000 on **loopback only** and sets `TRUSTED_PROXY: docker-gateway`
 literally; do not add it to `.env`. The app trusts only loopback and the discovered bridge
 gateway at hop zero, and refuses boot if gateway discovery fails. Postgres stays internal.
-Before cutover, verify the actual target-server peer, HTTPS `Secure` cookies and independent
-rate-limit buckets from two external networks; Docker Desktop TCP proof is not a VPS
+Reject unintended public hostnames at the proxy. Reader comments use trusted protocol plus
+raw `Host` for temporary blog-origin equality, not the image `PUBLIC_BASE_URL` or
+`X-Forwarded-Host`; the production image authority is excluded. Single-origin loopback
+development remains supported, with no new blog-origin env setting.
+Before cutover, verify the actual target-server peer, HTTPS `Secure` cookies, independent
+rate-limit buckets from two external networks, and blog-origin comment submission through
+moderation to the public list; Docker Desktop and local split-host proof are not a VPS
 rehearsal. See [architecture and deployment](ARCHITECTURE.md) and the
 [security model](SECURITY.md#transport-headers--proxy) before exposing the service.
 

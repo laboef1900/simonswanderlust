@@ -106,6 +106,57 @@ const run = (
   rehost: h.rehost, sleep: h.sleep, now: h.now, delayMs: 0, retries: 0, ...extra,
 });
 
+describe('literal image re-host substitution', () => {
+  it.each(['fresh', 'overwrite'] as const)('preserves dollar sequences and surrounding prose on %s import', async (mode) => {
+    const store = memoryPostStore();
+    const alts = ['Menu $$ and $& here', "Before $' after", 'Before $` after'];
+    const html = '<p>Distinct intro</p>' + alts.map((alt, index) =>
+      `<p><img src="https://wp/photo-${index}.jpg" alt="${alt.replaceAll('&', '&amp;')}"></p><p>Between ${index}</p>`,
+    ).join('') + '<p>Distinct ending</p>';
+    if (mode === 'overwrite') await run(pairOf('g', 'de-1', 'en-1', '<p>Previous draft</p>'), harness(), {}, store);
+    const summary = await run(pairOf('g', 'de-1', 'en-1', html, html), harness(), { overwriteDrafts: mode === 'overwrite' }, store);
+    expect(summary).toMatchObject({ imported: mode === 'fresh' ? 1 : 0, updated: mode === 'overwrite' ? 1 : 0,
+      images: { total: 3, hosted: 3, failed: 0 } });
+    const pair = (await store.get((await store.list())[0]!.translationKey))!;
+    const expected = ['Distinct intro', ...alts.flatMap((alt, index) =>
+      [`![${alt.replaceAll('`', '\\`')}](${SRC('de-1', `https://wp/photo-${index}.jpg`)})`, `Between ${index}`]), 'Distinct ending'].join('\n\n');
+    expect(pair.de.bodyMarkdown).toBe(expected);
+    expect(pair.en.bodyMarkdown).toBe(expected);
+  });
+
+  it('heals a merge with the stored dollar-bearing alt rather than the export alt', async () => {
+    const store = memoryPostStore();
+    const source = pairOf('g', 'de-1', 'en-1', '<img src="https://wp/a.jpg" alt="Export alt">');
+    await run(source, harness({ fail: () => new FetchError('offline', 'network') }), { log: () => {} }, store);
+    const pair = (await store.get((await store.list())[0]!.translationKey))!;
+    const alt = "Author $$ $& $` $'";
+    await store.upsertDraft({ ...pair, de: { ...pair.de, title: 'Edited title',
+      bodyMarkdown: `Author intro\n\n![${alt}](https://wp/a.jpg "Optional title")\n\nAuthor ending` } });
+    expect(await run(source, harness(), {}, store)).toMatchObject({ updated: 1, failed: 0 });
+    const healed = (await store.get(pair.translationKey))!;
+    expect(healed.de.title).toBe('Edited title');
+    expect(healed.de.bodyMarkdown).toBe(`Author intro\n\n![${alt}](${SRC('de-1', 'https://wp/a.jpg')})\n\nAuthor ending`);
+    expect(healed.en).toEqual(pair.en);
+    expect(healed.shared).toEqual(pair.shared);
+  });
+
+  it('replaces every identical image literally while retaining failed image markup', async () => {
+    const store = memoryPostStore();
+    const repeated = '<p><img src="https://wp/a.jpg" alt="Cost $$ and $&amp;"></p>';
+    const html = '<p>Start</p>' + repeated + '<p>Middle</p>' + repeated
+      + '<p><img src="https://wp/fail.jpg" alt="Keep $&amp;" title="Old title"></p><p>End</p>';
+    const summary = await run(pairOf('g', 'de-1', 'en-1', html),
+      harness({ fail: (url) => url.endsWith('/fail.jpg') ? new FetchError('offline', 'network') : null }),
+      { log: () => {} }, store);
+    expect(summary.images).toEqual({ total: 2, hosted: 1, failed: 1 });
+    expect(summary.warnings.some((warning) => warning.includes('https://wp/fail.jpg'))).toBe(true);
+    const pair = (await store.get((await store.list())[0]!.translationKey))!;
+    const hosted = `![Cost $$ and $&](${SRC('de-1', 'https://wp/a.jpg')})`;
+    expect(pair.de.bodyMarkdown).toBe(['Start', hosted, 'Middle', hosted,
+      '![Keep $&](https://wp/fail.jpg "Old title")', 'End'].join('\n\n'));
+  });
+});
+
 describe('importWxr', () => {
   it('shares scoped opening conversion with preflight, preserves edited merges, and only reformats an explicit overwrite', async () => {
     const store = memoryPostStore();

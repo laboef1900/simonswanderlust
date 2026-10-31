@@ -13,8 +13,8 @@ export interface ParsedWxr {
 type Node = Record<string, unknown>;
 const cd = (v: unknown): string => {
   if (v == null) return '';
-  if (typeof v === 'object') { const o = v as Node; return String(o.__cdata ?? o['#text'] ?? ''); }
-  return String(v);
+  const value = typeof v === 'object' ? ((v as Node).__cdata ?? (v as Node)['#text'] ?? '') : v;
+  return Array.isArray(value) ? value.join('') : String(value);
 };
 const arr = <T>(v: T | T[] | undefined | null): T[] => (v == null ? [] : Array.isArray(v) ? v : [v]);
 
