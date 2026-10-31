@@ -890,6 +890,13 @@ protections, so they carry their own:
   text that looks like an image or a tag therefore keeps its exact text through save, export,
   re-import and import re-runs, and is never fetched, audited or copied into Media.
 
+Inline-image re-host substitution (#360) emits replacement text literally. Dollar
+sequences in imported or author-edited alt text cannot copy surrounding Markdown
+or reinsert the old image destination. This is content preservation, not sanitization:
+gallery-text exclusion, image-map validation, origin equality, the foreign-image
+publish gate, SSRF/size/time guards and EXIF policy remain unchanged. Failed photos
+retain their original markup; the fix does not repair previously corrupted drafts.
+
 Why this is not merely theoretical: `GET /posts/:tk/preview` is `requireAuth` (**any** author, not
 just admins), runs the identical transform, and is served same-origin with `/admin/*`. A non-admin
 author storing a payload in a draft that an admin then previews would run script with the admin's
