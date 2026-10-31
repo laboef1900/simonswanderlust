@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { performance } from 'node:perf_hooks';
 import { COLUMN_WIDTH, BREAKOUT_WIDTH, PARTITION_WORK_QUANTUM, partitionRows, partitionRowWork } from '../src/lib/gallery-layout.js';
-import { transformBodyImages } from '../src/lib/body-images.js';
+import { STORY_BODY_SIZES, transformBodyImages } from '../src/lib/body-images.js';
 
 const origin = 'http://127.0.0.1:33456';
 const repeats = 3;
@@ -14,7 +14,7 @@ for (const shape of ['mixed', 'panorama', 'thin'] as const) {
       const images = Object.fromEntries(ratios.map((ratio, i) => [`${origin}/trips/bench/p${i}`, { width: Math.round(ratio * 6000), height: 6000 }]));
       const html = `<pre><code class="language-gallery">#layout: ${width === COLUMN_WIDTH ? 'column' : 'breakout'}\n${Object.keys(images).join('\n')}</code></pre>`;
       partitionRows(ratios, width);
-      await transformBodyImages(html, images, origin, { locale: 'en' });
+      await transformBodyImages(html, images, origin, { locale: 'en', inlineSizes: STORY_BODY_SIZES });
       const partitionMs: number[] = [];
       const transformMs: number[] = [];
       for (let repeat = 0; repeat < repeats; repeat++) {
@@ -22,7 +22,7 @@ for (const shape of ['mixed', 'panorama', 'thin'] as const) {
         partitionRows(ratios, width);
         partitionMs.push(performance.now() - start);
         start = performance.now();
-        await transformBodyImages(html, images, origin, { locale: 'en' });
+        await transformBodyImages(html, images, origin, { locale: 'en', inlineSizes: STORY_BODY_SIZES });
         transformMs.push(performance.now() - start);
       }
       let operations = 0;

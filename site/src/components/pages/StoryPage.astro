@@ -12,6 +12,7 @@ import CommentsIsland from '../CommentsIsland.astro';
 import { byLocale, localeOf, pathOf, translationOf, type Trip } from '../../lib/trips';
 import { PROD_SITE, blogPostingJsonLd, serializeJsonLd } from '../../lib/seo';
 import { splitOpening } from '../../lib/story-opening';
+import { resizeBodyImages, STORY_BODY_SIZES, STORY_OPENING_SIZES } from '../../lib/body-images';
 
 interface Props {
   trip: Trip;
@@ -24,7 +25,9 @@ const { headings } = await render(trip);
 // sanitises it at sync time; <Content /> would print the same string). It is
 // split here, not in the loader, because the cut is a layout decision: the
 // first section sits beside the rail, the rest runs centred and wider.
-const { opening, rest } = splitOpening(trip.rendered?.html ?? '', headings);
+const split = splitOpening(trip.rendered?.html ?? '', headings);
+const opening = resizeBodyImages(split.opening, STORY_OPENING_SIZES);
+const rest = resizeBodyImages(split.rest, STORY_BODY_SIZES);
 
 const all = await getCollection('trips');
 const other = translationOf(trip, all);
@@ -104,9 +107,9 @@ const jsonLd = serializeJsonLd(
             rail.addEventListener('change', syncDisclosures);
           }
         </script>
-        {/* `opening`/`rest` are the loader's own sanitised render, cut at a
-            heading boundary — the same string <Content /> would print. The
-            drop cap belongs to the story's first paragraph only. */}
+        {/* The loader's sanitised render, cut at a heading boundary and given
+            this column's source hints. The drop cap belongs to the story's
+            first paragraph only. */}
         <article
           class:list={[
             PROSE,

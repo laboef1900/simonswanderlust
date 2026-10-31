@@ -490,6 +490,26 @@ consecutive images and nested prose keep bare pictures at their original
 positions, with paragraph text and link order intact. Authored pictures retain
 their sanitized source choices. This adds no lightbox or stored-content rewrite.
 
+Generated inline pictures receive section-specific source hints before JavaScript
+runs. The story loader starts with the full-width envelope; `StoryPage` applies
+the final hints after splitting the opening from the remainder:
+
+| Viewport | Opening slot | Remainder slot |
+| --- | --- | --- |
+| below `48rem` / 768px | `100vw - 2.5rem` | same |
+| `48rem` to below `64rem` | `45.5rem` / 728px | same |
+| `64rem` to below `68.5rem` | `100vw - 23.5rem` | `100vw - 2.5rem` |
+| at least `68.5rem` / 1096px | `45rem` / 720px | `66rem` / 1056px |
+
+About uses its own grid: below `64rem`, `100vw - 2.5rem`; above it,
+`(min(100vw, 72rem) - 5.5rem) × 2.2 / 3.2`, capped at 731.5px.
+Standalone preview uses `min(100vw, 46rem) - 2.5rem`, capped at 696px.
+The rem geometry follows CSS and the shared gallery `COLUMN_WIDTH`; nested prose
+may be narrower, so these are containing-column envelopes. Galleries keep their
+existing per-row/slider hints, and authored pictures keep their sanitized choices.
+No variant URL, format, loading policy or layout changes. An intrinsically small
+original still has only its existing no-upscale candidates.
+
 **Break-out.** Below `lg` a wide gallery may exceed the story column to
 `min(100% + 24rem, 100vw - 3.5rem, 1112px)` — 24rem is the measured overhang
 either side of the 728px narrow-viewport column, and `100vw - 3.5rem` keeps it clear of the

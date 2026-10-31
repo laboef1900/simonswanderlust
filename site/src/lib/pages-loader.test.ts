@@ -2,6 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Loader } from 'astro/loaders';
 import { postgresPagesLoader, rowToPageEntry } from './pages-loader';
 import { renderMarkdown } from './render-markdown';
+import { unified } from 'unified';
+import rehypeParse from 'rehype-parse';
+import { visit } from 'unist-util-visit';
+import { ABOUT_BODY_SIZES } from './body-images.js';
 
 const db = vi.hoisted(() => ({ rows: [] as Record<string, unknown>[], statements: [] as string[], released: false }));
 vi.mock('pg', () => ({
@@ -107,7 +111,7 @@ describe('postgresPagesLoader load()', () => {
     const src = 'http://localhost:3000/pages/about/photo';
     db.rows = ['de', 'en'].map((locale) => ({
       key: 'about', locale, title: 'About',
-      body_markdown: `\`\`\`gallery\n${src}\n${src}\n\`\`\``,
+      body_markdown: `![About photo](${src})\n\n\`\`\`gallery\n${src}\n${src}\n\`\`\``,
       images: { [src]: { width: 1600, height: 1000, alt: '', caption: '' } },
     }));
     const entries = new Map<string, string>();
@@ -130,6 +134,16 @@ describe('postgresPagesLoader load()', () => {
       expect(html).toContain(`aria-label="${locale === 'de' ? 'Foto 2 von 2 öffnen' : 'Open photo 2 of 2'}"`);
       expect(html).toContain('alt=""');
       expect(html).toContain('href="https://img/pages/about/photo-1600.webp"');
+      let inlineSources = 0;
+      visit(unified().use(rehypeParse, { fragment: true }).parse(html), 'element', node => {
+        if (node.tagName !== 'picture' || !Object.hasOwn(node.properties, 'dataBodyImage')) return;
+        for (const child of node.children) {
+          if (child.type !== 'element' || child.tagName !== 'source') continue;
+          expect(child.properties.sizes).toBe(ABOUT_BODY_SIZES);
+          inlineSources++;
+        }
+      });
+      expect(inlineSources).toBe(2);
     }
   });
 });

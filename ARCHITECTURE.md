@@ -124,10 +124,12 @@ are in the specification.
    `ASTRO_TELEMETRY_DISABLED=1`. Astro's Content Layer loader (`site/src/lib/postgres-loader.ts`)
    `SELECT`s the published rows and turns each into a content entry. Post bodies are rendered
    Markdown → HTML, **sanitized**, and body images become responsive `<picture>`
-   (`site/src/lib/body-images.ts`). A ` ```gallery ` fence (one image URL per line) becomes a
+   (`site/src/lib/body-images.ts`). Generated inline pictures receive context-specific
+   `sizes`; `StoryPage.astro` applies opening/remainder hints after splitting the body.
+   A ` ```gallery ` fence (one image URL per line) becomes a
    photo gallery in the same pass, in one of three layout modes selected by a `#layout:` line
-   inside the fence — `column` (default; justified rows at the 960px story width), `breakout`
-   (the same rows in a 1112px break-out — centred below `lg`, the whole 960px story spread above it)
+   inside the fence — `column` (default; justified rows at the 1056px story width), `breakout`
+   (the same rows in a 1112px break-out — centred below `lg`, the whole 1056px story spread above it)
    or `slider` (a scroll-snap carousel). The row partition is computed at build time by
    `site/src/lib/gallery-layout.ts`, which is kept pure and dependency-free because draft
    preview runs it under `tsx` too. An unknown or missing mode falls back to `column` (it was

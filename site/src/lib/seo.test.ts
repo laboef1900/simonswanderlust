@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { blogPostingJsonLd, isoDate, proseDescription, serializeJsonLd, type BlogPostingInput } from './seo';
 import { renderMarkdown } from './render-markdown';
-import { transformBodyImages } from './body-images';
+import { ABOUT_BODY_SIZES, transformBodyImages } from './body-images';
 
 const configured = vi.hoisted(() => ({ identity: { authorName: 'Simon' } }));
 vi.mock('./build-identity', () => configured);
@@ -107,11 +107,11 @@ describe('proseDescription', () => {
   };
   const fallback = 'Über mich';
   const intro = 'Ich bin Simon und reise seit 2015. Hier erzähle ich von unterwegs.';
-  const rendered = async (body: string) => transformBodyImages(await renderMarkdown(body), images, origin, { locale: 'en' });
+  const rendered = async (body: string) => transformBodyImages(await renderMarkdown(body), images, origin, { locale: 'en', inlineSizes: ABOUT_BODY_SIZES });
 
   it('starts with prose after a leading responsive photo, not its alt, caption or URL', async () => {
     const html = await rendered(`![Simon am Strand](${photo})\n\n${intro}`);
-    expect(html).toContain('<picture>');
+    expect(html).toContain('<picture data-body-image');
     expect(proseDescription(html, fallback)).toBe(intro);
   });
 

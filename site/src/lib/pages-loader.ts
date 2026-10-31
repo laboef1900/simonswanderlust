@@ -1,6 +1,6 @@
 import type { Loader } from 'astro/loaders';
 import { loaderPool, withLoaderSnapshot } from './loader-pool.js';
-import { transformBodyImages, type ImageDims } from './body-images.js';
+import { ABOUT_BODY_SIZES, transformBodyImages, type ImageDims } from './body-images.js';
 import { imageOrigin, retargetImageOrigins } from './images.js';
 import { proseDescription } from './seo.js';
 
@@ -49,7 +49,7 @@ export function postgresPagesLoader(): Loader {
             id: input.id,
             data: { ...input.data, description: proseDescription(rendered.html, '') },
           });
-          rendered.html = await transformBodyImages(rendered.html, input.images, galleryOrigin, { locale: row.locale });
+          rendered.html = await transformBodyImages(rendered.html, input.images, galleryOrigin, { locale: row.locale, inlineSizes: ABOUT_BODY_SIZES });
           store.set({ id: input.id, data, body: input.body, rendered });
         }
         logger.info(`postgres-pages: loaded ${rows.length} entries`);

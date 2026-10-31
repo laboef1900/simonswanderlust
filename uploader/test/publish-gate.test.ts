@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { analyzeBodyContent, bodyImageKey } from '../src/publish-gate.js';
 import { renderMarkdown } from '../../site/src/lib/render-markdown.js';
-import { transformBodyImages } from '../../site/src/lib/body-images.js';
+import { STORY_BODY_SIZES, transformBodyImages } from '../../site/src/lib/body-images.js';
 
 // #91: the publish gate's foreign-origin check. A failed WXR re-host leaves the
 // WordPress URL in the body; body-images.ts hot-links an inline image with no
@@ -21,7 +21,7 @@ describe('analyzeBodyContent foreign-origin interpretation', () => {
   const oracle = async (body: string): Promise<string[]> => {
     // Literal text inside <code> is escaped by the serializer (`&#x3C;img`), so a
     // `src="` there is never a real attribute; drop it before the liberal scan.
-    const html = (await transformBodyImages(await renderMarkdown(body), {}, ORIGIN, { locale: 'en' })).replace(/<code(?![^>]*language-gallery)[^>]*>[\s\S]*?<\/code>/g, '');
+    const html = (await transformBodyImages(await renderMarkdown(body), {}, ORIGIN, { locale: 'en', inlineSizes: STORY_BODY_SIZES })).replace(/<code(?![^>]*language-gallery)[^>]*>[\s\S]*?<\/code>/g, '');
     const urls = [...html.matchAll(/\b(?:src|srcset)="([^"]*)"/g)]
       .flatMap((m) => (m[1] ?? '').split(',').map((c) => c.trim().split(/\s+/, 1)[0] ?? ''))
       .map((u) => u.replace(/&#x26;/g, '&').replace(/&#x22;/g, '"'));
@@ -104,7 +104,7 @@ describe('analyzeBodyContent foreign-origin interpretation', () => {
       expect((await analyzeBodyContent(body, {}, ORIGIN, 'en')).foreign, body).toEqual([`${OLD}/wp-content/uploads/g.jpg`]);
       // The hole being closed: with the own photo resolvable, the renderer builds
       // the gallery and the foreign line simply disappears.
-      const rendered = (await transformBodyImages(await renderMarkdown(body), { [`${ORIGIN}/trips/x/one`]: { width: 3000, height: 2000 } }, ORIGIN, { locale: 'en' }));
+      const rendered = (await transformBodyImages(await renderMarkdown(body), { [`${ORIGIN}/trips/x/one`]: { width: 3000, height: 2000 } }, ORIGIN, { locale: 'en', inlineSizes: STORY_BODY_SIZES }));
       expect(rendered).toContain(`${ORIGIN}/trips/x/one`);
       expect(rendered).not.toContain('old.example');
     }
@@ -142,7 +142,7 @@ describe('rendered heading semantics (#375)', () => {
   ])('judges %s from sanitized rendered elements', async (body, expected) => {
     const result = await analyzeBodyContent(body, {}, 'https://images.test', 'en');
     expect(result.hasH1).toBe(expected);
-    const rendered = (await transformBodyImages(await renderMarkdown(body), {}, 'https://images.test', { locale: 'en' }));
+    const rendered = (await transformBodyImages(await renderMarkdown(body), {}, 'https://images.test', { locale: 'en', inlineSizes: STORY_BODY_SIZES }));
     expect(/<h1(?:\s|>)/.test(rendered)).toBe(expected);
   });
 });
@@ -156,7 +156,7 @@ describe('rendered readiness references (#334)', () => {
     const src = `${photo}-640.${format}`;
     for (const body of [`![View](${src})`, `<img src="${src}" alt="View > valley">`]) {
       expect((await analyzeBodyContent(body, {}, origin, 'en')).sources).toEqual([src]);
-      expect((await transformBodyImages(await renderMarkdown(body), {}, origin, { locale: 'en' }))).toContain(`src="${src}"`);
+      expect((await transformBodyImages(await renderMarkdown(body), {}, origin, { locale: 'en', inlineSizes: STORY_BODY_SIZES }))).toContain(`src="${src}"`);
     }
   });
 
@@ -164,7 +164,7 @@ describe('rendered readiness references (#334)', () => {
     const body = `<picture><source srcset="${photo}-640.avif 1x, ${origin}/other-1280.avif 2x"><img src="${origin}/ready-640.webp"></picture>`;
     const result = await analyzeBodyContent(body, {}, origin, 'en');
     expect(result.sources).toEqual([`${photo}-640.avif`, `${origin}/other-1280.avif`, `${origin}/ready-640.webp`]);
-    const html = (await transformBodyImages(await renderMarkdown(body), {}, origin, { locale: 'en' }));
+    const html = (await transformBodyImages(await renderMarkdown(body), {}, origin, { locale: 'en', inlineSizes: STORY_BODY_SIZES }));
     for (const src of result.sources) expect(html).toContain(src);
   });
 
@@ -172,7 +172,7 @@ describe('rendered readiness references (#334)', () => {
     const bodies = [`![View](${photo})`, `\`\`\`gallery\n${photo}\n\`\`\``];
     for (const body of bodies) {
       const result = await analyzeBodyContent(body, images, origin, 'en');
-      const html = (await transformBodyImages(await renderMarkdown(body), images, origin, { locale: 'en' }));
+      const html = (await transformBodyImages(await renderMarkdown(body), images, origin, { locale: 'en', inlineSizes: STORY_BODY_SIZES }));
       expect(result.sources.length).toBeGreaterThan(0);
       expect(new Set(result.sources.map(src => bodyImageKey(src, origin, `${origin}/story/`)))).toEqual(new Set(['trips/test/photo']));
       for (const src of result.sources) expect(html).toContain(src);
@@ -186,7 +186,7 @@ describe('rendered readiness references (#334)', () => {
     const body = `\`\`\`gallery\n${photo}\nhttps://foreign.test/photo\n\`\`\``;
     const result = await analyzeBodyContent(body, {}, origin, 'en');
     expect(result).toEqual({ hasH1: false, sources: [], foreign: ['https://foreign.test/photo'] });
-    expect((await transformBodyImages(await renderMarkdown(body), {}, origin, { locale: 'en' }))).toContain('<pre>');
+    expect((await transformBodyImages(await renderMarkdown(body), {}, origin, { locale: 'en', inlineSizes: STORY_BODY_SIZES }))).toContain('<pre>');
   });
 
   it.each([
