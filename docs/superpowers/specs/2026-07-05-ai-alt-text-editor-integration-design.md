@@ -126,6 +126,20 @@ the editor to trip DraftGuard's dirty tracking). Failures (LM Studio unreachable
 error) show an inline, non-blocking message: "Couldn't reach LM Studio at <baseUrl> — is
 it running? Fill in the alt text manually." The manual field always remains usable.
 
+**Request ownership (#352, 2026-10-27):** each local-file button owns its own request
+token and `AbortController`. A new click replaces and aborts the old request (the
+button remains clickable); file `change` and manual alt `input` cancel it too.
+The same signal reaches caption-only config loading, image preparation and the
+browser-direct caption call. After each await, only the latest request for the
+identical `File` object and unchanged click-time alt value can continue or update
+the field, hint or status. Those identity/value checks also protect programmatic
+file/alt clearing after Insert, which emits no change event. An accepted suggestion
+still dispatches one bubbling input event for DraftGuard; cancelled/stale work
+dispatches none. Stale errors (including token truncation) and cleanup cannot
+change a newer request's status, ownership or credentials. Keys are cleared on
+cancellation and completion, and remain request-local. Hosted gallery ownership,
+the #351 reasoning/truncation handling and localized token-limit hints are unchanged.
+
 ### New: `uploader/src/caption.ts` (server, tested)
 
 The canonical, unit-tested parse contract that `llm.js` mirrors, plus the default prompt:
@@ -271,3 +285,58 @@ the German suggestion shown as a small copyable hint line. Load the two scripts.
 - Auto-suggesting on file pick (the button is an explicit, deliberate action).
 - Filling both locales from one click (kept per-field for correctness; can revisit later).
 - `.env` / `docker-compose` LM variables and `extra_hosts` wiring.
+
+## Local-file request ownership (#352, 2026-10-27)
+
+Each `AltSuggest.wire` owns its current request independently. A new click, file
+`change`, or alt-field `input` aborts its previous controller. The signal travels
+through caption-only config loading, real image preparation, and the browser-direct
+caption request. Before applying a result, reporting an error, or handling a config
+401, the request must still own the wire, its signal must not be aborted, the selected
+`File` must be the same object, and the field must retain its click-time value.
+Checking the file again is necessary because body Insert clears the input
+programmatically without dispatching `change`.
+
+Only an accepted result dispatches one bubbling `input` event, marking DraftGuard
+dirty once. A stale completion cannot replace manual text, attach one photo's alt to
+another, change a newer request's status, redirect to login, or clear/cancel the newer
+request. Request-local credential references are cleared on cancellation/completion;
+provider credentials are not part of the draft. These rules do not change #351:
+thinking is excluded from captions and token-truncated responses are rejected even
+when their JSON looks complete.
+
+### Runtime evidence
+
+Exercised the real editor, app and isolated PostgreSQL database on 2026-10-27:
+`issue352.localhost:33452`, with the sole registry provider configured as local
+`http://127.0.0.1:34452/v1`. This was a controlled HTTP responder, **not real model
+inference**; no API key or external provider was used. Synthetic PNG files passed
+through the shipped image decoder/resizer into real JPEG request payloads.
+
+- All four DE/EN hero/body buttons preserved manual edits during delayed replies,
+  survived A → B file changes, and accepted only the newest of two requests completed
+  in reverse order. Native provider fetches reported aborted signals and `AbortError`.
+- Deliberately held, already-settled responses exercised stale config 401, token-limit
+  and HTTP-failure completions for all four buttons. The config 401 was explicitly
+  injected over a real config response; the provider failure/truncation bodies came
+  from actual HTTP responses. None changed the new status, redirected, or prevented
+  the newer request succeeding.
+- Real DE and EN Insert actions uploaded images and cleared their file/alt inputs.
+  Releasing an old reply preserved the cleared fields and Insert status; selecting B
+  afterward produced the correct new suggestion.
+- Holding the result after real JPEG preparation, then changing files, exposed an
+  aborted preparation signal. Each subsequent success emitted exactly one input
+  event and called the real DraftGuard `markDirty` exactly once.
+- Current token-truncated replies retained existing text on all four buttons;
+  closed thinking was ignored on successful replies and unclosed thinking was
+  rejected. Config responses were `no-store`, with a null local-provider key;
+  provider requests had no Authorization header. Browser storage contained the
+  ordinary local recovery draft, not credential fields.
+- Apart from the two explicit image uploads, no content write/publish request
+  occurred. PostgreSQL contained zero posts, zero secrets, two media rows and one
+  synthetic admin. Local draft recovery remains distinct from saving to the server.
+
+The 35-case record and screenshot are retained locally under
+`.issue-runtime/issue352-browser-proof.json` and `issue352-editor.png`; these are
+runtime artifacts, not committed fixtures. Full automated checks remain a separate
+integration responsibility.
