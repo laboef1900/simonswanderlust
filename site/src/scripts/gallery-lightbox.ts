@@ -196,11 +196,11 @@ function createLightbox(labels: GalleryLabels): Lightbox | null {
   prev.addEventListener('click', () => show(index - 1));
   next.addEventListener('click', () => show(index + 1));
 
-  // Backdrop click. The dialog fills the viewport, so "outside the figure" is
-  // the honest test — comparing against the dialog itself would never fire.
+  // The figure and frame include empty backdrop space. Only the photo,
+  // caption and controls are content; clicks on their containers dismiss.
   dialog.addEventListener('click', (event) => {
     if (!(event.target instanceof Element)) return;
-    if (!event.target.closest('.jgal__lb-fig, .jgal__lb-btn')) dialog.close();
+    if (!event.target.closest('.jgal__lb-frame img, .jgal__lb-cap, .jgal__lb-btn')) dialog.close();
   });
 
   dialog.addEventListener('keydown', (event) => {
