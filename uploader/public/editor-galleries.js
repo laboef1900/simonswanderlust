@@ -64,10 +64,10 @@ window.EditorGalleries = (function () {
         let inserted;
         let cursor;
         if (before) {
-          // Mirror the block insertion convention: a blank line separates
-          // prose from the gallery, including a paste with its own newlines.
-          const suffix = text.endsWith('\n\n') ? '' : text.endsWith('\n') ? '\n' : '\n\n';
-          inserted = text + suffix;
+          // Keep padding AFTER the caret even when a paste ends in newlines.
+          // Widgets are removed until async analysis settles; the next input
+          // must remain outside the opener without depending on a live marker.
+          inserted = text + '\n\n';
           cursor = at + text.length;
         } else {
           // The marker supplies the already-analyzed block edge. beforeChange

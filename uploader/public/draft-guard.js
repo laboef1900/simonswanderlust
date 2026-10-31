@@ -44,6 +44,7 @@ window.DraftGuard = (function () {
     const debounceMs = opts.debounceMs || 5000;
     const orphanPrefix = opts.orphanPrefix || '';
     let dirty = false;
+    let redirecting = false;
     let timer = null;
     let generation = 0; // bumped on every edit; lets markClean detect mid-save edits
     let adoptedFrom = null; // another tab's stash key this tab restored from
@@ -62,6 +63,7 @@ window.DraftGuard = (function () {
 
     function markDirty() {
       dirty = true;
+      redirecting = false;
       generation += 1;
       cancelTimer();
       timer = setTimeout(() => { timer = null; stashNow(); }, debounceMs);
@@ -178,13 +180,15 @@ window.DraftGuard = (function () {
     // page back to the current URL (login.html honors ?next= via safeNextPath).
     function redirectToLogin() {
       if (dirty) stashNow();
-      dirty = false;
+      // Navigation consent is not a successful save: consumers still need
+      // to distinguish the unsaved form from persisted content.
+      redirecting = true;
       cancelTimer();
       location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search);
     }
 
     window.addEventListener('beforeunload', (e) => {
-      if (!dirty) return;
+      if (!dirty || redirecting) return;
       stashNow(); // last-chance stash even if the user leaves anyway
       e.preventDefault();
       e.returnValue = ''; // legacy Chrome needs returnValue set to show the dialog

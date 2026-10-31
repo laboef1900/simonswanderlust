@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { resolve } from 'node:path';
-import { MAX_SLUG_BYTES, isSafeSlug, assertNotStale, memoryPostStore, PostError, type PostPair } from '../src/posts.js';
+import { MAX_SLUG_BYTES, isSafeSlug, assertNotStale, memoryPostStore, PostError, type PostPair, type PostStore } from '../src/posts.js';
 import type { EditorialReviewResult } from '../src/editorial-review.js';
 import { editorDocument, EditorElement, EditorEvent } from './editor-dom-harness.js';
 import { ui } from '../../site/src/i18n/ui.js';
@@ -277,7 +277,7 @@ function loadEditor(options: EditorOptions = {}) {
     ])),
     GpxCopy: { en: new Proxy({}, { get: (_target, key) => String(key) }) },
     GpxMap: { create: async () => ({ render() {}, destroy() {}, resize() {} }) },
-    GpxEditor: { wire: () => ({ refresh: async () => {}, publishVersion: options.publishVersion ?? (() => null), publishError: () => null, noteCreated() {}, hasPreview: () => false, discard() {}, revisionNotice() {}, guardAction: () => true }) },
+    GpxEditor: { wire: () => ({ refresh: async () => true, publishVersion: options.publishVersion ?? (() => null), publishError: () => null, noteCreated() {}, hasPreview: () => false, discard() {}, revisionNotice() {}, guardAction: () => true }) },
     EditorGalleryImageOrigin: 'https://img',
     AltSuggest: { wire() {}, suggestHosted: options.caption ?? (() => Promise.reject(new Error('no model in test'))) },
   };
@@ -345,6 +345,247 @@ function minimalPair(): StashPayload {
   const loc = (locale: 'de' | 'en') => ({ locale, slug: 'x', title: 'X', excerpt: '', country: '', bodyMarkdown: '', images: {} });
   return { translationKey: 'tk1', status: 'draft', shared: {}, de: loc('de'), en: loc('en') };
 }
+
+describe('serialized writes in the real editor', () => {
+  function storeFetch(posts: PostStore): Fetch {
+    return async (url, options) => {
+      try {
+        if ((url === '/posts' || url === '/posts/tk1') && ['POST', 'PUT'].includes(options?.method ?? '')) {
+          const payload = JSON.parse(String(options!.body)) as PostPair & { updatedAt?: string };
+          return response(await posts.upsertDraft(
+            { ...payload, translationKey: payload.translationKey || 'tk1' },
+            payload.updatedAt ? new Date(payload.updatedAt) : undefined,
+          ));
+        }
+        if (url === '/posts/tk1/publish') {
+          const tokens = JSON.parse(String(options!.body)) as { baseUpdatedAt: string; baseRouteVersion: string | null };
+          return response({ ...await posts.publish('tk1', { ...tokens, baseUpdatedAt: new Date(tokens.baseUpdatedAt) }), build: { ok: true } });
+        }
+        if (url === '/posts/tk1/unpublish') return response(await posts.unpublish('tk1'));
+        return response(url === '/posts/tk1' ? await posts.get('tk1') : []);
+      } catch (error) {
+        if (error instanceof PostError) return response({ error: error.message, code: error.code }, 409);
+        throw error;
+      }
+    };
+  }
+
+  it.each([false, true])('persists both rapid save intents without saving later typing (new post: %s)', async (newPost) => {
+    const posts = memoryPostStore();
+    if (!newPost) await posts.upsertDraft(fullPair());
+    const send = storeFetch(posts);
+    const held = Promise.withResolvers<void>();
+    const savedTitles: string[] = [];
+    const h = loadEditor({ fetch: async (url, options) => {
+      const res = await send(url, options);
+      if (options?.method === 'PUT' || options?.method === 'POST') {
+        savedTitles.push((await posts.get('tk1'))!.de.title);
+        if (savedTitles.length === 1) await held.promise;
+      }
+      return res;
+    } });
+    if (newPost) h.api.populateForm(fullPair());
+    else await h.api.loadPost('tk1');
+    h.el('deTitle').value = 'First click';
+    h.el('deTitle').fire('input');
+    const first = h.api.doSaveDraft();
+    h.el('deTitle').value = 'Second click';
+    h.el('deTitle').fire('input');
+    const second = h.api.doSaveDraft();
+    h.el('deTitle').value = 'Not saved yet';
+    h.el('deTitle').fire('input');
+    await settle();
+    expect(savedTitles).toEqual(['First click']);
+    expect(h.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveSaving']);
+    held.resolve();
+    expect(await Promise.all([first, second])).toEqual([true, true]);
+    expect(savedTitles).toEqual(['First click', 'Second click']);
+    expect((await posts.get('tk1'))!.de.title).toBe('Second click');
+    expect(await posts.list()).toHaveLength(1);
+    expect(h.el('deTitle').value).toBe('Not saved yet');
+    expect(h.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveUnsaved']);
+    expect(h.prompts.map((prompt) => prompt.title)).toEqual([]);
+    const writes = h.requests.filter(({ options }) => options.method === 'POST' || options.method === 'PUT');
+    expect(writes.map(({ options }) => options.method)).toEqual(newPost ? ['POST', 'PUT'] : ['PUT', 'PUT']);
+    expect(JSON.parse(String(writes[1]!.options.body)).translationKey).toBe('tk1');
+    expect(h.el('actionError').textContent).toBe('');
+  });
+
+  it.each([
+    { action: 'publish', buildOk: true },
+    { action: 'publish', buildOk: false },
+    { action: 'unpublish', buildOk: true },
+  ])('waits for a held $action response before saving with its committed token (build: $buildOk)', async ({ action, buildOk }) => {
+    const posts = memoryPostStore();
+    await posts.upsertDraft(fullPair());
+    if (action === 'unpublish') await posts.publish('tk1', await publishTokens(posts, 'tk1'));
+    const send = storeFetch(posts);
+    const held = Promise.withResolvers<void>();
+    let actionToken: string | undefined;
+    const h = loadEditor({ confirm: true, fetch: async (url, options) => {
+      const res = await send(url, options);
+      if (url === '/posts/tk1/' + action) {
+        actionToken = (await posts.get('tk1'))!.updatedAt.toISOString();
+        await held.promise;
+        if (!buildOk) return response({ updatedAt: actionToken, build: { ok: false, error: 'build failed' } });
+      }
+      return res;
+    } });
+    await h.api.loadPost('tk1');
+    h.el(action + 'Btn').click();
+    await settle();
+    expect(actionToken).toBeDefined();
+    h.el('deTitle').value = 'Typo corrected';
+    h.el('deTitle').fire('input');
+    const saving = h.api.doSaveDraft();
+    await settle();
+    const savesBeforeReply = h.requests.filter(({ options }) => options.method === 'PUT').length;
+    expect(savesBeforeReply).toBe(action === 'publish' ? 1 : 0);
+    held.resolve();
+    expect(await saving).toBe(true);
+    const finalSave = h.requests.filter(({ options }) => options.method === 'PUT').at(-1)!;
+    expect(JSON.parse(String(finalSave.options.body)).updatedAt).toBe(actionToken);
+    expect((await posts.get('tk1'))!.de.title).toBe('Typo corrected');
+    expect(h.prompts.map((prompt) => prompt.title)).not.toContain('Reload the latest version?');
+    expect(h.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveSaved']);
+  });
+
+  it('keeps the publish save and publish request together ahead of a later Save intent', async () => {
+    const posts = memoryPostStore();
+    await posts.upsertDraft(fullPair());
+    const send = storeFetch(posts);
+    const held = Promise.withResolvers<void>();
+    let saves = 0;
+    const h = loadEditor({ confirm: true, fetch: async (url, options) => {
+      const res = await send(url, options);
+      if (options?.method === 'PUT' && ++saves === 1) await held.promise;
+      return res;
+    } });
+    await h.api.loadPost('tk1');
+    h.el('deTitle').value = 'Publish this version';
+    h.el('deTitle').fire('input');
+    h.el('publishBtn').click();
+    h.el('deTitle').value = 'Save this later version';
+    h.el('deTitle').fire('input');
+    const saving = h.api.doSaveDraft();
+    await settle();
+    expect((await posts.get('tk1'))!.de.title).toBe('Publish this version');
+    held.resolve();
+    expect(await saving).toBe(true);
+    expect(h.requests.filter(({ options }) => options.method === 'PUT' || options.method === 'POST')
+      .map(({ url }) => url)).toEqual(['/posts/tk1', '/posts/tk1/publish', '/posts/tk1']);
+    expect((await posts.get('tk1'))!.de.title).toBe('Save this later version');
+    expect(h.prompts.map((prompt) => prompt.title)).not.toContain('Reload the latest version?');
+  });
+
+  it('releases the chain after a request failure without retrying the failed intent', async () => {
+    const posts = memoryPostStore();
+    await posts.upsertDraft(fullPair());
+    const send = storeFetch(posts);
+    const held = Promise.withResolvers<Response>();
+    let saves = 0;
+    const h = loadEditor({ fetch: async (url, options) => {
+      if (options?.method === 'PUT' && ++saves === 1) return held.promise;
+      return send(url, options);
+    } });
+    await h.api.loadPost('tk1');
+    h.el('deTitle').value = 'Failed intent';
+    h.el('deTitle').fire('input');
+    const first = h.api.doSaveDraft();
+    h.el('deTitle').value = 'Next explicit intent';
+    h.el('deTitle').fire('input');
+    const second = h.api.doSaveDraft();
+    await settle();
+    expect(saves).toBe(1);
+    held.reject(new Error('connection failed'));
+    expect(await Promise.all([first, second])).toEqual([false, true]);
+    expect(saves).toBe(2);
+    expect((await posts.get('tk1'))!.de.title).toBe('Next explicit intent');
+    expect(h.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveSaved']);
+  });
+
+  it.each([false, true])('does not overwrite a foreign writer when queued saves conflict (reload: %s)', async (reload) => {
+    const posts = memoryPostStore();
+    await posts.upsertDraft(fullPair());
+    const send = storeFetch(posts);
+    const held = Promise.withResolvers<void>();
+    let saves = 0;
+    const h = loadEditor({ confirm: reload, fetch: async (url, options) => {
+      if (options?.method === 'PUT' && ++saves === 1) await held.promise;
+      return send(url, options);
+    } });
+    await h.api.loadPost('tk1');
+    h.el('deTitle').value = 'My first intent';
+    h.el('deTitle').fire('input');
+    const first = h.api.doSaveDraft();
+    h.el('deTitle').value = 'My queued intent';
+    h.el('deTitle').fire('input');
+    const second = h.api.doSaveDraft();
+    await settle();
+    const latest = (await posts.get('tk1'))!;
+    await posts.upsertDraft({ ...latest, de: { ...latest.de, title: 'Foreign writer' } }, latest.updatedAt);
+    held.resolve();
+    expect(await Promise.all([first, second])).toEqual([false, false]);
+    expect((await posts.get('tk1'))!.de.title).toBe('Foreign writer');
+    expect(saves).toBe(reload ? 1 : 2);
+    expect(h.prompts.map((prompt) => prompt.title)).toContain('Reload the latest version?');
+    expect(h.el('deTitle').value).toBe(reload ? 'Foreign writer' : 'My queued intent');
+    expect(h.el('draftSaveState').textContent).toBe(ui.en[reload ? 'editor.chrome.saveSaved' : 'editor.chrome.saveUnsaved']);
+  });
+
+  it('rejects Publish during a held conflict reload without replaying the old form against the foreign version', async () => {
+    const posts = memoryPostStore();
+    await posts.upsertDraft(fullPair());
+    const send = storeFetch(posts);
+    const reload = Promise.withResolvers<void>();
+    let loads = 0;
+    const h = loadEditor({ confirm: true, fetch: async (url, options) => {
+      if (url === '/posts/tk1' && !options?.method && ++loads === 2) await reload.promise;
+      return send(url, options);
+    } });
+    await h.api.loadPost('tk1');
+    const initial = (await posts.get('tk1'))!;
+    const foreign = await posts.upsertDraft({
+      ...initial,
+      de: { ...initial.de, title: 'Foreign DE', bodyMarkdown: 'Foreign German body' },
+      en: { ...initial.en, title: 'Foreign EN', bodyMarkdown: 'Foreign English body' },
+    }, initial.updatedAt);
+    h.el('deTitle').value = 'Stale local title';
+    h.el('deTitle').fire('input');
+    const saving = h.api.doSaveDraft();
+    const olderQueuedSave = h.api.doSaveDraft();
+    await settle();
+    expect(loads).toBe(2);
+    expect(h.el('deTitle').value).toBe('Stale local title');
+    expect(h.prompts.map((prompt) => prompt.title)).toEqual(['Reload the latest version?']);
+
+    h.el('publishBtn').click();
+    await settle();
+    expect(h.el('actionError').textContent).toBe(ui.en['editor.chrome.reloadFailed']);
+    expect(h.prompts.map((prompt) => prompt.title)).toEqual(['Reload the latest version?']);
+    reload.resolve();
+    expect(await Promise.all([saving, olderQueuedSave])).toEqual([false, false]);
+    await settle();
+    expect(h.requests.filter(({ options }) => options.method === 'PUT' || options.method === 'POST')
+      .map(({ url }) => url)).toEqual(['/posts/tk1']);
+    // The save response adds its gallery warnings; the stored pair does not carry them.
+    const { galleryWarnings, ...foreignStored } = foreign;
+    expect(galleryWarnings).toEqual([]);
+    expect(await posts.get('tk1')).toEqual(foreignStored);
+    expect(h.el('deTitle').value).toBe('Foreign DE');
+    expect(h.el('enTitle').value).toBe('Foreign EN');
+    expect(h.editors.map((editor) => editor.value())).toEqual(['Foreign German body', 'Foreign English body']);
+    expect(h.api.buildPayload().updatedAt).toBe(foreign.updatedAt.toISOString());
+    expect(h.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveSaved']);
+
+    // A new explicit action after the completed reload uses the accepted form.
+    h.el('publishBtn').click();
+    await settle();
+    expect(h.prompts.map((prompt) => prompt.title)).toEqual(['Reload the latest version?', 'Publish to the live site?']);
+    expect((await posts.get('tk1'))!.status).toBe('published');
+    expect((await posts.get('tk1'))!.en.bodyMarkdown).toBe('Foreign English body');
+  });
+});
 
 describe('unpublish concurrency token in the real editor', () => {
   it.each(['none', 'before', 'after'] as const)('preserves version ownership (other writer: %s)', async (otherWriter) => {
@@ -2784,6 +3025,128 @@ describe('lossless gallery metadata warning flow', () => {
   });
 });
 
+describe('revision restore protects unsaved bilingual work (#390)', () => {
+  const loadedAt = '2026-10-27T11:25:00.000Z';
+  const revision = {
+    id: 'revision-1', savedAt: '2026-10-25T09:00:00.000Z',
+    snapshot: {
+      ...fullPair(),
+      shared: { ...fullPair().shared, route: 'Earlier route' },
+      de: { ...fullPair().de, title: 'Earlier DE title', bodyMarkdown: 'Earlier DE body' },
+      en: { ...fullPair().en, title: 'Earlier EN title', bodyMarkdown: 'Earlier EN body' },
+    },
+  };
+  async function open(confirm: boolean) {
+    const h = loadEditor({ confirm, fetch: async (url) => {
+      if (url === '/posts/tk1') return response({ ...fullPair(), updatedAt: loadedAt });
+      if (url === '/posts/tk1/revisions') return response([
+        { id: revision.id, savedAt: revision.savedAt, titleDe: revision.snapshot.de.title, status: 'draft' },
+      ]);
+      if (url === '/posts/tk1/revisions/' + revision.id) return response(revision);
+      if (url.endsWith('/alt-audit')) return response({ images: [] });
+      throw new Error('Unexpected revision request: ' + url);
+    } });
+    await h.api.loadPost('tk1');
+    await settle();
+    h.el('revisionsCard').open = true;
+    return h;
+  }
+
+  for (const locale of ['de', 'en'] as const) {
+    it(`keeps ${locale.toUpperCase()}-only edits and the open revision list on Cancel`, async () => {
+      const h = await open(false);
+      h.el(locale + 'Title').value = 'Unsaved title';
+      h.el(locale + 'Title').fire('input');
+      h.editors[locale === 'de' ? 0 : 1]!.value('Unsaved manuscript');
+      const before = h.api.buildPayload();
+      const list = h.el('revisionsList').innerHTML;
+      required(h.el('revisionsList'), 'button').click();
+      await settle();
+      expect(h.prompts).toHaveLength(1);
+      expect(h.prompts[0]!.body).toContain(revision.snapshot.de.title);
+      expect(h.prompts[0]!.body).toContain(new Date(revision.savedAt).toLocaleString());
+      expect(h.api.buildPayload()).toEqual(before);
+      expect(h.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveUnsaved']);
+      expect(h.el('revisionsCard').open).toBe(true);
+      expect(h.el('revisionsList').innerHTML).toBe(list);
+      expect(h.requests.every(({ options }) => !options.method || options.method === 'GET')).toBe(true);
+    });
+
+    it(`replaces both locales and shared details only after accepting ${locale.toUpperCase()}-only dirty restore`, async () => {
+      const h = await open(true);
+      h.editors[locale === 'de' ? 0 : 1]!.value('Unsaved manuscript');
+      required(h.el('revisionsList'), 'button').click();
+      await settle();
+      expect(h.prompts).toHaveLength(1);
+      expect(h.api.buildPayload()).toMatchObject({
+        de: revision.snapshot.de, en: revision.snapshot.en, shared: revision.snapshot.shared,
+        updatedAt: loadedAt,
+      });
+      expect(h.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveUnsaved']);
+      expect(h.el('revisionsCard').open).toBe(true);
+      expect(h.requests.every(({ options }) => !options.method || options.method === 'GET')).toBe(true);
+    });
+  }
+
+  it('also protects shared-only unsaved changes', async () => {
+    const h = await open(false);
+    h.el('fmRoute').value = 'Unsaved shared route';
+    h.el('fmRoute').fire('input');
+    const before = h.api.buildPayload();
+    required(h.el('revisionsList'), 'button').click();
+    await settle();
+    expect(h.prompts).toHaveLength(1);
+    expect(h.api.buildPayload()).toEqual(before);
+  });
+
+  it('loads a clean form without a prompt and leaves the restored content unsaved', async () => {
+    const h = await open(false);
+    expect(h.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveSaved']);
+    required(h.el('revisionsList'), 'button').click();
+    await settle();
+    expect(h.prompts).toEqual([]);
+    expect(h.api.buildPayload()).toMatchObject({
+      de: revision.snapshot.de, en: revision.snapshot.en, shared: revision.snapshot.shared,
+      updatedAt: loadedAt,
+    });
+    expect(h.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveUnsaved']);
+    expect(h.requests.every(({ options }) => !options.method || options.method === 'GET')).toBe(true);
+  });
+});
+
+describe('revision restore with both locales dirty', () => {
+  it('keeps both manuscripts, titles, shared details and the drawer when cancelled', async () => {
+    const h = loadEditor({ confirm: false, fetch: async (url) => {
+      if (url === '/posts/tk1') return response({ ...fullPair(), updatedAt: '2026-10-27T11:25:00.000Z' });
+      if (url === '/posts/tk1/revisions') return response([
+        { id: 'revision-1', savedAt: '2026-10-25T09:00:00.000Z', titleDe: 'Bukarest', status: 'draft' },
+      ]);
+      if (url === '/posts/tk1/revisions/revision-1') return response({
+        snapshot: fullPair(), savedAt: '2026-10-25T09:00:00.000Z',
+      });
+      return response({ images: [] });
+    } });
+    await h.api.loadPost('tk1');
+    await settle();
+    h.el('revisionsCard').open = true;
+    for (const [index, locale] of ['de', 'en'].entries()) {
+      h.el(locale + 'Title').value = 'Unsaved ' + locale;
+      h.el(locale + 'Title').fire('input');
+      h.editors[index]!.value('Unsaved body ' + locale);
+    }
+    h.el('fmRoute').value = 'Unsaved shared route';
+    h.el('fmRoute').fire('input');
+    const before = h.api.buildPayload();
+    required(h.el('revisionsList'), 'button').click();
+    await settle();
+    expect(h.prompts).toHaveLength(1);
+    expect(h.api.buildPayload()).toEqual(before);
+    expect(h.el('revisionsCard').open).toBe(true);
+    expect(h.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveUnsaved']);
+    expect(h.requests.every(({ options }) => !options.method || options.method === 'GET')).toBe(true);
+  });
+});
+
 describe('restoring a local draft keeps the version it was edited against (#345)', () => {
   const V1 = '2026-10-27T11:20:26.092Z';
   const V2 = '2026-10-27T11:25:00.000Z';
@@ -2855,6 +3218,41 @@ describe('restoring a local draft keeps the version it was edited against (#345)
     expect(server.stored().de.title).toBe('Bukarest');
     expect(h.prompts.map((prompt) => prompt.title)).toContain('Reload the latest version?');
     expect(h.el('deTitle').value).toBe('Stashed DE edit');
+  });
+
+  it.each([V1, undefined])('revision restore cannot refresh a restored stash base of %s', async (base) => {
+    const server = versionedServer(serverV2());
+    const snapshot = fullPair();
+    snapshot.de.title = 'Selected revision DE';
+    snapshot.en.title = 'Selected revision EN';
+    const h = loadEditor({
+      isAdmin: true, search: '?tk=tk1',
+      stash: { key: 'swl:draft:tk1', payload: stashOf(base) },
+      confirm: (prompt) => [copy['editor.chrome.restoreTitle'], copy['editor.chrome.revisionRestoreTitle']].includes(prompt.title),
+      fetch: async (url, options) => {
+        if (url === '/posts/tk1/revisions') return response([
+          { id: 'revision-1', savedAt: V2, titleDe: snapshot.de.title, status: 'draft' },
+        ]);
+        if (url === '/posts/tk1/revisions/revision-1') return response({ snapshot, savedAt: V2 });
+        return server.fetch(url, options);
+      },
+    });
+    await settle();
+    required(h.el('revisionsList'), 'button').click();
+    await settle();
+    expect(h.el('deTitle').value).toBe(snapshot.de.title);
+    expect(h.el('enTitle').value).toBe(snapshot.en.title);
+    expect(h.api.buildPayload().updatedAt).toBe(base);
+    expect(h.requests.filter(isPut)).toEqual([]);
+    expect(await h.api.doSaveDraft()).toBe(false);
+    expect(server.writes).toEqual([]);
+    expect(server.stored().en.title).toBe('Newer EN saved elsewhere');
+    if (base === undefined) {
+      expect(h.requests.filter(isPut)).toEqual([]);
+      expect(h.el('actionError').textContent).toBe(copy['editor.chrome.restoreBlocked']);
+    } else {
+      expect(h.prompts.map((prompt) => prompt.title)).toContain('Reload the latest version?');
+    }
   });
 
   it('restores and saves both locales when the stash base is the stored version', async () => {

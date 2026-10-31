@@ -74,6 +74,8 @@ const routeRuns = geometry.track ? publicTrackSummary(geometry.track, locale) : 
             } catch (err) {
               console.error('mini-map: init failed', err);
               el.innerHTML = fallbackHTML;  // restore the fallback link
+              el.style.height = 'auto';
+              el.hidden = geometry!.track !== undefined;
             }
           }
         }
