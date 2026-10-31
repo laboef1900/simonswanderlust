@@ -3,7 +3,7 @@ import { satteri } from '@astrojs/markdown-satteri';
 import { unified } from 'unified';
 import rehypeParse from 'rehype-parse';
 import rehypeStringify from 'rehype-stringify';
-import { transformBodyImages } from './body-images';
+import { STORY_BODY_SIZES, transformBodyImages } from './body-images';
 import { MARKDOWN_OPTIONS } from './render-markdown';
 import { splitOpening } from './story-opening';
 
@@ -66,7 +66,7 @@ describe('splitOpening', () => {
   describe('rendered story bodies', () => {
     const renderer = satteri().createRenderer(MARKDOWN_OPTIONS);
     const parser = unified().use(rehypeParse, { fragment: true }).use(rehypeStringify);
-    const sanitize = (html: string) => transformBodyImages(html, {}, 'https://img.example.com', { locale: 'de' });
+    const sanitize = (html: string) => transformBodyImages(html, {}, 'https://img.example.com', { locale: 'de', inlineSizes: STORY_BODY_SIZES });
     const elements = (html: string) => parser.parse(html).children
       .filter((node) => node.type === 'element')
       .map((node) => parser.stringify({ type: 'root', children: [node] }));
