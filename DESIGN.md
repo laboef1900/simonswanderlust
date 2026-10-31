@@ -282,6 +282,11 @@ ratio to three decimals. Recorded failures it now prevents: `text-ink/70` under
 columns is **3.705:1** against the ridge, `/60` clears by 0.077 of a point, `/70`
 is **5.578:1**; `navy/60` on canvas is **4.05:1** where `navy/70` passes;
 `text-ink/60` on the language switcher was **4.33:1**.
+The small StoryGrid empty-state title and About profile-stat labels use
+`navy/70`; the no-JavaScript map introduction uses `ink/70`. Browser-composited
+contrast on their canvas surfaces measures **5.51:1** and **5.98:1**, respectively,
+in DE and EN at desktop and mobile widths. Their size, weight and spacing still
+carry the secondary hierarchy; reduced contrast does not.
 
 **The Two-Accent Rule.** `brand-red` is for light material, `brand-red-light`
 for dark. They are not a light/dark pair to be "simplified" into one token —
