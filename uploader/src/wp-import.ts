@@ -508,7 +508,7 @@ async function applyRehosts(body: string, rehosted: ReadonlyMap<string, RehostRe
     for (const { full, alt, url } of await markdownImages(text)) {
       const r = rehosted.get(url);
       if (!r) continue;
-      out = out.replaceAll(full, `![${alt}](${r.src})`);
+      out = out.replaceAll(full, () => `![${alt}](${r.src})`);
       record(url, r);
     }
     return out;

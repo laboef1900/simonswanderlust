@@ -1,5 +1,5 @@
-// Identity is saved independently of operational settings. Only the active locale
-// projection is sent; canonical origin and assets belong to their own features.
+// Text and assets save independently but share one revision. Asset writes must
+// never repaint the text form or discard its unsaved inputs.
 window.SettingsIdentity = (function () {
   function init() {
     const $ = (id) => document.getElementById(id);
@@ -17,13 +17,16 @@ window.SettingsIdentity = (function () {
     let dirty = false;
     let busy = false;
     let conflicted = false;
+    let assets = { logo: false, favicon: false };
+    const roles = ['logo', 'favicon'];
     for (const [id, key] of Object.entries({
       identityHeading: 'identityTab', identityIntro: 'identityIntro', identityTiming: 'identityTiming',
       identityOptional: 'identityOptional', identitySiteNameLabel: 'identitySiteName',
       identityAuthorNameLabel: 'identityAuthorName', identitySocialHeading: 'identitySocialHeading',
       identitySocialHelp: 'identitySocialHelp', identitySocialEmpty: 'identitySocialEmpty',
       identityAddLink: 'identityAddLink', identitySave: 'identitySave', identityReload: 'identityReload',
-      identityRebuild: 'identityRebuild',
+      identityRebuild: 'identityRebuild', identityAssetsHeading: 'identityAssetsHeading',
+      identityAssetsHelp: 'identityAssetsHelp',
     })) $(id).textContent = copy[key];
 
     function status(text, focus = false) {
@@ -36,6 +39,89 @@ window.SettingsIdentity = (function () {
       $('identityReload').disabled = value;
       $('identityRebuild').disabled = value;
       $('identitySave').disabled = conflicted;
+      for (const role of roles) {
+        $('identity-' + role + '-fields').disabled = value || revision === null;
+        $('identity-' + role + '-upload').disabled = value || conflicted || revision === null || !$('identity-' + role + '-file').files?.length;
+        $('identity-' + role + '-remove').disabled = value || conflicted || revision === null || !assets[role];
+      }
+    }
+    function paintAssets() {
+      for (const role of roles) {
+        $('identity-' + role + '-state').textContent = assets[role]
+          ? copy.identityAssetCustom : role === 'logo' ? copy.identityLogoDefault : copy.identityFaviconDefault;
+      }
+    }
+    function assetError(response, result, role) {
+      if (response.status === 403) return copy.identityAssetForbidden;
+      if (response.status === 507) return copy.identityAssetSpace;
+      const messages = {
+        too_many_files: copy.identityAssetOneFile,
+        asset_too_large: response.status === 413 ? copy.identityAssetInputLarge : copy.identityAssetOutputLarge,
+        unsupported_image_type: copy.identityAssetUnsupported,
+        animated_image: copy.identityAssetAnimated,
+        image_too_large: copy.identityAssetPixels,
+        image_invalid: copy.identityAssetInvalid,
+        image_too_small: role === 'logo' ? copy.identityLogoHelp : copy.identityFaviconHelp,
+        invalid_identity: copy.identityAssetRequestInvalid,
+      };
+      return messages[result.code] || copy.identityAssetFailed;
+    }
+    async function saveAsset(role, remove) {
+      if (busy || conflicted || revision === null || (remove && !assets[role])) return;
+      const control = $('identity-' + role + '-file');
+      if (!remove && control.files?.length !== 1) { status(copy.identityAssetOneFile, true); return; }
+      if (!remove && control.files[0].size > 2 * 1024 * 1024) { status(copy.identityAssetInputLarge, true); return; }
+      // Lock before confirmation too: no text/other-asset save can race its revision.
+      lock(true);
+      try {
+        if (remove && !await AdminConfirm.ask({
+          title: copy.identityAssetRemove + ' · ' + (role === 'logo' ? copy.identityLogo : copy.identityFavicon),
+          body: role === 'logo' ? copy.identityLogoRemoveConfirm : copy.identityFaviconRemoveConfirm,
+          confirmLabel: copy.identityAssetRemove, danger: true,
+        })) return;
+        status(remove ? copy.identityAssetRemoving : copy.identityAssetUploading);
+        let body;
+        if (remove) body = JSON.stringify({ revision });
+        else {
+          body = new FormData();
+          body.append('revision', String(revision));
+          body.append('file', control.files[0]);
+        }
+        const response = await fetch('/settings/identity/assets/' + role, {
+          method: remove ? 'DELETE' : 'PUT',
+          ...(remove ? { headers: { 'content-type': 'application/json' } } : {}),
+          body,
+        });
+        if (response.status === 401) { location.href = '/login'; return; }
+        const result = await response.json();
+        if (response.status === 409 && result.code === 'identity_conflict') {
+          conflicted = true;
+          status(copy.identityConflict, true);
+        } else if (!response.ok) {
+          status(assetError(response, result, role), true);
+        } else {
+          revision = result.revision;
+          assets = result.assets;
+          // No reload: local text, link order and the other chosen file stay intact.
+          if (!remove) control.value = '';
+          paintAssets();
+          status(remove ? copy.identityAssetRemoved : copy.identityAssetSaved);
+        }
+      } catch { status(copy.identityAssetFailed, true); }
+      finally { lock(false); }
+    }
+    for (const role of roles) {
+      const label = role === 'logo' ? copy.identityLogo : copy.identityFavicon;
+      $('identity-' + role + '-label').textContent = label;
+      $('identity-' + role + '-file-label').textContent = copy.identityAssetChoose;
+      $('identity-' + role + '-help').textContent = role === 'logo' ? copy.identityLogoHelp : copy.identityFaviconHelp;
+      for (const action of ['upload', 'remove']) {
+        const button = $('identity-' + role + '-' + action);
+        button.textContent = action === 'upload' ? copy.identityAssetUpload : copy.identityAssetRemove;
+        button.setAttribute('aria-label', button.textContent + ' · ' + label);
+        button.addEventListener('click', () => saveAsset(role, action === 'remove'));
+      }
+      $('identity-' + role + '-file').addEventListener('change', () => lock(busy));
     }
     function input(parent, id, label, value, maxLength, type = 'text') {
       const group = document.createElement('div');
@@ -126,6 +212,9 @@ window.SettingsIdentity = (function () {
         paintLocalized(data.identity);
         links = data.identity.socialLinks.map((link) => ({ ...link }));
         paintLinks();
+        assets = data.assets;
+        paintAssets();
+        for (const role of roles) $('identity-' + role + '-file').value = '';
         dirty = conflicted = false;
         status('');
       } catch {
@@ -141,7 +230,8 @@ window.SettingsIdentity = (function () {
     });
     $('identityReload').addEventListener('click', async () => {
       if (busy) return;
-      if (dirty && !await AdminConfirm.ask({ title: copy.identityReload, body: copy.identityReloadConfirm, confirmLabel: copy.identityReload })) return;
+      if ((dirty || roles.some((role) => $('identity-' + role + '-file').files?.length)) &&
+          !await AdminConfirm.ask({ title: copy.identityReload, body: copy.identityReloadConfirm, confirmLabel: copy.identityReload })) return;
       await load();
     });
     $('identityForm').addEventListener('submit', async (event) => {
