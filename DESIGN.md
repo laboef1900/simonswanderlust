@@ -743,6 +743,12 @@ geometry or introduce text over the photograph; homepage covers, cards, paginati
 social images keep the hero. Selection is per locale in the editor's existing inspector,
 using the same media picker, upload and framing controls rather than a new visual pattern.
 
+Story openings and About use one 3rem, extra-bold red drop cap on the article's
+first **direct-child paragraph**. A preceding heading does not suppress it.
+Quoted paragraphs, loose-list paragraphs, later direct paragraphs and the
+story-rest article keep their ordinary body-size initials; nested prose never
+starts another decorative opening.
+
 ### Navigation
 
 - **Header:** canvas with a `border-navy/10` underline, `1152px` container,
