@@ -105,6 +105,12 @@ const latest = byLocale(await getCollection('trips'), locale).slice(0, 3);
             >{label} ↗</a
           >
         </li>)}
+        <li>
+          <a href={`/legal/${locale}.html`} class="inline-flex min-h-[44px] items-center rounded transition-[color] hover:text-brand-red-light focus-visible:outline-brand-red-light">{t('editor.chrome.softwareNotices')}</a>
+        </li>
+        <li>
+          <a href="/legal/THIRD-PARTY-NOTICES.txt" class="inline-flex min-h-[44px] items-center rounded transition-[color] hover:text-brand-red-light focus-visible:outline-brand-red-light">{t('editor.chrome.thirdPartyNotices')}</a>
+        </li>
       </ul>
     </div>
   </div>

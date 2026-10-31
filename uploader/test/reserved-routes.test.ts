@@ -14,6 +14,7 @@ import { defaultSettings, validate } from '../src/settings.js';
 import { createGpxFiles } from '../src/gpx-files.js';
 import type { GpxService } from '../src/gpx-service.js';
 import type { LanguageConfig } from '../src/language.js';
+import { TEST_TRUST } from './trusted-proxy-fixture.js';
 
 const modes: LanguageConfig[] = [
   { primary: 'de', locales: ['de', 'en'] }, { primary: 'en', locales: ['en', 'de'] },
@@ -38,7 +39,7 @@ describe('reserved public namespaces', () => {
     await Promise.all(['images', 'map', 'site/current'].map(path => mkdir(join(root, path), { recursive: true })));
     const app = buildServer({
       storageDir: join(root, 'images'), siteDir: join(root, 'site'), mapDir: join(root, 'map'),
-      baseUrl: 'https://images.example', imgHost: 'images.example', backupDir: join(root, 'backup'),
+      baseUrl: 'https://images.example', imgHost: 'images.example', backupDir: join(root, 'backup'), trustProxy: TEST_TRUST,
       users: memoryUserStore(), sessions: memorySessionStore(), posts, pages: memoryPageStore(posts.language),
       media: memoryMediaStore({ baseUrl: 'https://images.example' }), secrets: memorySecretsStore(), gpx,
       settings: { get: () => settings, update: patch => { settings = validate({ ...settings, ...patch }); return settings; } },
@@ -51,6 +52,7 @@ describe('reserved public namespaces', () => {
       encodeQueue: {
         enqueue: () => {}, isActive: () => false, recover: async () => 0, drain: async () => {},
         quiesce: async () => {}, idle: async () => {}, stats: () => ({ pending: 0, running: 0 }),
+        withAdmission: (_key, operation) => operation(),
       },
       onRoute(route) {
         // Root wildcard static mounts serve content, not a fixed app namespace.

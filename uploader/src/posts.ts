@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { heroImageError, imageMarkdown, imagesMapError, normalizeGalleryFences, rewriteOutsideGalleries, type ImageMeta } from './body-content.js';
+import type { GalleryWarning, GalleryDiagnostic } from '../public/gallery-photo-line.js';
 import { lockPostPair, touchPostPair } from './post-pair-lock.js';
 import { safePairHash, type GpxFiles } from './gpx-files.js';
 import { enqueueRouteCleanup } from './gpx-store.js';
@@ -91,6 +92,8 @@ export interface PostPair {
  * which the editor echoes back on save for optimistic concurrency (issue #28).
  */
 export interface StoredPostPair extends PostPair { hasUnpublishedChanges: boolean; updatedAt: Date }
+/** Diagnostics belong to this save's submitted bodies, never to stored content. */
+export interface SavedPostPair extends StoredPostPair { galleryWarnings: GalleryWarning[] }
 /** Whole-pair snapshot of the working copy just BEFORE a save overwrote it (issue #28). */
 export type RevisionSnapshot = Pick<PostPair, 'status' | 'shared' | 'de' | 'en'>;
 export interface RevisionSummary {
@@ -189,10 +192,10 @@ export interface PostStore {
    * Route-level slug consent uses this language token; recheck it under the
    * language lock before a newly enabled locale can become writable.
    */
-  upsertDraft(pair: PostPair, baseUpdatedAt?: Date, baseLanguageUpdatedAt?: Date): Promise<StoredPostPair>;
+  upsertDraft(pair: PostPair, baseUpdatedAt?: Date, baseLanguageUpdatedAt?: Date): Promise<SavedPostPair>;
   publish(translationKey: string, tokens: PublishTokens, validate?: PublishValidation): Promise<{ updatedAt: Date }>;
   /** Flip a pair back to draft (the "emergency brake" — the live site drops it on the next build). */
-  unpublish(translationKey: string): Promise<void>;
+  unpublish(translationKey: string): Promise<{ previousUpdatedAt: Date; updatedAt: Date }>;
   /** Hard-delete both locale rows, freeing their slugs for reuse. */
   remove(translationKey: string): Promise<void>;
   /**
@@ -244,16 +247,23 @@ interface Stored extends PostPair {
 }
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
+/** ASCII grammar makes characters equal bytes; leave four bytes for `.mdx`. */
+export const MAX_SLUG_BYTES = 251;
 /** db.ts `REGIONS` (which the posts CHECK is built from), widened so untrusted strings can be tested against it. */
 const REGION_KEYS: readonly string[] = REGIONS;
 
 /** True for a slug safe to use in a URL and as a storage path segment. */
 export function isSafeSlug(slug: string): boolean {
-  return SLUG_RE.test(slug);
+  return slug.length <= MAX_SLUG_BYTES && SLUG_RE.test(slug);
 }
 
-function checkSlug(slug: string): void {
-  if (!isSafeSlug(slug)) throw new PostError(`invalid slug "${slug}" (lowercase a-z, 0-9, hyphen)`);
+export function checkSlug(slug: string, locale: Locale): void {
+  if (typeof slug !== 'string') throw new PostError(`${locale}.slug must be a string`);
+  const bytes = Buffer.byteLength(slug, 'utf8');
+  if (bytes > MAX_SLUG_BYTES) {
+    throw new PostError(`${locale}.slug must be at most ${MAX_SLUG_BYTES} ASCII bytes (received ${bytes})`);
+  }
+  if (!isSafeSlug(slug)) throw new PostError(`${locale}.slug invalid slug (lowercase a-z, 0-9, hyphen)`);
 }
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -333,7 +343,7 @@ export function validateDraft(pair: unknown, language: LanguageConfig = DEFAULT_
       throw new PostError(`${locale}.keyFacts must be an object of strings`);
     }
     const slug = l.slug ?? '';
-    if (slug !== '') checkSlug(slug as string);
+    if (slug !== '') checkSlug(slug as string, locale);
     if (locale === language.primary && !(typeof l.title === 'string' && l.title.trim())) throw new PostError(`a ${localeName(locale)} title is required to start a draft`, 'invalid_post');
   }
 }
@@ -347,7 +357,7 @@ export function requestedLocales(pair: PostPair, language: LanguageConfig): Loca
 
 function validateLocale(p: PostLocale): void {
   const name = localeName(p.locale);
-  if (!isSafeSlug(p.slug)) throw new PostError(`${name}: valid slug required`);
+  checkSlug(p.slug, p.locale);
   if (!p.title.trim()) throw new PostError(`${name}: title required`);
   if (!p.excerpt.trim()) throw new PostError(`${name}: excerpt required`);
   if (!p.country.trim()) throw new PostError(`${name}: country required`);
@@ -366,30 +376,9 @@ function validatePublishedImage(h: HeroImage, field: string, requireAlt = true):
 }
 
 /**
- * StoryHero owns the document's only H1. Ignore fenced examples so an article
- * may teach Markdown/HTML without the example making an otherwise valid post
- * impossible to publish.
+ * Synchronous structural validation only. Full publication eligibility also
+ * requires the async rendered-body and image-readiness gates in server.ts.
  */
-function bodyHasH1(body: string): boolean {
-  let fence: { marker: string; length: number } | null = null;
-  for (const line of body.split('\n')) {
-    if (fence) {
-      const close = new RegExp(`^ {0,3}\\${fence.marker}{${fence.length},}[ \\t]*$`);
-      if (close.test(line)) fence = null;
-      continue;
-    }
-    const open = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
-    if (open) {
-      const marker = open[1]?.[0];
-      if (marker) fence = { marker, length: open[1]!.length };
-      continue;
-    }
-    if (/^ {0,3}#[ \t]+/.test(line) || /<h1(?:[ \t\r\n][^>]*)?>/i.test(line)) return true;
-  }
-  return false;
-}
-
-
 export function validateForPublish(pair: PostPair, language: LanguageConfig = DEFAULT_LANGUAGE): void {
   const s = pair.shared;
   if (s.countryCode.length !== 2) throw new PostError('countryCode must be 2 letters');
@@ -421,12 +410,8 @@ export function validateForPublish(pair: PostPair, language: LanguageConfig = DE
     });
   }
   if (!s.date.trim()) throw new PostError('date required');
-  for (const locale of requestedLocales(pair, language)) {
-    validateLocale(pair[locale]);
-    if (bodyHasH1(pair[locale].bodyMarkdown)) {
-      throw new PostError(`${localeName(locale)}: body must not contain an H1; the story hero provides the page H1`);
-    }
-  }
+  // Rendered-body H1s are refused by the publish gate on the sanitized tree (#375).
+  for (const locale of requestedLocales(pair, language)) validateLocale(pair[locale]);
 }
 
 const PLACEHOLDER_HERO: HeroImage = { src: '', width: 0, height: 0, alt: '' };
@@ -451,14 +436,14 @@ const PLACEHOLDER_REGION = 'europe';
  * regex; this version is additionally quote/brace-aware so alt text containing '>' (legacy
  * exports escaped only '"') converts instead of surviving to be sanitizer-stripped.
  */
-export function normalizeBodyImages(
+export async function normalizeBodyImages(
   bodyMarkdown: string,
   images: Record<string, ImageDims>,
-): { bodyMarkdown: string; images: Record<string, ImageDims> } {
+): Promise<{ bodyMarkdown: string; images: Record<string, ImageDims>; galleryWarnings: GalleryDiagnostic[] }> {
   // Gallery fences first: a ```gallery line may carry `| WxH | alt="…"`
   // metadata that belongs in the images map (see body-content.ts). Its output
   // contains no <BodyImage> tags, so the two passes are independent.
-  const gal = normalizeGalleryFences(bodyMarkdown, images);
+  const gal = await normalizeGalleryFences(bodyMarkdown, images);
   bodyMarkdown = gal.bodyMarkdown;
   const merged: Record<string, ImageDims> = { ...gal.images };
   // Attrs are consumed in disjoint chunks — "quoted", {braced}, or any char that opens
@@ -466,7 +451,7 @@ export function normalizeBodyImages(
   // Only outside gallery fences: a gallery line's text (a gallery-local caption above
   // all) is content, never a tag to convert.
   const tagRe = /<BodyImage\s+((?:"[^"]*"|\{[^}]*\}|[^>"{])*?)\/>/g;
-  const normalized = rewriteOutsideGalleries(bodyMarkdown, (text) => text.replace(tagRe, (match, attrs: string) => {
+  const normalized = await rewriteOutsideGalleries(bodyMarkdown, (text) => text.replace(tagRe, (match, attrs: string) => {
     const get = (name: string): string | undefined => {
       const quoted = attrs.match(new RegExp(`${name}="([^"]*)"`));
       if (quoted?.[1] !== undefined) return quoted[1];
@@ -491,7 +476,7 @@ export function normalizeBodyImages(
     }
     return imageMarkdown(alt, src);
   }));
-  return { bodyMarkdown: normalized, images: merged };
+  return { bodyMarkdown: normalized, images: merged, galleryWarnings: gal.galleryWarnings };
 }
 
 /**
@@ -513,15 +498,17 @@ export function normalizeBodyImages(
  * post's `images` map unchecked. See body-content.ts `imagesMapError` for why
  * an unchecked map is an XSS vector rather than a tidiness problem.
  */
-function draftWithDefaults(pair: PostPair, language: LanguageConfig, existing?: PostPair | null): PostPair {
+async function draftWithDefaults(pair: PostPair, language: LanguageConfig, existing?: PostPair | null): Promise<{ pair: PostPair; galleryWarnings: GalleryWarning[] }> {
+  const galleryWarnings: GalleryWarning[] = [];
   // The locale is passed in rather than read off `l`: a partial draft payload
   // can omit `locale` at runtime despite the TS type, and the error message
   // must still name which side failed.
-  const fillLocale = (l: PostLocale, locale: Locale): PostLocale => {
+  const fillLocale = async (l: PostLocale, locale: Locale): Promise<PostLocale> => {
     if (!language.locales.includes(locale)) {
+      // A disabled locale keeps its stored row; it is never re-validated here.
       l = existing?.[locale] ?? { locale, slug: '', title: '', excerpt: '', country: '',
         heroImage: PLACEHOLDER_HERO, bodyMarkdown: '', images: {} };
-    }
+    } else if ((l.slug ?? '') !== '') checkSlug(l.slug, locale);
     const err = imagesMapError(l.images) ?? heroImageError(l.heroImage);
     if (err) throw new PostError(`${locale}: ${err}`);
     const titleError = heroImageError(l.titleImage);
@@ -546,12 +533,14 @@ function draftWithDefaults(pair: PostPair, language: LanguageConfig, existing?: 
       bodyMarkdown: l.bodyMarkdown ?? '',
       images: l.images ?? {},
     };
-    const n = normalizeBodyImages(filled.bodyMarkdown, filled.images);
+    const n = await normalizeBodyImages(filled.bodyMarkdown, filled.images);
+    galleryWarnings.push(...n.galleryWarnings.map((warning) => ({ ...warning, locale })));
     return { ...filled, bodyMarkdown: n.bodyMarkdown, images: n.images };
   };
   const s = pair.shared;
-  return {
-    ...pair,
+  const normalized: PostPair = {
+    translationKey: pair.translationKey,
+    status: pair.status,
     shared: {
       ...s,
       date: s.date || new Date().toISOString().slice(0, 10),
@@ -565,9 +554,10 @@ function draftWithDefaults(pair: PostPair, language: LanguageConfig, existing?: 
       // Absent = enabled per post; the site-wide setting is the default-off gate.
       commentsEnabled: s.commentsEnabled ?? true,
     },
-    de: fillLocale(pair.de, 'de'),
-    en: fillLocale(pair.en, 'en'),
+    de: await fillLocale(pair.de, 'de'),
+    en: await fillLocale(pair.en, 'en'),
   };
+  return { pair: normalized, galleryWarnings };
 }
 
 /**
@@ -687,11 +677,12 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
     },
     async upsertDraft(pair, baseUpdatedAt, baseLanguageUpdatedAt) {
       const key = pair.translationKey || randomUUID();
-      return language.runExclusive((mode) => withPair(key, () => {
+      return language.runExclusive((mode) => withPair(key, async () => {
         assertDraftLanguage(mode, baseLanguageUpdatedAt);
         validateDraft(pair, mode);
         const existing = byKey.get(key);
-        pair = draftWithDefaults(pair, mode, existing);
+        const normalized = await draftWithDefaults(pair, mode, existing);
+        pair = normalized.pair;
         if (!existing && baseUpdatedAt) throw new PostError('post not found', 'not_found');
         if (existing) assertNotStale(existing.updatedAt, baseUpdatedAt);
         for (const locale of ['de', 'en'] as Locale[]) {
@@ -724,7 +715,7 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
           hasUnpublishedChanges: status === 'published',
         };
         byKey.set(key, stored);
-        return publicPair(stored);
+        return { ...publicPair(stored), galleryWarnings: normalized.galleryWarnings };
       }));
     },
     async publish(tk, tokens, validate) {
@@ -750,10 +741,12 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
       return language.runExclusive(() => withPair(tk, () => {
         const p = byKey.get(tk);
         if (!p) throw new PostError('post not found');
+        const previousUpdatedAt = new Date(p.updatedAt);
         p.status = 'draft';
         p.rowStatus = { de: 'draft', en: 'draft' };
         p.hasUnpublishedChanges = false;
         p.updatedAt = nextTime(p.updatedAt);
+        return { previousUpdatedAt, updatedAt: new Date(p.updatedAt) };
       }));
     },
     async remove(tk) {
@@ -1079,7 +1072,9 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
         validateDraft(pair, language);
         await lockPostPair(client, tk);
         const existing = await readPostPair(client, tk, language, true);
-        pair = draftWithDefaults(pair, language, existing);
+        // Inside the pair lock: a disabled locale keeps the row read here.
+        const normalized = await draftWithDefaults(pair, language, existing);
+        pair = normalized.pair;
         if (!existing && baseUpdatedAt) throw new PostError('post not found', 'not_found');
         if (existing) assertNotStale(existing.updatedAt, baseUpdatedAt);
         const status = existing?.status ?? 'draft';
@@ -1123,7 +1118,7 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
         if (!saved) throw new PostError('failed to save post');
         writable();
         await client.query('COMMIT');
-        return saved;
+        return { ...saved, galleryWarnings: normalized.galleryWarnings };
       } catch (e) {
         await client.query('ROLLBACK').catch(() => {});
         if (isSlugCollision(e)) throw new PostError('slug already in use', 'duplicate_slug');
@@ -1177,11 +1172,13 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
         await client.query('BEGIN');
         const language = await readLanguage(client, true);
         await lockPostPair(client, tk);
-        if (!(await readPostPair(client, tk, language, true))) throw new PostError('post not found');
-        await touchPostPair(client, tk);
+        const pair = await readPostPair(client, tk, language, true);
+        if (!pair) throw new PostError('post not found');
+        const updatedAt = await touchPostPair(client, tk);
         await client.query(`UPDATE posts SET status='draft' WHERE translation_key=$1`, [tk]);
         writable();
         await client.query('COMMIT');
+        return { previousUpdatedAt: pair.updatedAt, updatedAt };
       } catch (error) {
         await client.query('ROLLBACK').catch(() => {});
         throw error;

@@ -57,10 +57,11 @@ window.LLM = (function () {
     return -1;
   }
 
-  // Extract the first JSON object carrying non-empty altEn + altDe. Mirrors
-  // src/caption.ts::parseCaption (kept in sync; enforced by test/llm-mirror.test.ts).
+  // Extract the first JSON object carrying non-empty altEn + altDe, after
+  // discarding thinking (#351). Mirrors src/caption.ts::parseCaption (kept in
+  // sync; enforced by test/llm-mirror.test.ts).
   function parseCaption(content) {
-    const s = String(content);
+    const s = withoutThinking(String(content));
     let sawJson = false;
     for (let i = 0; i < s.length; i++) {
       if (s[i] !== '{') continue;
@@ -105,7 +106,7 @@ window.LLM = (function () {
   }
 
   function cleanReviewText(value, max = 1000) {
-    const text = value.replace(/\p{C}/gu, '').slice(0, max);
+    const text = value.replace(/\s+/gu, ' ').replace(/\p{C}/gu, '').trim().slice(0, max);
     return /[\uD800-\uDBFF]$/.test(text) ? text.slice(0, -1) : text;
   }
 
@@ -495,19 +496,34 @@ window.LLM = (function () {
     }
   }
 
+  // A failed request or unusable reply becomes one fixed message (cancelled, or
+  // the generic failure). Provider text never reaches the page.
+  function captionFailure(e) {
+    const aborted = e && (e.name === 'AbortError' || e.name === 'TimeoutError');
+    const error = new Error(aborted ? 'Caption request cancelled or timed out' :
+      'Caption request failed. Check the provider, API key, vision model and browser CORS access.');
+    if (aborted) error.name = 'AbortError';
+    return error;
+  }
+
   async function caption(baseUrl, model, prompt, dataUrl, timeoutMs, maxTokens, signal, apiKey) {
     const endpoint = captionEndpoint(baseUrl, '/chat/completions');
+    let reply;
     try {
-      const reply = await visionChat({
+      reply = await visionChat({
         label: 'Caption request', endpoint, model, text: prompt, dataUrl, timeoutMs, signal, apiKey, maxTokens,
       });
+    } catch (e) {
+      throw captionFailure(e);
+    }
+    // Never salvage a draft from a token-truncated reply (#351): it is refused
+    // before parsing, so no alt field changes, and keeps its own message so the
+    // caller can name the token limit instead of the connection.
+    if (reply.finishReason === 'length') throw new Error('Caption response was truncated');
+    try {
       return parseCaption(reply.content);
     } catch (e) {
-      const aborted = e && (e.name === 'AbortError' || e.name === 'TimeoutError');
-      const error = new Error(aborted ? 'Caption request cancelled or timed out' :
-        'Caption request failed. Check the provider, API key, vision model and browser CORS access.');
-      if (aborted) error.name = 'AbortError';
-      throw error;
+      throw captionFailure(e);
     }
   }
 

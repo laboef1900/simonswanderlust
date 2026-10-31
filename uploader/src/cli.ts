@@ -89,7 +89,8 @@ async function restoreMain(args: string[]): Promise<void> {
   const { yes, acceptLanguageChange, file } = parseRestoreArgs(args);
   if (!file) {
     console.error(
-      'usage: stop app, then docker compose run --rm --no-deps app node --import tsx src/cli.ts restore [--yes] [--accept-language-change] /data/backup/db/db-YYYYMMDD-HHmmss.json.gz\n' +
+      'usage: docker compose stop app\n' +
+      '       docker compose run --rm --no-deps --entrypoint node app --import tsx src/cli.ts restore [--yes] [--accept-language-change] /data/backup/db/db-YYYYMMDD-HHmmss.json.gz\n' +
       '       (bare dev: stop the app, then node --import tsx src/cli.ts restore [--yes] [--accept-language-change] <file>)\n' +
       '       --yes skips confirmation, never exclusive ownership, language-change acceptance or the verified pre-restore backup.',
     );
@@ -427,7 +428,8 @@ async function main(): Promise<void> {
       'usage:\n' +
       '  npm run upload -- <imageFile> <key> [alt]\n' +
       `  ${exec} rebuild\n` +
-      `  ${exec} restore [--yes] /data/backup/db/db-YYYYMMDD-HHmmss.json.gz\n` +
+      '  docker compose stop app\n' +
+      '  docker compose run --rm --no-deps --entrypoint node app --import tsx src/cli.ts restore [--yes] /data/backup/db/db-YYYYMMDD-HHmmss.json.gz\n' +
       `  ${exec} set-password <username> [newPassword]\n` +
       `  ${exec} audit-exif`,
     );
