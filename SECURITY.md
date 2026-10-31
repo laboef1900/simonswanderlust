@@ -116,6 +116,18 @@ an owner-authorized safe rebuild/release switch and cache assessment. No safety 
   "logged out". Spec: `docs/superpowers/specs/2026-09-06-lazy-session-resolution-design.md`.
 - **First-admin setup** (`/setup`) is only available while no users exist, and is **serialized**
   with a per-process lock so two concurrent requests cannot both create an admin (TOCTOU closed).
+- **Account removal** (#368) preserves at least one administrator in a configured installation.
+  `UserStore.remove` takes a short Postgres `SHARE ROW EXCLUSIVE` users-table lock before reading
+  the target/count and deleting in the same transaction; the memory store makes the same decision
+  without an intervening await. Concurrent authenticated cross-deletions yield one 200 and one
+  409 `cannot remove the last admin`, not an empty users table that reopens setup. Only a removed
+  account loses sessions (Postgres FK cascade; explicit invalidation only after `removed`).
+  Self-delete remains 409; a later request using a deleted account's cookie remains 401.
+  Password policy, lazy session resolution and setup rate limiting are unchanged.
+  Verified over real `main.ts` TCP routes against isolated Postgres with two admins, then with
+  extra authors; both sessions of each survivor remained usable and `/setup` stayed 409.
+  Approval, lock-barrier evidence and rollback containment:
+  `docs/superpowers/specs/2026-10-27-issue-368-atomic-last-admin-design.md`.
 - **Password changes** — `POST /users/me/password` lets an authenticated user rotate their own
   password after re-proving the **current** one (rate-limited, so a hijacked session cannot
   brute-force it — see *Rate limiting*). On success **all of that user's sessions are destroyed**
@@ -376,6 +388,16 @@ even if that entry is itself a trusted address. For any other peer, its socket a
 Rotating client-supplied leftmost entries or sending forged headers directly from another
 container does not open a fresh bucket.
 
+The async rate-limit preHandler **returns the Fastify refusal reply** (#372), rather than
+merely calling `send`: a pending asynchronous `onSend` hook must not allow later preHandlers
+or the login, setup or password-change handler to continue behind a client-visible 429.
+The account-lock refusal in `/login` follows the same return contract. Budgets, keys and
+authentication checks are unchanged. On 2026-10-27, real loopback HTTP requests against
+`buildServer` with PostgreSQL user/session stores verified unchanged persisted users,
+password hashes and sessions after refusals, both with the normal hook chain and an explicitly
+injected asynchronous send delay. This is a conditional hook-composition fixture, not evidence
+of a production exploit; see the #372 design spec's runtime verification record.
+
 `/login` additionally keeps a **per-account failure budget across all sources** — the defence
 against a guess spread over many addresses, which the per-IP bucket cannot see — and checks it
 *before* running scrypt, so a locked account costs no hashing work. The budget is **100 failures
@@ -470,6 +492,13 @@ Public image variants carry an explicit **allow-list** of EXIF tags, built in
 `FocalLength`, plus the ICC profile. Everything else — the **GPS IFD**, XMP,
 IPTC and `Orientation` — is dropped by construction, because `withExif()`
 replaces the EXIF block wholesale rather than filtering it.
+
+The #371 numeric correction preserves that boundary: sub-unit values use a reciprocal
+only within 1% relative error, otherwise the existing /1000 representation. Supported
+number bounds and all tag/format rules are unchanged. Actual Linux amd64/arm64 uploads
+confirmed exposure 0.4/0.6/0.8 and 1/8000 plus aperture 0.95 in every served variant;
+GPS/XMP/IPTC remained absent and originals remained unchanged and unservable. Existing
+photos are not automatically re-encoded.
 
 This replaced a blanket `.withMetadata()` which republished source GPS
 coordinates on every public file. Untouched originals under `/data/images`
@@ -965,8 +994,16 @@ preview even though the live site would load it.
   serialized provider/settings write prevalidates everything, commits the secret first, then
   writes settings. A subsequent failure can leave a new key with the old URL, or a removed key
   on a provider that still exists; responses explicitly report partial or unknown outcomes.
-  Reload and deliberately reconcile before inference. The UI clears its typed key, reloads
-  presence/settings, and never runs inference on save.
+  Reload and deliberately reconcile before inference. At validated/confirmed request handoff,
+  the UI clears only the submitted provider form's masked key; unrelated settings operations
+  preserve an unsubmitted key in that same form node, never a second cache or browser storage.
+  Completions belong to the originating form object, so an older request cannot clear a new
+  form. A failed settings refresh retains pending input but blocks registry mutations and
+  provider tests until fresh settings are available; page reload discards that input.
+  Cancel, form replacement and switching Add to local discard the pending key intentionally.
+  Stored-key destination confirmation and typed-key/URL binding remain unchanged, as do the
+  credential endpoints, per-provider secret slots, encryption and disclosure policy above.
+  Save refreshes presence/settings and never runs inference or automatically retries.
 - **Registry migration:** the first boot of the registry release copies the legacy shared
   `ai_api_key` envelope to every provider that already received it (the remote providers the
   two features had selected) and deletes the legacy row, in one Postgres transaction, without

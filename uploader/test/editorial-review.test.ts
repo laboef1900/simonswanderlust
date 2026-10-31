@@ -126,6 +126,24 @@ describe('editorial review parser and shipped browser mirror', () => {
     }
   });
 
+  it('preserves word boundaries across model whitespace in every review field', () => {
+    const multiline: EditorialReviewResult = {
+      title: { status: 'warn', critique: '  Too short.\r\nAdd the place.  ', suggestions: ['Lisbon\nin three days'] },
+      excerpt: { status: 'pass', critique: 'Clear\tsearch intent.', suggestedExcerpt: 'Trams,\n tiles and tascas.' },
+      headings: { status: 'pass', critique: 'One\u00a0route\t two stops.' },
+      practicalDetails: { status: 'warn', critique: 'Explain\nseasonal access.', missingAspects: ['Best\tseason'] },
+      internalLinks: { status: 'info', linkOpportunities: ['Nearby\r\nwalks\u200e'] },
+    };
+    const expected: EditorialReviewResult = {
+      title: { status: 'warn', critique: 'Too short. Add the place.', suggestions: ['Lisbon in three days'] },
+      excerpt: { status: 'pass', critique: 'Clear search intent.', suggestedExcerpt: 'Trams, tiles and tascas.' },
+      headings: { status: 'pass', critique: 'One route two stops.' },
+      practicalDetails: { status: 'warn', critique: 'Explain seasonal access.', missingAspects: ['Best season'] },
+      internalLinks: { status: 'info', linkOpportunities: ['Nearby walks'] },
+    };
+    for (const parse of parsers) expect(parse(JSON.stringify(multiline))).toEqual(expected);
+  });
+
   it('strips Unicode controls before clamping every text and list field', () => {
     const dirty = '\u0000\n\t\u200e\u202e\uD800' + 'x'.repeat(1200);
     const oversized: EditorialReviewResult = {

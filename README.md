@@ -134,6 +134,10 @@ Before starting, edit your private `.env`:
 - Set `IMAGE_TAG` to the [release](https://github.com/laboef1900/simonswanderlust/releases)
   you want to run. The committed default is `0.17.1`.
 
+Override **both** domain values together. Unset or explicitly empty values still select
+Compose's Simon-specific defaults: `PUBLIC_BASE_URL=https://img.simonswanderlust.com` and
+`IMG_HOST=img.simonswanderlust.com`. They do not auto-detect your blog's domain.
+
 The app runs as non-root uid 1000. On a Linux host, prepare the data directory so it is
 writable, then start the stack:
 
@@ -143,6 +147,10 @@ sudo chown -R 1000:1000 uploader/data
 docker compose pull
 docker compose up -d
 ```
+
+Skipping ownership on a fresh root-owned Linux bind mount produced `EACCES`/permission
+denied, an exit-code-1 restart loop and an unhealthy container in the native rehearsal.
+Prepare ownership before starting; do not reproduce this failure on existing content.
 
 If the GHCR package requires authentication, run `docker login ghcr.io` before pulling.
 Open **http://localhost:3000/login** to create the first admin account, then head to the
@@ -164,6 +172,18 @@ rate-limit buckets from two external networks, and blog-origin comment submissio
 moderation to the public list; Docker Desktop and local split-host proof are not a VPS
 rehearsal. See [architecture and deployment](ARCHITECTURE.md) and the
 [security model](SECURITY.md#transport-headers--proxy) before exposing the service.
+
+The [2026-10-29 native amd64/arm64 rehearsal](docs/2026-10-29-clean-install-rehearsal.md)
+records exact released-image digests, a verified two-host TLS proxy example, installation
+deviations and measured resources. It exercised released **0.17.1**, not current/unmerged
+code, through real HTTPS/API calls—not interactive browser UI or a browser certificate
+store. Split-domain blog-Origin comment posting reproduced the known
+[#319](https://github.com/laboef1900/simonswanderlust/issues/319) 403 defect.
+The two synthetic photos and one bilingual story establish **no hosting minimum**.
+That historical image predates the codec fixes tracked in
+[#347](https://github.com/laboef1900/simonswanderlust/issues/347); the rehearsal is not a
+security-support or downgrade endorsement. The broader supported installation guide
+and default changes belong to [#293](https://github.com/laboef1900/simonswanderlust/issues/293).
 
 ### Build the current source
 
