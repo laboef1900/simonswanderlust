@@ -252,6 +252,30 @@ function runTimers(timers: { fn: () => void; cleared: boolean }[]): void {
   for (const t of due) t.fn();
 }
 
+describe('media-browser current folder', () => {
+  it('exposes only the selected folder across nested, sibling and All photos navigation', async () => {
+    const page = loadPage({ folders: ['Trips', 'Trips/North', 'Trips/South'] });
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [], total: 0 });
+    await page.flush();
+    let buttons = page.el('folderTree').querySelectorAll('.folder-btn');
+    expect(buttons.filter((button) => button.getAttribute('aria-current') === 'true')
+      .map((button) => button.textContent)).toEqual(['All photos']);
+
+    for (const [label, folder] of [['North', 'Trips/North'], ['South', 'Trips/South'], ['All photos', '']]) {
+      buttons.find((button) => button.textContent === label)!.dispatch('click');
+      await page.flush();
+      const request = page.listRequests.shift()!;
+      expect(new URL(request.url, 'https://app.example').searchParams.get('folder') ?? '').toBe(folder);
+      request.resolve({ items: [], total: 0 });
+      await page.flush();
+      buttons = page.el('folderTree').querySelectorAll('.folder-btn');
+      expect(buttons.filter((button) => button.getAttribute('aria-current') === 'true')
+        .map((button) => button.textContent)).toEqual([label]);
+    }
+  });
+});
+
 describe('media-browser upload completion', () => {
   it('keeps keyboard navigation on the same photo when completion changes its grid index', async () => {
     const page = loadPage();

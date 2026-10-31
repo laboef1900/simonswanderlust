@@ -140,6 +140,7 @@
       var li = document.createElement('li');
       var btn = el('button', 'folder-btn' + (state.folder === path ? ' is-current' : ''), label);
       btn.type = 'button';
+      btn.setAttribute('aria-current', state.folder === path ? 'true' : 'false');
       btn.style.paddingLeft = (0.4 + depth * 0.8) + 'rem';
       btn.addEventListener('click', function () {
         state.folder = path;
