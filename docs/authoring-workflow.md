@@ -600,6 +600,9 @@ into the static site, so none of the switches below need a Publish or a rebuild.
    close a trip, but only an admin can open the site to comments.
 3. **Moderation** — a reader's comment lands in `/admin/comments.html` as **pending** and is not
    public until an admin clicks **Approve**. Author replies are auto-approved and marked as such.
+   Their localized **Autor / Author** badge follows the reply's stored author flag, independent
+   of the number of approved comments elsewhere on the site. This does not change the current
+   limit of the oldest 500 approved comments returned for one story.
 4. **No rebuild** — closing or opening comments (either switch) takes effect on the next request.
    It does not require **Publish** and never triggers a site build.
 5. **Deleting a post deletes its comments** — the thread is removed in the same transaction as the

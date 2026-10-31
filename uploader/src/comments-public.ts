@@ -34,12 +34,6 @@ export interface PublicCommentsOptions {
   ipLimiter: RateLimiter;
   /** Process-wide limiter (single key). */
   globalLimiter: RateLimiter;
-  /**
-   * Ids of APPROVED author replies (`is_author = true`) for one translation
-   * key. The public store's shape carries no author flag, so the route asks
-   * for the id set separately; absent → every comment reports `isAuthor: false`.
-   */
-  isAuthorIds?: (translationKey: string) => Promise<Set<string>>;
 }
 
 /** Honeypot field name: hidden from humans, filled by naive bots. */
@@ -66,10 +60,10 @@ export interface PublicCommentJson {
   postedLocale: Locale;
 }
 
-export function toPublic(c: PublicComment, postedLocale: Locale, isAuthor: boolean): PublicCommentJson {
+export function toPublic(c: PublicComment, postedLocale: Locale): PublicCommentJson {
   return {
     id: c.id, authorName: c.name, body: c.body,
-    createdAt: new Date(c.createdAt).toISOString(), isAuthor, postedLocale,
+    createdAt: new Date(c.createdAt).toISOString(), isAuthor: c.isAuthor, postedLocale,
   };
 }
 
@@ -111,13 +105,12 @@ export function registerPublicComments(app: FastifyInstance, opts: PublicComment
     try {
       pair = await publishedPair(tk);
       if (!pair) return reply.code(404).send(NOT_FOUND);
-      const authorIds = opts.isAuthorIds ? await opts.isAuthorIds(tk) : new Set<string>();
       const perLocale = await Promise.all(LOCALES.map(async (loc) =>
         (await opts.comments!.listApproved(tk, loc)).map((c) => ({ c, loc }))));
       rows = perLocale.flat()
         .sort((a, b) => new Date(a.c.createdAt).getTime() - new Date(b.c.createdAt).getTime())
         .slice(0, GET_LIMIT)
-        .map(({ c, loc }) => toPublic(c, loc, authorIds.has(c.id)));
+        .map(({ c, loc }) => toPublic(c, loc));
     } catch (e) {
       return failed(reply, 'GET', e);
     }
