@@ -1155,9 +1155,18 @@ deliberate trade-off, not an oversight:
   unset `saved_at`, clear assets and keep the live canonical origin if set; otherwise they use
   the legacy origin. The CLI announces the legacy recovery and includes live identity/assets
   in the verified undo set. Restart loads the restored cache; public output waits for Rebuild.
-- Image archives (`/data/backup/db/images-*.tar`) contain no password hashes — only the already
-  publicly served image files — but their download route stays behind the same admin gate and
-  strict filename validation as the dumps.
+- Image archives (`/data/backup/db/images-*.tar`) contain public variants **and private
+  full-resolution originals**. Originals may retain EXIF/GPS and other source metadata:
+  handle these archives as sensitive recovery material, like database dumps. Downloads remain
+  admin-only with strict filename validation. Image archives are **never pruned** automatically;
+  each may hold a unique part of the recovery chain. Deleting a photo from the media library
+  does **not** purge earlier archives or their offsite copies.
+  The read-only [`audit-exif` command](#published-image-metadata-allow-list) inspects public
+  variants, not private originals or archive history: a clean result does not certify those
+  copies GPS-free and does not erase anything. Private GPX originals belong to **separate
+  companion route archives** referenced by v10 database dump manifests, not image tars.
+  Protect offsite copies and retain separate key escrow as described in
+  [Backups & disaster recovery](ARCHITECTURE.md#backups--disaster-recovery).
 - The download route (`GET /backups/:name`) is **admin-only** and validates the filename against a
   strict pattern (`^db-\d{8}-\d{6}\.json\.gz$` or `^images-\d{8}-\d{6}\.tar$`) before touching the
   filesystem — no path traversal.

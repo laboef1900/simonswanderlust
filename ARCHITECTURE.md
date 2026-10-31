@@ -699,6 +699,14 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   `/data/images` written or published since the previous filesystem boundary are tarred into
   `/data/backup/db/images-<YYYYMMDD-HHmmss>.tar` (mtime/ctime-incremental; when nothing qualifies,
   no file is written). Archives are **never pruned** — each can hold a unique slice of the library.
+  They contain public variants **and private full-resolution originals**, which may retain
+  EXIF/GPS and other source metadata. Treat image archives as sensitive recovery material,
+  like database dumps; downloads remain admin-only. Deleting a photo from the media library
+  does **not** purge earlier archives or their offsite copies. The read-only
+  [`audit-exif` command](SECURITY.md#published-image-metadata-allow-list) audits public variants,
+  not private originals or historical archives: a clean result does not certify those copies
+  GPS-free and does not erase anything. Private GPX originals are stored in separate companion
+  route archives referenced by v10 dump manifests, not part of these image tars.
   Metadata changes and conservative full recovery can repeat files and increase backup space; the offsite host-level backup
   above remains the real DR protection. To rebuild the images dir from archives, untar them
   **oldest-first** into an empty `images/` (later duplicates simply overwrite earlier ones).
