@@ -1,13 +1,15 @@
 import { setImmediate } from 'node:timers/promises';
 import { describe, expect, it } from 'vitest';
-import { analyzeRenderedBody, transformBodyImages } from './body-images.js';
-import { escapeMeta } from '../../../uploader/public/gallery-photo-line.js';
-import { renderMarkdown } from './render-markdown.js';
 import { unified } from 'unified';
 import rehypeParse from 'rehype-parse';
+import rehypeStringify from 'rehype-stringify';
 import { visit } from 'unist-util-visit';
-import type { Element } from 'hast';
-import type { ImageDims } from './body-images.js';
+import type { Element, Root } from 'hast';
+import { analyzeRenderedBody, transformBodyImages, type ImageDims } from './body-images.js';
+import { escapeMeta } from '../../../uploader/public/gallery-photo-line.js';
+import { renderMarkdown } from './render-markdown.js';
+import { sanitizedBodyTree, textOf } from './gallery-identity.js';
+import { splitOpening } from './story-opening.js';
 import { SHIKI_CSS } from './shiki-classes.js';
 
 const ORIGIN = 'https://img.simonswanderlust.com';
@@ -317,6 +319,213 @@ describe('transformBodyImages — responsive <picture>', () => {
     const out = (await transformBodyImages('<img src="https://other/z" alt="z">', {}, ORIGIN, { locale: 'en' }));
     expect(out).toContain('<img src="https://other/z"');
     expect(out).not.toContain('<picture>');
+  });
+});
+
+describe('transformBodyImages — valid image flow (#378)', () => {
+  const src = `${ORIGIN}/trips/lake`;
+  const stored = { [src]: { width: 3000, height: 2000 } };
+  // rehype-parse uses the HTML5 parser (parse5). Compare using the renderer's
+  // serializer on both sides, so spelling differences are not tree repairs.
+  const html5 = unified().use(rehypeParse, { fragment: true }).use(rehypeStringify);
+  const elements = (tree: Root | Element, tag: string): Element[] => {
+    const found: Element[] = [];
+    visit(tree, 'element', (node) => {
+      if (node.tagName === tag) found.push(node);
+    });
+    return found;
+  };
+  function childTags(node: Root | Element): string[] {
+    const tags: string[] = [];
+    for (const child of node.children) {
+      if (child.type === 'element') tags.push(child.tagName);
+    }
+    return tags;
+  }
+  async function render(body: string, imageMap: Record<string, ImageDims> = stored) {
+    const out = await transformBodyImages(await renderMarkdown(body), imageMap, ORIGIN, { locale: 'en' });
+    const tree = html5.parse(out);
+    expect(html5.stringify(tree)).toBe(out);
+    for (const node of [...elements(tree, 'p'), ...elements(tree, 'a')]) {
+      expect(textOf(node).trim() !== '' || elements(node, 'img').length > 0).toBe(true);
+    }
+    return tree;
+  }
+  function expectResponsive(tree: Root | Element, alts: string[], format?: 'jpeg') {
+    const pictures = elements(tree, 'picture');
+    expect(pictures).toHaveLength(alts.length);
+    expect(elements(tree, 'img').map((image) => image.properties.alt)).toEqual(alts);
+    for (const picture of pictures) {
+      const formats = format === 'jpeg' ? ['jpeg'] : ['avif', 'webp'];
+      expect(childTags(picture)).toEqual([...formats.map(() => 'source'), 'img']);
+      const sources = elements(picture, 'source');
+      expect(sources.map((source) => source.properties.type)).toEqual(formats.map((f) => `image/${f}`));
+      sources.forEach((source, i) => {
+        expect(source.properties.srcSet).toBe(
+          [640, 1280, 1920, 3000].map((width) => `${src}-${width}.${formats[i]} ${width}w`).join(', '),
+        );
+      });
+      expect(elements(picture, 'img')[0]?.properties).toMatchObject({
+        src: `${src}-1280.${format ?? 'webp'}`,
+        width: 3000, height: 2000, loading: 'lazy', decoding: 'async',
+      });
+    }
+  }
+
+  it('keeps the exact consecutive-image fixture in one paragraph without browser repair', async () => {
+    const tree = await render(`![See](${src})\n![Zwei](${src})`);
+    expect(childTags(tree)).toEqual(['p']);
+    const paragraph = elements(tree, 'p')[0]!;
+    expect(childTags(paragraph)).toEqual(['picture', 'picture']);
+    expect(textOf(paragraph)).toBe('\n');
+    expect(elements(tree, 'figure')).toHaveLength(0);
+    expectResponsive(tree, ['See', 'Zwei']);
+  });
+
+  it('keeps both halves of the exact sentence fixture in their original paragraph', async () => {
+    const tree = await render(`Vor dem Bild ![See](${src}) nach dem Bild.`);
+    expect(childTags(tree)).toEqual(['p']);
+    const paragraph = elements(tree, 'p')[0]!;
+    expect(paragraph.children.map((child) => child.type === 'text' ? child.value : child.type)).toEqual([
+      'Vor dem Bild ', 'element', ' nach dem Bild.',
+    ]);
+    expect(childTags(paragraph)).toEqual(['picture']);
+    expect(elements(tree, 'figure')).toHaveLength(0);
+    expectResponsive(tree, ['See']);
+  });
+
+  it('moves the exact standalone linked-image fixture into one named link inside a figure', async () => {
+    const tree = await render(`[![See](${src})](https://example.com/)`);
+    expect(childTags(tree)).toEqual(['figure']);
+    expect(elements(tree, 'p')).toHaveLength(0);
+    const figure = elements(tree, 'figure')[0]!;
+    expect(childTags(figure)).toEqual(['a']);
+    const links = elements(tree, 'a');
+    expect(links).toHaveLength(1);
+    expect(links[0]?.properties.href).toBe('https://example.com/');
+    expect(childTags(links[0]!)).toEqual(['picture']);
+    // A link with no text retains its original accessible name from the image.
+    expectResponsive(links[0]!, ['See']);
+  });
+
+  it.each([false, true])('retains standalone whitespace and sanitized anchor attributes (linked: %s)', async (linked) => {
+    const image = `<img src="${src}" alt="See &amp; Berge">`;
+    const content = linked
+      ? `<a href="https://example.com/?a=1&amp;b=2" title="Lake" lang="de"> \t${image} \n</a>`
+      : image;
+    const body = `<p> \n${content}\t </p>`;
+    const original = sanitizedBodyTree(await renderMarkdown(body));
+    const tree = await render(body);
+    expect(childTags(tree)).toEqual(['figure']);
+    expect(textOf(elements(tree, 'figure')[0]!)).toBe(textOf(elements(original, 'p')[0]!));
+    expectResponsive(tree, ['See & Berge']);
+    if (linked) {
+      expect(elements(tree, 'a')).toHaveLength(1);
+      expect(elements(tree, 'a')[0]?.properties).toMatchObject({
+        href: 'https://example.com/?a=1&b=2', title: 'Lake', lang: 'de',
+      });
+    }
+  });
+
+  it.each([
+    { body: `[Vor ![See](${src}) danach](https://example.com/)`, parent: 'a', text: 'Vor  danach' },
+    { body: `Vor [![See](${src})](https://example.com/) danach`, parent: 'a', text: 'Vor  danach' },
+    { body: `![See](${src})![Zwei](${src})`, parent: 'p', text: '', alts: ['See', 'Zwei'] },
+    { body: `*![See](${src})*`, parent: 'em', text: '' },
+    { body: `## Am ![See](${src})`, parent: 'h2', text: 'Am ' },
+    { body: `> ![See](${src})`, parent: 'p', text: '' },
+    { body: `- ![See](${src})`, parent: 'li', text: '' },
+    { body: `- First\n\n  ![See](${src})`, parent: 'p', text: 'First' },
+    { body: `<div><p><img src="${src}" alt="See"></p></div>`, parent: 'p', text: '' },
+    { body: `<pre><span><img src="${src}" alt="See"></span></pre>`, parent: 'span', text: '' },
+  ])('keeps phrasing content in its original $parent context: $body', async ({ body, parent, text, alts }) => {
+    const tree = await render(body);
+    expect(elements(tree, 'figure')).toHaveLength(0);
+    expect(textOf(tree).trim()).toBe(text.trim());
+    expectResponsive(tree, alts ?? ['See']);
+    expect(elements(tree, parent).some((node) => childTags(node).includes('picture'))).toBe(true);
+    if (body.includes('https://example.com/')) {
+      expect(elements(tree, 'a')).toHaveLength(1);
+      expect(elements(tree, 'a')[0]?.properties.href).toBe('https://example.com/');
+    }
+  });
+
+  it('does not generate another figure for an authored figure', async () => {
+    const body = `<figure><img src="${src}" alt="See"><figcaption>Caption</figcaption></figure>`;
+    const original = sanitizedBodyTree(await renderMarkdown(body));
+    const tree = await render(body);
+    // The existing sanitizer unwraps author figure/figcaption; this change does
+    // not expand that allowlist or reintroduce a figure around the surviving img.
+    expect(childTags(tree)).toEqual(['picture']);
+    expect(textOf(tree)).toBe(textOf(original));
+    expectResponsive(tree, ['See']);
+  });
+
+  it('preserves an authored picture and its explicit source choices as a sanitized unit', async () => {
+    const body = `<p>Before <a href="https://example.com/"><picture><source srcset="${src}-640.jpeg 640w, ${src}-1280.jpeg 1280w" media="(min-width: 600px)"><img src="${src}" alt="See" width="3000" height="2000" onerror="alert(1)"></picture></a> after</p>`;
+    const input = await renderMarkdown(body);
+    const tree = await render(body);
+    const sanitized = sanitizedBodyTree(input);
+    expect(html5.stringify(tree)).toBe(html5.stringify(sanitized));
+    expect(childTags(tree)).toEqual(['p']);
+    expect(elements(tree, 'picture')).toHaveLength(1);
+    expect(elements(tree, 'source')).toHaveLength(1);
+    expect(elements(tree, 'source')[0]?.properties.srcSet).toBe(`${src}-640.jpeg 640w, ${src}-1280.jpeg 1280w`);
+    expect(elements(tree, 'img')[0]?.properties.src).toBe(src);
+    expect(elements(tree, 'img')[0]?.properties.alt).toBe('See');
+    expect(elements(tree, 'a')).toHaveLength(1);
+    expect(analyzeRenderedBody(input).sources).toEqual([`${src}-640.jpeg`, `${src}-1280.jpeg`, src]);
+    expect(analyzeRenderedBody(html5.stringify(tree))).toEqual(analyzeRenderedBody(input));
+  });
+
+  it.each([
+    `![See](${src})`,
+    `Before ![See](${src}) after`,
+    `[![See](${src})](https://example.com/)`,
+  ])('preserves JPEG-only source selection in each flow context: %s', async (body) => {
+    const tree = await render(body, { [src]: { ...stored[src], format: 'jpeg' } });
+    expectResponsive(tree, ['See'], 'jpeg');
+  });
+
+  it('keeps unknown images and unsupported stored formats untransformed', async () => {
+    // JSON is the runtime boundary for persisted format values.
+    const unsupported: ImageDims = JSON.parse('{"width":3000,"height":2000,"format":"png"}');
+    const imageMaps: Record<string, ImageDims>[] = [{}, { [src]: unsupported }];
+    for (const imageMap of imageMaps) {
+      for (const body of [`![See](${src})`, `[![See](${src})](https://example.com/)`, `Before ![See](${src}) after`]) {
+        const tree = await render(body, imageMap);
+        expect(childTags(tree)).toEqual(['p']);
+        expect(elements(tree, 'picture')).toHaveLength(0);
+        expect(elements(tree, 'figure')).toHaveLength(0);
+        expect(elements(tree, 'img')[0]?.properties).toMatchObject({ src, alt: 'See' });
+      }
+    }
+  });
+
+  it('moves only sanitized links and retains intentional decorative alt without inventing a name', async () => {
+    const tree = await render(`<p><a href="javascript:alert(1)" onclick="alert(1)" style="position:fixed" title="Safe"><img src="${src}" alt="" onerror="alert(1)"></a></p>`);
+    expect(childTags(tree)).toEqual(['figure']);
+    expect(elements(tree, 'a')).toHaveLength(1);
+    expect(elements(tree, 'a')[0]?.properties).toEqual({ title: 'Safe' });
+    expectResponsive(tree, ['']);
+    expect(elements(tree, 'img')[0]?.properties).not.toHaveProperty('onError');
+    expect(elements(tree, 'script')).toHaveLength(0);
+  });
+
+  it('preserves the valid opening and remaining story through the consumer split', async () => {
+    const tree = await render(`Vor dem Bild ![See](${src}) nach dem Bild.\n\n## Next\n\n[![See](${src})](https://example.com/)`);
+    const html = html5.stringify(tree);
+    const heading = elements(tree, 'h2')[0]!;
+    const { opening, rest } = splitOpening(html, [
+      { depth: 2, slug: String(heading.properties.id), text: 'Next' },
+    ]);
+    expect(opening + rest).toBe(html);
+    expect(html5.stringify(html5.parse(opening))).toBe(opening);
+    expect(html5.stringify(html5.parse(rest))).toBe(rest);
+    expect(childTags(html5.parse(opening))).toEqual(['p']);
+    expect(childTags(html5.parse(rest))).toEqual(['h2', 'figure']);
+    expect(textOf(html5.parse(opening)).trim()).toBe('Vor dem Bild  nach dem Bild.');
+    expect(elements(html5.parse(rest), 'a')).toHaveLength(1);
   });
 });
 

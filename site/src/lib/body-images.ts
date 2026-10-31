@@ -3,6 +3,7 @@ import rehypeStringify from 'rehype-stringify';
 import { visit, SKIP } from 'unist-util-visit';
 import { h } from 'hastscript';
 import { useTranslations, type Locale } from '../i18n/ui.js';
+import type { Element } from 'hast';
 import { galleryCode, sanitizedBodyTree, textOf } from './gallery-identity.js';
 import { srcset, fallbackSrc, largestVariant, sourceFormats, type RemoteHeroImage } from './images.js';
 import {
@@ -88,22 +89,43 @@ function sourceNodes(image: RemoteHeroImage, sizes: string) {
   );
 }
 
-/** hast <figure><picture>…</figure> mirroring BodyImage → RemoteImage output. */
+/** Responsive phrasing content, shared by standalone figures and inline images. */
 function pictureNode(image: RemoteHeroImage) {
-  return h('figure', { class: 'my-8' }, [
-    h('picture', [
-      ...sourceNodes(image, SIZES),
-      h('img', {
-        src: fallbackSrc(image),
-        alt: image.alt,
-        width: image.width,
-        height: image.height,
-        loading: 'lazy',
-        decoding: 'async',
-        class: 'block w-full rounded-lg',
-      }),
-    ]),
+  return h('picture', [
+    ...sourceNodes(image, SIZES),
+    h('img', {
+      src: fallbackSrc(image),
+      alt: image.alt,
+      width: image.width,
+      height: image.height,
+      loading: 'lazy',
+      decoding: 'async',
+      class: 'block w-full rounded-lg',
+    }),
   ]);
+}
+
+function resolvedPicture(node: Element, images: Record<string, ImageDims>): Element | null {
+  if (node.tagName !== 'img') return null;
+  const src = node.properties.src;
+  if (typeof src !== 'string' || !src || !images[src]) return null;
+  const d = images[src];
+  if (d.format !== undefined && d.format !== 'jpeg') return null;
+  const alt = (node.properties.alt as string) ?? '';
+  return pictureNode({
+    src, alt, width: d.width, height: d.height,
+    ...(d.format === 'jpeg' ? { format: d.format } : {}),
+  });
+}
+
+function onlyMeaningfulChild(node: Element): Element | null {
+  let only: Element | null = null;
+  for (const child of node.children) {
+    if (child.type === 'text' && /^\s*$/.test(child.value)) continue;
+    if (child.type !== 'element' || only) return null;
+    only = child;
+  }
+  return only;
 }
 
 
@@ -128,8 +150,8 @@ function pictureNode(image: RemoteHeroImage) {
  *     and hastscript treats a node-shaped object in a children array AS A NODE
  *     — `{type:'raw', value:'<script>…'}` would emit a live script tag,
  *     because the stringifier runs with allowDangerousHtml. A gallery-local
- *     `caption-override` is fence TEXT the sanitizer never saw; it only ever
- *     becomes a hast text node, so HTML or fence syntax in it stays text.
+ *     `caption-override` is fence TEXT the sanitizer never saw; it only becomes
+ *     hast text or a serialized accessible-name property, never raw markup.
  *  3. Dimensions are checked before any arithmetic reaches markup.
  *
  * Nothing disappears silently: a URL with no `images` entry is skipped, and if
@@ -348,35 +370,28 @@ export async function transformBodyImages(
       });
       return SKIP;
     }
-    if (node.tagName === 'p') {
-      const kids = node.children.filter((c) => !(c.type === 'text' && /^\s*$/.test((c as { value: string }).value)));
-      const only = kids.length === 1 ? kids[0] : undefined;
-      if (only && only.type === 'element' && (only as { tagName: string }).tagName === 'img') {
-        const imgNode = only as typeof node;
-        const src = imgNode.properties?.src as string | undefined;
-        if (src && images[src]) {
-          const d = images[src];
-          if (d.format !== undefined && d.format !== 'jpeg') return;
-          const alt = (imgNode.properties?.alt as string) ?? '';
-          parent.children[index] = pictureNode({
-            src, alt, width: d.width, height: d.height,
-            ...(d.format === 'jpeg' ? { format: d.format } : {}),
-          });
-          return SKIP;
-        }
+    // An authored picture's explicit sources and fallback are one unit. Neither
+    // it nor generated pictures should acquire a second responsive wrapper.
+    if (node.tagName === 'picture') return SKIP;
+    if (node.tagName === 'p' && parent.type === 'root') {
+      const only = onlyMeaningfulChild(node);
+      const imageParent = only?.tagName === 'a' ? only : node;
+      const image = only?.tagName === 'a' ? onlyMeaningfulChild(only) : only;
+      const picture = image && resolvedPicture(image, images);
+      if (image && picture) {
+        imageParent.children[imageParent.children.indexOf(image)] = picture;
+        // Move the sanitized anchor itself, never clone it or create a new link.
+        // Retain whitespace on both sides of the image/anchor as authored.
+        parent.children[index] = h('figure', { class: 'my-8' }, node.children);
+        return SKIP;
       }
-      return;
     }
     if (node.tagName === 'img') {
-      const src = node.properties?.src as string | undefined;
-      if (!src || !images[src]) return;
-      const d = images[src];
-      if (d.format !== undefined && d.format !== 'jpeg') return;
-      const alt = (node.properties?.alt as string) ?? '';
-      parent.children[index] = pictureNode({
-        src, alt, width: d.width, height: d.height,
-        ...(d.format === 'jpeg' ? { format: d.format } : {}),
-      });
+      const picture = resolvedPicture(node, images);
+      if (picture) {
+        parent.children[index] = picture;
+        return SKIP;
+      }
     }
   });
   for (const render of galleries) await render();

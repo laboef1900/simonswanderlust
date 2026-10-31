@@ -966,6 +966,12 @@ double its attack surface.
 `<picture>` / gallery markup. Those injected nodes therefore inherit **none** of the sanitizer's
 protections, so they carry their own:
 
+- **Inline-image structure preserves sanitized nodes** (#378). Only an image-only root
+  paragraph, optionally containing one image-only link, becomes a figure. Other recognized
+  images become phrasing pictures in place; the single sanitized anchor is moved, never
+  cloned or reconstructed from raw attributes. Authored pictures remain sanitized units.
+  No allow-list expansion or DOM repair script is involved. Existing map validation,
+  source/format/dimension policy, private-original restrictions and EXIF allow-list remain.
 - **Gallery URLs are allow-listed by origin equality.** A ` ```gallery ` fence's URLs arrive as
   *text* content, which `rehype-sanitize` never protocol-checks (unlike an `<img src>`), and they
   land in an `<a href>`. A `javascript:` line would fire. The check is

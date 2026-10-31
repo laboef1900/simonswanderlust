@@ -483,6 +483,13 @@ respectively; a fixed-height correction would over-fetch them. Desktop retains
 the existing cover crops and their height-aware source hints. The compact cover
 thumbnail reuses the photograph already requested by the eager hero.
 
+**Body images.** Known images receive responsive pictures. A figure is reserved
+for an image-only top-level paragraph, including one image-only link; the figure
+wraps that single sanitized link, never the other way around. Mixed sentences,
+consecutive images and nested prose keep bare pictures at their original
+positions, with paragraph text and link order intact. Authored pictures retain
+their sanitized source choices. This adds no lightbox or stored-content rewrite.
+
 **Break-out.** Below `lg` a wide gallery may exceed the story column to
 `min(100% + 24rem, 100vw - 3.5rem, 1112px)` — 24rem is the measured overhang
 either side of the 728px narrow-viewport column, and `100vw - 3.5rem` keeps it clear of the
