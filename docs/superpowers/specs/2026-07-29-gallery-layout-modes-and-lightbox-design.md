@@ -222,13 +222,45 @@ page has no gallery.
   `html:has(dialog.jgal__lb[open]) { overflow: hidden }`. No ancestor sets `overflow-x: hidden` on
   the story route, so the document element is the scroller and this works.
 - Arrow keys and `Home`/`End` navigate; backdrop click closes; position announced via a polite live
-  region; `prefers-reduced-motion` respected.
+  region; `prefers-reduced-motion` respected. Backdrop means the empty space outside the photo,
+  caption and controls, including empty figure/frame space: the full-viewport figure must not
+  be excluded from dismissal (#357). Photo/caption clicks keep the viewer open, arrows navigate
+  without closing, and backdrop, Close and Escape return focus to the originating gallery link.
 - **Degradation:** every photo is a real `<a>` to its largest variant. JS off → clicking opens the
   full-resolution image, and the grid is already correctly laid out by CSS alone.
 - **The script never touches the layout** — no measuring, no class toggling that affects flow — or
   CLS returns.
 - Interactive strings come from `site/src/i18n/ui.ts` via data attributes, mirroring `data-readstory`
   (Golden Rule 7).
+- **Decoded thumbnail only** (#384): reuse the grid image's non-empty `currentSrc` only
+  when it is complete with a positive natural width. A lazy, loading, broken or
+  missing candidate produces no thumbnail element, not an empty `src` or a request
+  for the grid's fallback. The responsive large picture, formats and native link
+  fallback stay unchanged.
+
+Qualification (2026-10-28): four failing-before DOM cases and the complete site
+suite/Astro check/build passed. Actual `main.ts` served a runtime-built synthetic
+37-photo story and generated variants. Fresh-cache DE/EN checks at 390px/DPR2 and
+1440px/DPR1 retained the loaded thumbnail, then navigated to an unrequested last
+photo: exactly one AVIF request (1280px or 1920px), no fallback-WebP thumbnail request
+and no empty-source image. Home/End, disabled end controls, Escape/focus restoration
+and no-JavaScript navigation to the 3000px WebP all worked. Final screenshots await
+the existing entrance animation and assert opaque dialog/picture styles.
+Evidence: `.local/backlog-execution-2026-10-27/issue-384-browser/proof.json`.
+This is isolated Chromium viewport coverage, not a physical-device or production claim.
+
+**#357 browser proof (2026-10-27):** the real uploader published a synthetic DE/EN story
+(column and breakout galleries) and saved a DE/EN About page (slider), with generated PNGs
+uploaded and encoded through the real media queue. Managed Chromium at 1440×1000 and
+390×844 exercised all twelve locale/surface/viewport combinations using trusted mouse
+clicks or touch taps, not dispatched dialog events. Empty dark points hit-tested to
+`FIGURE.jgal__lb-fig` and changed `dialog.open` from true to false; photo/caption clicks
+and both arrows kept it true, and backdrop/Close/Escape restored the exact opener's focus.
+Additional side/bottom backdrop points dismissed in all combinations. Captures waited for
+loaded responsive images and completed opening animations. The fitted frame had no substantial
+empty area in these fixtures, so this proof does not claim a separate frame-target pointer hit.
+Local evidence: `.issue-runtime/lightbox-evidence.json` and
+`.issue-runtime/{desktop,mobile}-{de,en}-{column,breakout,slider}.png` in the issue worktree.
 
 **Server-rendered link names (#358):** the renderer now takes an explicit content locale.
 A nonblank image alt names its link natively; otherwise the resolved visible caption supplies

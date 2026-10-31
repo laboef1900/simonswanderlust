@@ -45,7 +45,7 @@ const trips = defineCollection({
 
 const pages = defineCollection({
   loader: postgresPagesLoader(),
-  schema: () => z.object({ title: z.string() }),
+  schema: () => z.object({ title: z.string(), description: z.string() }),
 });
 
 export const collections = { trips, pages };

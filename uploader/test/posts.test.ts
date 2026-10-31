@@ -46,7 +46,7 @@ describe('story slug byte bound (#353)', () => {
         const saved = await store.upsertDraft(pair());
         const revisions = await store.listRevisions(saved.translationKey);
         await expect(store.upsertDraft({ ...input, translationKey: saved.translationKey })).rejects.toThrow(message);
-        expect(await store.get(saved.translationKey)).toEqual(saved);
+        expect({ ...await store.get(saved.translationKey), galleryWarnings: [] }).toEqual(saved);
         expect(await store.listRevisions(saved.translationKey)).toEqual(revisions);
       }
     }

@@ -86,6 +86,25 @@ The direct Satteri engine is now pinned to `0.10.5`, matching the upgraded
 a regression asserts that both callers resolve the same installed engine.
 The historical implementation/runtime evidence below retains its original version.
 
+Satteri 0.10.5 reports positions in **UTF-16 code units** (0.9.4 counted Unicode scalar
+values, see the implementation contract below). The scalar-to-UTF-16 adapter therefore
+mis-mapped every node after an astral character; the astral/CRLF corpus cases
+(`🧭`-prefixed nested tilde and raw HTML galleries) failed closed until
+`gallery-source.ts` used the positions directly. Out-of-range or non-integer positions
+still fail closed.
+
+Pending inline alt edits now settle **before** an editor write intent is captured: the
+#362 write queue captures the payload at the click, so the previous flush inside the
+queued save would have sent a payload without them. Capture stays synchronous when no
+gallery edit is pending, so typing after the click is still excluded.
+
+A paste ending in newlines at a collapsed gallery's opening edge now always keeps a
+blank-line pad after the caret. Analysis is asynchronous, so the boundary widgets are
+gone until it settles; typing in that window previously landed on the opener line and
+turned the gallery into an unterminated fence (regression in
+`editor-galleries-codemirror.test.ts` failed before, passes after). The extra blank
+lines render identically.
+
 The merged collapsed-marker typing guard uses its already-analyzed marker edge
 synchronously, without calling the now-async insertion analyzer from CodeMirror's
 `beforeChange`. Its real bundled-CodeMirror regressions now await authoritative

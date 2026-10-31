@@ -5,7 +5,10 @@
 **/.build-tmp
 uploader/data
 map-assets
-docs
+docs/*
+!docs/third-party-inventory.json
+!docs/third-party-evidence.json
+!docs/third-party-image-evidence.json
 *.md
 # Bootstrap secrets (DATABASE_URL / POSTGRES_PASSWORD). `COPY uploader/ .` and
 # `COPY site/ .` run from this root context, so uploader/.dockerignore is inert
@@ -13,3 +16,6 @@ docs
 **/.env
 **/.env.*
 !**/.env.example
+.issue-runtime
+**/public/legal
+source-release.json

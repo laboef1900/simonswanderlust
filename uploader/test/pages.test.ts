@@ -182,7 +182,7 @@ describe('memoryPageStore', () => {
     if (a.status !== 'fulfilled') throw new Error('first save was refused');
     const stored = await s.get('about');
     expect(stored.de.title).toBe('tab-a');
-    expect(a.value).toEqual(stored);
+    expect(a.value).toEqual({ ...stored, galleryWarnings: [] });
     expect(a.value.updatedAt!.getTime()).toBeGreaterThan(base.updatedAt!.getTime());
     // One revision: the true predecessor, taken once.
     expect((await s.listRevisions('about')).map((r) => r.titleDe)).toEqual(['Über mich']);
@@ -195,7 +195,7 @@ describe('memoryPageStore', () => {
     expect(a.de.title).toBe('first');
     expect(b.de.title).toBe('second');
     expect(b.updatedAt!.getTime()).toBeGreaterThan(a.updatedAt!.getTime());
-    expect(await s.get('fresh')).toEqual(b);
+    expect({ ...await s.get('fresh'), galleryWarnings: [] }).toEqual(b);
     const revs = await s.listRevisions('fresh');
     expect(revs.map((r) => r.titleDe)).toEqual(['first']);
     expect((await s.getRevision('fresh', revs[0]!.id))!.snapshot.de.title).toBe('first');

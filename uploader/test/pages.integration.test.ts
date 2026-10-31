@@ -248,7 +248,8 @@ maybe('pgPageStore serializes saves of one page (Postgres, #344)', () => {
     const stored = await store.get(key);
     expect(stored.de.title).toBe('TAB-A');
     // The response is this save's own state and token.
-    expect(a.value).toEqual(stored);
+    // The response is the stored state plus this save's (empty) gallery warnings.
+    expect(a.value).toEqual({ ...stored, galleryWarnings: [] });
     expect(a.value.updatedAt!.getTime()).toBeGreaterThan(base.updatedAt!.getTime());
     await rowTokens(key, a.value.updatedAt!);
     // The true predecessor, snapshotted once; the refused save left no trace.
@@ -271,7 +272,8 @@ maybe('pgPageStore serializes saves of one page (Postgres, #344)', () => {
     if (!a.ok) throw a.error;
     const stored = await store.get(key);
     expect(stored.de.title).toBe('NEW-A');
-    expect(a.value).toEqual(stored);
+    // The response is the stored state plus this save's (empty) gallery warnings.
+    expect(a.value).toEqual({ ...stored, galleryWarnings: [] });
     await rowTokens(key, a.value.updatedAt!);
     expect(await store.listRevisions(key)).toEqual([]);
   }, 20_000);
@@ -288,7 +290,7 @@ maybe('pgPageStore serializes saves of one page (Postgres, #344)', () => {
     expect(a.value.de.title).toBe('FIRST');
     expect(b.value.de.title).toBe('SECOND');
     expect(b.value.updatedAt!.getTime()).toBeGreaterThan(a.value.updatedAt!.getTime());
-    expect(await store.get(key)).toEqual(b.value);
+    expect({ ...await store.get(key), galleryWarnings: [] }).toEqual(b.value);
     await rowTokens(key, b.value.updatedAt!);
     const revs = await store.listRevisions(key);
     expect(revs.map((r) => r.titleDe)).toEqual(['FIRST']);
