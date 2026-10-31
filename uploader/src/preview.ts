@@ -187,9 +187,10 @@ export async function renderPreviewHtml(
 ): Promise<string> {
   const post = pair[locale];
   const shared = pair.shared;
-  const body = await transformBodyImages(await renderMarkdown(post.bodyMarkdown), post.images, imageOrigin, galleryMetadata, {
+  const body = await transformBodyImages(await renderMarkdown(post.bodyMarkdown), post.images, imageOrigin, {
+    locale,
     schedule: () => setImmediate(),
-  });
+  }, galleryMetadata);
 
   const parsedDate = shared.date ? new Date(shared.date) : undefined;
   const metaParts = [

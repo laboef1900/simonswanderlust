@@ -865,6 +865,14 @@ becoming a contact sheet. The one cap left is on a row that would stand taller
 than the square — a lone portrait — held at the square's own height as a
 **percentage** of the container so it scales with it.
 
+Every gallery photo link is named in the server-rendered HTML: a nonblank image
+alt supplies its native name; otherwise use the resolved visible caption, then
+the localized “Open photo {current} of {total}” action. Hidden or deliberately
+cleared captions are not exposed through a name. Decorative `alt=""` stays
+decorative; no photo description is invented. Numbering counts accepted photos,
+continues across rows and resets per gallery. The names work without JavaScript
+and in the script-free preview; the lightbox leaves them intact.
+
 **Lightbox dismissal follows the visible content, not its containers.** In all
 three modes, clicking or tapping the dark space around a photo closes the native
 dialog, even when that space hit-tests to its full-viewport figure. Only the

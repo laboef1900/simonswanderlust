@@ -97,3 +97,39 @@ describe('page prose metadata', () => {
     expect(db.released).toBe(true);
   });
 });
+
+describe('postgresPagesLoader load()', () => {
+  afterEach(() => { vi.unstubAllEnvs(); db.rows = []; db.statements = []; db.released = false; });
+
+  it('builds localized decorative gallery names for both About locales before any script runs', async () => {
+    vi.stubEnv('DATABASE_URL', 'postgres://mocked/never-dialed');
+    vi.stubEnv('PUBLIC_BASE_URL', 'https://img');
+    const src = 'http://localhost:3000/pages/about/photo';
+    db.rows = ['de', 'en'].map((locale) => ({
+      key: 'about', locale, title: 'About',
+      body_markdown: `\`\`\`gallery\n${src}\n${src}\n\`\`\``,
+      images: { [src]: { width: 1600, height: 1000, alt: '', caption: '' } },
+    }));
+    const entries = new Map<string, string>();
+    const context = {
+      store: {
+        clear: () => entries.clear(),
+        set: (entry: { id: string; rendered: { html: string } }) => {
+          entries.set(entry.id, entry.rendered.html);
+          return true;
+        },
+      },
+      parseData: async ({ data }: { data: Record<string, unknown> }) => data,
+      renderMarkdown: async (body: string) => ({ html: await renderMarkdown(body) }),
+      logger: { info: () => { /* quiet */ } },
+    } as unknown as Parameters<Loader['load']>[0];
+    await postgresPagesLoader().load(context);
+    for (const locale of ['de', 'en']) {
+      const html = entries.get(`about/${locale}`) ?? '';
+      expect(html).toContain(`aria-label="${locale === 'de' ? 'Foto 1 von 2 öffnen' : 'Open photo 1 of 2'}"`);
+      expect(html).toContain(`aria-label="${locale === 'de' ? 'Foto 2 von 2 öffnen' : 'Open photo 2 of 2'}"`);
+      expect(html).toContain('alt=""');
+      expect(html).toContain('href="https://img/pages/about/photo-1600.webp"');
+    }
+  });
+});

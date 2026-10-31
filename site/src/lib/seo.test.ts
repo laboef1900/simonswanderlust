@@ -107,7 +107,7 @@ describe('proseDescription', () => {
   };
   const fallback = 'Über mich';
   const intro = 'Ich bin Simon und reise seit 2015. Hier erzähle ich von unterwegs.';
-  const rendered = async (body: string) => transformBodyImages(await renderMarkdown(body), images, origin);
+  const rendered = async (body: string) => transformBodyImages(await renderMarkdown(body), images, origin, { locale: 'en' });
 
   it('starts with prose after a leading responsive photo, not its alt, caption or URL', async () => {
     const html = await rendered(`![Simon am Strand](${photo})\n\n${intro}`);

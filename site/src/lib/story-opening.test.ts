@@ -66,7 +66,7 @@ describe('splitOpening', () => {
   describe('rendered story bodies', () => {
     const renderer = satteri().createRenderer(MARKDOWN_OPTIONS);
     const parser = unified().use(rehypeParse, { fragment: true }).use(rehypeStringify);
-    const sanitize = (html: string) => transformBodyImages(html, {}, 'https://img.example.com');
+    const sanitize = (html: string) => transformBodyImages(html, {}, 'https://img.example.com', { locale: 'de' });
     const elements = (html: string) => parser.parse(html).children
       .filter((node) => node.type === 'element')
       .map((node) => parser.stringify({ type: 'root', children: [node] }));

@@ -1504,7 +1504,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     const keys = new Set<string>();
     for (const locale of ['de', 'en'] as const) {
       const l = pair[locale];
-      const body = await analyzeBodyContent(l.bodyMarkdown, l.images, imageBase);
+      const body = await analyzeBodyContent(l.bodyMarkdown, l.images, imageBase, locale);
       if (body.hasH1) {
         throw new PostError(`${locale}: body must not contain an H1; the story hero provides the page H1`);
       }

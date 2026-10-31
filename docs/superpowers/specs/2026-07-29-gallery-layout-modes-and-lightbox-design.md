@@ -230,7 +230,7 @@ page has no gallery.
   full-resolution image, and the grid is already correctly laid out by CSS alone.
 - **The script never touches the layout** — no measuring, no class toggling that affects flow — or
   CLS returns.
-- All strings come from `site/src/i18n/ui.ts` via data attributes, mirroring `data-readstory`
+- Interactive strings come from `site/src/i18n/ui.ts` via data attributes, mirroring `data-readstory`
   (Golden Rule 7).
 - **Decoded thumbnail only** (#384): reuse the grid image's non-empty `currentSrc` only
   when it is complete with a positive natural width. A lazy, loading, broken or
@@ -261,6 +261,14 @@ loaded responsive images and completed opening animations. The fitted frame had 
 empty area in these fixtures, so this proof does not claim a separate frame-target pointer hit.
 Local evidence: `.issue-runtime/lightbox-evidence.json` and
 `.issue-runtime/{desktop,mobile}-{de,en}-{column,breakout,slider}.png` in the issue worktree.
+
+**Server-rendered link names (#358):** the renderer now takes an explicit content locale.
+A nonblank image alt names its link natively; otherwise the resolved visible caption supplies
+an escaped `aria-label`, falling back to `gallery.open` (“Foto {current} von {total} öffnen” /
+“Open photo {current} of {total}”). Hidden/cleared captions do not leak into names, and empty
+image alt is not rewritten. Positions count accepted photos, including repeated URLs, continue
+across justified rows and restart per gallery. Static pages and script-free previews therefore
+have named links before the island runs; the island preserves those names and native hrefs.
 
 ### Slider controls and accessibility
 
