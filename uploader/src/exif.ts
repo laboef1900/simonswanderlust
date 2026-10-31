@@ -67,21 +67,20 @@ export function cleanExifString(v: unknown): string | null {
  * Encode a number as an EXIF unsigned rational string.
  *
  * @ai-note: exif-reader returns rationals PRE-DIVIDED (0.004, not 1/250), so
- * this re-encodes. Sub-second values become reciprocals because that is how
- * cameras record shutter speed and a /1000 denominator would round 1/8000 to
- * zero. Values >= 1 use a fixed /1000 denominator, which is exact enough for
- * apertures and focal lengths.
+ * this re-encodes. A reciprocal preserves fast shutter speeds without the
+ * /1000 denominator rounding them to zero, but only when it is within 1% of
+ * the input. Other values use /1000 rather than rounding 0.8 seconds to 1.
  */
 export function toRational(v: unknown): string | null {
   if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) return null;
   if (v === 0) return '0/1';
   if (v < 1) {
     const den = Math.round(1 / v);
-    if (den > 0 && den <= 4_000_000) return `1/${den}`;
-    return null;
+    if (den <= 0 || den > 4_000_000) return null;
+    if (Math.abs(1 / den - v) <= 0.01 * v) return `1/${den}`;
   }
   const num = Math.round(v * 1000);
-  if (num > 4_000_000_000) return null;
+  if (num === 0 || num > 4_000_000_000) return null;
   return `${num}/1000`;
 }
 

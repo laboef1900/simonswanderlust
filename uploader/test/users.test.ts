@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { hashPassword, verifyPassword, memoryUserStore, UserExistsError, DUMMY_STORED_HASH, PasswordPolicyError, UsernamePolicyError, usernamePolicyViolation } from '../src/users.js';
 
@@ -70,11 +71,31 @@ describe('memoryUserStore', () => {
     await expect(s.create({ username: '<img src=x>', password: 'password123456', isAdmin: false })).rejects.toBeInstanceOf(UsernamePolicyError);
     expect(await s.count()).toBe(0);
   });
-  it('removes a user', async () => {
+  it('removes an author and reports repeated, unknown and malformed removals as not_found', async () => {
     const s = memoryUserStore();
     const u = await s.create({ username: 'a', password: 'password123456', isAdmin: false });
-    await s.remove(u.id);
+    await expect(s.remove(u.id)).resolves.toBe('removed');
     expect(await s.count()).toBe(0);
+    for (const id of [u.id, randomUUID(), 'not-a-uuid']) {
+      await expect(s.remove(id)).resolves.toBe('not_found');
+    }
+  });
+  it('refuses direct removal of the sole administrator without changing accounts', async () => {
+    const s = memoryUserStore();
+    const admin = await s.create({ username: 'admin', password: 'password123456', isAdmin: true });
+    await s.create({ username: 'author', password: 'password123456', isAdmin: false });
+    const before = await s.list();
+    await expect(s.remove(admin.id)).resolves.toBe('last_admin');
+    expect(await s.list()).toEqual(before);
+  });
+  it('serializes concurrent administrator removals without losing the last admin', async () => {
+    const s = memoryUserStore();
+    const a = await s.create({ username: 'admin-a', password: 'password123456', isAdmin: true });
+    const b = await s.create({ username: 'admin-b', password: 'password123456', isAdmin: true });
+    const results = await Promise.all([s.remove(a.id), s.remove(b.id)]);
+    expect(results.sort()).toEqual(['last_admin', 'removed']);
+    expect(await s.count()).toBe(1);
+    expect(await s.countAdmins()).toBe(1);
   });
   it('setPassword replaces the stored hash (old rejected, new verifies)', async () => {
     const s = memoryUserStore();
