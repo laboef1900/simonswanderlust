@@ -200,19 +200,55 @@ ASVS L1 exception record: `docs/superpowers/specs/2026-09-14-comments-design.md`
   comments_enabled`; when false the approved thread is still readable (closed, not hidden) and
   `POST` answers 409 `comments_disabled`. `GET` 404s for an unknown key and for a draft-only
   key with the same body, so it cannot enumerate unpublished posts. Response is `no-store`.
+- **Author badges use the approved public row's stored flag** (#349), never an admin-list
+  lookup or a reader-supplied name/cookie. The explicit public key set above is unchanged.
+  An author reply returned for one story remains marked even after another story has more
+  than 500 approved comments. The existing per-story response cap and moderation permissions
+  are unchanged. Real-main/Postgres runtime proof on 2026-10-28 also kept public GET working
+  during a session-table lock and a deliberately injected moderation-query failure; neither
+  proves availability when the public comments/posts queries themselves fail.
 - **`POST` order of checks is load-bearing** and pinned by tests: (1) per-IP rate limit → 429,
   no insert; (2) **honeypot** — a non-blank `website` field answers **204 with an empty body**,
   no row, no log line (a 400 would train the bot; 204 does not look like the real 201);
-  (3) **Origin check** — the `Origin` header, else the origin of `Referer`, must equal
-  `new URL(PUBLIC_BASE_URL).origin` by **origin equality, never a prefix match** (the gallery
-  allow-list lesson: `https://simonswanderlust.com.evil.example` must fail); missing both,
-  unparsable, or mismatched → 403; (4) validation → 400 with the generic code `invalid_comment`,
+  (3) **Origin check** — the `Origin` header, else the origin of `Referer` only when Origin
+  is absent/empty, must equal the request's allowed **blog** origin by **origin equality,
+  never a prefix match** (#319). Credentials, malformed/non-HTTP(S) URLs, an Origin with
+  a path/query/fragment, missing both headers or mismatch → 403. A malformed Origin
+  cannot be rescued by Referer; (4) validation → 400 with the generic code `invalid_comment`,
   never the store's wording; (5) published pair → 404; (6) global or per-post flag off → 409;
   (7) insert as **`pending`** → 201 `{ ok: true }` — the new id is not echoed, so a caller cannot
   probe moderation. JSON body capped at 4 KiB; unknown fields (`email`, `parentId`, `status`)
   are ignored, never stored.
+- **Blog-origin source (#319):** resolve one origin per request. A supplied
+  `ServerConfig.commentsOrigin` override wins and invalid values fail closed. Otherwise the
+  temporary fallback is trusted `req.protocol` plus the **verbatim Host header**. It never
+  derives the expected origin from Origin, Referer or `X-Forwarded-Host`. The #369 immediate-peer
+  policy governs forwarded protocol and client IP; the proxy must preserve Host, overwrite
+  forwarded protocol and reject unintended public hostnames. Missing/malformed authority
+  fails closed. Both `PUBLIC_BASE_URL`'s image authority and actual `IMG_HOST` are excluded,
+  including alternate schemes. Authority comparisons normalize default ports under the
+  actual request protocol; explicit `:443`/`:80` cannot bypass the exclusion. A different
+  non-default port is not excluded merely for sharing a hostname. Malformed `IMG_HOST`
+  refuses the fallback, without overriding an explicit valid `commentsOrigin`. The only
+  exception is the existing single-origin loopback image/blog topology (`imgHostServesBlog`),
+  with matching image origin and serving authority.
+  This is CSRF equality, not authorization or a deployment-domain allow-list: until configured,
+  a non-image authority deliberately forwarded by the trusted proxy can accept its own
+  same-origin submissions. #276 will insert the current validated canonical identity between
+  the explicit override and fallback; #319 neither implements that API nor seeds identity from
+  a request. No CORS, session, persistence or ASVS-exception expansion is involved.
 - **Hold-for-moderation.** Every accepted comment is `pending`; nothing is public until an admin
   approves it on `/admin/comments.html` (`requireAdmin`, see below). Deletion is erasure.
+- **Bounded, complete admin traversal (#350).** The separate admin list returns 50 rows
+  plus `hasMore`, using one-row lookahead and oldest-first `(created_at, id)` ordering.
+  Pending and Approved both support nonnegative safe-integer offsets, validated after
+  `requireAdmin` and before a list query; responses are `no-store`. Previous/Next reaches
+  comments beyond the old 500-row admin ceiling, including erasure targets. A successful
+  moderation action restarts at page one; concurrent external changes can shift offsets,
+  so traversal is not a snapshot and must restart to see the new state. Deletion and
+  unapproval remove a comment from the next public GET immediately, without rebuilding.
+  The public six-key shape, oldest-500 per-story response cap, author flag projection,
+  admin-only permissions and ASVS exception remain unchanged.
 - **Rate limit:** 5 `POST`s per address per 15 minutes plus a process-wide 200 per hour, keyed on
   `req.ip` under the address-validated, immediate-peer policy below — never on the reader-chosen
   name, which would let anyone DoS a name. See *Rate limiting* for the separate limiter maps.
@@ -859,6 +895,13 @@ protections, so they carry their own:
   pre-flight count and merge substitution, the alt audit and media-sync's alt backfill. Gallery
   text that looks like an image or a tag therefore keeps its exact text through save, export,
   re-import and import re-runs, and is never fetched, audited or copied into Media.
+
+Inline-image re-host substitution (#360) emits replacement text literally. Dollar
+sequences in imported or author-edited alt text cannot copy surrounding Markdown
+or reinsert the old image destination. This is content preservation, not sanitization:
+gallery-text exclusion, image-map validation, origin equality, the foreign-image
+publish gate, SSRF/size/time guards and EXIF policy remain unchanged. Failed photos
+retain their original markup; the fix does not repair previously corrupted drafts.
 
 Why this is not merely theoretical: `GET /posts/:tk/preview` is `requireAuth` (**any** author, not
 just admins), runs the identical transform, and is served same-origin with `/admin/*`. A non-admin
