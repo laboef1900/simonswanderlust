@@ -779,3 +779,35 @@ still satisfy §12. Design approval or a successful browser journey alone is not
 These decisions authorize the documented design for implementation subject to those gates,
 not a merge, deployment, owner-data operation, login/session-policy change or revival of the
 withdrawn file-based progress design. Any material departure requires fresh explicit approval.
+
+## #279 current-dev integration (2026-11-01)
+
+Merged `dev` after the language (#284/#285), identity (#275/#276) and publish-recovery
+(#297) changes landed. Decisions:
+
+- **Boot order.** `captureBootEvidence` still runs first (read-only, before any sweep), then
+  dev's pre-language-migration recovery dump (only when `posts` exists, so that install is
+  already retired by schema evidence), then `initializeApplicationSchema` and onboarding
+  classification. `ensureSchema` creates `site_language` before `onboarding_state`.
+- **Bootstrap-only target catalog.** `assertBootstrapOnlyTarget` admits dev's schema exactly:
+  `posts.omitted` (additive, `NOT NULL DEFAULT false`, with the `posts_omitted_unpublished`
+  CHECK), and the `site_language` singleton (columns, defaults, primary key and its three
+  CHECKs). `site_language` counts as prior-schema evidence, may hold its boot seed in an
+  otherwise empty target, and preparation refuses any non-seed language row (a chosen or
+  locked mode is owner configuration, like a non-default identity).
+- **Restore.** `restoreWithOnboarding` forwards #276's `originRoles`, so the fenced native
+  restore keeps the canonical-origin topology check.
+- **Routes.** `/onboarding` joins `APP_SEGMENTS` (#287). The read-only reverse-collision check
+  of 2026-10-31 covered `onboarding` against the owner database: no story or page uses it.
+- **Desk.** The authenticated-context loader keeps onboarding activation and adds dev's
+  admin-only build status and the language-mode read before the first Desk paint.
+
+Verification at the merge: uploader `tsc` 0 and the PostgreSQL-enabled suite 3996/3996
+(one earlier run had a single load-sensitive failure that passed alone and on the rerun),
+including the real `pg_dump`/`psql` SQL-recovery test against an owned fixture database;
+site 689/689, `astro check` 0 errors, `astro build` OK. The real app from this worktree
+classified a fresh install as eligible, refused anonymous reads (401), dismissed/resumed,
+refused an early finish (409), advanced photo/story/publish from real upload, draft and
+publish requests, finished to `retired` and then refused resume (409). The Desk in managed
+Chromium at 1280 px showed the checklist, build status and unset-domain notice without
+horizontal overflow.
