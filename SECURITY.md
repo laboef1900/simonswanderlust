@@ -359,6 +359,14 @@ ASVS L1 exception record: `docs/superpowers/specs/2026-09-14-comments-design.md`
   comments_enabled`; when false the approved thread is still readable (closed, not hidden) and
   `POST` answers 409 `comments_disabled`. `GET` 404s for an unknown key and for a draft-only
   key with the same body, so it cannot enumerate unpublished posts. Response is `no-store`.
+  Since #284 the thread is **bound to the committed published locale set**: `GET` calls
+  `PostStore.getPublishedLocales(tk)` (`uploader/src/posts.ts` — enabled locales whose row is
+  `status = 'published'` with a non-null `published_snapshot`, empty unless the primary is among
+  them) and lists approved rows only for those locales (`comments-public.ts`, `listApproved` per
+  locale, then the existing merge/cap). An approved comment in a locale that is omitted,
+  disabled, unpublished or merely saved-but-not-published stays in the database and in the
+  admin queue (`withPublicLocaleMetadata` marks it `publicLocale: false` in
+  `comments-admin.ts`; `comments.html` labels it), but never in the public response.
 - **Author badges use the approved public row's stored flag** (#349), never an admin-list
   lookup or a reader-supplied name/cookie. The explicit public key set above is unchanged.
   An author reply returned for one story remains marked even after another story has more
@@ -374,10 +382,15 @@ ASVS L1 exception record: `docs/superpowers/specs/2026-09-14-comments-design.md`
   never a prefix match** (#319). Credentials, malformed/non-HTTP(S) URLs, an Origin with
   a path/query/fragment, missing both headers or mismatch → 403. A malformed Origin
   cannot be rescued by Referer; (4) validation → 400 with the generic code `invalid_comment`,
-  never the store's wording; (5) published pair → 404; (6) global or per-post flag off → 409;
-  (7) insert as **`pending`** → 201 `{ ok: true }` — the new id is not echoed, so a caller cannot
+  never the store's wording; (5) committed published pair → 404 (`getPublishedLocales` empty);
+  (6) **`postedLocale` not in the committed published locale set → 400 `invalid_comment`** —
+  the same generic code as validation, so the route is no oracle for a draft, omitted or
+  disabled-locale row (#284); (7) global or per-post flag off → 409;
+  (8) insert as **`pending`** → 201 `{ ok: true }` — the new id is not echoed, so a caller cannot
   probe moderation. JSON body capped at 4 KiB; unknown fields (`email`, `parentId`, `status`)
-  are ignored, never stored.
+  are ignored, never stored. Steps 5–6 are pinned across save / failed publish / stale-token
+  publish / unpublish in `uploader/test/comments-public.test.ts` (*committed comment locale
+  coverage*) and against Postgres in `uploader/test/comments-language.integration.test.ts`.
 - **Blog-origin source (#319/#276):** resolve one origin per request. A supplied
   `ServerConfig.commentsOrigin` override wins and invalid values fail closed. Otherwise the
   current cached canonical identity is validated against the image topology and used when
@@ -423,6 +436,70 @@ ASVS L1 exception record: `docs/superpowers/specs/2026-09-14-comments-design.md`
   used as the public display name. Existing comment rows keep their historical names.
 - **Not done by design:** no `workLock`, no rebuild (comments are runtime, never baked), no
   `safeFetch` or any outbound call, no markdown/HTML, no `parentId`.
+
+### Language modes — reconfirmation and leakage review (#282–#285)
+
+The owner-approved [four-mode contract](docs/superpowers/specs/2026-10-27-issue-283-language-mode-contract.md)
+(DE+EN DE-primary — simonswanderlust.com, byte-identical; DE+EN EN-primary; DE-only; EN-only)
+is implemented by #284 (uploader) and #285 (site). This section reconfirms the model above
+against it; nothing here adds an unauthenticated surface.
+
+- **Where the mode lives and who can touch it.** One Postgres singleton,
+  `site_language` (`uploader/src/db.ts`: `primary_locale`, `enabled_locales`, `locked_at`,
+  `updated_at`, CHECK-constrained to `de`/`en` with the primary among the enabled set), seeded
+  `('de', {de,en})` with `ON CONFLICT DO NOTHING`. `GET /language` is `requireAuth` (the editor
+  needs the enabled locales; the mode is public knowledge anyway from the URLs) and
+  `PUT /language` is `requireAdmin` (`uploader/src/server.ts`); both are `no-store`. The body is
+  validated to exactly `{ primary, locales }` (`validateLanguage`, `uploader/src/language.ts`);
+  anything else is 400 `invalid_language`. Transitions are refused inside the same transaction
+  that holds the row `FOR UPDATE`: once the install is **locked** — `locked_at` set at the first
+  story or journey publish, or derived from any retained `published_at`
+  (`readLanguage` `COALESCE`s both, so deleting every post cannot unlock it) — changing the
+  primary is 409 `language_primary_locked` and removing an enabled locale is 409
+  `language_locale_published` (`assertLanguageTransition`). Only *adding* the secondary remains
+  possible, which adds URLs and moves none. A slug that would land in a reserved namespace
+  under the new layout is 409 `reserved_slug` (`assertLanguageNamespace`). Pinned by
+  `uploader/test/language-api.integration.test.ts` (auth, no-store, each refusal) and the
+  published-URL-set invariant in `uploader/test/language-mode.integration.test.ts`.
+- **What a reader or attacker can learn about an unpublished or disabled locale: nothing beyond
+  the mode itself.** The static release is built from `SITE_LANGUAGE_JSON` plus one exported
+  database snapshot (see `ARCHITECTURE.md`, *Language modes*): the trips loader keeps only
+  `status = 'published' AND published_snapshot IS NOT NULL` rows **and** drops rows whose locale
+  is not enabled (`site/src/lib/postgres-loader.ts`), the pages loader filters by enabled locale
+  the same way, and `publicRoutes` (`site/src/lib/public-routes.ts`) generates routes only for
+  enabled locales — so a disabled locale has no page, no feed, no sitemap entry, no `hreflang`
+  and no switcher link (`site/src/components/language-render.test.ts` asserts no `/<absent>/`
+  link on any page; `site/test/built/routes.test.ts` greps every file of a real single-language
+  build for a marker planted in the disabled rows' titles, bodies and slugs). A row the database
+  marks `omitted` can never be published: `posts_omitted_unpublished` CHECKs
+  `status = 'draft' AND published_snapshot IS NULL AND published_at IS NULL`. Drafts are
+  unchanged — only `published_snapshot` ever reaches the build. The 404 page is rendered in the
+  enabled locales only. What *is* observable: the primary locale (root vs `/de/`/`/en/` prefix)
+  and whether a secondary is enabled, both of which are the published URL layout.
+- **Comments are bound to published locales.** `GET /comments` returns approved rows only for
+  the committed published locale set and `POST /comments` refuses a `postedLocale` outside it
+  with the generic 400 — see *Public comments* above for the exact order and the tests. The
+  public JSON key set is unchanged. Author replies default to the **primary** locale
+  (`uploader/src/comments.ts`, `comments-admin.ts`). Retained comments of a hidden locale
+  remain visible to the admin and are never deleted by a mode change.
+- **Dumps and restore carry the mode.** `site_language` is in every dump from v12
+  (`LANGUAGE_DUMP_VERSION = 12`, `uploader/src/backup.ts`) alongside `posts[].omitted`; older
+  apps refuse v12+ through their allow-list. `readDump` validates the language row, every
+  `omitted` row and the per-pair snapshot/history consistency against the **dump's** mode
+  before any `DELETE` (`BackupError`, nothing deleted). Pre-v12 dumps are normalized explicitly
+  to DE+EN DE-primary with `locked_at` derived from `min(published_at)` of the restored posts,
+  never from the live row. The dump's row **replaces** the live one in the same transaction
+  (restoring content under another layout would itself move every URL). The restore CLI
+  (`uploader/src/cli.ts`) prints the live and dump modes and, when they differ **and** the live
+  install is locked, refuses unless `--accept-language-change` is passed beside `yes`/`--yes`
+  (`requiresLanguageAcceptance`); the verified pre-restore dump captures the live
+  `site_language`, and the CLI prints the exact undo command. Pinned by
+  `uploader/test/language-backup.test.ts` and `backup.integration.test.ts`. Boot writes a
+  pre-migration recovery set before the first language schema write (`uploader/src/main.ts`).
+- **Other surfaces.** WXR import skips Polylang items of a disabled locale (`skippedLocale`,
+  never stored); MDX export writes only enabled, non-omitted, slug-bearing rows; legacy
+  WordPress redirects (`uploader/src/redirects.ts`) are eligible only for DE-primary installs,
+  and the `/en/…` entries only when EN is enabled — a 301 into a 404 is never emitted.
 
 ### Site identity
 
@@ -1496,6 +1573,15 @@ this documentation records no production migration or recovery operation.
   unset `saved_at`, clear assets and keep the live canonical origin if set; otherwise they use
   the legacy origin. The CLI announces the legacy recovery and includes live identity/assets
   in the verified undo set. Restart loads the restored cache; public output waits for Rebuild.
+- Version 12 (`LANGUAGE_DUMP_VERSION`) adds the `site_language` singleton and `posts[].omitted`
+  (#284). The language row is content identity — it decides the URL of every published row —
+  so a restore **replaces** the live row with the dump's in the same transaction, and the CLI
+  requires `--accept-language-change` beside `yes`/`--yes` whenever the live install is locked
+  and the modes differ (`requiresLanguageAcceptance`, `uploader/src/cli.ts`). The pre-restore
+  undo set includes the live language row. Pre-v12 formats restore as DE+EN DE-primary with
+  `omitted = false` everywhere and `locked_at` derived from the restored publication history;
+  a v12+ dump with missing or malformed language metadata is refused before any deletion.
+  See [Language modes](#language-modes--reconfirmation-and-leakage-review-282285).
 - Image archives (`/data/backup/db/images-*.tar`) contain public variants **and private
   full-resolution originals**. Originals may retain EXIF/GPS and other source metadata:
   handle these archives as sensitive recovery material, like database dumps. Downloads remain

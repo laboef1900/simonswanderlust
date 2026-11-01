@@ -798,6 +798,27 @@ starts another decorative opening.
   `brand-red` bottom border on a square-cornered box, so it reads as one straight
   rule — a different *kind* of signal, not a darker shade — and the outgoing
   link is `ink/70` (**5.97:1**; `/60` was 4.33:1).
+- **Language switcher per mode** (`site/src/components/LangSwitcher.astro`, fed by
+  `siteLanguage()` from `site/src/lib/site-language.ts`; `site/src/components/language-render.test.ts`
+  and `site/test/built/routes.test.ts` pin it). The install's mode is
+  `{ primary, locales }`, with `locales` always ordered primary first:
+  - **DE+EN, DE-primary** (`{ primary: 'de', locales: ['de','en'] }`, simonswanderlust.com):
+    renders `DE | EN` in that order, unchanged. DE lives at root, EN under `/en/`.
+  - **DE+EN, EN-primary** (`{ primary: 'en', locales: ['en','de'] }`): renders `EN | DE` — the
+    order follows the primary, so the root language is always the first item. EN lives at root,
+    DE under `/de/`.
+  - **DE-only** and **EN-only** (`locales.length === 1`): the switcher is **not rendered at all**
+    — no empty box, no lone current-locale marker. The header simply ends with the nav links.
+    Nothing on any page links to the absent locale's prefix.
+  - In both bilingual modes the current locale is the `aria-current` box with the brand
+    underline; the other locale is a link carrying `hreflang` and an accessible name in the
+    reader's language (`nav.viewInGerman` / `nav.viewInEnglish`). Its `href` is the page's
+    counterpart when one is built (`alternates` from `Base.astro` — fixed pages via
+    `localeAlternates`, stories via `translationOf`, regions only when both sides exist) and
+    otherwise the other locale's **home** (`homePath(other)`), so an untranslated story or an
+    empty translated region never advertises a page that does not exist. `hreflang` /
+    `x-default` link elements and `og:locale:alternate` are emitted on the same condition — a
+    built counterpart — with `x-default` pointing at the primary locale's URL.
 - **Destination index** (`RegionFilter`): navigation set in the log register —
   14px mono uppercase navy, a `brand-red` `tabular-nums` count, and a 12px arrow
   at `navy/55` that turns red and slides `2px` on hover. Hover adds a **dashed**
