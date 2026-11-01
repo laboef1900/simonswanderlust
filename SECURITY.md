@@ -1195,6 +1195,18 @@ tuned so it does **not** break legitimate output: heading `id`s stay un-prefixed
 contents `#anchor` links resolve) and `class` survives everywhere. Verified end-to-end against a
 published post carrying an XSS payload.
 
+**Public journeys (#310)** have no new public write endpoint. Their loader imports the
+same exported read-only database epoch as stories and language, fails closed on invalid
+or expired epochs/snapshots, and releases checked-out connections on failure. It reads
+published journey snapshots only; membership resolution can see only the published
+`trips` collection. Draft/missing/inactive members cannot supply titles, URLs, images or
+geometry. Intro paragraphs and titles are ordinary escaped Astro text, never `set:html`.
+Canonical unsuffixed hero sources pass the shared snapshot validator before origin
+retargeting and the existing responsive image consumer. The map reads only approved
+public track runs, never private GPX or EXIF, and creates numbered links with DOM text.
+The public route bases remain structurally separate from authenticated `/journey-admin`.
+Actual-target reverse-collision evidence and human approval remain pre-merge gates;
+synthetic database fixtures do not satisfy them.
 The #375 H1 predicate reads the shared sanitize-first tree; it does not relax the
 schema, image injection guards, preview CSP or photo privacy controls. Enforcing one
 story H1 is a document-semantics rule, **not an XSS protection**.

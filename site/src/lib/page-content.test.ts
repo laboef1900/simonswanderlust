@@ -46,7 +46,7 @@ describe('published page boundary', () => {
 describe('all-mode page route ownership', () => {
   it.each(modes)('registers About once and preserves fixed resources in $primary/$locales', (mode) => {
     const about: PublicPage[] = mode.locales.map((locale) => ({ id: `about/${locale}`, data: pageDataSchema.parse(row(locale, 'about', '')) }));
-    const routes = publicRoutes([], mode, [...about, page('de'), page('en')]);
+    const routes = publicRoutes([], mode, { pages: [...about, page('de'), page('en')], journeys: [] });
     for (const locale of mode.locales) {
       expect(routes.filter((route) => route.path === aboutPath(locale, mode))).toHaveLength(1);
       expect(routes.find((route) => route.path === mapPath(locale, mode))?.kind).toBe('map');
@@ -59,11 +59,11 @@ describe('all-mode page route ownership', () => {
   it.each(modes)('fails competing pages/stories at every fixed namespace-relative path in $primary/$locales', (mode) => {
     for (const locale of mode.locales) for (const fixed of [aboutPath, mapPath, regionsIndexPath]) {
       const slug = fixed(locale, mode).slice(homePath(locale, mode).length, -1);
-      expect(() => publicRoutes([], mode, [page(locale, slug)])).toThrow('Conflicting public routes');
-      expect(() => publicRoutes([story(locale, slug)], mode)).toThrow('Conflicting public routes');
+      expect(() => publicRoutes([], mode, { pages: [page(locale, slug)], journeys: [] })).toThrow('Conflicting public routes');
+      expect(() => publicRoutes([story(locale, slug)], mode, { pages: [], journeys: [] })).toThrow('Conflicting public routes');
     }
     for (const slug of ['de', 'en', 'admin', 'map', 'feed', '404']) {
-      expect(() => publicRoutes([], mode, [page(mode.primary, slug)])).toThrow('Conflicting public routes');
+      expect(() => publicRoutes([], mode, { pages: [page(mode.primary, slug)], journeys: [] })).toThrow('Conflicting public routes');
     }
   });
   it.each(modes)('rejects both creation orders deterministically in $primary/$locales', (mode) => {
@@ -74,20 +74,20 @@ describe('all-mode page route ownership', () => {
     for (const ordered of [claims, [...claims].reverse()]) {
       expect(() => assertPublicRoutes(ordered, mode)).toThrow(`Conflicting public routes at /same/: page:contact:${mode.primary} and story:trip:${mode.primary}`);
     }
-    expect(() => publicRoutes([s], mode, [p])).toThrow('Conflicting public routes at /same/');
+    expect(() => publicRoutes([s], mode, { pages: [p], journeys: [] })).toThrow('Conflicting public routes at /same/');
   });
   it('warns for grandfathered app/legacy stories but never allows a page to claim them', () => {
     const warnings: string[] = [];
-    expect(publicRoutes([story('de', 'posts'), story('de', 'feed')], modes[0], [], (warning) => warnings.push(warning)).map((route) => route.path)).toEqual(expect.arrayContaining(['/posts/', '/feed/']));
+    expect(publicRoutes([story('de', 'posts'), story('de', 'feed')], modes[0]!, { pages: [], journeys: [] }, (warning) => warnings.push(warning)).map((route) => route.path)).toEqual(expect.arrayContaining(['/posts/', '/feed/']));
     expect(warnings).toHaveLength(2);
-    expect(() => publicRoutes([], modes[0], [page('de', 'posts')])).toThrow('app:posts');
-    expect(() => publicRoutes([], modes[0], [page('en', 'posts')])).not.toThrow();
+    expect(() => publicRoutes([], modes[0]!, { pages: [page('de', 'posts')], journeys: [] })).toThrow('app:posts');
+    expect(() => publicRoutes([], modes[0]!, { pages: [page('en', 'posts')], journeys: [] })).not.toThrow();
   });
   it.each(['de', 'en'] as const)('activation adds complete secondary page routes without moving %s routes', (primary) => {
     const secondary = primary === 'de' ? 'en' : 'de';
     const pages = [page('de'), page('en')];
-    const before = publicRoutes([], { primary, locales: [primary] }, pages);
-    const after = publicRoutes([], { primary, locales: [primary, secondary] }, pages);
+    const before = publicRoutes([], { primary, locales: [primary] }, { pages, journeys: [] });
+    const after = publicRoutes([], { primary, locales: [primary, secondary] }, { pages, journeys: [] });
     expect(before.every((route) => after.some((next) => next.path === route.path && next.kind === route.kind))).toBe(true);
     expect(pageAlternates(before, 'contact')).toBeUndefined();
     expect(pageAlternates(after, 'contact')).toBeDefined();

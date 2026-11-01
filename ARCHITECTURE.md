@@ -263,6 +263,24 @@ attempt. `GET /health` reports `release: false` meanwhile (information, not a ve
 `SECURITY.md`). Restarts against an existing `/data` volume skip all of this and serve
 immediately — no rebuild on every boot.
 
+### Public journeys (#310)
+
+`journeys` is a separate Content Layer collection. `journeys-loader.ts` imports the
+builder's exported PostgreSQL snapshot through `withLoaderSnapshot`, checks the captured
+language, and executes one content query against published `journeys.published_snapshot`.
+It never reads working journey rows or private route sources. The shared strict v1
+snapshot validator runs before image-origin adaptation and the collection reuses the
+story image schema.
+
+`liveJourneys` resolves ordered member keys solely against published `trips` in the
+enabled locale. The same projection drives dynamic detail/index routes, story strips,
+alternates and therefore the sitemap. A zero-visible-member locale creates no route
+or link. Paths use localized `rundreisen`/`journeys` beneath the current locale prefix;
+existing story paths, chronological pagination, RSS, homepage and global map stay unchanged.
+Duplicate published claims retain journey lists but suppress ambiguous story strips.
+The overview map contains numbered locations and each story's separate public GPX runs;
+there is no connecting line, stop overlay or cross-gap distance.
+
 ### Site identity (#274–#275)
 
 The [approved identity contract](docs/superpowers/specs/2026-10-27-issue-273-site-identity-design.md)

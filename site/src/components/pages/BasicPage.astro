@@ -12,7 +12,10 @@ const entry = await getEntry('pages', pageId);
 if (!entry || entry.data.locale !== locale || entry.data.key === 'about') throw new Error('Missing published basic page');
 // Content Layer's renderer is the existing sanitize → guarded images pipeline, not raw author HTML.
 const { Content } = await render(entry);
-const routes = publicRoutes(await getCollection('trips'), siteLanguage(), await getCollection('pages'));
+const [trips, pages, journeys] = await Promise.all([
+  getCollection('trips'), getCollection('pages'), getCollection('journeys'),
+]);
+const routes = publicRoutes(trips, siteLanguage(), { pages, journeys });
 // The loader's prose description (#273), extracted from the sanitized render.
 const description = entry.data.description || entry.data.title;
 ---

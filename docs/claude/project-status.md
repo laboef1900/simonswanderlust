@@ -599,3 +599,9 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
   hidden (#138 keys/#22 generations unchanged), Publish/Unpublish shown to admins only, 16px
   field text and 24px checkboxes on coarse pointers (`--control-font`). See
   `docs/superpowers/specs/2026-11-01-phone-compose-audit.md`.
+- **Implemented, G3 pending (#310):** public DE/EN journey pages (`/rundreisen/…`,
+  `/en/journeys/…`, routes owner-approved 2026-11-01), ordered published-only membership, story
+  journey strips beside the unchanged chronological pager, progressive overview map. The
+  VoiceOver pass (`docs/superpowers/plans/2026-11-01-issue-310-screen-reader-script.md`, fixture
+  `uploader/scripts/journey-sr-fixture.mjs`) is still owed; TalkBack waived with Android until
+  2027-05-01.

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ui, type Locale, type UIKey } from '../i18n/ui';
-import { aboutPath, homePath, mapPath, regionPath, regionsIndexPath, regionSlugs, regions, rssPath } from './paths';
+import { aboutPath, homePath, mapPath, regionPath, regionsIndexPath, regionSlugs, regions, rssPath, journeyPath, journeysIndexPath } from './paths';
 import type { SiteLanguage } from './site-language';
 import { namespaceOf, reservation } from './reserved-routes';
 
@@ -101,6 +101,9 @@ describe('approved language layouts', () => {
         expect(reservation(namespaceOf(locale, language), word, language)?.owner).toBe('site');
       }
       expect(reservation('root', 'map', language)?.owner).toBe('app');
+      expect(journeysIndexPath(locale, language)).toBe(`${prefix}/${locale === 'de' ? 'rundreisen' : 'journeys'}/`);
+      expect(journeyPath('expedition', locale, language)).toBe(`${journeysIndexPath(locale, language)}expedition/`);
+      expect(reservation(namespaceOf(locale, language), locale === 'de' ? 'rundreisen' : 'journeys', language)?.owner).toBe('site');
     }
   });
 });

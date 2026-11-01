@@ -23,7 +23,7 @@ setWorkerUrl(workerUrl);
 const PMTILES_URL = 'pmtiles:///map/basemap.pmtiles';
 let protocolRegistered = false;
 
-function baseStyle(): StyleSpecification {
+export function baseStyle(): StyleSpecification {
   if (!protocolRegistered) {
     addProtocol('pmtiles', new Protocol().tile);
     protocolRegistered = true;

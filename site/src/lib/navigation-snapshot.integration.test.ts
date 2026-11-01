@@ -61,7 +61,7 @@ async function collect(loader: Loader) {
           const pages = await collect(postgresPagesLoader());
           const navigation = await collect(postgresNavigationLoader());
           const trips = await collect(postgresTripsLoader());
-          const routes = publicRoutes(trips as Trip[], snapshot.language, pages as PublicPage[]);
+          const routes = publicRoutes(trips as Trip[], snapshot.language, { pages: pages as PublicPage[], journeys: [] });
           const resolved = resolveNavigation(navigation[0]!.data, routes, snapshot.language, secondary, '/');
           expect(resolved.header[0]?.label).toBe('CAPTURED NAV');
           expect(routes.some((route) => route.locale === secondary && route.kind === 'page')).toBe(true);

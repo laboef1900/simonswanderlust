@@ -1,7 +1,6 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -43,7 +42,13 @@ describe.skipIf(!databaseUrl)('real zero-content Astro builds', () => {
   let directory: string;
   let isolatedUrl: string;
   beforeAll(async () => {
-    directory = await mkdtemp(join(tmpdir(), 'swl-empty-build-'));
+    // @ai-warning Not os.tmpdir(): with an outDir outside the site root Astro stages
+    // prerender assets under <site>/.astro/.prerender and rename()s them into outDir,
+    // which fails with EXDEV where /tmp is another device (GitHub runners) once the
+    // shared CSS is large enough to be emitted as a file. Production avoids the same
+    // trap by building into <site>/.build-tmp (uploader/src/build.ts); .astro/ is ignored.
+    await mkdir(join(siteRoot, '.astro', 'test-builds'), { recursive: true });
+    directory = await mkdtemp(join(siteRoot, '.astro', 'test-builds', 'empty-build-'));
     admin = new pg.Pool({ connectionString: databaseUrl });
     await admin.query(`CREATE SCHEMA ${schema}`);
     const target = new URL(databaseUrl!);

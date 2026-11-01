@@ -937,6 +937,54 @@ and all archived #309/#310 acceptance checks remain required. This record does n
 journey feature implemented or authorize merge, deployment, publication, an existing story URL
 rename, or an owner-data/content operation.
 
+## #310 implementation and qualification boundary
+
+The public implementation uses `journeys-loader.ts`, the shared `journey-snapshot.ts`
+validator supplied by #309, and `liveJourneys` for route/index/strip/alternate decisions.
+The route inventory supplies the optional strip to StoryPage without changing its
+chronological pager or making non-member pages read working journey content. The
+overview emits separate LineString features for the published runs and keyboard-link
+numbered pins; the list, localized discontinuity note and run summaries survive without JS.
+
+Added automated coverage includes actual Astro component consumers, shared-epoch
+Postgres integration, loader failure/release paths, four-mode paths/reservations,
+canonical hero retarget/rendering and an actual-release contract suite at
+`site/test/built/journeys.test.ts`. That suite deliberately requires real release
+artifacts; its fixture protocol is in the test header. Component rendering is not
+represented as a full Astro build or screen-reader verification.
+
+The real four-mode release qualification found that separate lines for false journey
+branches emitted literal whitespace under `compressHTML: 'true'`, changing every old
+page and adding a space before non-member comments. Keep journey dispatch adjacent
+to the existing page branch and the optional strip adjacent to its preceding closing
+tag, without adding template whitespace nodes. The strict built-release comparison
+continues to normalize asset hashes only; whitespace differences are not waived.
+
+The public integration includes #309 and the actual #289 page/navigation implementation.
+`publicRoutes(trips, language, { pages, journeys }, warn)`
+requires both collections explicitly; dispatch, alternates and navigation share that
+collision-checked emitted inventory. Journey owners include their stable journey identity.
+The public reader continues to reuse #309's strict snapshot validator and shared build epoch.
+
+The subsequent isolated qualification at `603586d` produced12 actual before/live/dormant
+Astro releases across all four language modes, using an exact `309@0c87708` private baseline.
+The parent ran all eight strict built-release cases successfully: old non-member HTML/XML
+matched after asset-hash normalization only, member pagers/N° stayed unchanged, and dormant
+pages/index/sitemap/strips and private sentinel bytes were absent. Hero suffix/focus, escaped
+intro, shared published membership and exact disconnected track runs were checked.
+
+Actual `main.ts` routing separated public pages from authenticated journey-admin endpoints.
+Settled desktop/320/390px DE/EN pages, no-JS links and keyboard navigation were inspected.
+The genuine self-hosted Protomaps20261029 worldz0–8 basemap rendered through local range
+requests; numbered44px pins and native keyboard zoom worked without third-party requests in
+the observed windows. Original failing releases and repaired releases are both retained.
+Owned apps/tabs were closed; no owner content was accessed or changed.
+
+An actual assistive-technology/screen-reader pass remains required; DOM/accessibility-tree
+checks are not that evidence. The actual target's public-prefix reverse-collision query,
+matching boot report and landing dump-version allocation remain separate pre-merge gates.
+Synthetic fixtures do not qualify that target or imply permission to inspect or change it.
+
 ## 21. #309 implementation and qualification boundary (2026-10-29)
 
 The authoring implementation uses `uploader/src/journeys.ts`, `journey-cleanup.ts` and
@@ -1054,3 +1102,40 @@ build, renaming a published locale's slug without confirmation 409 `slug_locked`
 deleting a member story removes it from the journey; an in-app backup is v14 with
 journeys, locales, members and the published snapshot, and restores into a fresh
 migrated schema with the same counts.
+
+## #310 current-dev integration and held gate (2026-11-01)
+
+Merged `origin/dev` at `17aa2ec` (after #309 landed as #491). Resolutions: `BasicPage`
+uses the loader's prose description (#273) with the journeys-aware `publicRoutes`;
+`StoryPage` imports both the journey strip and dev's responsive `sizes`; the
+count-label render test's collection mock returns only trips.
+
+Verification: uploader `tsc` and full suite with isolated PostgreSQL 4692/4692; site
+840/840 with PostgreSQL, `astro check` 0/0/0, `npm run build`. Runtime on a fresh
+database: a published journey with members 1, 3 (draft), 2 renders
+`/rundreisen/balkan-rundreise/` and `/en/journeys/balkan-trip/` (200, hreflang pair,
+in the sitemap and the `/rundreisen/` index), lists only the published members in
+journey order, escapes HTML in the intro, and story 1 links back through its strip; at
+320/390 px there is no horizontal overflow and keyboard order runs skip link → header →
+language switch → index → member stories. Booting this head against an isolated
+restored owner copy printed no collision lines, loaded 0 journeys, and kept `/`,
+`/uber-mich/`, `/en/about-me/`, `/karte/` at 200 with no journey routes.
+
+**Held for G3.** Merge waits for a real screen-reader pass at 320/390 px following
+`docs/superpowers/plans/2026-11-01-issue-310-screen-reader-script.md`; DOM and
+keyboard checks above are not that evidence.
+
+## Owner decisions for #310 — 2026-11-01
+
+- **Public routes approved** (owner, interview 2026-11-01): DE `/rundreisen/` and
+  `/rundreisen/<slug>/`, EN `/en/journeys/` and `/en/journeys/<slug>/` (secondary-locale prefixes
+  per the language mode), built only for journeys with a published member in that locale. No
+  existing URL changes. Merge is authorised **before** the screen-reader pass; any finding from
+  G3 is fixed in a follow-up PR and #310 stays open until the pass is recorded.
+- **G3 scope:** VoiceOver on a current iPhone at 320 and 390 px, run by the owner. **TalkBack is
+  waived** together with the Android column (exception E1 in the mobile acceptance matrix,
+  `docs/superpowers/specs/2026-10-27-mobile-acceptance-matrix-design.md` §13.1; review by
+  2027-05-01).
+- **Instance:** the disposable `new.simonswanderlust.com` / `img.new.simonswanderlust.com`
+  instance from the #300 run sheet §1a, seeded with `uploader/scripts/journey-sr-fixture.mjs`.
+

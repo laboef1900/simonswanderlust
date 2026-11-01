@@ -9,7 +9,8 @@ import AboutPage from './AboutPage.astro';
 
 const content = vi.hoisted(() => ({ trips: [] as Trip[] }));
 vi.mock('astro:content', () => ({
-  getCollection: async () => content.trips,
+  // Only trips exist here; the pages, navigation and journeys collections are empty.
+  getCollection: async (name: string) => name === 'trips' ? content.trips : [],
   getEntry: async () => undefined,
   render: vi.fn(),
 }));
