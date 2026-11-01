@@ -1439,3 +1439,24 @@ and whose probe returned 503 left Detach refused with the new message and the ro
 still attached on the server; after **Check again** found the committed save, Detach
 removed the route. Restoring a local draft against an unchanged stored version showed
 "Local draft restored" with the recovery notice hidden.
+
+### Deployment-mount qualification tooling — 2026-11-01
+
+The owner asked for exact steps to clear the deployment-mount gate (G6). The packaged harness
+(`.github/native-owner/package-qualify.py`) only ever bound Docker named volumes to `/data`, so it
+could not test the server's actual bind-mounted data filesystem. It now takes `--data-root`: an
+absolute, empty, owner-created directory; each scenario binds a fresh subdirectory of it to
+`/data`, and the run refuses a directory inside a live data root (any ancestor holding
+`.storage-owner.lock`). The ext4 requirement (`fsType ef53`) and every other assertion are
+unchanged; the evidence records `dataRoot.path`/`hostFsType` and states that it qualifies only
+that mount for that image.
+
+Evidence: [manual qualification run 41347014866](https://github.com/laboef1900/simonswanderlust/actions/runs/41347014866)
+(`workflow_dispatch`, `qualify_native_package=true`, head `7c00c55`) passed both the named-volume
+matrix and the new bind-mount matrix on native amd64 and arm64 runners (22 steps each,
+`fsType ef53`, host `ext2/ext3`). Locally, the refusal inside a live data root fired, and a
+Docker Desktop file-share bind reached the ext4 guard and was rejected as designed
+(`fakeowner`). **Runner ext4 evidence does not qualify the owner's server**; the owner runs
+[`docs/superpowers/plans/2026-11-01-g6-deployment-mount-qualification.md`](../plans/2026-11-01-g6-deployment-mount-qualification.md)
+on the real mount with the image to be deployed, and the result is recorded here.
+
