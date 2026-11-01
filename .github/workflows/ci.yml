@@ -242,6 +242,20 @@ jobs:
             --pg-container "${FIXTURE_PREFIX}_pg" \
             --database-env "$PRIVATE_ROOT/database.env" \
             --output "$PRIVATE_ROOT/output" --prefix "$FIXTURE_PREFIX" --port 34315
+      # The same matrix on a bind-mounted host directory (G6 path). Runner ext4 evidence
+      # proves the harness mode only; it never qualifies the owner's deployment mount.
+      - name: Exercise the same matrix on a bind-mounted ext4 directory
+        id: qualify_bind
+        if: always() && steps.postgres.outcome == 'success'
+        run: |
+          install -d -m 700 "$RUNNER_TEMP/g6-bind-root"
+          python3 .github/native-owner/package-qualify.py \
+            --image "$PACKAGE_IMAGE" --source-sha "$SOURCE_SHA" \
+            --source-root "$GITHUB_WORKSPACE" --expected-arch "$PACKAGE_ARCH" \
+            --pg-container "${FIXTURE_PREFIX}_pg" \
+            --database-env "$PRIVATE_ROOT/database.env" \
+            --output "$PRIVATE_ROOT/output-bind" --prefix "${FIXTURE_PREFIX}_b" --port 34316 \
+            --data-root "$RUNNER_TEMP/g6-bind-root"
       - name: Stop only the private PostgreSQL fixture
         if: always() && steps.postgres.outcome != 'skipped'
         run: |
@@ -255,6 +269,7 @@ jobs:
           PACKAGE_OUTCOME: ${{ steps.package.outcome }}
           POSTGRES_OUTCOME: ${{ steps.postgres.outcome }}
           QUALIFY_OUTCOME: ${{ steps.qualify.outcome }}
+          QUALIFY_BIND_OUTCOME: ${{ steps.qualify_bind.outcome }}
         run: |
           python3 - <<'PY'
           import json, os, re
@@ -267,7 +282,7 @@ jobs:
               'arch': os.environ['PACKAGE_ARCH'],
               'runnerArch': os.environ['RUNNER_ARCH'],
               'kernelArch': os.uname().machine,
-              'outcomes': {key: os.environ[key + '_OUTCOME'] for key in ['PREPARE', 'PACKAGE', 'POSTGRES', 'QUALIFY']},
+              'outcomes': {key: os.environ[key + '_OUTCOME'] for key in ['PREPARE', 'PACKAGE', 'POSTGRES', 'QUALIFY', 'QUALIFY_BIND']},
               'deploymentMountGate': 'NOT qualified: mandatory separate operational gate',
           }
           (export / 'job-outcome.json').write_text(json.dumps(evidence, indent=2) + '\n')
@@ -287,7 +302,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: packaged-owner-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ env.PRIVATE_ROOT }}/output/sanitized-evidence/
+          path: |
+            ${{ env.PRIVATE_ROOT }}/output/sanitized-evidence/
+            ${{ env.PRIVATE_ROOT }}/output-bind/sanitized-evidence/
           if-no-files-found: error
           retention-days: 14
           # All remaining fixtures/private files die with this ephemeral runner.
