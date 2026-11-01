@@ -123,3 +123,26 @@ release workflow, publish anything, or establish new-package registry availabili
 Inherited historical/native evidence is not relabeled as a new-platform runtime result.
 The first owner-authorized publication, both-platform release qualification and registry
 access checks remain the future release gate described above.
+
+## First publication — v0.18.1, 2026-11-01
+
+Owner-authorized. The `v0.18.0` tag (`9c575c9`) ran
+[release run 41355438196](https://github.com/laboef1900/simonswanderlust/actions/runs/41355438196),
+which failed in the native-build stage before pushing anything: `release.yml` passed floating
+`dhi.io/node:26-dev`/`dhi.io/node:26` build arguments over the Dockerfile's digest-pinned
+defaults, and `container-toolchain.mjs` refuses non-immutable references. No image or GitHub
+Release exists for v0.18.0; the tag was left in place, not replaced. #508 dropped the
+overrides and the release moved forward to v0.18.1.
+
+| Item | Value |
+| --- | --- |
+| Tag / commit | `v0.18.1` → `4c715085a944f88133d430b1a654b7de71d4decf` (merged `main`) |
+| Workflow | [run 41358308153](https://github.com/laboef1900/simonswanderlust/actions/runs/41358308153), success |
+| Index digest | `sha256:6a12b5fb85be4a31fb3e325dfaf4eb95128031eeb8c8b9a2fa45527ff64fba9c` |
+| `linux/amd64` | `sha256:324e68420e53cb52e8ec89250619b9ae3c631ee7d9f212324a7573e28d6170f1` |
+| `linux/arm64` | `sha256:b385a9d938b094c339f27f4d11ea83582b122025fbaebe1e5174996f5edc72e0` |
+| Tags | `0.18.1`, `0.18`, `latest` |
+| Package visibility | `public` (GitHub packages API) |
+| GitHub Release | [v0.18.1](https://github.com/laboef1900/simonswanderlust/releases/tag/v0.18.1) |
+
+No deployment, operator `.env` change or live-blog rebuild was part of this publication.
