@@ -338,6 +338,17 @@ features' required singleton seeds, not `ensureSchema` alone:
   or add placeholder language/navigation tables. Every subsequently installed required
   singleton must join that boundary and the prepared-target backup acceptance test.
 
+The #279 + #284 integration catalog includes `posts.omitted` and `site_language`.
+Admission retains exact installed column/default/nullability/key/CHECK semantics,
+including the unpublished-only omission invariant. A missing language table or seed,
+or a genuinely absent additive `omitted` column, can be initialized through the same
+boundary. Missing or altered constraints on existing columns still refuse preparation.
+Only the feature-owned default language configuration with no publication lock is
+bootstrap state; configured modes and invalid timestamps are not. The prepared-target
+regression captures this real singleton in the native dump and exercises both absent
+metadata recovery and no-mutation refusal. A surviving language-only schema also counts
+as prior schema for conservative first-run exclusion.
+
 The shared initializer runs **no HTTP listener, release build/bootstrap, background workers,
 import/media/route recovery, housekeeping, settings writes or model migration**. It inserts
 only incumbent bootstrap defaults, never demo stories or owner content, and does not overwrite
@@ -780,6 +791,30 @@ These decisions authorize the documented design for implementation subject to th
 not a merge, deployment, owner-data operation, login/session-policy change or revival of the
 withdrawn file-based progress design. Any material departure requires fresh explicit approval.
 
+## 15. #280 empty-state qualification (2026-10-29)
+
+Integrated source `c23c2da7887cafc6e24dfac3f1392c4893aa1c81` passed real
+`main.ts` empty-content builds in all four approved language modes. Managed-browser
+checks at 1280px and 320px covered every enabled-locale Home, Map and destinations
+page, empty RSS/sitemaps, inactive-route absence, and admin/author empty states.
+No sample stories, photos, map islands or region links were fabricated. Both roles'
+Media controls and narrowed-view recovery were keyboard exercised; admin-only
+pages/APIs and onboarding stayed unavailable to authors. Held/failed reads stayed
+distinct from genuine empty content. The fixture retained zero posts/media/comments,
+its original admin and a synthetic author; the original language mode was restored.
+
+The complete PostgreSQL-enabled uploader suite/typecheck and site suite/Astro
+check/build passed. Four-mode empty-build regression coverage removes internal
+snapshot handoffs from child environments rather than supplying malformed empty
+values. Bootstrap admission recognizes the exact approved `site_language` and
+`posts.omitted` catalog while continuing to reject altered or unknown schemas.
+
+Evidence lives in the worktree's ignored
+`.issue-runtime/evidence/final-c23c2da/` (acceptance/runtime/public reports and
+61 screenshots). This is not a populated-browser, screen-reader or deployment
+qualification. Parent review, exact-head CI and eventual stack integration remain
+separate gates; no owner content, production data or restore policy changed.
+
 ## #279 current-dev integration (2026-11-01)
 
 Merged `dev` after the language (#284/#285), identity (#275/#276) and publish-recovery
@@ -811,3 +846,21 @@ refused an early finish (409), advanced photo/story/publish from real upload, dr
 publish requests, finished to `retired` and then refused resume (409). The Desk in managed
 Chromium at 1280 px showed the checklist, build status and unset-domain notice without
 horizontal overflow.
+
+## #280 current-dev integration (2026-11-01)
+
+Merged `dev` after #279 landed. #280 had carried its own copy of the bootstrap catalog's
+`site_language`/`posts.omitted` admission; the merge keeps one copy of each entry and #280's
+stricter language-row check (validated dates, `DEFAULT_LANGUAGE`). Desk keeps #280's loader,
+which reads the language mode inside the authenticated-context load so its failure is
+retryable, plus dev's admin build status. The map page keeps #280's empty state (no "0 pins"
+badge, no map island) together with dev's singular/plural pin label; dev's count-label test
+now asserts the empty state for zero trips. MapPage's lazy `await import()` of the map
+module is resolved to the module under test by the WebGL fallback test harness.
+
+Verification at the merge: uploader `tsc` 0 and the PostgreSQL-enabled suite 4028/4028
+(including the real `pg_dump`/`psql` recovery test); site 693/693 plus the four-mode
+`empty-build` PostgreSQL integration 4/4; `astro check` 0 errors; `astro build` OK. The real
+app built an empty install whose DE/EN map pages showed the empty state with no map island;
+after one real publish, managed Chromium loaded the lazily imported map module, rendered the
+canvas and pin and labelled it "1 Pin-Standort".

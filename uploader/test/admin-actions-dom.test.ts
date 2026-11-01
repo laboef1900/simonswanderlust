@@ -219,6 +219,18 @@ function loadPosts(extraGlobals: Record<string, unknown> = {}) {
   });
 }
 
+describe('ordinary Desk empty states', () => {
+  it.each([true, false])('keeps draft creation available without onboarding (admin: %s)', (isAdmin) => {
+    const { ctx, el } = loadPage('public/index.html', {}, ['public/desk.js']);
+    vm.runInContext(`authenticatedContext = { isAdmin: ${isAdmin} }; renderNext(null); renderRelease(false);`, ctx);
+    const empty = el('deskNext').children[0]!;
+    expect(empty.children[0]!.textContent).toBe(ui.en['editor.chrome.deskNoDrafts']);
+    expect(empty.children[1]!.href).toBe('/admin/editor.html');
+    expect(el('deskRelease').textContent).toBe(ui.en[isAdmin ? 'editor.chrome.deskNoReleaseAdmin' : 'editor.chrome.deskNoReleaseAuthor']);
+    expect(el('deskRelease').children).toHaveLength(0);
+  });
+});
+
 describe('import.html rejection accounting', () => {
   it('shows a rejection-only completed summary and renders HTML-like slugs only as text', () => {
     const { ctx, el } = loadPage('public/import.html', {});

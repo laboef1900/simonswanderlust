@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { setImmediate } from 'node:timers/promises';
+import { ui } from '../../site/src/i18n/ui.js';
 
 // media-browser.js is the library page's DOM glue (media.html). Its
 // user-visible contracts that no pure helper can carry — the detail panel
@@ -50,8 +51,10 @@ class FakeNode {
   get firstElementChild(): FakeNode | null { return this.children[0] ?? null; }
   appendChild(c: FakeNode): FakeNode { this.children.push(c); return c; }
   remove(): void {}
-  focus(): void { if (this.focusState) this.focusState.activeElement = this; }
+  focused = false;
+  focus(): void { this.focused = true; if (this.focusState) this.focusState.activeElement = this; }
   contains(node: FakeNode | null): boolean { return this === node || this.children.some((child) => child.contains(node)); }
+  click(): void { this.dispatch('click'); }
   showModal(): void { this.open = true; }
   close(): void { this.open = false; this.dispatch('close'); }
   setAttribute(k: string, v: string): void { this.attrs[k] = v; }
@@ -127,7 +130,7 @@ interface Page {
   flush(): Promise<void>;
 }
 
-function loadPage(opts: { describe?: Describe; folders?: string[] } = {}): Page {
+function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' | 'en'; folders?: string[] } = {}): Page {
   const focusState = { activeElement: null as FakeNode | null };
   const roots = new Map<string, FakeNode>();
   for (const id of pageIds) {
@@ -179,6 +182,7 @@ function loadPage(opts: { describe?: Describe; folders?: string[] } = {}): Page 
   const describePhoto = opts.describe ?? (async () => DETAILS);
   const ctx: Record<string, unknown> = {
     document: {
+      documentElement: { lang: opts.locale ?? 'en' },
       getElementById,
       get activeElement() { return focusState.activeElement; },
       createElement: (tag: string) => new FakeNode(tag, focusState),
@@ -217,7 +221,10 @@ function loadPage(opts: { describe?: Describe; folders?: string[] } = {}): Page 
         });
       }
     },
-    Auth: { ensureAuthed: async () => ({ id: 'u1', username: 'simon', isAdmin: true }), renderHeader() {} },
+    Auth: { ensureAuthed: async () => ({ id: 'u1', username: 'simon', isAdmin: opts.isAdmin ?? true }), renderHeader() {} },
+    EditorCopy: Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [locale,
+      Object.fromEntries(Object.entries(strings).filter(([key]) => key.startsWith('editor.chrome.')).map(([key, value]) => [key.slice('editor.chrome.'.length), value])),
+    ])),
     EditorGalleryImageOrigin: 'https://img.example',
     AltSuggest: {
       loadConfig: async () => ({
@@ -251,6 +258,61 @@ function runTimers(timers: { fn: () => void; cleared: boolean }[]): void {
   timers.length = 0;
   for (const t of due) t.fn();
 }
+
+describe('media-browser empty states', () => {
+  it.each([
+    { isAdmin: true, locale: 'en' as const },
+    { isAdmin: false, locale: 'en' as const },
+    { isAdmin: false, locale: 'de' as const },
+  ])('offers an upload, not an admin recovery action ($isAdmin / $locale)', async (options) => {
+    const page = loadPage(options);
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [], total: 0 });
+    await page.flush();
+    expect(page.el('mediaEmpty').hidden).toBe(false);
+    expect(page.el('grid').hidden).toBe(true);
+    expect(page.el('grid').children).toHaveLength(0);
+    expect(page.el('mediaEmptyMessage').textContent).toContain(ui[options.locale]['editor.chrome.mediaEmptyHelp']);
+    expect(page.el('emptyShowAll').hidden).toBe(true);
+    const choose = vi.fn();
+    page.el('fileInput').addEventListener('click', choose);
+    page.el('emptyChoosePhotos').click();
+    expect(choose).toHaveBeenCalledOnce();
+    expect(page.el('fileInput').focused).toBe(true);
+    if (!options.isAdmin) expect(page.el('rescan').hidden).toBe(true);
+    expect(page.patches).toHaveLength(0);
+  });
+
+  it('recovers from an empty filtered view without adding content and removes the state when photos return', async () => {
+    const page = loadPage({ isAdmin: false });
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [item('one')], total: 1 });
+    await page.flush();
+    page.el('fStatus').value = 'failed';
+    page.el('fStatus').dispatch('change');
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [], total: 0 });
+    await page.flush();
+    expect(page.el('mediaEmptyMessage').textContent).toContain(ui.en['editor.chrome.mediaNoResults']);
+    expect(page.el('emptyShowAll').hidden).toBe(false);
+    page.el('emptyShowAll').click();
+    await page.flush();
+    const reset = page.listRequests.shift()!;
+    const query = new URL(reset.url, 'https://app.example').searchParams;
+    expect(query.get('status') || '').toBe('');
+    expect(query.get('q') || '').toBe('');
+    expect(query.get('folder') || '').toBe('');
+    expect(page.el('fStatus').value).toBe('');
+    expect(page.el('fSearch').focused).toBe(true);
+    reset.resolve({ items: [item('one')], total: 1 });
+    await page.flush();
+    expect(page.el('mediaEmpty').hidden).toBe(true);
+    expect(page.el('mediaEmptyMessage').textContent).toBe('');
+    expect(page.el('grid').hidden).toBe(false);
+    expect(page.el('grid').querySelectorAll('.media-cell')).toHaveLength(1);
+    expect(page.patches).toHaveLength(0);
+  });
+});
 
 describe('media-browser current folder', () => {
   it('exposes only the selected folder across nested, sibling and All photos navigation', async () => {

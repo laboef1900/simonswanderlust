@@ -1,7 +1,7 @@
 import { Window } from 'happy-dom';
 import { describe, expect, it, vi } from 'vitest';
 import { experimental_AstroContainer as AstroContainer } from 'astro/container';
-import type { Locale } from '../../i18n/ui';
+import { ui, type Locale } from '../../i18n/ui';
 import type { Trip } from '../../lib/trips';
 import RegionPage from './RegionPage.astro';
 import MapPage from './MapPage.astro';
@@ -48,7 +48,9 @@ describe('rendered public count labels', () => {
 
       const map = window.document.createElement('div');
       map.innerHTML = await renderer.renderToString(MapPage, { props: { locale } });
-      expect([...map.querySelectorAll('main span')].some((span) => span.textContent?.trim() === pins)).toBe(true);
+      // #280: an empty map shows its empty state instead of a fabricated "0 pins" badge.
+      if (count === 0) expect(map.querySelector('main h2')?.textContent?.trim()).toBe(ui[locale]['map.emptyTitle']);
+      else expect([...map.querySelectorAll('main span')].some((span) => span.textContent?.trim() === pins)).toBe(true);
     } finally {
       await window.happyDOM.close();
     }

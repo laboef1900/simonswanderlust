@@ -29,21 +29,28 @@ const stats = statsLine(tripStats(trips), t);
   <section class="mx-auto max-w-6xl px-5 py-10">
     <div class="flex flex-wrap items-end justify-between gap-4 border-b border-navy/10 pb-6">
       <div>
-        <p class="font-mono text-xs font-semibold tracking-log text-brand-red uppercase">
+        {trips.length > 0 && <p class="font-mono text-xs font-semibold tracking-log text-brand-red uppercase">
           {stats}
-        </p>
+        </p>}
         <h1 class="mt-1 text-3xl font-extrabold text-navy md:text-4xl">{t('map.title')}</h1>
         <p class="mt-1 text-ink/70">{t('map.intro')}</p>
       </div>
-      <div class="hidden sm:flex items-center gap-2 rounded border border-navy/10 bg-canvas px-3 py-1.5 font-mono text-xs text-navy/70 shadow-sm">
+      {trips.length > 0 && <div class="hidden sm:flex items-center gap-2 rounded border border-navy/10 bg-canvas px-3 py-1.5 font-mono text-xs text-navy/70 shadow-sm">
         <span class="relative flex h-2 w-2">
           <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand-red opacity-75 motion-reduce:hidden"></span>
           <span class="relative inline-flex h-2 w-2 rounded-full bg-brand-red"></span>
         </span>
         <span>{trips.length} {countLabel(trips.length, t('map.pinCountOne'), t('map.pinCount'))}</span>
-      </div>
+      </div>}
     </div>
 
+    {trips.length === 0 ? (
+      <div class="mt-8 py-8">
+        <h2 class="text-lg font-bold text-navy">{t('map.emptyTitle')}</h2>
+        <p class="mt-2 max-w-prose text-ink/70">{t('map.emptyBody')}</p>
+      </div>
+    ) : (
+    <>
     <div class="relative mt-6 overflow-hidden rounded-lg border border-navy/10 bg-canvas shadow-sm">
       <div
         id="map"
@@ -69,15 +76,16 @@ const stats = statsLine(tripStats(trips), t);
         }
       </ul>
     </nav>
+    </>
+    )}
   </section>
 </Base>
 
 <script>
-  import { initFullMap } from '../../scripts/travel-map';
-
   const el = document.getElementById('map');
   if (el && el.dataset.geojson) {
     try {
+      const { initFullMap } = await import('../../scripts/travel-map');
       initFullMap(
         el,
         JSON.parse(el.dataset.geojson) as import('../../lib/map-data').PinCollection,

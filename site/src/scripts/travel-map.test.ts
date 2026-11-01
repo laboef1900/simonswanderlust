@@ -113,7 +113,10 @@ afterEach(() => {
 // by this harness. Assertions below observe DOM behavior, not source wording.
 function mount(component: string) {
   const source = readFileSync(resolve(process.cwd(), 'src/components', component), 'utf8');
-  const script = source.match(/<script>([\s\S]*?)<\/script>/)![1]!.replace(/^  import .*;\n/gm, '');
+  // Static imports and MapPage's lazy `await import()` (#280: an empty map page loads no
+  // map bundle) both resolve to the module under test, injected below.
+  const script = source.match(/<script>([\s\S]*?)<\/script>/)![1]!.replace(/^  import .*;\n/gm, '')
+    .replace(/^\s*const \{ initFullMap \} = await import\([^)]*\);\n/gm, '');
   let intersect = () => {};
   const disconnect = vi.fn();
   class Observer {

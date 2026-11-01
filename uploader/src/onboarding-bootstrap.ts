@@ -6,6 +6,7 @@ import { identityFromRow, seedSiteIdentity, type IdentityRow } from './site-iden
 import { neutralIdentity } from '../../site/src/lib/site-identity.js';
 import { readOnboardingState, type RetiredReason } from './onboarding.js';
 import { readRestoreFence } from './onboarding-fence.js';
+import { DEFAULT_LANGUAGE, languageFromRow, type LanguageRow } from './language.js';
 
 export interface OnboardingPaths { storageDir: string; settingsPath: string; backupDir: string; siteDir: string }
 export interface BootEvidence { priorSchema: boolean; accounts: boolean; content: boolean }
@@ -170,8 +171,8 @@ const BOOTSTRAP_COLUMNS: Record<string, Record<string, string>> = {
   app_secrets: { key: 'text', ciphertext: 'text', iv: 'text', tag: 'text', updated_at: 'timestamp with time zone' },
   site_identity: { id: 'boolean', revision: 'integer', seed_source: 'text', saved_at: 'timestamp with time zone', updated_at: 'timestamp with time zone', site_name: 'text', author_name: 'text', canonical_origin: 'text', localized: 'jsonb', social_links: 'jsonb' },
   site_identity_assets: { role: 'text', sha256: 'text', width: 'integer', height: 'integer', bytes: 'bytea', created_at: 'timestamp with time zone' },
-  comments: { id: 'uuid', translation_key: 'text', locale: 'text', name: 'text', email: 'text', body: 'text', status: 'text', is_author: 'boolean', sender_hash: 'text', created_at: 'timestamp with time zone' },
   site_language: { id: 'boolean', primary_locale: 'text', enabled_locales: 'text[]', locked_at: 'timestamp with time zone', updated_at: 'timestamp with time zone' },
+  comments: { id: 'uuid', translation_key: 'text', locale: 'text', name: 'text', email: 'text', body: 'text', status: 'text', is_author: 'boolean', sender_hash: 'text', created_at: 'timestamp with time zone' },
   onboarding_state: { singleton: 'boolean', schema_version: 'smallint', state: 'text', reason: 'text', evaluated_at: 'timestamp with time zone', dismissed_at: 'timestamp with time zone', retired_at: 'timestamp with time zone' },
 };
 const ADDITIVE_COLUMNS: Record<string, readonly string[]> = { posts: ['published_snapshot','published_at','categories','tags','scheduled_at','title_image','featured','comments_enabled','omitted'], media: ['format','encoding'], comments: ['is_author'] };
@@ -240,17 +241,17 @@ const BOOTSTRAP_CHECKS: Record<string, { columns: readonly string[]; expression:
     { columns: ['height'], expression: '((height >= 1) AND (height <= 1024))' },
     { columns: ['bytes'], expression: '(octet_length(bytes) <= 262144)' },
   ],
+  site_language: [
+    { columns: ['id'], expression: 'id' },
+    { columns: ['primary_locale'], expression: "(primary_locale = ANY (ARRAY['de'::text, 'en'::text]))" },
+    { columns: ['enabled_locales'], expression: "(((cardinality(enabled_locales) >= 1) AND (cardinality(enabled_locales) <= 2)) AND (enabled_locales <@ ARRAY['de'::text, 'en'::text]) AND ((cardinality(enabled_locales) = 1) OR (enabled_locales[1] <> enabled_locales[2])) AND (array_position(enabled_locales, NULL::text) IS NULL))" },
+    { columns: ['primary_locale', 'enabled_locales'], expression: '(primary_locale = ANY (enabled_locales))' },
+  ],
   comments: [
     { columns: ['locale'], expression: "(locale = ANY (ARRAY['de'::text, 'en'::text]))" },
     { columns: ['name'], expression: '((char_length(name) >= 1) AND (char_length(name) <= 80))' },
     { columns: ['body'], expression: '((char_length(body) >= 1) AND (char_length(body) <= 2000))' },
     { columns: ['status'], expression: "(status = ANY (ARRAY['pending'::text, 'approved'::text, 'rejected'::text, 'spam'::text]))" },
-  ],
-  site_language: [
-    { columns: ['id'], expression: 'id' },
-    { columns: ['primary_locale'], expression: "(primary_locale = ANY (ARRAY['de'::text, 'en'::text]))" },
-    { columns: ['enabled_locales'], expression: "(((cardinality(enabled_locales) >= 1) AND (cardinality(enabled_locales) <= 2)) AND (enabled_locales <@ ARRAY['de'::text, 'en'::text]) AND ((cardinality(enabled_locales) = 1) OR (enabled_locales[1] <> enabled_locales[2])) AND (array_position(enabled_locales, NULL::text) IS NULL))" },
-    { columns: ['primary_locale', 'enabled_locales'], expression: "(primary_locale = ANY (enabled_locales))" },
   ],
   onboarding_state: [
     { columns: ['singleton'], expression: 'singleton' },
@@ -409,9 +410,15 @@ export async function assertBootstrapOnlyTarget(pool: DbPool, assertOwner: () =>
       }
     }
     if (tables.has('site_language')) {
-      // The boot seed only: a chosen or locked language mode is owner configuration.
-      const rows = await client.query<{ primary_locale: string; enabled_locales: string[]; locked_at: Date | null }>('SELECT primary_locale, enabled_locales, locked_at FROM site_language');
-      if (rows.rows.some((row) => row.primary_locale !== 'de' || !isDeepStrictEqual(row.enabled_locales, ['de', 'en']) || row.locked_at !== null)) throw new Error('Preparation refuses non-default language configuration.');
+      const rows = await client.query<LanguageRow>('SELECT primary_locale, enabled_locales, locked_at, updated_at FROM site_language');
+      for (const row of rows.rows) {
+        // Missing seeds are recoverable; configured modes or publication history
+        // are owner state, not a preparation shortcut. Validate stored dates too.
+        const language = languageFromRow(row);
+        if (language.lockedAt !== null || !isDeepStrictEqual({ primary: row.primary_locale, locales: row.enabled_locales }, DEFAULT_LANGUAGE)) {
+          throw new Error('Preparation refuses non-default language.');
+        }
+      }
     }
     if (tables.has('onboarding_state')) {
       const state = await readOnboardingState(client);

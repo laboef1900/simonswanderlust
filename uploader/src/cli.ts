@@ -12,9 +12,9 @@ import { acquireStorageOwner, StorageReadOnlyError, type StorageOwner } from './
 import { createGpxFiles } from './gpx-files.js';
 import { verifyRouteArchive, routeRecoverySummary } from './gpx-backup.js';
 import { createPool, type DbPool } from './db.js';
+import { readLanguage, type LanguageConfig } from './language.js';
 import { prepareNativeRestore, restoreWithOnboarding } from './onboarding-restore.js';
 import { publishRestoreFence } from './onboarding-fence.js';
-import { readLanguage, type LanguageConfig } from './language.js';
 import { buildFailureMessage, type BuildFailureCode } from './build-state.js';
 import { configuredOriginRoles, validateCanonicalRoles, type OriginRoles } from './canonical-origin.js';
 

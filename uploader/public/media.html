@@ -92,6 +92,14 @@
             <button id="clearSelection" type="button" class="btn-secondary">Clear</button>
           </div>
 
+          <div id="mediaEmpty" hidden>
+            <p id="mediaEmptyMessage" class="muted" role="status"></p>
+            <div class="form-actions">
+              <button id="emptyChoosePhotos" type="button"></button>
+              <button id="emptyShowAll" type="button" class="btn-secondary" hidden></button>
+            </div>
+          </div>
+
           <!-- aria-multiselectable + roving tabindex: arrows move focus, Space
                toggles, Shift+Arrow extends, Ctrl/Cmd+A selects all. -->
           <div id="grid" class="media-grid" role="listbox" aria-multiselectable="true" aria-label="Photos"></div>
