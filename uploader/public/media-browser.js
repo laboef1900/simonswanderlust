@@ -307,6 +307,13 @@
     $('aiAll').disabled = state.total === 0;
   }
 
+  /** A refused file names its reason and what to do instead; it was never sent. */
+  function refusalText(reason) {
+    if (reason === 'heic') return copy.uploadRefusedHeic;
+    if (reason === 'not_image') return copy.uploadRefusedNotImage;
+    return copy.uploadRefusedTooLarge.replace('{max}', api.formatBytes(api.MAX_UPLOAD_BYTES));
+  }
+
   function renderQueue() {
     var box = $('uploadQueue');
     var snap = state.queue;
@@ -316,7 +323,14 @@
     if (!snap || !snap.total && !snap.paused) { box.hidden = true; return; }
     box.hidden = false;
     box.appendChild(el('p', 'muted', snap.done + ' of ' + snap.total + ' uploaded'
-      + (snap.failed ? ' · ' + snap.failed + ' failed' : '')));
+      + (snap.failed ? ' · ' + snap.failed + ' failed' : '')
+      + (snap.refused ? ' · ' + copy.uploadRefusedCount.replace('{count}', snap.refused) : '')));
+    // Phones suspend a backgrounded tab's transfers; encoding needs no tab at all.
+    if (snap.unsettled) {
+      var keepOpen = el('p', 'upload-keep-open', copy.uploadKeepOpen);
+      keepOpen.setAttribute('role', 'status');
+      box.appendChild(keepOpen);
+    }
     box.appendChild(el('p', 'muted', copy.uploadLimit));
     if (snap.paused) {
       var banner = el('div', 'upload-session');
@@ -347,8 +361,12 @@
       row.appendChild(el('span', 'upload-row__name', i.name));
       var label = i.state === 'unknown' ? copy.uploadUnknown : i.state === 'checking' ? copy.uploadChecking
         : i.state === 'needs-auth' ? copy.uploadNeedsAuth : i.state === 'retryable' ? copy.uploadRetryable
-        : i.state === 'gone' ? copy.uploadGone : api.queueState(i);
-      var status = el('span', 'upload-row__state', label);
+        : i.state === 'gone' ? copy.uploadGone
+        : i.state === 'refused' ? refusalText(i.error)
+        // Transferred is not encoded: the grid badge reports processing → ready/failed.
+        : i.state === 'done' && !(i.result && i.result.duplicate) ? copy.uploadDone
+        : api.queueState(i);
+      var status = el('span', 'upload-row__state' + (i.state === 'refused' || i.state === 'failed' ? ' is-refused' : ''), label);
       status.id = 'upload-state-' + i.id;
       row.appendChild(status);
       row.setAttribute('aria-describedby', status.id);
@@ -370,7 +388,7 @@
       retry.addEventListener('click', function () { uploads.retryFailed(); });
       box.appendChild(retry);
     }
-    if (snap.done && snap.active === 0 && !snap.paused && !snap.unsettled) {
+    if ((snap.done || snap.refused) && snap.active === 0 && !snap.paused && !snap.unsettled) {
       var clear = el('button', 'btn-secondary', 'Clear finished');
       clear.type = 'button';
       clear.addEventListener('click', function () { uploads.clearFinished(); reload(); });
@@ -1018,7 +1036,7 @@
     var accept = function (files) {
       if (!files || !files.length) return;
       uploads.add(files, { folder: state.folder });
-      say('Uploading ' + files.length + ' file(s) — you can keep working; encoding continues on the server.');
+      say(copy.uploadStarted.replace('{count}', files.length));
     };
     input.addEventListener('change', function () { accept(input.files); input.value = ''; });
     ['dragenter', 'dragover'].forEach(function (t) {
