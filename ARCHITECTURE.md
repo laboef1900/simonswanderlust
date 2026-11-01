@@ -818,7 +818,7 @@ default bind `./uploader/data` is not sufficient when material lives elsewhere.
 
 | Material | Recovery requirement |
 |---|---|
-| v10 `db-*.json.gz` | Content, accounts/password hashes, comments, media metadata, encrypted `app_secrets` and private `post_routes`; validate the selected dump. Gzip is not encryption. |
+| Current `db-*.json.gz` (v14) | Content, accounts/password hashes, comments, media metadata, encrypted `app_secrets`, private `post_routes`, site identity and its logo/favicon assets, language mode, navigation and journeys; validate the selected dump. Gzip is not encryption. |
 | Private GPX originals | Keep each retained dump's manifest-referenced `routes-*.tar`, including its declared degraded-source states; include retained private route storage in a host copy. Public simplified tracks and image tars are not substitutes. Originals may retain removed locations/times after detachment or public trimming. |
 | Image originals and variants | Capture the configured image storage and/or every archive needed for the selected recovery point. Replay a complete chain oldest-first into an empty isolated directory. Originals may contain EXIF/GPS; deletion from the media library does not erase old archives or offsite copies. |
 | `settings.json` and any `settings.json.pre-ai-registry` | Operator copy, outside logical dumps. Capture the current settings coherently with the dump; the migration copy is not necessarily current pre-upgrade settings. Provider registry URLs/assignments must match the encrypted credential generation. |
