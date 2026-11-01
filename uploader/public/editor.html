@@ -672,6 +672,20 @@
           refreshAltAudit().catch(() => {});
           setStatus('');
         },
+        rebase: (body) => {
+          currentTk = body.translationKey;
+          loadedUpdatedAt = body.updatedAt;
+          loadedSlugs.de = body.de?.slug || '';
+          loadedSlugs.en = body.en?.slug || '';
+          guard.setResource('post:' + currentTk);
+          gpxEditor.noteCreated(currentTk);
+          const url = new URL(location.href);
+          url.searchParams.set('tk', currentTk);
+          history.replaceState(null, '', url.toString());
+          loadBlocked = false;
+          showErr('');
+          renderDraftState();
+        },
         useStored: async (body) => {
           await loadPost(body.translationKey, { snapshot: body });
           if (loadBlocked || !writeRecovery.canAdopt(body.ownerUserId)) throw new Error(editorCopy.reloadFailed);
@@ -2285,7 +2299,7 @@
         refreshAltAudit().catch(() => {});
 
         // Initial loading must not erase a recovery stash before it is offered.
-        // A deliberate reload after a conflict does discard the dirty form.
+        // Conflict replacement already preserved the local copy in a separate context.
         if (guard.isDirty()) guard.markClean();
         renderDraftState();
         setStatus(isPublished
@@ -2479,6 +2493,9 @@
               if (isPublished) {
                 for (const l of ['de', 'en']) if (loadedSlugs[l]) slugFieldFor(l).value = loadedSlugs[l];
               }
+              // #306: continue the stash's own generation so a late acknowledgement
+              // of an earlier attempt cannot mark this restored copy clean.
+              guard.restoreGeneration(stash.generation);
               // The stash's version and unresolved attempts come back with it (#305,
               // #345): a base that cannot be judged blocks saving instead of guessing.
               if (!writeRecovery.restore(stash.recovery)) {

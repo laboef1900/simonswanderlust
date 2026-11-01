@@ -145,6 +145,100 @@ window.MediaApi = (function () {
     };
   }
 
+  // All public metadata writers use this leaf-level contract, including AI.
+  function mediaLeaves(patch) {
+    var leaves = [];
+    Object.keys(patch).forEach(function (field) {
+      if (field === 'alt' || field === 'caption') {
+        Object.keys(patch[field]).forEach(function (locale) { leaves.push([field, locale]); });
+      } else leaves.push([field]);
+    });
+    return leaves;
+  }
+  function leafValue(item, leaf) {
+    return leaf.length === 2 ? (item[leaf[0]] || {})[leaf[1]] || '' : item[leaf[0]] || (leaf[0] === 'tags' ? [] : '');
+  }
+  function putLeaf(item, leaf, value) {
+    if (leaf.length === 2) (item[leaf[0]] = item[leaf[0]] || {})[leaf[1]] = value;
+    else item[leaf[0]] = value;
+  }
+  function expectations(patch, item, empty) {
+    var expect = {};
+    mediaLeaves(patch).forEach(function (leaf) {
+      putLeaf(expect, leaf, empty ? (leaf[0] === 'tags' ? [] : '') : leafValue(item, leaf));
+    });
+    return window.MediaConditional.canonicalizePatch(expect);
+  }
+  function changedFields(values, base) {
+    var canonical = window.MediaConditional.canonicalizePatch(values);
+    var previous = expectations(canonical, base);
+    var patch = {};
+    mediaLeaves(canonical).forEach(function (leaf) {
+      if (JSON.stringify(leafValue(canonical, leaf)) !== JSON.stringify(leafValue(previous, leaf))) {
+        putLeaf(patch, leaf, leafValue(canonical, leaf));
+      }
+    });
+    return patch;
+  }
+  function assertItem(item, key) {
+    var invalid = function () { throw Object.assign(new Error('invalid_media_response'), { unknown: true }); };
+    if (!item || typeof item !== 'object' || Array.isArray(item) || item.key !== key) invalid();
+    var values = {};
+    ['title', 'alt', 'caption', 'tags', 'folder'].forEach(function (field) {
+      if (!Object.prototype.hasOwnProperty.call(item, field)) invalid();
+      values[field] = item[field];
+    });
+    ['alt', 'caption'].forEach(function (field) {
+      if (!values[field] || !Object.prototype.hasOwnProperty.call(values[field], 'de')
+        || !Object.prototype.hasOwnProperty.call(values[field], 'en')) invalid();
+    });
+    try { window.MediaConditional.canonicalizePatch(values); } catch (_) { invalid(); }
+    return item;
+  }
+  function compareFields(patch, expect, current, key) {
+    var stored = expectations(patch, assertItem(current, key));
+    return mediaLeaves(patch).map(function (leaf) {
+      var intended = leafValue(patch, leaf);
+      var expected = leafValue(expect, leaf);
+      var value = leafValue(stored, leaf);
+      return { field: leaf.join('.'), intended: intended, expected: expected, stored: value,
+        outcome: JSON.stringify(value) === JSON.stringify(intended) ? 'achieved'
+          : JSON.stringify(value) === JSON.stringify(expected) ? 'expected' : 'other' };
+    });
+  }
+  async function savePatch(client, key, patch, expect) {
+    var conditional = window.MediaConditional.canonicalizeConditional({
+      conditional: { version: 1, patch: patch, expect: expect },
+    });
+    try {
+      var saved = await client.patch(key, conditional.patch, conditional.expect);
+      if (!saved || saved.conditionalVersion !== 1) {
+        throw Object.assign(new Error('media_conditional_unsupported'), { unsupported: true });
+      }
+      var acknowledged = compareFields(conditional.patch, conditional.expect, saved, key);
+      if (acknowledged.some(function (field) { return field.outcome !== 'achieved'; })) {
+        throw Object.assign(new Error('invalid_media_response'), { unknown: true });
+      }
+      return saved;
+    } catch (error) {
+      if (error.unsupported) throw error;
+      if (error.status === 409 && error.current) {
+        try { error.fields = compareFields(conditional.patch, conditional.expect, error.current, key); }
+        catch (invalidCurrent) { error.current = null; error.probeError = invalidCurrent; }
+      } else if (isUnknown(error)) {
+        error.unknown = true;
+        error.current = null;
+        error.fields = undefined;
+        try {
+          var current = await client.get(key);
+          error.fields = compareFields(conditional.patch, conditional.expect, current, key);
+          error.current = current;
+        } catch (probeError) { error.probeError = probeError; }
+      }
+      throw error;
+    }
+  }
+
   // ---- transport ----------------------------------------------------------
 
   function makeClient(opts) {
@@ -172,7 +266,7 @@ window.MediaApi = (function () {
           throw Object.assign(new Error('invalid_response'), { status: res.status, unknown: res.ok || res.status >= 500 });
         }
         if (!res.ok) throw Object.assign(new Error(parsed.error || ('HTTP ' + res.status)), {
-          status: res.status, code: parsed.code, unknown: res.status >= 500,
+          status: res.status, code: parsed.code, current: parsed.current, unknown: res.status >= 500,
         });
         return parsed;
       };
@@ -243,8 +337,11 @@ window.MediaApi = (function () {
 
     return {
       list: function (state) { return request('GET', '/media' + listQuery(state)); },
-      get: function (key) { return request('GET', '/media/items/' + key); },
-      patch: function (key, fields) { return request('PATCH', '/media/items/' + key, fields); },
+      get: function (key) { return request('GET', '/media/items/' + key, undefined, true); },
+      patch: function (key, patch, expect) {
+        var conditional = window.MediaConditional.canonicalizeConditional({ conditional: { version: 1, patch: patch, expect: expect } });
+        return request('PATCH', '/media/items/' + key, { conditional: conditional });
+      },
       remove: function (key) { return request('DELETE', '/media/items/' + key); },
       move: function (keys, folder) { return request('POST', '/media/move', { keys: keys, folder: folder }); },
       lookup: function (keys) { return request('POST', '/media/lookup', { keys: keys }, true); },
@@ -454,6 +551,11 @@ window.MediaApi = (function () {
     debounce: debounce,
     makeSequence: makeSequence,
     makeClient: makeClient,
+    expectations: expectations,
+    changedFields: changedFields,
+    compareFields: compareFields,
+    assertItem: assertItem,
+    savePatch: savePatch,
     isUnknown: isUnknown,
     createUploadAttempt: createUploadAttempt,
     createUploadQueue: createUploadQueue,

@@ -1252,3 +1252,165 @@ database: create with receipt (200), replay of the same `saveId` 409
 committed it resolved to "Saved to the server" through the probe, without a
 second write. Residual: after a failed probe the GPX route write is not gated by
 WriteRecovery; the server's route base check (409) remains its safeguard.
+
+
+## #306 source implementation handoff
+
+The #306 branch extends the frozen #305 implementation, rather than introducing another
+draft or receipt convention. These are source notes, **not verification or deployment proof**.
+
+- DraftGuard keeps immutable owner/resource/context/record storage; all recovery entry points
+  are inert before owner initialization. Logout never offers deletion. Unknown-owner legacy
+  bytes remain private, unchanged and unavailable to admins. The workflow and security guide
+  describe private author/custodian recovery and precise disposal after backup.
+- The shared post/page recovery controller retains the actual restored base. Invalid/missing
+  bases cannot borrow an initial server load's token; one read opens comparison instead.
+  Explicit rebase and stored-version loading preserve a separate full local record first.
+  The story editor and all four generic page keys use these same controls. Receipt restoration
+  resets to the captured generation, so an own landed attempt can clean only its matching
+  generation, never newer recovered edits. Online/offline signals display information only.
+- `media-conditional.js` is the shared pure text/tag/folder canonicalizer. Public PATCH
+  requires the v1 envelope and identical nonempty patch/expect leaf sets. Internal fill-only
+  `MediaStore.patch` remains explicit and unchanged; `patchConditional` performs one atomic
+  conditional UPDATE with RETURNING (memory parity), with transactional folder creation.
+  Success carries `conditionalVersion: 1`; conflict current values use normal role redaction.
+- Detail, single-photo AI and bulk AI use the same conditional transport and one bounded
+  item read after Unknown, comparing each field without replay or partial patch. Missing
+  version acknowledgement or malformed evidence cannot clean local work.
+
+Parent verification: full uploader typecheck/Vitest against disposable PostgreSQL, site
+Vitest/i18n and Astro checks/build, plus real-browser two-tab and request-drop/offline scenarios.
+Exercise each page key with stale, missing and malformed restored bases; own late receipt
+adoption with newer text; same-account interleaved record cleanup/re-keying; A→B author/admin,
+logout/expiry and legacy quarantine; storage-quota refusal of replacement; conflict rebase and
+stored reload with both locales and images. Media scenarios must include same-field races,
+unrelated-field success, canonical tags/controls, old/new client-server envelopes, malformed
+acknowledgements and reads, mixed unknown results, detail edits during requests, single/bulk
+AI empty-fill races, and session-end pause/no navigation. No worker ran checks or browser
+sessions for this handoff. The actual deployment-mount restriction above is unchanged.
+
+### Observed #306 qualification
+
+After that source handoff, parent verification passed the full uploader typecheck and
+PostgreSQL-enabled suite, Astro check, site suite and actual build at `358573a`. Real-browser
+qualification covered owner/context isolation, all four page keys, stale/missing/malformed
+bases, late receipts with newer edits, conflicts, offline/no-replay behavior and conditional
+Media detail/single-photo/bulk-AI interruption.
+
+Real storage exhaustion exposed an inaccurate generic outcome message. Both stored-version
+replacement and explicit rebase now identify the local-storage refusal. The actual browser
+recheck retained earlier records byte-for-byte and kept newer DE/EN input in the open form,
+without pretending the newer text had been persisted. Neither refusal nor explicit recovery
+retry sent a mutation. Removing only the test's new quota-filler keys allowed both choices;
+a subsequent explicit Save was acknowledged normally. The narrow keyboard warning was
+inspected. Recovery chrome remains English in the current admin; the DE dictionary is also
+served and completeness-tested, not claimed as a separately exercised German admin surface.
+
+Private exact records and runtime artifacts remain outside version control. No owner data
+was used, and the actual deployment-mount gate above remains unchanged.
+
+The first #306 final-head CI attempt exposed a test synchronization defect in inherited
+upload recovery coverage: 300 event-loop turns did not guarantee completion of real
+filesystem reads for the next bounded receipt page. The tests now await actual receipt
+acceptance/finalization signals, retaining the 105-receipt continuation assertion and
+the normal test deadline. No recovery behavior or guard was relaxed. All twelve focused
+upload-service cases passed after this repair; subsequent full-suite and final-head CI
+results are recorded separately in the PR and execution ledger.
+
+Independent PR review then found that preserving newer Media inputs also discarded the
+acknowledged comparison base. The next Save could falsely clean a reversion to the original
+value, or conflict with the author's own acknowledged write. The repair advances only the
+submitted, acknowledged leaves while keeping newer input and unrelated expectations intact;
+a settled comparison is cleared. Both subsequent-save regressions failed before the fix.
+
+Actual `a63f937` main/PostgreSQL/browser qualification held genuine committed200 responses
+at the response stage, then exercised A→B→A, A→B→C, nested DE alt/caption reversion, independent
+untouched EN updates, and real409 → Use mine → newer typing → ordinary Save. Subsequent
+requests used the acknowledged leaf bases and stored the intended values without replay,
+false-clean or unrelated-field overwrite. Desktop/320px dirty/saved state and keyboard focus
+were inspected. Fresh synthetic fixtures and raw evidence remain private and retained;
+the owned session, interception, app and tabs were closed.
+
+A second independent review found a native-select boundary: an acknowledged item can
+name a folder created after the page loaded. Omitting that option made the native select
+empty, so the next unrelated Save could move the photo to root. The detail renderer now
+includes the current item's folder without adopting unrelated dirty inputs or refreshing
+the full folder list. Both acknowledgement and Use stored regressions failed before repair.
+
+Actual `e09184f` qualification used two real browser tabs, new folders and genuine conditional
+200/409 responses. Subsequent unrelated Saves omitted folder from both patch and expectations;
+native selected options, HTTP readback and PostgreSQL agreed on the remote folder. A held
+committed200 plus newer title/DE-caption edits retained acknowledged leaf expectations and
+an independent EN-caption update. Six qualifying UI PATCHes were200/200/409/200/200/200,
+without automatic replay. Settled desktop/320px controls were inspected. Synthetic sessions
+were revoked, both tabs closed and the app stopped; retained evidence records harness limits.
+
+A third review found that Use stored could replace and falsely clean the form while a
+Use mine request was pending. Save and both conflicting recovery choices now share the
+pending-state gate; the replacement handler also refuses a forced event while saving.
+A stored-value read is tied to its comparison object, so a late response cannot reopen a
+comparison that an acknowledged write has already settled. Both consumer regressions failed
+before repair; all 50 Media DOM cases passed afterward.
+
+Actual `5397a2a` qualification used two browser tabs and real PostgreSQL-backed conditional
+writes. Response-stage interception held genuine committed200 responses without replacing
+their bodies: native Tab skipped the disabled choices, Mine remained dirty, and release
+produced the acknowledged clean form. A genuine older Check stored response released after
+the PATCH acknowledgement did not reopen the comparison. Independent caption Saves retained
+their leaf expectations without resending title; HTTP and SQL confirmed the intended title.
+The scoped record contains 14 intentional UI PATCHes (10 successful, four conflicts),
+including disclosed preliminary/capture repetitions, and zero spurious PATCHes. Desktop and
+320px keyboard states were inspected. Interceptions and observers were removed, owned
+sessions revoked, tabs closed and the app stopped; synthetic data and evidence are retained.
+
+A fourth review separated panel lifetime from edit generation: navigating away and back
+while a title write was pending creates a new form, not newer typing in the original form.
+The write now captures that form's title input identity. A clean reopened form adopts the
+canonical acknowledgement; a dirty reopened form retains its inputs and original comparison
+base. A discarded form's late conflict cannot attach to the new form. Newly rendered Save
+buttons inherit the pending gate. Three consumer regressions failed before repair; all
+53 Media DOM cases passed afterward.
+
+Actual `003357d` qualification used two uploaded synthetic photos, native Discard/navigation,
+two browser tabs and held genuine PostgreSQL-backed 200/409 responses. Clean and dirty reopen
+paths both produced caption-only subsequent PATCHes, preserving the acknowledged title.
+An old409 did not create a comparison on the reopened dirty form, while a new stale title
+edit genuinely returned409 against its original base. Each mandatory observation window had
+two explicit PATCHes and no automatic/replay write; HTTP readbacks and final SQL agreed.
+Desktop/320px focus and pending controls were inspected. This focused supplement does not
+qualify image rendering: fixture thumbnail URLs used the wrong loopback origin; an optional
+final recovery also left a stale grid label although detail/SQL were correct. The retained
+record names those limits. Owned sessions/cookies were cleared, interceptions detached,
+both tabs closed and the app stopped.
+
+The next full review established that the stale grid label was a listing regression, not
+merely a fixture limitation: detail-only adoption also left filtered membership, ordering,
+total and selection stale. Successful acknowledgements and explicit Use stored now invoke
+the existing sequenced listing reload. Its dirty-panel guard preserves newer inputs and
+comparison bases; its request tickets reject superseded queries. Three consumer regressions
+failed before repair; all56 Media DOM cases passed afterward.
+
+Actual `e93ba96` qualification verified Save A→B and genuine second-tab409 → Use stored:
+the photo left the filtered list, selection/bulk actions cleared, and canonical title/folder
+appeared in refreshed views. A genuine post-save listing200 held while the author typed
+preserved exact dirty nodes, focus, scroll and comparison bases on release, while grid title
+and ordering updated. Caption-only subsequent PATCHes omitted title/folder. Native320px
+dirty reopen retained the lifetime protections. Both correct-origin thumbnails returned
+HTTP200 WebP; HTTP and PostgreSQL readbacks agreed. The record includes13 explicit PATCHes
+(11 successes, two conflicts), fixture/exploratory writes and excluded mis-targeted holds;
+no recovery replay was observed. Sessions, cookies, tabs, app and interceptions were cleaned.
+
+## #306 current-dev integration (2026-11-01)
+
+Merged `origin/dev` at `84509f1` (after #305 landed). Resolutions: the editor's
+stash restore keeps dev's #332 partial-restore handling, published-slug
+retention and the #345 token clearing, and #306's `guard.restoreGeneration`
+now runs inside the populated branch before `writeRecovery.restore`. The two
+dev media-browser completion tests now assert #306's conditional detail-save
+envelope (`{ conditional: { version: 1, expect, patch } }`) instead of a bare
+patch.
+
+Verification: uploader `tsc` and full suite with isolated PostgreSQL 4339/4339;
+site 763/763 with PostgreSQL, `astro check` 0/0/0, `npm run build`. Runtime on
+a fresh database: receipt upload accepted; conditional PATCH 200, a stale
+expectation 409 `media_changed` without writing, an unconditional PATCH 400.

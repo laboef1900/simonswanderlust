@@ -308,21 +308,6 @@ describe('MediaApi fetch client', () => {
     await expect(client.deleteFolder!('x' as never)).rejects.toMatchObject({ message: 'folder is not empty', status: 409 });
   });
 
-  it('sends JSON bodies and builds item URLs from the key', async () => {
-    const api = load();
-    const calls: { url: string; init: { method: string; body?: string } }[] = [];
-    const client = api.makeClient({
-      fetch: async (url: string, init: { method: string; body?: string }) => {
-        calls.push({ url, init });
-        return { status: 200, ok: true, json: async () => ({ ok: true }) };
-      },
-      XMLHttpRequest: class {},
-    });
-    await client.patch!('trips/x/hero' as never, { title: 'T' } as never);
-    expect(calls[0]!.url).toBe('/media/items/trips/x/hero');
-    expect(calls[0]!.init.method).toBe('PATCH');
-    expect(JSON.parse(calls[0]!.init.body!)).toEqual({ title: 'T' });
-  });
 });
 
 describe('MediaApi search helpers', () => {
@@ -383,7 +368,8 @@ describe('media client DOM safety', () => {
 
   it('the page loads the split modules rather than inlining the logic', () => {
     expect(page).toContain('<script src="/admin/media-api.js"></script>');
-    expect(page).toContain('<script src="/admin/media-browser.js"></script>');
+    expect(page).toContain('<script type="module" src="/admin/media-conditional.js"></script>');
+    expect(page).toContain('<script type="module" src="/admin/media-browser.js"></script>');
     // "No bundler" permits multiple <script> tags; it never required one file.
     expect(page).not.toMatch(/<script>[\s\S]{200,}<\/script>/);
   });

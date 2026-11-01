@@ -3048,7 +3048,7 @@ dialog.media-ai { max-width: min(38rem, calc(100vw - 2rem)); }
 .media-ai__failures li + li { margin-top: 0.25rem; }
 
 /* Recovery evidence stays in the workspace, never inside a sticky command bar. */
-.write-recovery { margin-block: 1rem; padding-block: 1rem; border-block: 1px solid var(--line-strong); min-width: 0; }
+.write-recovery, .write-connectivity { margin-block: 1rem; padding-block: 1rem; border-block: 1px solid var(--line-strong); min-width: 0; }
 .write-recovery .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; }
 .write-recovery details { margin-block-start: 1rem; }
 .write-recovery summary { cursor: pointer; font-weight: 600; }

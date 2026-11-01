@@ -216,10 +216,33 @@ explicit and restricted to the original account. No File queue is persisted. Pos
 reconciliation performs at most one automatic bounded read after an unknown response or
 receipt-check conflict; **Check again** is manual and never replays a write. Acknowledgement
 adoption checks owner, attempt identity and exact form generation, preserving newer edits.
-Local records contain owner/resource/context, base/attempt metadata and form snapshots,
-not credentials. Logout and expiry preserve drafts. Legacy unknown-owner bytes are
-neither exposed nor deleted, including for admins; private browser-profile recovery is
-manual. Someone with access to the same browser profile can still inspect its storage.
+Local recovery uses immutable owner/resource/context/record keys. No draft storage is read
+or written until the stable authenticated owner is known; restoration checks the envelope
+against that owner and its exact scoped key. Cleanup names only the acknowledged generation's
+exact immutable records, never a resource prefix or another tab's newer work. Stale/missing
+base comparison and explicit rebase or stored-version loading retain the entire previous copy.
+The approved D7 envelope contains non-secret owner/resource/create identity, base token,
+attempt IDs, context/record/generation and attempted form snapshots alongside text and image
+URLs/dimensions. It grants no authority, contains no credentials and is never an executable
+queue. Offline/online events are informational and cannot trigger a request.
+
+Logout and expiry always preserve drafts. Unknown-owner legacy bytes remain unchanged and
+inaccessible through the app, including to admins: no preview, download, import, attribution
+or disposal UI. The original author/device custodian may privately back up the profile,
+inspect/export the exact legacy records in browser tools and manually transfer only their
+own text into an authenticated editor. Disposal requires backup/export and identification
+of exact records, outside the app. This is a browser-profile-access residual: account isolation
+does not encrypt storage or prevent direct inspection by someone with profile access.
+
+Media metadata PATCH uses only `{ conditional: { version: 1, patch, expect } }`. Missing,
+extraneous or legacy top-level mutable fields are refused before mutation. Shared pure
+canonicalization defines text/control/length, tag ordering/deduplication and NFC folder
+comparison. One conditional database UPDATE checks all changed fields atomically; a mismatch
+refuses the whole patch. A conflict's current item uses the same GPS/uploader redaction as
+ordinary reads. Successful responses require `conditionalVersion: 1`; a nested envelope
+cannot mutate an old handler's top-level fields, and a missing marker never cleans local edits.
+Detail, single AI and bulk AI callers all participate; no schema column or dump-version change
+is involved. Unknown outcomes get one read and field-by-field comparison, not automatic replay.
 
 **Qualification and deployment restriction:** inherited native-binding evidence covers
 macOS arm64/APFS and native DHI Node 26.12.1/glibc amd64+arm64 on inspected ext4 bind mounts
