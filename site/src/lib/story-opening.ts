@@ -1,4 +1,9 @@
 import type { MarkdownHeading } from 'astro';
+import type { Element } from 'hast';
+import { unified } from 'unified';
+import rehypeParse from 'rehype-parse';
+
+const parser = unified().use(rehypeParse, { fragment: true });
 
 /**
  * Split a story's rendered body into its opening section and the rest.
@@ -12,29 +17,36 @@ import type { MarkdownHeading } from 'astro';
  * `## Jungle` → intro) as one opening rather than an empty one. The rest is
  * rendered centred and wider below the spread.
  *
- * "Top-level" is the shallowest depth the body uses, so a story written in
- * `###` alone splits like one written in `##`. Headings are located by the
- * `id` rehype-slug gave them, which is what `headings` carries; a body whose
- * markup does not match its metadata is returned whole rather than cut in a
- * guessed place.
+ * "Top-level" is the shallowest depth among headings directly under the body
+ * root, so a story written in `###` alone splits like one written in `##`.
+ * Headings inside quotes or lists stay with their enclosing nodes. The root
+ * headings must match the `id` and depth in the renderer's metadata; a mismatch
+ * returns the body whole rather than cutting in a guessed place. Parsing only
+ * locates source offsets: the already-sanitized HTML is never reserialized.
  */
 export function splitOpening(html: string, headings: readonly MarkdownHeading[]): { opening: string; rest: string } {
   const whole = { opening: html, rest: '' };
   if (headings.length === 0) return whole;
-  const depth = Math.min(...headings.map((h) => h.depth));
+  const tree = parser.parse(html);
+  const rootHeadings = tree.children.filter((node): node is Element =>
+    node.type === 'element' && /^h[1-6]$/.test(node.tagName));
+  const metadataDepths = new Map(headings.map((heading) => [heading.slug, heading.depth]));
+  let depth = Infinity;
+  for (const node of rootHeadings) {
+    const nodeDepth = Number(node.tagName[1]);
+    if (metadataDepths.get(String(node.properties.id ?? '')) !== nodeDepth) return whole;
+    depth = Math.min(depth, nodeDepth);
+  }
   let cursor = 0;
-  for (const heading of headings) {
-    if (heading.depth !== depth) continue;
-    const open = new RegExp(`<h${depth}\\b[^>]*\\bid="${heading.slug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`, 'g');
-    open.lastIndex = cursor;
-    const match = open.exec(html);
-    if (!match) return whole;
-    if (html.slice(cursor, match.index).trim() !== '') {
-      return { opening: html.slice(0, match.index), rest: html.slice(match.index) };
+  for (const node of rootHeadings) {
+    if (Number(node.tagName[1]) !== depth) continue;
+    const start = node.position?.start.offset;
+    const end = node.position?.end.offset;
+    if (start === undefined || end === undefined) return whole;
+    if (html.slice(cursor, start).trim() !== '') {
+      return { opening: html.slice(0, start), rest: html.slice(start) };
     }
-    const close = html.indexOf(`</h${depth}>`, match.index);
-    if (close === -1) return whole;
-    cursor = close + `</h${depth}>`.length;
+    cursor = end;
   }
   return whole;
 }

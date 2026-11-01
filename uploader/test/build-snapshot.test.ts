@@ -30,6 +30,26 @@ function capturePool(languageRows: unknown[], databaseSnapshot = '00000003-00000
 }
 
 describe('build language capture integrity', () => {
+  it.each([
+    { baseUrl: 'https://blog.example', imgHost: 'images.example' },
+    { baseUrl: 'https://cdn.example', imgHost: 'BLOG.example:443' },
+    { baseUrl: 'https://cdn.example', imgHost: 'user@images.example' },
+  ])('refuses captured canonical conflicting with actual image roles %j before invoking the build', async originRoles => {
+    const fixture = capturePool([languageRow], undefined, { ...identity, canonical_origin: 'https://blog.example' });
+    const consume = vi.fn(async () => {});
+    await expect(withBuildSnapshot(fixture.pool, { timeoutMs: 5000, originRoles }, consume))
+      .rejects.toMatchObject({ code: 'invalid_identity', field: 'canonicalOrigin' });
+    expect(consume).not.toHaveBeenCalled();
+    expect(fixture.release).toHaveBeenCalledExactlyOnceWith(true);
+  });
+  it('captures a normalized canonical separately from the image URL and routing authority', async () => {
+    const fixture = capturePool([languageRow], undefined, { ...identity, canonical_origin: 'https://BÜCHER.example:443/' });
+    await withBuildSnapshot(fixture.pool, { timeoutMs: 5000,
+      originRoles: { baseUrl: 'https://cdn.example', imgHost: 'images.example' } }, async snapshot => {
+      expect(snapshot.identity.canonicalOrigin).toBe('https://xn--bcher-kva.example');
+      expect(snapshot.language).toEqual({ primary: 'en', locales: ['en', 'de'] });
+    });
+  });
   it('captures normalized language from the same exporter connection, without history in the child contract', async () => {
     const fixture = capturePool([{ ...languageRow, enabled_locales: ['de', 'en'] }]);
     await withBuildSnapshot(fixture.pool, { timeoutMs: 5000 }, async snapshot => {

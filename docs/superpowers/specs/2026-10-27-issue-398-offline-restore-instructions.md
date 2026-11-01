@@ -55,6 +55,22 @@ Replace the stale “users, posts and pages only” claim with the current dump 
 #295 remains independent: its retained test fixture was inspected read-only, not executed or
 edited, and none of its results are claimed here. This implementation used its own topology.
 
+Subsequent #295 evidence (2026-10-29) is recorded separately in the
+[whole-blog isolated restore runbook](../../2026-10-29-restore-rehearsal.md). It covers
+nonempty media/comments/secrets and a fresh target with distinct bind/database/project,
+followed by an actual rebuild and desktop/mobile gallery decoding on its final locked runtime.
+It does not retroactively broaden the #398 evidence below, establish upgrade/downgrade
+eligibility, or claim offsite recovery. Its earlier dependency-mismatched image attempt and
+key-error scenario provenance remain explicitly bounded in that record.
+
+For a fresh whole-blog recovery, complete image-chain and matching settings/key recovery
+**before** restarting the restored app; otherwise boot reconciliation can mark media missing.
+Extract images oldest-first into the fresh target's empty `images/`, never by clearing an
+existing installation. The private archive remains manifest-paired and is handled by the CLI.
+Retain the verified undo set and immutable recovery inputs. Inspect both the resolved host
+`/data` bind and the CLI's database target before confirming; a separate Compose project
+alone does not isolate the default relative bind or port 3000.
+
 ## Observed disposable evidence — 2026-10-28
 
 - Compose project `swl-issue398-offline`, own `.issue-runtime/drill-pg` and `drill-data`

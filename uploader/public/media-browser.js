@@ -50,12 +50,16 @@
     onUnauthed: function () { uploads.pause(); say(copy.uploadNeedsAuth); },
     canWrite: function () { return !!state.me && !uploads.snapshot().paused; },
   });
+  // Upload completion means the original was accepted, not that encoding is
+  // ready. Reload the current query so the server supplies its actual status
+  // and applies the author's folder, filters, sorting and page.
+  var refreshUploads = api.debounce(function () { reload(undefined, true); }, 200);
   var uploads = api.createUploadQueue(client, {
     onChange: function (snap) {
-      var completed = snap.done > (state.queue ? state.queue.done : 0);
+      var previousDone = state.queue ? state.queue.done : 0;
       state.queue = snap;
       renderQueue();
-      if (completed) void reload();
+      if (snap.done > previousDone) refreshUploads();
     },
   });
   window.addEventListener('beforeunload', function (event) {
@@ -143,25 +147,53 @@
   // win, or the grid, the total in say() and the pruned selection all describe
   // a query the author has already typed past. See makeSequence.
   var loads = api.makeSequence();
+  var foregroundPending = false;
+  var foregroundMessage;
 
-  async function reload(msg) {
+  async function reload(msg, background) {
     var ticket = loads.next();
+    // A newer completion request may win the response race, but must still
+    // finish an explicit Save/filter/folder action's pending render.
+    if (!background) {
+      foregroundPending = true;
+      foregroundMessage = msg;
+    }
     try {
-      var res = await client.list({
+      var query = {
         folder: state.folder, recursive: state.recursive, q: state.q, tag: state.tag,
         status: state.status, sort: state.sort, order: state.order,
         page: state.page, pageSize: state.pageSize,
-      });
+      };
+      var res;
+      while (true) {
+        res = await client.list(query);
+        if (!loads.isCurrent(ticket)) return;
+        var lastPage = Math.max(1, Math.ceil(res.total / query.pageSize));
+        if (query.page <= lastPage) break;
+        // Deletions, moves and status changes can remove the current page.
+        // Only move backwards: concurrent shrinkage may need another correction,
+        // but cannot keep this load chasing an ever-growing page count.
+        query.page = lastPage;
+        if (res.total === 0) break;
+      }
       var folders = await client.folders();
       if (!loads.isCurrent(ticket)) return;
+      state.page = query.page;
       state.items = res.items;
       state.total = res.total;
       state.folders = folders;
       // Drop selections for photos no longer in view.
       var visible = state.items.map(function (i) { return i.key; });
       state.selected = state.selected.filter(function (k) { return visible.indexOf(k) !== -1; });
-      render();
-      say(msg != null ? msg : state.total + ' photo(s)');
+      // Capture at response time: the author may have moved focus while loading.
+      var active = document.activeElement;
+      var focusedKey = active && $('grid').contains(active) ? active.dataset.key : null;
+      var message = foregroundPending ? foregroundMessage : msg;
+      render(!foregroundPending);
+      if (focusedKey) focusCell(visible.indexOf(focusedKey));
+      say(message != null ? message : state.total + ' photo(s)');
+      foregroundPending = false;
+      foregroundMessage = undefined;
     } catch (e) {
       if (loads.isCurrent(ticket)) fail(e);
     }
@@ -183,6 +215,7 @@
       var li = document.createElement('li');
       var btn = el('button', 'folder-btn' + (state.folder === path ? ' is-current' : ''), label);
       btn.type = 'button';
+      btn.setAttribute('aria-current', state.folder === path ? 'true' : 'false');
       btn.style.paddingLeft = (0.4 + depth * 0.8) + 'rem';
       btn.addEventListener('click', function () {
         state.folder = path;
@@ -353,7 +386,7 @@
   // is left untouched — whatever reload() or a selection change did to the rest
   // of the page — until the edits are saved or explicitly discarded
   // (see detailReplaceable).
-  function renderDetail() {
+  function renderDetail(background) {
     if (state.detailDirty) return;
     var item = state.items.filter(function (i) { return i.key === state.detailKey; })[0];
     if (!item) state.detailKey = null;
@@ -365,6 +398,10 @@
       state.detailChanged = null;
     }
     var panel = $('detail');
+    // Background completion must not remove a control between focus and typing.
+    // Explicit actions (including Save) still refresh the clean panel normally.
+    if (background && item && panel.dataset.key === item.key
+      && panel.contains(document.activeElement)) return;
     panel.innerHTML = '';
     // A suggestion belongs to the photo it was asked for: once the panel shows
     // another photo (or none), the request is abandoned, never applied, and
@@ -513,12 +550,14 @@
     }
   }
 
-  function render() {
-    renderFolders();
+  function render(background) {
+    // Completion changes photos, not folder navigation. Queue emissions already
+    // repaint their own state; replacing either here would discard focused controls.
+    if (!background) renderFolders();
     renderGrid();
     renderToolbar();
-    renderDetail();
-    renderQueue();
+    renderDetail(background);
+    if (!background) renderQueue();
   }
 
   // ---- selection ----------------------------------------------------------

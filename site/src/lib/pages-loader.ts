@@ -1,9 +1,10 @@
 import type { Loader } from 'astro/loaders';
 import { loaderPool, withLoaderSnapshot } from './loader-pool.js';
-import { foreignBodyImageSources, transformBodyImages, type ImageDims } from './body-images.js';
+import { ABOUT_BODY_SIZES, BASIC_PAGE_BODY_SIZES, foreignBodyImageSources, transformBodyImages, type ImageDims } from './body-images.js';
 import { imageOrigin, retargetImageOrigins } from './images.js';
 import { siteLanguage } from './site-language.js';
 import { assertLoaderLanguage } from './build-language.js';
+import { proseDescription } from './seo.js';
 import { PAGE_KINDS } from './page-kinds.js';
 import { pageDataSchema, publishedPageRows } from './page-content.js';
 
@@ -51,15 +52,22 @@ export function postgresPagesLoader(): Loader {
         });
         const enabledRows = publishedPageRows(rows, language.locales);
         for (const row of enabledRows) {
-          // Analyze the original, sanitized body before portability rewrites or image resolution.
-          const rendered = await renderMarkdown(row.body_markdown);
+          const input = rowToPageEntry(row, galleryOrigin);
+          const rendered = await renderMarkdown(input.body);
+          // Registered images were re-pointed at this host (the stored origin is advisory —
+          // see retargetImageOrigins); any reference still foreign would hot-link.
           if (foreignBodyImageSources(rendered.html, galleryOrigin).length) {
             throw new Error(`Unsafe published page images: ${row.key}/${row.locale}`);
           }
-          const input = rowToPageEntry(row, galleryOrigin);
-          const data = await parseData({ id: input.id, data: input.data });
-          if (input.body !== row.body_markdown) Object.assign(rendered, await renderMarkdown(input.body));
-          rendered.html = transformBodyImages(rendered.html, input.images, galleryOrigin);
+          // Extract before responsive figures can split an image's paragraph.
+          const data = await parseData({
+            id: input.id,
+            data: { ...input.data, description: proseDescription(rendered.html, '') },
+          });
+          rendered.html = await transformBodyImages(rendered.html, input.images, galleryOrigin, {
+            locale: row.locale,
+            inlineSizes: row.key === 'about' ? ABOUT_BODY_SIZES : BASIC_PAGE_BODY_SIZES,
+          });
           store.set({ id: input.id, data, body: input.body, rendered });
         }
         logger.info(`postgres-pages: loaded ${enabledRows.length} entries`);

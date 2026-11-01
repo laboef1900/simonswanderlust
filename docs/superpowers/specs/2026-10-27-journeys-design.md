@@ -1018,3 +1018,39 @@ At `2e916d8`, all six checks passed with two uploader workers and no file-parall
 override: 160 uploader files / 3,861 tests, 40 site files / 573 tests, both type checks
 and the actual build. CI run `40981249705` then passed. The original failing run is
 retained alongside the repair; a blind retry did not establish qualification.
+
+## #309 implementation approval and current-dev integration (2026-11-01)
+
+**Implementation approval (G2).** The owner approved implementing #309 (journey
+authoring) and #310 (public journeys) in the 2026-10-31 held-PR plan decision
+("G2: Approve partial (#309 journeys)"). This records that approval for #309;
+#310 additionally keeps its screen-reader gate (G3, 320/390 px) before merge.
+No story URL, slug or owner-data operation is approved by this record.
+
+**Integration.** PR #491 was retargeted from the `feature/issue-309-prerequisites`
+comparison branch to `dev` once #485 and #489 had landed, and merged `origin/dev`
+at `1d8b291`. The dump format stays **v14** (dev is at v13; no re-allocation).
+Resolutions: boot order is schema → read-only namespace report → onboarding →
+`repairJourneyOrphans`; `APP_SEGMENTS` reserves `gallery`, `journey-admin` and
+`publication`; the onboarding catalog keeps the journey nullable columns beside
+dev's; navigation saves render the #297 build outcome inside #317's publication
+begin/end; `journey-snapshot.ts` takes `MAX_GALLERY_TEXT` from its new home; the
+#492 pre-route recovery set reports no journey tables; the split-origin boot test
+places journey heroes on the image origin.
+
+**Boot report (G1 follow-up).** Booting this head against an isolated restored
+copy of the owner database (`pg_dump` read only; owner DB untouched) wrote a v9
+pre-migration recovery set (18 posts, 2 pages, 698 media), migrated, built the
+initial release and printed **no** reserved-route collision or unknown-page lines,
+matching the 2026-10-31 G1 inventory; `/`, `/uber-mich/`, `/en/about-me/`,
+`/karte/` answered 200 and `/rundreisen/`, `/en/journeys/` 404 (public rendering
+is #310).
+
+**Verification.** Uploader `tsc` and full suite with isolated PostgreSQL
+4692/4692; site 795/795 with PostgreSQL, `astro check` 0/0/0, `npm run build`.
+Runtime on a fresh database: two published stories; journey create 201, reorder
+200, a second tab's stale save 409 `conflict`, publish 200 with a successful
+build, renaming a published locale's slug without confirmation 409 `slug_locked`,
+deleting a member story removes it from the journey; an in-app backup is v14 with
+journeys, locales, members and the published snapshot, and restores into a fresh
+migrated schema with the same counts.

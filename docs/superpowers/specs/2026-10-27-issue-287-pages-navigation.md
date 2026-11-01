@@ -1053,9 +1053,10 @@ The implementation extends the existing #285 `[...path].astro` catalogue, not
 parallel fixed route files. `pages` and `navigation` Content Layer collections
 import the same exported snapshot already used by trips/identity/language.
 Eligibility is applied before row parsing; Zod then rejects malformed published
-registry rows, missing enabled counterparts and invalid images. The original
-sanitized body is checked for foreign image origins before portability rewriting
-and guarded responsive-picture/gallery rendering. About stays the existing
+registry rows, missing enabled counterparts and invalid images. The sanitized
+body is checked for foreign image origins after portability rewriting (which
+re-points only registered `images` keys at this host, so it cannot introduce a
+foreign load) and before guarded responsive-picture/gallery rendering. About stays the existing
 resource and fixed localized route exactly once, including its fallback text.
 Generic pages have canonical/sitemap/actual-counterpart hreflang, not story feeds.
 The existing #288 sanitized saved-draft preview remains the preview surface.
@@ -1175,3 +1176,70 @@ separate dependency qualification, not claimed by this proof. Likewise, manual
 screen-reader assessment, actual-target collision/deployment qualification,
 independent implementation-PR review, exact-final-head CI and resulting-stack
 qualification remain distinct. No merge, release or deployment is authorized.
+## #288 current-dev integration (2026-11-01)
+
+Merged `origin/dev` at `b51a25d` (after #276, #279, #280, #281, #284, #285, #297,
+#344 and the gallery-metadata warnings landed). Resolutions, keeping both intents:
+
+- **Build outcome (#297).** Page save/publish/unpublish/delete answer 200 with the
+  stored pair and the projected build report, never the earlier 502 `persisted`
+  envelope; `about.html` and `pages.html` render failed builds through
+  `BuildReporting` while keeping the stored state.
+- **Gallery warnings.** `mergePageUpdate` normalizes both locales with the async
+  `normalizeGalleryFences`; saves return transient `galleryWarnings` that are never
+  stored or snapshotted. Preview uses the async `transformBodyImages`.
+- **#344 serialization.** `transaction` already holds `site_language` FOR UPDATE
+  before `readPage`, which serializes every page mutation including two creations
+  of a never-saved key; no extra advisory lock was added. #344's suite now uses
+  the `contact` kind (only known kinds are writable) and expresses #288's token
+  contract: a supplied `updatedAt` for an absent page is `not_found` for both
+  racers, so creation is always token-less.
+- **Boot order.** `initializeApplicationSchema` → read-only
+  `reportNamespaceCollisions` → `initializeOnboarding`; the onboarding bootstrap
+  catalog accepts the additive page columns, `site_nav` (seed must equal
+  `DEFAULT_NAVIGATION`) and `pages_locale_slug_idx`.
+
+Verification on the merge: uploader `tsc` and full suite 4155/4155 with isolated
+PostgreSQL; site `astro check` 0/0, `npm run build`, and the zero-content build
+integration 4/4. Runtime on a fresh database: page catalogue, contact draft
+(200, no build), publish (200, build ok), reserved slug `karte` refused 409,
+About save returns `de:unknown_field` gallery warning; with a read-only
+`releases/`, unpublish and an editor Publish both answered 200 with
+`release_write_failed` and the editor showed the saved state with the Settings
+retry link; delete (200, build ok) and the Pages list rendered. The managed
+headless browser does not deliver native `<dialog>` close events, so the
+confirmation was stubbed in-page for the editor click. Public rendering of
+non-About pages remains #289 (`/kontakt/` is 404 at this head by design). The
+G1 read-only owner inventory found no reserved-route collisions, matching a
+silent boot report.
+
+## #289 current-dev integration (2026-11-01)
+
+Merged `origin/dev` after #288 (#484) and the pre-route boot fix (#492) landed.
+Resolutions, keeping both intents:
+
+- **Page loader.** One render per row: registered images are re-pointed at this
+  host first (`retargetImageOrigins`; the stored origin is advisory), then any
+  still-foreign reference refuses the build, then the row's prose `description`
+  (#273 SEO) is extracted before responsive pictures are injected. Basic pages
+  use `BASIC_PAGE_BODY_SIZES` for their `max-w-3xl` column; About keeps
+  `ABOUT_BODY_SIZES`. `BasicPage` takes the loader description instead of a
+  regex-stripped body. The content schema is `pageDataSchema` plus `description`.
+- **Publish gate.** `foreignBodyImageSources` (shared with the loader) now reads
+  `analyzeRenderedBody`; the gate returns `hasH1` beside it.
+- **Navigation save (#297).** `PUT /settings/navigation` answers 200
+  `{ saved, build }` with the projected build report; the settings page adopts
+  the token either way and names the failure cause. The 502 `persisted`
+  envelope is gone.
+- `MAX_GALLERY_TEXT` now comes from `uploader/public/gallery-photo-line.js`.
+
+Verification: uploader `tsc` and full suite with isolated PostgreSQL (4166/4167,
+the remaining SQL-recovery case passes against its pg_dump wrapper database);
+site suite with PostgreSQL 763/763, `astro check` 0/0/0, `npm run build`,
+zero-content build 4/4. Runtime on a fresh database: contact page publish →
+`/kontakt/` and `/en/contact/` 200 with hreflang pair and prose description, in
+the sitemap; navigation save through the real settings page with a read-only
+`releases/` → saved, cause shown; successful save → footer legal link and
+header label live; unpublish → 404 and the footer link is omitted. Owner copy
+(isolated restore): boot report silent (matches G1), initial release built,
+`/`, `/uber-mich/`, `/en/about-me/`, `/karte/` 200.

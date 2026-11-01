@@ -62,10 +62,20 @@ describe('build identity snapshot', () => {
     expect(() => parseIdentitySnapshot(JSON.stringify({ ...snapshot, tagline: source.tagline }))).toThrow(IdentityError);
     expect(() => parseIdentitySnapshot(JSON.stringify({ ...snapshot, studioDescriptor: source.studioDescriptor }))).toThrow(IdentityError);
   });
-  it('validates locale membership and reserved canonical origins', () => {
+  it('validates locale membership and canonical-origin shape', () => {
     for (const locales of [[], ['fr'], ['de', 'de']]) expect(() => parseIdentitySnapshot(JSON.stringify({ ...toIdentitySnapshot(neutralIdentity()), locales }))).toThrow(IdentityError);
-    for (const canonicalOrigin of ['http://public.example', 'https://1.2.3.4', 'https://example.com/path', 'https://u:p@example.com', 'https://example.com/']) expect(() => normalizeIdentity({ ...neutralIdentity(), canonicalOrigin })).toThrow(IdentityError);
+    for (const canonicalOrigin of ['http://public.example', 'https://1.2.3.4', 'https://example.com/path', 'https://u:p@example.com']) expect(() => normalizeIdentity({ ...neutralIdentity(), canonicalOrigin })).toThrow(IdentityError);
     expect(normalizeIdentity({ ...neutralIdentity(), canonicalOrigin: 'http://localhost:3000' }).canonicalOrigin).toBe('http://localhost:3000');
+  });
+  it.each([
+    ['https://EXAMPLE.com:443/', 'https://example.com'],
+    ['https://BÜCHER.example/', 'https://xn--bcher-kva.example'],
+    ['https://example.com:8443/', 'https://example.com:8443'],
+  ])('normalizes %s consistently through stored identity and build snapshots', (input, expected) => {
+    const stored = normalizeIdentity({ ...neutralIdentity(), canonicalOrigin: input });
+    expect(stored.canonicalOrigin).toBe(expected);
+    const snapshot = { ...toIdentitySnapshot(neutralIdentity()), canonicalOrigin: input };
+    expect(parseIdentitySnapshot(JSON.stringify(snapshot)).canonicalOrigin).toBe(expected);
   });
   it('accepts captured hash-named asset paths and rejects incomplete or traversing assets', () => {
     const snapshot = toIdentitySnapshot(neutralIdentity());

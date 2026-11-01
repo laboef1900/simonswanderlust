@@ -116,3 +116,17 @@ proof implements neither #297 nor #316.
 ## Owner decision and containment
 
 Approve this commit-point semantics, log-only cleanup warning and fail-closed lease behavior, including SECURITY.md reconfirmation. No new permission, data migration, API or deletion policy is requested. If implementation is defective, revert only this patch on a security-supported image or roll forward; retain the promoted release and persistent data. Reverting the patch can restore the known false-failure symptom and is not a rollback of published content. Never downgrade to codecs prohibited by #347.
+
+### Integration repair — snapshot cancellation after promotion (2026-10-31)
+
+Integrating current `dev` put every production build inside `withBuildSnapshot`, which
+races the deployment against lease/connection/deadline aborts and rejects with the abort
+reason (after waiting for the deployment to settle). A loss observed while pruning therefore
+turned a committed promotion back into `ok: false`. `buildAndDeploy` now reports the commit
+point to `runOnce` immediately after the `current` rename, and `runOnce` returns
+`{ ok: true, release }` for a promoted stamp even when the wrapper rejects. Pruning still stops
+at the first lost-lease check, so no further cleanup write is admitted; the wrapper's own
+reject-on-abort contract is unchanged. Regression: `build-snapshot.integration.test.ts`
+drives a real pool-backed builder, loses the lease at the first cleanup ownership check after
+the flip, and asserts success, the served release and the retained old release (failed
+before the fix with `{ ok: false, error: 'lease lost' }`).

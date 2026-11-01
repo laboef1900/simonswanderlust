@@ -86,11 +86,13 @@ if (migration.posts && (!migration.language || !migration.omitted || !migration.
   owner.assertWritable();
 }
 await initializeApplicationSchema(pool, owner.assertWritable);
+owner.assertWritable();
+// Read-only boot report of reserved-namespace collisions (#287 D2.6); never mutates content.
+await reportNamespaceCollisions(pool, (message) => console.warn(message));
 await initializeOnboarding(pool, { storageDir, settingsPath, backupDir, siteDir }, bootEvidence, owner.assertWritable);
 owner.assertWritable();
 await repairJourneyOrphans(pool, runtime);
 owner.assertWritable();
-await reportNamespaceCollisions(pool, (message) => console.warn(message));
 const identityStore = await pgSiteIdentityStore(pool);
 const secrets = pgSecretsStore(pool, encryptionKey);
 // AI provider registry migration (spec §5), before listen(): copy the legacy
@@ -119,7 +121,7 @@ const importJobs = createImportRunner({ store: pgImportJobStore(pool, runtime), 
 await importJobs.recover();
 owner.assertWritable();
 
-const baseUrl = process.env.PUBLIC_BASE_URL ?? 'https://img.simonswanderlust.com';
+const baseUrl = process.env.PUBLIC_BASE_URL ?? 'http://localhost:3000';
 let imgHost: string;
 try {
   imgHost = process.env.IMG_HOST ?? new URL(baseUrl).host;
@@ -139,6 +141,7 @@ const builder = createSiteBuilder({
   releasesRoot: siteDir,
   lock: workLock,
   pool,
+  originRoles: { baseUrl, imgHost },
   ...runtime,
   applicationName: owner.applicationName + ':build',
 });
@@ -211,8 +214,8 @@ const app = buildServer({
   sessions,
   settings,
   identityStore,
-  language: posts.language,
   onboarding: pgOnboardingStore(pool, owner.isWritable),
+  language: posts.language,
   secrets,
   posts,
   pages,

@@ -4,7 +4,7 @@ import {
   focusPosition,
   imageOrigin,
   largestVariant,
-  PROD_IMAGE_ORIGIN,
+  DEV_IMAGE_ORIGIN,
   retargetImageOrigins,
   srcset,
   sourceFormats,
@@ -176,15 +176,16 @@ describe('imageOrigin', () => {
     expect(imageOrigin('http://localhost:3000/images')).toBe('http://localhost:3000');
   });
 
-  it('falls back to the production origin when the build has no PUBLIC_BASE_URL', () => {
-    expect(imageOrigin(undefined)).toBe(PROD_IMAGE_ORIGIN);
-    expect(imageOrigin('')).toBe(PROD_IMAGE_ORIGIN);
-    expect(imageOrigin('   ')).toBe(PROD_IMAGE_ORIGIN);
+  it('falls back to the development origin when the build has no PUBLIC_BASE_URL', () => {
+    expect(DEV_IMAGE_ORIGIN).toBe('http://localhost:3000');
+    expect(imageOrigin(undefined)).toBe(DEV_IMAGE_ORIGIN);
+    expect(imageOrigin('')).toBe(DEV_IMAGE_ORIGIN);
+    expect(imageOrigin('   ')).toBe(DEV_IMAGE_ORIGIN);
   });
 
   it('falls back on a non-string or unparsable value instead of emitting a broken hint', () => {
-    expect(imageOrigin(42)).toBe(PROD_IMAGE_ORIGIN);
-    expect(imageOrigin('img.simonswanderlust.com')).toBe(PROD_IMAGE_ORIGIN);
+    expect(imageOrigin(42)).toBe(DEV_IMAGE_ORIGIN);
+    expect(imageOrigin('img.simonswanderlust.com')).toBe(DEV_IMAGE_ORIGIN);
   });
 });
 

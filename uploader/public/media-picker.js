@@ -426,8 +426,10 @@ window.MediaPicker = (function () {
       grid.setAttribute('aria-busy', state.loading ? 'true' : 'false');
       count.textContent = state.loading ? copy.pickerPhotosLoading : state.failed ? '' : state.total + ' photo(s)';
       pager.textContent = 'Page ' + state.page;
-      prev.disabled = state.loading || state.page <= 1;
-      next.disabled = state.loading || state.page * state.pageSize >= state.total;
+      // Keep pager buttons focusable while busy AND at the first/last page.
+      // Native disabled would drop keyboard focus; click guards enforce these states.
+      prev.setAttribute('aria-disabled', state.loading || state.page <= 1 ? 'true' : 'false');
+      next.setAttribute('aria-disabled', state.loading || state.page * state.pageSize >= state.total ? 'true' : 'false');
       // Multi-select may commit an empty selection: that removes the gallery.
       // Nothing commits while the gallery's own rows are still being looked up.
       choose.disabled = state.resolving || (!multiple && picked.size() === 0);
@@ -573,8 +575,16 @@ window.MediaPicker = (function () {
       state.page = 1;
       load();
     }, 200));
-    prev.addEventListener('click', function () { state.page = Math.max(1, state.page - 1); load(); });
-    next.addEventListener('click', function () { state.page += 1; load(); });
+    prev.addEventListener('click', function () {
+      if (state.closed || state.loading || state.page <= 1) return;
+      state.page -= 1;
+      load();
+    });
+    next.addEventListener('click', function () {
+      if (state.closed || state.loading || state.page * state.pageSize >= state.total) return;
+      state.page += 1;
+      load();
+    });
     cancel.addEventListener('click', close);
     choose.addEventListener('click', commit);
     // Esc fires `cancel` on a native dialog — clean up the node too.

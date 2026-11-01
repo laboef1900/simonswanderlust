@@ -224,11 +224,30 @@ describe.skipIf(!url)('onboarding PostgreSQL boot and snapshot boundary', () => 
       await pool.query("INSERT INTO media(key,status) VALUES('photo','ready')");
       await pool.query("UPDATE posts SET status='published'");
       await pool.query('UPDATE site_identity SET saved_at=now()');
+      await pool.query("UPDATE site_language SET primary_locale='en', enabled_locales=ARRAY['en'], locked_at=now()");
       const snapshot = await readOnboardingProgress(client);
       expect(snapshot).toMatchObject({ identity: false, ready: false, story: true, published: false, newest: 'a', newestDraft: 'a' });
+      expect(snapshot.language).toMatchObject({ primary: 'de', locales: ['de', 'en'], lockedAt: null });
       await client.query('COMMIT');
     } finally { client.release(); }
-    expect(await pgOnboardingStore(pool, () => true).read()).toMatchObject({ complete: true });
+    expect(await pgOnboardingStore(pool, () => true).read()).toMatchObject({
+      complete: true, language: { primary: 'en', locales: ['en'], lockedAt: expect.any(String) },
+    });
+  });
+  it('does not substitute a default for missing language, while retired projections reveal no configuration', async () => {
+    const store = await boot();
+    await pool.query('DELETE FROM site_language');
+    await expect(store.read()).rejects.toThrow();
+    await pool.query("UPDATE onboarding_state SET state='retired', reason='finished', retired_at=now()");
+    expect(await store.read()).toEqual({ status: 'retired' });
+  });
+  it('derives read-only language from retained publication history without writing the singleton', async () => {
+    const store = await boot();
+    await insertStory('published-before-language');
+    await pool.query('UPDATE posts SET published_at=now()');
+    expect(await store.read()).toMatchObject({ language: { lockedAt: expect.any(String) } });
+    expect((await pool.query('SELECT locked_at FROM site_language')).rows[0].locked_at).toBeNull();
+    expect((await pool.query('SELECT state FROM onboarding_state')).rows[0].state).toBe('eligible');
   });
   it('serializes finish/resume, permanently retires despite later regressions and does not read absent runtime state as eligible', async () => {
     const store = await boot(); await insertStory('a', 'published');

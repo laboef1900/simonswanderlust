@@ -20,7 +20,7 @@ async function page(options: { primary?: 'de' | 'en'; locales?: ('de' | 'en')[];
   const document = Object.assign(dom.document, { documentElement: { lang: 'en' } });
   const initial = { config: structuredClone(DEFAULT_NAVIGATION), updatedAt: '2026-01-01T00:00:00.000Z',
     language: { primary: options.primary ?? 'de', locales: options.locales ?? ['de', 'en'] }, socialLinks: [{ label: '<img onerror=x>', url: 'https://social.example/' }] };
-  const requests: Request[] = []; const confirms: unknown[] = [];
+  const requests: Request[] = []; const confirms: unknown[] = []; const lifecycle: string[] = [];
   const events = new EventTarget();
   const context: Record<string, unknown> = { document, EditorCopy: { en: copy }, BuildCopy: buildCopy, location: { href: '' },
     AbortController, setTimeout: () => 1, clearTimeout() {},
@@ -28,6 +28,7 @@ async function page(options: { primary?: 'de' | 'en'; locales?: ('de' | 'en')[];
     AdminConfirm: { ask: async (question: unknown) => { confirms.push(question); return options.confirm ?? true; } },
     fetch: async (url: string, init?: { method?: string; body?: string }) => {
       const request = { url, method: init?.method ?? 'GET', body: init?.body }; requests.push(request);
+      if (request.method !== 'GET') lifecycle.push('request');
       if (url === '/rebuild/status') return Response.json({ live: null, running: null, last: null, record: 'missing' });
       if (url === '/pages') return Response.json({ pages: [{ key: 'about', status: 'published', locales: { de: { slug: '' }, en: { slug: '' } } }] });
       if (request.method === 'GET') return Response.json(initial);
@@ -55,11 +56,15 @@ async function page(options: { primary?: 'de' | 'en'; locales?: ('de' | 'en')[];
     unavailable() { el('buildStatus').textContent = ''; },
   });
   const controller = context.SettingsNavigation as { init(publication: { beginAction(): void; endAction(): void }): Promise<void> };
-  await controller.init(publication);
+  // Record the controller's begin/end around each mutation while keeping the real refresh behaviour.
+  await controller.init({
+    beginAction: () => { lifecycle.push('begin'); publication.beginAction(); },
+    endAction: () => { lifecycle.push('end'); publication.endAction(); },
+  });
   publication.start(false);
   const edit = (id: string, value: string, event = 'input') => { el(id).value = value; el(id).fire(event); };
   const submit = async () => { el('navigationForm').fire('submit'); await settle(); };
-  return { el, edit, submit, requests, confirms, document, initial };
+  return { el, edit, submit, requests, confirms, document, initial, lifecycle };
 }
 describe('owner-usable navigation settings', () => {
   it.each(['de', 'en'] as const)('shows only enabled %s fields and preserves ordered edits through save', async (primary) => {
@@ -116,6 +121,8 @@ describe('owner-usable navigation settings', () => {
     expect(h.el('navigationStatus').textContent).toContain(release);
     h.edit('nav-header-0-label-de', 'Next'); await h.submit();
     expect(JSON.parse(h.requests.filter((request) => request.method === 'PUT')[1]!.body!).updatedAt).toBe('2026-01-03T00:00:00.000Z');
+    // Every build-triggering mutation suspends the shared publication refresh (#317), like identity/language.
+    expect(h.lifecycle).toEqual(['begin', 'request', 'end', 'begin', 'request', 'end', 'begin', 'request', 'end']);
   });
   it('retains input on unacknowledged network failure and cancelled reload/removal', async () => {
     const h = await page({ confirm: false, save: () => Promise.reject(new Error('network lost')) });

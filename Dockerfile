@@ -34,6 +34,7 @@ ARG PMTILES_VERSION=1.30.3
 ARG PROTOMAPS_BUILD=auto
 ARG PROTOMAPS_MAX_AGE_DAYS=14
 ARG MAP_MAXZOOM=8
+ARG GLYPHS_REVISION=028c18f713baecad011301ff7a69acc39bcc2ae7
 
 # --- owned Node-API lifetime lock: compiler stays in this stage only ---
 FROM ${NODE_BUILD} AS native-build
@@ -51,19 +52,31 @@ RUN ["node", "/app/uploader/scripts/build-native.mjs", "/proof"]
 # --- uploader deps + vendored admin assets ---
 FROM ${NODE_BUILD} AS uploader-build
 WORKDIR /app/uploader
+ARG SOURCE_REPOSITORY=
+ARG SOURCE_REVISION=
 COPY uploader/package.json uploader/package-lock.json ./
 RUN npm ci --omit=dev
 COPY uploader/ .
-RUN node scripts/copy-fonts.mjs && node scripts/copy-easymde.mjs && node scripts/copy-vendor.mjs
+COPY LICENSE NOTICE /app/
+COPY docs/third-party-inventory.json docs/third-party-evidence.json docs/third-party-image-evidence.json /app/docs/
+COPY site/src/i18n/ui.ts /app/site/src/i18n/
+RUN node scripts/copy-fonts.mjs && node scripts/copy-easymde.mjs && node scripts/copy-vendor.mjs && node scripts/copy-legal.mjs uploader "$SOURCE_REPOSITORY" "$SOURCE_REVISION"
 # The build driver and descriptor-test subprocesses are not runtime inputs.
 RUN ["node", "-e", "const fs = require('node:fs'); fs.rmSync('scripts/build-native.mjs'); fs.rmSync('test', { recursive: true, force: true });"]
 
 # --- site deps (full install: Astro build needs devDependencies at runtime) ---
 FROM ${NODE_BUILD} AS site-build
 WORKDIR /app/site
+ARG SOURCE_REPOSITORY=
+ARG SOURCE_REVISION=
 COPY site/package.json site/package-lock.json ./
 RUN npm ci
 COPY site/ .
+COPY LICENSE NOTICE /app/
+COPY docs/third-party-inventory.json docs/third-party-evidence.json docs/third-party-image-evidence.json /app/docs/
+COPY uploader/scripts/copy-legal.mjs /app/uploader/scripts/
+COPY uploader/scripts/vendor-licenses/ /app/uploader/scripts/vendor-licenses/
+RUN node /app/uploader/scripts/copy-legal.mjs site "$SOURCE_REPOSITORY" "$SOURCE_REVISION"
 
 # --- map assets: fetch the Protomaps basemap slice + glyph fonts ONCE, on the
 # native build platform (tiles are arch-independent data). Kept off the node
@@ -76,6 +89,7 @@ ARG PROTOMAPS_BUILD
 ARG PROTOMAPS_MAX_AGE_DAYS
 ARG MAP_MAXZOOM
 ARG BUILDARCH
+ARG GLYPHS_REVISION
 RUN apk add --no-cache curl tar
 WORKDIR /work
 # pmtiles CLI is a static Go binary (musl-safe); pick the asset for the build arch.
@@ -105,13 +119,15 @@ RUN set -eux; \
     ./pmtiles extract "https://build.protomaps.com/${BUILD}.pmtiles" /map/basemap.pmtiles --maxzoom="${MAP_MAXZOOM}"; \
     ./pmtiles show /map/basemap.pmtiles | head -3; \
     echo "${BUILD}" > /map/BASEMAP_BUILD
-# Glyph fonts the Protomaps theme requests (Noto Sans Regular/Medium/Italic; tracks main).
+# Pin glyphs and retain their readable license with the served font files.
 RUN set -eux; \
-    curl -fsSL "https://github.com/protomaps/basemaps-assets/archive/refs/heads/main.tar.gz" | tar -xz; \
+    curl -fsSL "https://github.com/protomaps/basemaps-assets/archive/${GLYPHS_REVISION}.tar.gz" | tar -xz; \
     for f in "Noto Sans Regular" "Noto Sans Medium" "Noto Sans Italic"; do \
-      cp -R "basemaps-assets-main/fonts/$f" /map/fonts/; \
+      cp -R "basemaps-assets-${GLYPHS_REVISION}/fonts/$f" /map/fonts/; \
     done; \
-    rm -rf basemaps-assets-main
+    cp "basemaps-assets-${GLYPHS_REVISION}/fonts/OFL.txt" /map/fonts/OFL.txt; \
+    echo "${GLYPHS_REVISION}" > /map/GLYPHS_REVISION; \
+    rm -rf "basemaps-assets-${GLYPHS_REVISION}"
 
 # --- runtime: both trees, non-root, no build tooling ---
 FROM ${NODE_RUNTIME}
@@ -126,6 +142,8 @@ ENV NODE_ENV=production \
 COPY --from=uploader-build --chown=1000:1000 /app/uploader /app/uploader
 COPY --from=native-build --chown=1000:1000 /app/uploader/native /app/uploader/native
 COPY --from=site-build --chown=1000:1000 /app/site /app/site
+COPY --from=uploader-build /app/LICENSE /app/NOTICE /app/source-release.json /app/
+COPY --from=uploader-build /app/docs /app/docs
 # Basemap + glyph fonts baked in; the app serves them at /map/ (MAP_DIR=/map-assets).
 COPY --from=mapfetch --chown=1000:1000 /map /map-assets
 WORKDIR /app/uploader

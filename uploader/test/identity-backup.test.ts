@@ -6,6 +6,7 @@ import { gzipSync } from 'node:zlib';
 import sharp from 'sharp';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { BackupError, DUMP_VERSION, IDENTITY_DUMP_VERSION, readDump, validateIdentityAssets, type Dump } from '../src/backup.js';
+import { normalizeIdentityUpload } from '../src/site-identity-assets.js';
 import { neutralIdentity } from '../../site/src/lib/site-identity.js';
 import { identityDumpRow } from './site-identity-fixture.js';
 
@@ -100,15 +101,25 @@ describe('identity asset restore boundary', () => {
     expect(parsed.tables.site_identity_assets).toEqual(dump.tables.site_identity_assets);
   });
 
-  it('accepts one complete favicon group with each exact role size', async () => {
+  it.each(['png', 'jpeg', 'webp'] as const)('accepts normalized %s uploads through the real dump codec for every role', async (format) => {
+    const source = await sharp({ create: { width: 360, height: 180, channels: 4, background: '#12345680' } })
+      .withMetadata().toFormat(format).toBuffer();
+    const normalized = [
+      ...await normalizeIdentityUpload(source, 'logo'),
+      ...await normalizeIdentityUpload(source, 'favicon'),
+    ];
     const dump = fixture();
-    for (const [role, size] of [['favicon-32', 32], ['favicon-192', 192], ['apple-touch-180', 180]] as const) {
-      const bytes = await sharp({ create: { width: size, height: size, channels: 4, background: '#fbfbfd' } }).png().toBuffer();
-      dump.tables.site_identity_assets!.push({ role, width: size, height: size,
-        sha256: createHash('sha256').update(bytes).digest('hex'), bytes: bytes.toString('base64'),
-        created_at: '2026-10-27T12:00:00.000Z' });
+    dump.tables.site_identity_assets = normalized.map((asset) => ({
+      ...asset, bytes: asset.bytes.toString('base64'), created_at: '2026-10-27T12:00:00.000Z',
+    }));
+    const restored = readDump(await save(dump));
+    await expect(validateIdentityAssets(restored)).resolves.toBeUndefined();
+    expect(restored.tables.site_identity_assets).toHaveLength(4);
+    for (const asset of normalized) {
+      const row = restored.tables.site_identity_assets!.find((entry) => entry.role === asset.role)!;
+      expect(row).toMatchObject({ sha256: asset.sha256, width: asset.width, height: asset.height });
+      expect(Buffer.from(row.bytes as string, 'base64')).toEqual(asset.bytes);
     }
-    await expect(validateIdentityAssets(readDump(await save(dump)))).resolves.toBeUndefined();
   });
 
   it('refuses embedded image metadata rather than repairing untrusted restored bytes', async () => {
