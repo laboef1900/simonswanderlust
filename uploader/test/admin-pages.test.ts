@@ -43,6 +43,8 @@ interface StubEvent {
 // tab sees one localStorage, each has its own sessionStorage.
 function makeSandbox(opts: { throwStorage?: boolean; store?: Map<string, string>; session?: Map<string, string>; owner?: string | null } = {}) {
   const beforeUnload: Array<(e: StubEvent) => void> = [];
+  const lifecycle = new Map<string, Array<() => void>>();
+  const documentStub = { visibilityState: 'visible' as 'visible' | 'hidden' };
   const store = opts.store ?? new Map<string, string>();
   const timers = new Map<number, () => void>();
   let nextId = 1;
@@ -83,12 +85,16 @@ function makeSandbox(opts: { throwStorage?: boolean; store?: Map<string, string>
     addEventListener: (type: string, fn: (e: StubEvent) => void) => void;
     DraftGuard?: DraftGuardApi;
   } = {
-    addEventListener: (type, fn) => { if (type === 'beforeunload') beforeUnload.push(fn); },
+    addEventListener: (type, fn) => {
+      if (type === 'beforeunload') beforeUnload.push(fn);
+      else lifecycle.set(type, [...(lifecycle.get(type) ?? []), fn as () => void]);
+    },
   };
 
   vm.runInNewContext(guardSrc, {
     window: windowStub,
     crypto: webcrypto,
+    document: documentStub,
     localStorage: new Proxy(localStorageStub, { get(target, key) { storageAccesses++; return Reflect.get(target, key); } }),
     sessionStorage: new Proxy(sessionStorageStub, { get(target, key) { storageAccesses++; return Reflect.get(target, key); } }),
     location,
@@ -116,6 +122,11 @@ function makeSandbox(opts: { throwStorage?: boolean; store?: Map<string, string>
       const fns = [...timers.values()];
       timers.clear();
       fns.forEach((fn) => fn());
+    },
+    /** A browser lifecycle event other than beforeunload (pagehide, visibilitychange). */
+    fire: (type: string, visibility?: 'visible' | 'hidden') => {
+      if (visibility) documentStub.visibilityState = visibility;
+      (lifecycle.get(type) ?? []).forEach((fn) => fn());
     },
     fireBeforeUnload: (): StubEvent => {
       const e: StubEvent = {
@@ -168,6 +179,24 @@ describe('DraftGuard.createDraftGuard', () => {
 
     guard.markClean();
     expect(sb.fireBeforeUnload().defaultPrevented).toBe(false);
+  });
+
+  it('stashes a dirty form the moment the tab is hidden, without waiting for the debounce or pagehide (#302)', () => {
+    const sb = makeSandbox();
+    let title = 'Rhodos';
+    const guard = sb.api.createDraftGuard({ resource: KEY, collect: () => ({ title }) });
+    sb.fire('visibilitychange', 'hidden');
+    expect(guard.tryRestore()).toBeNull(); // clean: nothing to keep
+
+    sb.fire('visibilitychange', 'visible');
+    guard.markDirty();
+    title = 'Rhodos, am Hafen';
+    sb.fire('visibilitychange', 'visible'); // coming back is not leaving
+    expect(guard.tryRestore()).toBeNull();
+
+    sb.fire('visibilitychange', 'hidden'); // backgrounded; the OS may now discard the tab
+    expect(guard.tryRestore()?.payload).toEqual({ title: 'Rhodos, am Hafen' });
+    expect(guard.isDirty()).toBe(true); // stashing is not saving
   });
 
   it('markDirty schedules one debounced stash of the collected payload', () => {

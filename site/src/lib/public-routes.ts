@@ -1,7 +1,9 @@
 import type { Locale } from '../i18n/ui.js';
 import { aboutPath, homePath, mapPath, regionPath, regionsIndexPath, rssPath, type Region } from './paths.js';
 import { byLocale, liveRegions, pathOf, type Trip } from './trips.js';
-import { siteLanguage, type SiteLanguage } from './site-language.js';
+import type { SiteLanguage } from './site-language.js';
+import { journeysIndexPath } from './paths.js';
+import { liveJourneys, journeyPositions, type Journey, type LiveJourney, type JourneyPosition } from './journeys.js';
 import { namespaceOf, reservation } from './reserved-routes.js';
 import { pageDataSchema, type PublicPage } from './page-content.js';
 import type { PageKind } from './page-kinds.js';
@@ -9,13 +11,24 @@ import type { PageKind } from './page-kinds.js';
 export type PublicRoute =
   | { path: string; kind: 'home' | 'about' | 'map' | 'regions'; locale: Locale }
   | { path: string; kind: 'region'; locale: Locale; region: Region }
-  | { path: string; kind: 'story'; locale: Locale; trip: Trip }
+  | { path: string; kind: 'journeys'; locale: Locale; journeys: LiveJourney[] }
+  | { path: string; kind: 'journey'; locale: Locale; journey: LiveJourney }
+  | { path: string; kind: 'story'; locale: Locale; trip: Trip; journeyPosition?: JourneyPosition }
   | { path: string; kind: 'page'; locale: Locale; page: PublicPage };
 
 /** One inventory for static HTML generation; absent translations never receive routes. */
-export function publicRoutes(trips: Trip[], language: SiteLanguage = siteLanguage(), pages: PublicPage[] = [], warn: (message: string) => void = console.warn): PublicRoute[] {
+export function publicRoutes(
+  trips: Trip[],
+  language: SiteLanguage,
+  { pages, journeys }: { pages: PublicPage[]; journeys: Journey[] },
+  warn: (message: string) => void = console.warn,
+): PublicRoute[] {
   const routes: PublicRoute[] = [];
   for (const locale of language.locales) {
+    const live = liveJourneys(journeys, trips, locale, language);
+    const positions = journeyPositions(live, journeys, warn);
+    if (live.length) routes.push({ path: journeysIndexPath(locale, language), kind: 'journeys', locale, journeys: live });
+    for (const journey of live) routes.push({ path: journey.path, kind: 'journey', locale, journey });
     routes.push(
       { path: homePath(locale, language), kind: 'home', locale },
       { path: aboutPath(locale, language), kind: 'about', locale },
@@ -26,7 +39,8 @@ export function publicRoutes(trips: Trip[], language: SiteLanguage = siteLanguag
       routes.push({ path: regionPath(region, locale, language), kind: 'region', locale, region });
     }
     for (const trip of byLocale(trips, locale, language)) {
-      routes.push({ path: pathOf(trip, language), kind: 'story', locale, trip });
+      routes.push({ path: pathOf(trip, language), kind: 'story', locale, trip,
+        ...(positions.has(trip.id) ? { journeyPosition: positions.get(trip.id)! } : {}) });
     }
   }
   for (const page of pages) {
@@ -44,6 +58,8 @@ export function routeOwner(route: PublicRoute): string {
   if (route.kind === 'about') return `page:about:${route.locale}`;
   if (route.kind === 'page') return `page:${route.page.data.key}:${route.locale}`;
   if (route.kind === 'story') return `story:${route.trip.data.translationKey}:${route.locale}`;
+  if (route.kind === 'journey') return `journey:${route.journey.entry.data.journeyId}:${route.locale}`;
+  if (route.kind === 'journeys') return `journeys:index:${route.locale}`;
   if (route.kind === 'region') return `region:${route.region}:${route.locale}`;
   return `site:${route.kind}:${route.locale}`;
 }

@@ -1,0 +1,57 @@
+---
+import { useTranslations } from '../i18n/ui';
+import type { LiveJourney } from '../lib/journeys';
+import { journeyGeometry } from '../lib/journey-map';
+import { publicTrackSummary } from '../lib/public-track';
+import { pathOf } from '../lib/trips';
+interface Props { journey: LiveJourney }
+const { journey } = Astro.props;
+const t = useTranslations(journey.locale);
+const geometry = journeyGeometry(journey);
+---
+<section class="mt-12 border-t border-dashed border-navy/30 pt-8" aria-labelledby="journey-map-heading">
+  <h2 id="journey-map-heading" class="text-2xl font-extrabold text-navy">{t('journey.mapHeading')}</h2>
+  <div data-journey-map data-geometry={JSON.stringify(geometry)} data-pin-label={t('journey.pin')} role="region" aria-label={t('journey.map').replace('{title}', journey.entry.data.title)} class="mt-5 h-80 w-full bg-navy/5 sm:h-96"></div>
+  <p class="mt-4 max-w-prose text-sm leading-relaxed">{t('journey.mapNote')}</p>
+  <ol class="mt-5 space-y-4" data-journey-map-fallback>
+    {journey.members.map((trip, index) => <li>
+      <a href={pathOf(trip)} class="inline-flex min-h-[44px] items-center text-navy underline underline-offset-4 hover:text-brand-red active:text-brand-red">{t('journey.pin').replace('{number}', String(index + 1)).replace('{title}', trip.data.title)}</a>
+      {trip.data.track && <ol class="space-y-3 pb-3 text-sm">
+        {publicTrackSummary(trip.data.track, journey.locale).map((run, runIndex) => <li>
+          <p class="font-semibold">{t('map.trackRun').replace('{number}', String(runIndex + 1)).replace('{distance}', run.distance)}</p>
+          <dl class="mt-1 grid gap-x-4 sm:grid-cols-[auto_1fr]">
+            <dt>{t('map.trackStart')}</dt><dd class="font-mono text-xs leading-relaxed tabular-nums">{run.start}</dd>
+            <dt>{t('map.trackEnd')}</dt><dd class="font-mono text-xs leading-relaxed tabular-nums">{run.end}</dd>
+          </dl>
+        </li>)}
+      </ol>}
+    </li>)}
+  </ol>
+</section>
+<style>
+  [data-journey-map] :global(.journey-map-pin) {
+    display: flex; align-items: center; justify-content: center;
+    width: 44px; height: 44px; border: 2px solid var(--color-navy);
+    border-radius: 50%; background: var(--color-canvas); color: var(--color-navy);
+    font-family: var(--font-mono); font-weight: 600; text-decoration: none;
+  }
+  [data-journey-map] :global(.journey-map-pin:hover),
+  [data-journey-map] :global(.journey-map-pin:active) { color: var(--color-brand-red); border-color: var(--color-brand-red); }
+</style>
+<script>
+  import { initJourneyMap } from '../scripts/journey-map';
+  import type { JourneyGeometry } from '../lib/journey-map';
+  for (const element of document.querySelectorAll<HTMLElement>('[data-journey-map]')) {
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      observer.disconnect();
+      try {
+        initJourneyMap(element, JSON.parse(element.dataset.geometry!) as JourneyGeometry, element.dataset.pinLabel!);
+      } catch {
+        // Text and links are outside the enhancement and remain usable without WebGL.
+        element.hidden = true;
+      }
+    }, { rootMargin: '200px' });
+    observer.observe(element);
+  }
+</script>
