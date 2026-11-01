@@ -118,15 +118,13 @@ features shipped in their release.
 
 ### Start with a released image
 
-**Image-name cutover pending release:** current source uses
-`ghcr.io/laboef1900/wanderlust-studio`. The first release under that name is a
-**future, owner-authorized action**, not part of this change. Until it is published,
-use [Build the current source](#build-the-current-source), not the pull commands below.
-Already released images, including
-`ghcr.io/laboef1900/simonswanderlust-app:0.17.1`, retain their original name and tags;
-they are not copied or aliased to the new package. Existing installations should keep
-their existing deployment configuration until an upgrade is authorized. A saved
-`IMAGE_TAG=0.17.1` does not become valid under the new image name.
+**Image name:** releases from **v0.18.0** on are published as
+`ghcr.io/laboef1900/wanderlust-studio` (see the
+[releases](https://github.com/laboef1900/simonswanderlust/releases)). Releases up to
+v0.17.1 remain at `ghcr.io/laboef1900/simonswanderlust-app`; they are not copied or
+aliased to the new package, so a saved `IMAGE_TAG=0.17.1` does not resolve under the new
+name. Existing installations upgrade deliberately, following the
+[release notes](#cutting-a-release) and the upgrade runbook.
 
 **Installing on a server?** Follow the [installation guide](docs/install.md): supported
 platforms, measured requirements, secrets, the reverse proxy, blog and image domains, first
@@ -298,27 +296,74 @@ limitations, then check correspondence and delivery in the final rebuilt release
 
 ### Cutting a release
 
-**Last release before the image-name cutover: v0.17.1**, published as
-`ghcr.io/laboef1900/simonswanderlust-app:0.17.1`. Fixes since v0.17.0:
+**v0.18.0 — first release as `ghcr.io/laboef1900/wanderlust-studio`** (linux/amd64 and
+linux/arm64). The product is now **Wanderlust Studio**; the software is AGPL-3.0-only and
+stories, photos and the blog's brand are excluded (`NOTICE`). Changes since v0.17.1
+(PRs #401–#505; the GitHub release lists each one):
 
-- Gallery reloads no longer risk saving mixed DE/EN content after partial form loading;
-  failed reloads preserve a local recovery copy and block Save, Preview and Publish.
-- Galleries inserted at the end of a story stay separated from subsequent photos and prose.
-- Editor and public story maps frame split antimeridian routes consistently, preserve
-  genuinely wide routes, and keep route overlays visible when the local basemap is unavailable.
-- Publish checks readiness against the images actually rendered in the story, including
-  direct Markdown and HTML references, without blocking on unused image metadata.
-- Image backups exclude unfinished temporary files and capture completed images that cross
-  an incremental archive boundary, using a cutoff from the images filesystem.
+- **Site identity** in Settings: site and author name, canonical blog origin, taglines,
+  social links, logo and favicons (#433, #454, #478).
+- **Language modes:** DE+EN, EN+DE, DE-only or EN-only, chosen at first run (#476, #477, #482).
+- **Editable pages** (About, Contact, Privacy, Legal notice) with draft/publish and
+  configurable navigation (#484, #485).
+- **Journeys:** ordered groups of stories with their own localized pages and overview maps
+  (#490, #491).
+- **First-run onboarding** with role-safe empty states (#474, #483).
+- **Truthful writes and publication:** ambiguous saves and uploads are reconciled, draft
+  recovery is isolated, and Publish reports the actual build outcome and release inclusion
+  (#479, #486–#488).
+- **Phone authoring:** compose, preview and background stash on a phone; Publish is
+  admin-only there; unusable phone photos are refused before transfer (#500, #501).
+- **Licensing:** `LICENSE`, `NOTICE`, `/legal/` and `/admin/legal/` notice pages, OCI
+  license labels and a third-party inventory (#455, #499).
+- **Security:** sharp 0.35.5 (libvips 8.18.7, libheif 1.23.5, librsvg 2.63.2) for untrusted
+  AVIF/SVG input (#403); patched production dependencies and explicit proxy trust (#404);
+  fresh consent per destructive confirmation (#401); atomic last-admin deletion (#414).
+- Fixes across the editor, galleries, media library, comments moderation, WordPress import,
+  backups, maps and public-page contrast (WCAG AA).
 
-Before upgrading, follow the [canonical runbook](ARCHITECTURE.md#app-upgrades-and-supported-recovery):
-take **Back up now** under a write freeze and retain the complete matching recovery generation
-and previous image identity. Retaining that identity does **not** authorize a downgrade.
-The first image backup after this upgrade creates a **full image archive** to establish
-the new cutoff provenance; allow capacity for that archive plus the existing free-space
-reserve. Missing or invalid backup state also requires a full archive. Existing archives
-are preserved; insufficient space reports a failure rather than deleting backup history.
-See [Database dumps](ARCHITECTURE.md#database-dumps).
+Upgrade notes for v0.17.1 → v0.18.0 (the [release recovery checklist](ARCHITECTURE.md#release-recovery-checklist)):
+
+- **Image, Compose and bootstrap.** Apply this release's `docker-compose.yml` together with
+  the image. `IMAGE_TAG` (no default), `PUBLIC_BASE_URL` and `IMG_HOST` are now required in
+  `.env`; the old `simonswanderlust.com` defaults are gone. Compose sets
+  `TRUSTED_PROXY: docker-gateway`, valid only for a host TLS proxy → loopback port →
+  Compose bridge; the old hop-count setup does not satisfy it and other topologies are
+  unsupported. Postgres stays at 18.
+- **Schema migrations** (forward and additive at boot, no `DROP`): new tables
+  `site_identity`, `site_identity_assets`, `site_language`, `site_nav`, `journeys`,
+  `journey_locales`, `journey_members`, `onboarding_state` and `upload_receipts`; `pages`
+  gains `slug`/`status`/`published_at` (About becomes published); `posts` gains `omitted`
+  with the `posts_omitted_unpublished` check; `posts`/`pages` gain `last_save_id`/`last_save_by`;
+  orphaned `page_revisions` rows are deleted. An existing install is seeded with the legacy
+  identity (`Simon's Wanderlust`, `https://simonswanderlust.com`), DE-primary DE+EN, default
+  navigation, and onboarding retired.
+- **Settings migration:** with the legacy identity, a valid `settings.json` without
+  `reviewPrompt` gets the previous brand-specific review prompt written into it (no copy is
+  kept; the key was absent). An unreadable or invalid file is left alone. Nothing else changes.
+- **Dumps:** the writer is **v14** (identity v11, language v12, pages/navigation v13,
+  journeys v14); this release reads v1–v14. v0.17.1 reads only v1–v10, so no dump taken
+  after the upgrade restores on it. v1–v9 still cannot supply private GPX routes. A ≤ v10
+  restore seeds the legacy identity and DE+EN. No image-archive format or cutoff change.
+- **Recovery material:** before upgrading, capture one generation on v0.17.1 under a write
+  freeze, per the [canonical runbook](ARCHITECTURE.md#app-upgrades-and-supported-recovery):
+  the v10 dump with its route archive, the complete image chain, `settings.json`, Compose and
+  `.env`, and the separately escrowed `ENCRYPTION_KEY` association.
+- **Rebuild:** deploying does not rebuild. The blog keeps serving its v0.17.1 output until
+  the next Publish or **Settings → Rebuild site now**. Rebuild once after verifying the
+  upgrade (check **Settings → Site identity** first) to ship the `/legal/` pages, map
+  attribution and rendering fixes.
+- **Recovery direction: roll-forward only; no supported downgrade.** v0.17.1 lacks #347's
+  codec floor and cannot read v11+ dumps or the new tables.
+- **Evidence:** no v0.17.1 → v0.18.0 upgrade rehearsal was run for this release. Existing
+  evidence covers a DHI candidate pair at dump v10 (#298, 2026-10-29), the native v0.17.1
+  clean install ([record](docs/2026-10-29-clean-install-rehearsal.md)) and N13 → N14 restores
+  during the journeys work. Treat this upgrade as unrehearsed and capture recovery first.
+
+**v0.17.1** (last release as `ghcr.io/laboef1900/simonswanderlust-app:0.17.1`) fixed
+stale-locale gallery reloads, end-of-story galleries, antimeridian route framing, publish
+readiness against rendered images and incremental image-archive boundaries. Its first image
+backup after upgrading created a full image archive.
 
 Upgrading from before v0.17.0: GPX recovery requires the private v10 database dump **and
 its matching route archive**. Restore is offline: stop the app before running the restore
@@ -359,9 +404,8 @@ is limited to the immediately previous security-supported, rehearsed pair; none 
 today. #347's patched codec floor is mandatory and its recovery remains roll-forward only.
 An app upgrade does not authorize a [Postgres-major change](ARCHITECTURE.md#upgrading-a-postgres-major-eg-17--18).
 
-The next release is a separate human action. This image-name change does not bump
-versions, publish an image or authorize a deployment.
-Satisfy the release gate above before tagging; generated notes alone do not qualify.
+Each release is a separate, owner-authorized action. Satisfy the release gate above before
+tagging; generated notes alone do not qualify.
 
 1. On a `feature/*` branch from `dev`, choose an unused next release version and
    update both apps' package and lockfile versions. Keep `IMAGE_TAG` explicit (no

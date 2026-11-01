@@ -7,11 +7,11 @@ domain and an image domain. Every number below comes from the
 here is a benchmark or a guarantee. Examples use `blog.example.com`, `img.example.com` and
 placeholder secrets. Replace all of them.
 
-> **Image-name cutover.** Current source runs `ghcr.io/laboef1900/wanderlust-studio`. Until
-> the first release under that name is published (see the
-> [releases](https://github.com/laboef1900/simonswanderlust/releases)), follow
-> [Build the image locally](#build-the-image-locally) instead of pulling. Releases under the
-> old name (`simonswanderlust-app`, up to 0.17.1) are not aliased to the new one.
+> **Image name.** Releases from 0.18.0 on are published as
+> `ghcr.io/laboef1900/wanderlust-studio`; set `IMAGE_TAG` to a version listed on the
+> [releases](https://github.com/laboef1900/simonswanderlust/releases) page, or
+> [build the image locally](#build-the-image-locally). Releases under the old name
+> (`simonswanderlust-app`, up to 0.17.1) are not aliased to the new one.
 
 ## 1. What is supported
 
