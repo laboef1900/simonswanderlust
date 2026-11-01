@@ -8,7 +8,7 @@ interface Attempt { saveId: string; expectedOwnerId: string; resource: string; g
 interface Recovery {
   initialize(owner: string): boolean; observeOwner(owner: string | null): void; resumeOwner(owner: string): boolean;
   save(payload: object, generation: number): Promise<boolean>; probe(): Promise<boolean>;
-  exportState(): { attempts: Attempt[]; createKey: string }; restore(state: unknown): boolean;
+  exportState(): { attempts: Attempt[]; createKey: string }; restore(state: unknown): boolean; unresolved(): boolean;
 }
 interface Guard { initialize(owner: string): boolean; markDirty(): void; markClean(generation?: number): void;
   snapshot(): number; isDirty(): boolean; stashNow(): boolean; tryRestore(): { recovery: unknown; key: string; raw: string } | null;
@@ -92,6 +92,34 @@ describe('write outcome reconciliation', () => {
     expect(await f.recovery.probe()).toBe(false);
     expect(await f.save()).toBe(true);
     expect(f.calls.map(call => call.init?.method ?? 'GET')).toEqual(['POST', 'GET', 'GET', 'POST']);
+  });
+  // A probe without any unresolved attempt (e.g. right after restoring a draft) has
+  // nothing that "may still be running"; only a real pending attempt says so.
+  it.each([
+    { pending: false, stored: 'same', expected: '' },
+    { pending: false, stored: 'missing', expected: '' },
+    { pending: true, stored: 'same', expected: 'writeNotVisible' },
+    { pending: true, stored: 'missing', expected: 'writeNotVisible' },
+  ] as const)('reports a pending attempt only when one exists (pending: $pending, stored: $stored)', async ({ pending, stored, expected }) => {
+    const f = fixture({ resource: 'tk1' }); f.edit('Local');
+    const read = () => stored === 'missing' ? response({}, 404)
+      : response({ translationKey: 'tk1', de: {}, en: {}, ownerUserId: f.owner, lastSaveId: null, updatedAt: '2026-10-01T00:00:00.000Z' });
+    f.handle(async (_url, init) => { if (init?.method === 'PUT') throw new Error('Lost response'); return read(); });
+    if (pending) expect(await f.save()).toBe(false);
+    else expect(await f.recovery.probe()).toBe(false);
+    const box = f.dom.document.querySelector('.write-recovery')!;
+    expect(box.querySelector('p')!.textContent).toBe(expected);
+    expect(box.hidden).toBe(!pending);
+    expect(f.recovery.unresolved()).toBe(false);
+  });
+  it('reports an unconfirmed version while a probe is unavailable or a comparison is open', async () => {
+    const f = fixture({ resource: 'tk1' }); f.edit('Local');
+    f.handle(async (_url, init) => { if (init?.method === 'PUT') throw new Error('Lost response'); return response({}, 503); });
+    expect(await f.save()).toBe(false);
+    expect(f.recovery.unresolved()).toBe(true);
+    f.handle(async () => response({ translationKey: 'tk1', de: {}, en: {}, ownerUserId: f.owner, lastSaveId: null, updatedAt: '2026-10-05T00:00:00.000Z' }));
+    expect(await f.recovery.probe()).toBe(false);
+    expect(f.recovery.unresolved()).toBe(true);
   });
   it('retains an earlier attempt after a 404 and recognizes its late commit during a later 409 probe', async () => {
     const f = fixture(); f.edit('First');

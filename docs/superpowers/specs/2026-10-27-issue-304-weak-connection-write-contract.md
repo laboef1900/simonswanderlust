@@ -1414,3 +1414,28 @@ Verification: uploader `tsc` and full suite with isolated PostgreSQL 4339/4339;
 site 763/763 with PostgreSQL, `astro check` 0/0/0, `npm run build`. Runtime on
 a fresh database: receipt upload accepted; conditional PATCH 200, a stale
 expectation 409 `media_changed` without writing, an unconditional PATCH 400.
+
+## Integration findings fixed (2026-11-01)
+
+Two residuals recorded during the #305 integration are closed:
+
+- **GPX route writes wait for an unresolved save.** A route attach or detach carries the
+  post's version token. While WriteRecovery is checking a save's outcome, holds an
+  unknown outcome, shows a comparison, or is paused for another account
+  (`WriteRecovery.unresolved()`), the editor's GPX `runWrite` now refuses inside the
+  write queue with `gpx_save_unresolved` and the route panel says why
+  (`gpx.saveUnresolved`); nothing is sent. Once **Check again** resolves the save, the
+  route action proceeds normally. Previously only the server's 409 stopped it.
+- **No phantom "may still be running".** A probe with no unresolved attempt for the
+  resource (e.g. right after restoring a local draft whose base matches the stored
+  version, or a 404 for a never-saved key) no longer reports `writeNotVisible`; the
+  notice stays hidden. A real pending attempt still reports it.
+
+Evidence: `editor-gpx.test.ts` (failed probe → Detach sends no route write; failed
+before the change) and `write-recovery.test.ts` (status only with a pending attempt;
+`unresolved()` while unavailable or comparing; failed before). Runtime in the real
+editor on a fresh database with an attached route: a save whose response was dropped
+and whose probe returned 503 left Detach refused with the new message and the route
+still attached on the server; after **Check again** found the committed save, Detach
+removed the route. Restoring a local draft against an unchanged stored version showed
+"Local draft restored" with the recovery notice hidden.
