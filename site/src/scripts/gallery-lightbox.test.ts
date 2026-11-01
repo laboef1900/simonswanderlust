@@ -9,6 +9,7 @@
 // including showModal/close and focus, which is what makes this testable at all.
 import { beforeEach, describe, expect, it } from 'vitest';
 import { initGalleries, type GalleryLabels } from './gallery-lightbox.js';
+import { STORY_BODY_SIZES, transformBodyImages } from '../lib/body-images.js';
 
 const labels: GalleryLabels = {
   slider: 'Photo gallery, scrolls horizontally',
@@ -76,6 +77,32 @@ beforeEach(() => {
 });
 
 describe('initGalleries — degradation and inertness', () => {
+  it.each(['column', 'breakout', 'slider'])('preserves built empty-alt link names and positional navigation in %s', async (mode) => {
+    const src = 'https://img.test/photo';
+    document.body.innerHTML = await transformBodyImages(`<pre><code class="language-gallery">#layout: ${mode}\n${src}\n${src} | caption-override="Visible caption"\n${src}</code></pre>`, { [src]: { width: 3000, height: 2000, alt: '' } }, 'https://img.test', { locale: 'de', inlineSizes: STORY_BODY_SIZES }, );
+    const expected = ['Foto 1 von 3 öffnen', 'Visible caption', 'Foto 3 von 3 öffnen'];
+    expect(photos().map((link) => link.getAttribute('aria-label'))).toEqual(expected);
+    initGalleries(document, labels);
+    expect(photos().map((link) => link.getAttribute('aria-label'))).toEqual(expected);
+    for (const link of photos()) {
+      expect(link.querySelector('img')?.alt).toBe('');
+      expect(link.href).toBe(`${src}-3000.webp`);
+      for (const init of [{ metaKey: true }, { ctrlKey: true }, { shiftKey: true }, { altKey: true }, { button: 1 }]) {
+        expect(click(link, init).defaultPrevented).toBe(false);
+      }
+    }
+    expect(dialog()).toBeNull();
+    expect(click(photos()[2]!).defaultPrevented).toBe(true);
+    expect(liveText()).toBe('Photo 3 of 3');
+    expect(shownSrc()).toBe(`${src}-1280.webp`);
+    expect(dialog()?.querySelector('img')?.getAttribute('alt')).toBe('');
+    press('ArrowLeft');
+    expect(liveText()).toBe('Photo 2 of 3');
+    expect(dialog()?.querySelector('.jgal__lb-cap')?.textContent).toBe('Visible caption');
+    click(lbButton('close')!);
+    expect(photos().map((link) => link.getAttribute('aria-label'))).toEqual(expected);
+  });
+
   it('does nothing at all on a page with no gallery', () => {
     document.body.innerHTML = '<article><p>Just prose.</p></article>';
     initGalleries(document, labels);
@@ -113,9 +140,10 @@ describe('initGalleries — lightbox', () => {
   it('shows the decoded grid candidate until the larger image loads', () => {
     mountJustified(1);
     const gridImage = photos()[0]!.querySelector('img')!;
-    Object.defineProperty(gridImage, 'currentSrc', {
-      configurable: true,
-      value: 'https://img.test/p0-640.webp',
+    Object.defineProperties(gridImage, {
+      currentSrc: { value: 'https://img.test/p0-640.webp' },
+      complete: { value: true },
+      naturalWidth: { value: 640 },
     });
     initGalleries(document, labels);
     click(photos()[0]!);
@@ -129,6 +157,26 @@ describe('initGalleries — lightbox', () => {
 
     large?.dispatchEvent(new Event('load'));
     expect(frame?.classList.contains('is-ready')).toBe(true);
+  });
+
+  it.each([
+    { state: 'unrequested lazy image', currentSrc: '', complete: false, naturalWidth: 0 },
+    { state: 'loading candidate', currentSrc: 'https://img.test/p1-640.webp', complete: false, naturalWidth: 640 },
+    { state: 'broken candidate', currentSrc: 'https://img.test/p1-640.webp', complete: true, naturalWidth: 0 },
+    { state: 'missing candidate URL', currentSrc: '', complete: true, naturalWidth: 640 },
+  ])('omits the thumbnail for $state on navigation', ({ currentSrc, complete, naturalWidth }) => {
+    mountJustified(2);
+    Object.defineProperties(photos()[1]!.querySelector('img')!, {
+      currentSrc: { value: currentSrc },
+      complete: { value: complete },
+      naturalWidth: { value: naturalWidth },
+    });
+    initGalleries(document, labels);
+    click(photos()[0]!);
+    press('ArrowRight');
+    expect(dialog()?.querySelector('.jgal__lb-thumb')).toBeNull();
+    expect(shownSrc()).toBe('https://img.test/p1-1280.webp');
+    expect(liveText()).toBe('Photo 2 of 2');
   });
 
   it('carries alt and caption across, and hides an empty caption', () => {
@@ -220,14 +268,54 @@ describe('initGalleries — lightbox', () => {
     expect(document.activeElement).toBe(lbButton('close'));
   });
 
-  it('closes on the close button and on a backdrop click, but not on the figure', () => {
+  it.each(['.jgal__lb-fig', '.jgal__lb-frame', '.jgal__lb-picture'])(
+    'closes when the empty backdrop belongs to %s',
+    (selector) => {
+      mountJustified(2);
+      initGalleries(document, labels);
+      click(photos()[0]!);
+      // Real empty-space hits land on these containers, not the dialog root.
+      click(dialog()!.querySelector(selector)!);
+      expect(dialog()?.open).toBe(false);
+    },
+  );
+
+  it.each(['.jgal__lb-thumb', '.jgal__lb-img', '.jgal__lb-cap'])(
+    'keeps the lightbox open when clicking %s',
+    (selector) => {
+      mountJustified(2);
+      // The thumbnail exists only for an already-decoded grid candidate.
+      Object.defineProperties(photos()[0]!.querySelector('img')!, {
+        currentSrc: { value: 'https://img.test/p0-640.webp' },
+        complete: { value: true },
+        naturalWidth: { value: 640 },
+      });
+      initGalleries(document, labels);
+      click(photos()[0]!);
+      click(dialog()!.querySelector(selector)!);
+      expect(dialog()?.open).toBe(true);
+      expect(liveText()).toBe('Photo 1 of 2');
+    },
+  );
+
+  it('keeps navigation controls interactive without treating them as backdrop', () => {
     mountJustified(2);
     initGalleries(document, labels);
     click(photos()[0]!);
-    click(dialog()!.querySelector('.jgal__lb-fig')!);
+    const glyph = document.createElement('span');
+    glyph.textContent = '›';
+    lbButton('next')!.replaceChildren(glyph);
+    click(glyph);
     expect(dialog()?.open).toBe(true);
-    click(dialog()!);
-    expect(dialog()?.open).toBe(false);
+    expect(liveText()).toBe('Photo 2 of 2');
+    click(lbButton('prev')!);
+    expect(dialog()?.open).toBe(true);
+    expect(liveText()).toBe('Photo 1 of 2');
+  });
+
+  it('closes on the close button', () => {
+    mountJustified(2);
+    initGalleries(document, labels);
     click(photos()[0]!);
     click(lbButton('close')!);
     expect(dialog()?.open).toBe(false);

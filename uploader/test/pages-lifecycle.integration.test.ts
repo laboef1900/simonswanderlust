@@ -37,7 +37,8 @@ function story(slug = 'story'): PostPair {
 
   it('keeps About content, history and identity through a second bootstrap; reports unknown rows without deleting them', async () => {
     const pages = pgPageStore(pool); const about = await pages.get('about');
-    const saved = await pages.save({ key: 'about', de: { ...about.de, title: 'Author heading' } }, about.updatedAt!);
+    // Saves also report transient gallery diagnostics, which are never stored.
+    const { galleryWarnings: _aboutWarnings, ...saved } = await pages.save({ key: 'about', de: { ...about.de, title: 'Author heading' } }, about.updatedAt!);
     const history = await pages.listRevisions('about');
     await pool.query("INSERT INTO pages(key,locale,title) VALUES('legacy-page','de','Legacy author text')");
     const messages: string[] = [];
@@ -155,7 +156,7 @@ function story(slug = 'story'): PostPair {
   });
 
   it('rolls the complete deletion back when updating inbound navigation fails', async () => {
-    const pages = pgPageStore(pool); await pages.save(page()); const saved = await pages.save(page());
+    const pages = pgPageStore(pool); await pages.save(page()); const { galleryWarnings: _warnings, ...saved } = await pages.save(page());
     const before = await pages.listRevisions('contact'); const navigation = (await pool.query('SELECT * FROM site_nav')).rows;
     await pool.query(`CREATE FUNCTION reject_nav_update() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'nav write failed'; END $$`);
     await pool.query('CREATE TRIGGER reject_nav BEFORE UPDATE ON site_nav FOR EACH ROW EXECUTE FUNCTION reject_nav_update()');
@@ -185,7 +186,7 @@ function story(slug = 'story'): PostPair {
   });
 
   it.each([1, 10])('refuses a modern identity dump relabelled v%i without replacing pages or navigation', async (version) => {
-    const pages = pgPageStore(pool); const saved = await pages.save(page());
+    const pages = pgPageStore(pool); const { galleryWarnings: _warnings, ...saved } = await pages.save(page());
     const file = join(dir, await dumpDatabase(pool, dir)); const dump = readDump(file);
     dump.version = version;
     // Reach the identity boundary rather than the earlier private-route version guard.

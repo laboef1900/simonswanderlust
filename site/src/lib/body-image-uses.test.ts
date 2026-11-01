@@ -3,10 +3,11 @@ import { unified } from 'unified';
 import rehypeParse from 'rehype-parse';
 import { visit } from 'unist-util-visit';
 import type { Element, RootContent } from 'hast';
-import { bodyImageSources, bodyImageUses, transformBodyImages, transformBodyImagesWithUses, type ImageDims } from './body-images.js';
+import { STORY_BODY_SIZES, analyzeRenderedBody, bodyImageUses, transformBodyImages, transformBodyImagesWithUses, type ImageDims } from './body-images.js';
 import { renderMarkdown } from './render-markdown.js';
 
 const origin = 'https://images.example';
+const options = { locale: 'en' as const, inlineSizes: STORY_BODY_SIZES };
 const first = `${origin}/trips/first`;
 const second = `${origin}/trips/second`;
 const images = {
@@ -32,7 +33,7 @@ function renderedPhotos(html: string) {
 }
 
 describe('bodyImageUses renderer parity (C1/C5/C6)', () => {
-  it.each(['column', 'breakout', 'slider'])('keeps exact repeated raw identities and effective descriptions in %s', (mode) => {
+  it.each(['column', 'breakout', 'slider'])('keeps exact repeated raw identities and effective descriptions in %s', async (mode) => {
     const html = fence(`#layout: ${mode}\n${first} | alt="Ignored line"\n${second}\n${first} | caption-override="Only here"\n${first} | caption-override=""`) +
       fence(`#layout: ${mode}\n#captions: hidden\n${first}\n${second} | caption-override="Hidden override"`);
     const library = new Map([[first, { alt: 'Current library', caption: 'Current caption' }]]);
@@ -45,8 +46,8 @@ describe('bodyImageUses renderer parity (C1/C5/C6)', () => {
       { src: second, alt: 'Snapshot second', caption: null, captionFollowsLibrary: false },
     ];
     expect(bodyImageUses(html, images, origin, library)).toEqual({ gallery: expected, inline: [] });
-    const rendered = transformBodyImages(html, images, origin, library);
-    const observed = transformBodyImagesWithUses(html, images, origin, library);
+    const rendered = await transformBodyImages(html, images, origin, options, library);
+    const observed = await transformBodyImagesWithUses(html, images, origin, options, library);
     expect(observed).toEqual({ html: rendered, gallery: expected });
     expect(renderedPhotos(rendered)).toEqual([
       { href: `${first}-1600.webp`, alt: 'Current library', caption: 'Current caption' },
@@ -58,7 +59,7 @@ describe('bodyImageUses renderer parity (C1/C5/C6)', () => {
     ]);
   });
 
-  it('preserves deliberate blank library text and empty inherited captions', () => {
+  it('preserves deliberate blank library text and empty inherited captions', async () => {
     const library = new Map([[first, { alt: '', caption: '' }]]);
     const html = fence(`${first} | alt="Cannot replace blank"\n${second}`);
     const uses = bodyImageUses(html, images, origin, library);
@@ -66,15 +67,15 @@ describe('bodyImageUses renderer parity (C1/C5/C6)', () => {
       { src: first, alt: '', caption: '', captionFollowsLibrary: true },
       { src: second, alt: 'Snapshot second', caption: 'Fallback caption', captionFollowsLibrary: true },
     ]);
-    expect(renderedPhotos(transformBodyImages(html, images, origin, library)).map(({ alt, caption }) => ({ alt, caption })))
+    expect(renderedPhotos(await transformBodyImages(html, images, origin, options, library)).map(({ alt, caption }) => ({ alt, caption })))
       .toEqual([{ alt: '', caption: '' }, { alt: 'Snapshot second', caption: 'Fallback caption' }]);
   });
 
-  it('coerces untrusted text identically without admitting HTML nodes', () => {
+  it('coerces untrusted text identically without admitting HTML nodes', async () => {
     const malformed = { [first]: { width: 1600, height: 1000, alt: 42, caption: { type: 'raw', value: '<script>bad</script>' } } } as unknown as Record<string, ImageDims>;
     const uses = bodyImageUses(fence(first), malformed, origin);
     expect(uses.gallery).toEqual([{ src: first, alt: '42', caption: '[object Object]', captionFollowsLibrary: true }]);
-    expect(renderedPhotos(transformBodyImages(fence(first), malformed, origin))[0]).toMatchObject({ alt: '42', caption: '[object Object]' });
+    expect(renderedPhotos(await transformBodyImages(fence(first), malformed, origin, options))[0]).toMatchObject({ alt: '42', caption: '[object Object]' });
   });
 
   it('handles escaped metadata through the real Markdown renderer', async () => {
@@ -82,7 +83,7 @@ describe('bodyImageUses renderer parity (C1/C5/C6)', () => {
     expect(bodyImageUses(html, images, origin).gallery).toEqual([
       { src: first, alt: 'Snapshot first', caption: null, captionFollowsLibrary: false },
     ]);
-    expect(renderedPhotos(transformBodyImages(html, images, origin))[0]?.caption).toBe('A & B');
+    expect(renderedPhotos(await transformBodyImages(html, images, origin, options))[0]?.caption).toBe('A & B');
   });
 });
 
@@ -98,11 +99,11 @@ describe('bodyImageUses guarded occurrence classification (C1/C7)', () => {
     ['missing dimension', { width: 100 }],
     ['non-JPEG format', { width: 100, height: 100, format: 'webp' }],
     ['null format', { width: 100, height: 100, format: null }],
-  ])('drops %s in both classification and actual rendering', (_name, dimensions) => {
+  ])('drops %s in both classification and actual rendering', async (_name, dimensions) => {
     const invalid = { ...images, [first]: dimensions } as unknown as Record<string, ImageDims>;
     const html = fence(`${first}\n${second}\n${first}`);
     expect(bodyImageUses(html, invalid, origin).gallery.map((use) => use.src)).toEqual([second]);
-    expect(renderedPhotos(transformBodyImages(html, invalid, origin))).toHaveLength(1);
+    expect(renderedPhotos(await transformBodyImages(html, invalid, origin, options))).toHaveLength(1);
   });
 
   it.each([
@@ -112,18 +113,18 @@ describe('bodyImageUses guarded occurrence classification (C1/C7)', () => {
     'javascript:alert(1)',
     '/trips/first',
     'not a URL',
-  ])('rejects disallowed gallery URL %s, even with dimensions and library metadata', (src) => {
+  ])('rejects disallowed gallery URL %s, even with dimensions and library metadata', async (src) => {
     const map = { ...images, [src]: images[first]! };
     const html = fence(`${src}\n${first}`);
     expect(bodyImageUses(html, map, origin, new Map([[src, { alt: 'Invalid', caption: 'Invalid' }]])).gallery.map((use) => use.src)).toEqual([first]);
-    expect(renderedPhotos(transformBodyImages(html, map, origin))).toHaveLength(1);
+    expect(renderedPhotos(await transformBodyImages(html, map, origin, options))).toHaveLength(1);
   });
 
-  it('does not classify missing map entries or invalid origins as gallery uses', () => {
+  it('does not classify missing map entries or invalid origins as gallery uses', async () => {
     expect(bodyImageUses(fence(first), {}, origin).gallery).toEqual([]);
     expect(bodyImageUses(fence(first), images, 'bad origin').gallery).toEqual([]);
-    expect(transformBodyImages(fence(first), {}, origin)).toContain('<pre>');
-    expect(renderedPhotos(transformBodyImages(fence(first), images, 'bad origin'))).toEqual([]);
+    expect(await transformBodyImages(fence(first), {}, origin, options)).toContain('<pre>');
+    expect(renderedPhotos(await transformBodyImages(fence(first), images, 'bad origin', options))).toEqual([]);
   });
 
   it('takes inline sources from the sanitized pre-transformation tree, never library text or gallery lines', () => {
@@ -131,7 +132,7 @@ describe('bodyImageUses guarded occurrence classification (C1/C7)', () => {
       `<img src="${second}" srcset="${second}-640.jpeg 640w, ${second}-1280.jpeg 1280w">` +
       '<img src="javascript:alert(1)"><script><img src="https://evil.example/photo"></script>' + fence(first);
     const uses = bodyImageUses(html, images, origin);
-    expect(uses.inline).toEqual(bodyImageSources(html).sources);
+    expect(uses.inline).toEqual(analyzeRenderedBody(html).sources);
     expect(uses.inline).toContain(`${first}-640.avif`);
     expect(uses.inline).toContain(second);
     expect(uses.inline).not.toContain(first);

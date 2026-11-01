@@ -54,10 +54,10 @@ export function sourceFormats(image: RemoteHeroImage): readonly ImageFormat[] {
 }
 
 /**
- * Origin the hero images are served from when the build has no configured base
- * URL. Mirrors the `PUBLIC_BASE_URL` default in the repo-root `docker-compose.yml`.
+ * Development image origin when PUBLIC_BASE_URL is absent. Production builds
+ * receive the independently configured image host, never the canonical blog origin.
  */
-export const PROD_IMAGE_ORIGIN = 'https://img.simonswanderlust.com';
+export const DEV_IMAGE_ORIGIN = 'http://localhost:3000';
 
 /**
  * Origin to preconnect to for the LCP hero image (see `Base.astro`).
@@ -65,16 +65,16 @@ export const PROD_IMAGE_ORIGIN = 'https://img.simonswanderlust.com';
  * @ai-note The image host is an *uploader* setting (`PUBLIC_BASE_URL`), and the
  * app container spawns `astro build` with its own env, so Vite exposes it as
  * `import.meta.env.PUBLIC_BASE_URL` (Astro's env prefix is `PUBLIC_`). Local
- * dev / CI builds run without it, hence the production fallback. Takes
+ * dev / CI builds run without it, hence the loopback fallback. Takes
  * `unknown` because `import.meta.env` is an untyped record — narrowing here
  * keeps callers free of casts.
  */
 export function imageOrigin(baseUrl: unknown): string {
-  if (typeof baseUrl !== 'string' || baseUrl.trim() === '') return PROD_IMAGE_ORIGIN;
+  if (typeof baseUrl !== 'string' || baseUrl.trim() === '') return DEV_IMAGE_ORIGIN;
   try {
     return new URL(baseUrl).origin;
   } catch {
-    return PROD_IMAGE_ORIGIN;
+    return DEV_IMAGE_ORIGIN;
   }
 }
 

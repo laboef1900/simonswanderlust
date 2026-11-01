@@ -20,7 +20,7 @@ publication concurrency tokens, or address publication-state UX roadmap issues.
 1. Extend the existing renderer-backed publication analysis in `uploader/src/publish-gate.ts`
    into one body-analysis function returning foreign image URLs and actual body image sources.
    Render each locale's Markdown **once**, with the existing `renderMarkdown`.
-2. Preserve the foreign-origin interpretation: run `bodyImageSources` on that rendered HTML
+2. Preserve the foreign-origin interpretation: run `analyzeRenderedBody` (expanded and renamed by #375) on that rendered HTML
    **before** metadata resolution. Retain both source URLs and gallery lines for this check,
    including foreign gallery lines the transform would drop. Keep origin equality and the
    existing HTTP(S)/relative-URL interpretation; never replace this with a Markdown regex.

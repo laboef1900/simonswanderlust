@@ -3,13 +3,15 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
 import * as geometry from '../public/gpx-geometry.js';
+import { browserScript, galleryCodecBindings } from './gallery-browser-module.js';
 import * as publicTrack from '../public/gpx-public-track.js';
 import { editorDocument, EditorElement, EditorEvent } from './editor-dom-harness.js';
 import { ui } from '../../site/src/i18n/ui.js';
-import type { PostPair } from '../src/posts.js';
+import { memoryPostStore, type PostPair } from '../src/posts.js';
+import { publication } from './publication-client-fixture.js';
 
 const html = readFileSync('public/editor.html', 'utf8');
-const markup = html.slice(0, html.lastIndexOf('<script>'));
+const markup = html.slice(0, html.lastIndexOf('<script type="module">'));
 const script = readFileSync('public/editor-gpx.js', 'utf8');
 const preview = {
   importId: 'a'.repeat(64), expiresAt: '2026-10-24T12:00:00.000Z',
@@ -95,7 +97,7 @@ function gpxDocument() {
 
 type HostState = { tk: string | null; baseUpdatedAt: string };
 interface GpxTestHarness {
-  api: { refresh(): Promise<void>; hasPreview(): boolean; publishVersion(): string | null; publishError(code: string): string | null };
+  api: { refresh(): Promise<boolean>; hasPreview(): boolean; publishVersion(): string | null; publishError(code: string): string | null };
   element(id: string): EditorElement;
   requests: { url: string; options: RequestInit }[];
   state: HostState;
@@ -147,8 +149,14 @@ function setup(options: SetupOptions = {}) {
     getPost: () => ({ ...state }),
     beginAction: () => { publicationActions.push('begin'); },
     endAction: () => { publicationActions.push('end'); },
+    runWrite: async <T>(write: (saveDraft: () => Promise<boolean>) => Promise<T>) => write(async () => {
+      saveCalls++;
+      if (options.failSave) return false;
+      state.tk = 'new-pair';
+      state.baseUpdatedAt = '2026-10-24T10:00:30.000Z';
+      return true;
+    }),
     setBaseUpdatedAt: (value: string) => { state.baseUpdatedAt = value; },
-    saveDraft: async () => { saveCalls++; if (options.failSave) return false; state.tk = 'new-pair'; state.baseUpdatedAt = '2026-10-24T10:00:30.000Z'; return true; },
     adoptStops(stops: { name: string; lat: number; lng: number }[]) { adopted.push(stops); },
     inspector: { isOpen: () => false, close() {}, open() {}, reveal(target: EditorElement) { target.focus(); } },
     on401() {},
@@ -187,13 +195,37 @@ function check(h: GpxTestHarness, id: string, value = true) {
   h.element(id).checked = value;
   h.element(id).fire('change');
 }
-/** Run the real editor serializer, DraftGuard, host callbacks and GPX controller.
+const EDITOR_OWNER = '11111111-1111-4111-8111-111111111111';
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+/** An unacknowledged save attempt as WriteRecovery records it in a stash (#305). */
+interface StashAttempt { saveId: string; expectedOwnerId: string; resource: string; baseUpdatedAt: string | null; generation: number; sentPayload: unknown }
+/** An owner-scoped DraftGuard record (#305) for `resource` ('new' or 'post:<tk>'),
+ * carrying the WriteRecovery state a real stash would: base version plus any
+ * unresolved attempts (a new post's `createKey` is its client-chosen identity). */
+function stashRecord(resource: string, payload: unknown, baseUpdatedAt: string | null,
+  recovery: { createKey?: string; attempts?: StashAttempt[] } = {}) {
+  const context = webcrypto.randomUUID(), recordId = webcrypto.randomUUID(), createKey = recovery.createKey ?? webcrypto.randomUUID();
+  const key = `swl:draft:u:${EDITOR_OWNER}:${resource}:${context}:record:${recordId}`;
+  const value = JSON.stringify({
+    version: 1, ownerUserId: EDITOR_OWNER, resource, context, recordId, generation: 1,
+    savedAt: '2026-10-28T11:00:00.000Z', payload,
+    recovery: { version: 1, expectedOwnerId: EDITOR_OWNER, kind: 'posts', resource: resource === 'new' ? createKey : resource.slice(5),
+      createKey, baseUpdatedAt, attempts: recovery.attempts ?? [] },
+  });
+  return { key, value };
+}
+/** Run the real editor serializer, DraftGuard, WriteRecovery, host callbacks and GPX controller.
  * Only browser/vendor facilities and network responses are substituted. */
-function fullEditor(candidate: typeof preview, fetchOverride?: SetupOptions['fetch']) {
+function fullEditor(candidate: typeof preview, fetchOverride?: SetupOptions['fetch'], options: {
+  initialize?: boolean;
+  tk?: string;
+  stash?: { key: string; value: string };
+  confirm?: (title: string) => Promise<boolean>;
+} = {}) {
   const dom = gpxDocument();
   const requests: RequestRecord[] = [];
-  const values = new Map<string, string>();
-  const owner = '11111111-1111-4111-8111-111111111111';
+  const values = new Map<string, string>(options.stash ? [[options.stash.key, options.stash.value]] : []);
+  const owner = EDITOR_OWNER;
   let createdKey = '';
   const local = {
     getItem: (key: string) => values.get(key) ?? null,
@@ -225,29 +257,44 @@ function fullEditor(candidate: typeof preview, fetchOverride?: SetupOptions['fet
       .filter(([key]) => key.startsWith(prefix)).map(([key, value]) => [key.slice(prefix.length), value])),
   ]));
   const context: Record<string, unknown> = {
+    ...galleryCodecBindings,
     document: dom.document,
-    location: { search: '', pathname: '/admin/editor.html', href: 'http://localhost/admin/editor.html', origin: 'http://localhost' },
+    location: { search: options.tk ? '?tk=' + options.tk : '', pathname: '/admin/editor.html', href: 'http://localhost/admin/editor.html' + (options.tk ? '?tk=' + options.tk : ''), origin: 'http://localhost' },
     history: { replaceState() {} },
     localStorage: local,
     sessionStorage: local,
     fetch: async (url: string, options: RequestInit = {}) => {
       requests.push({ url, options });
-      const sent = options.body && (url === '/posts' || /^\/posts\/[^/]+$/.test(url)) ? JSON.parse(String(options.body)) : null;
+      const post = url === '/posts' || /^\/posts\/[^/]+$/.test(url);
+      const sent = options.body && post ? JSON.parse(String(options.body)) : null;
       if (url === '/posts' && sent) createdKey = sent.translationKey;
       const overridden = await fetchOverride?.(url, options);
       if (overridden) {
-        if (overridden.ok && sent) return response({ ...(await overridden.json() as Record<string, unknown>), translationKey: createdKey,
-          ownerUserId: owner, saveId: sent.saveId });
+        // Feature fixtures speak the #305 receipt protocol: acks carry the owner and
+        // the sent saveId; reads carry the owner and the last receipt (none by default).
+        // Both carry a publication observation (#317) unless the fixture supplies one.
+        if (overridden.ok && sent) {
+          const body = await overridden.json() as Record<string, unknown>;
+          return response({ publication: publication(body.status === 'published' ? 'published' : 'draft'), ...body,
+            translationKey: sent.translationKey, ownerUserId: owner, saveId: sent.saveId });
+        }
+        if (overridden.ok && post && !options.method) {
+          const body = await overridden.json() as Record<string, unknown>;
+          if (body && 'de' in body && 'en' in body) {
+            return response({ ownerUserId: owner, lastSaveId: null, publication: publication(body.status === 'published' ? 'published' : 'draft'), ...body });
+          }
+          return response(body);
+        }
         return overridden;
       }
       if (url === '/gpx/imports') return response(candidate, 201);
       if (url.startsWith('/gpx/imports/') && options.method === 'DELETE') return response({}, 204);
       if (url === '/posts' && options.method === 'POST') return response({
-        ...sent, translationKey: createdKey, updatedAt: '2026-10-24T10:00:30.000Z', ownerUserId: owner, saveId: sent.saveId,
+        ...sent, translationKey: createdKey, updatedAt: '2026-10-24T10:00:30.000Z', ownerUserId: owner, saveId: sent.saveId, publication: publication('draft'),
       });
       if (url === '/posts/' + createdKey + '/route' && options.method === 'PUT') return response({ error: 'gpx_conflict' }, 409);
       if (url === '/posts/' + createdKey && options.method === 'PUT') return response({
-        ...sent, translationKey: createdKey, updatedAt: '2026-10-24T10:00:40.000Z', ownerUserId: owner, saveId: sent.saveId,
+        ...sent, translationKey: createdKey, updatedAt: '2026-10-24T10:00:40.000Z', ownerUserId: owner, saveId: sent.saveId, publication: publication('draft'),
       });
       if (url.endsWith('/revisions')) return response([]);
       if (url.endsWith('/alt-audit')) return response({ images: [] });
@@ -257,6 +304,8 @@ function fullEditor(candidate: typeof preview, fetchOverride?: SetupOptions['fet
     Worker: CandidateWorker,
     setTimeout: () => 0,
     clearTimeout() {},
+    setInterval: () => 0,
+    clearInterval() {},
     addEventListener: dom.document.addEventListener,
     removeEventListener: dom.document.removeEventListener,
     URLSearchParams, URL, AbortController, Event: EditorEvent, KeyboardEvent: EditorEvent, console,
@@ -266,25 +315,26 @@ function fullEditor(candidate: typeof preview, fetchOverride?: SetupOptions['fet
     alert() {},
     confirm: () => false,
     EasyMDE,
-    Auth: { ensureAuthed: async () => null, renderHeader() {} },
-    AdminConfirm: { ask: async () => true, liveUrls: () => ({ de: '', en: '' }), urlsPlain: () => '' },
+    Auth: { ensureAuthed: async () => options.initialize ? { isAdmin: true, userId: owner } : null, renderHeader() {} },
+    AdminConfirm: { ask: async ({ title }: { title: string }) => options.confirm ? options.confirm(title) : true, liveUrls: () => ({ de: '', en: '' }), urlsPlain: () => '' },
     MediaPicker: { open() {} },
     AltSuggest: { wire() {} },
     WaypointCopy: copy('editor.waypoint.'),
     EditorImageCopy: copy('editor.titleImage.'),
     EditorGalleryCopy: copy('editor.gallery.'),
     EditorCopy: copy('editor.chrome.'),
+    BuildCopy: copy('admin.build.'),
     GpxCopy: copy('gpx.'),
     GpxMap: { create: async () => ({ render() {}, destroy() {}, resize() {} }) },
     EditorGalleryImageOrigin: 'https://img',
   };
   context.window = context;
   vm.createContext(context);
-  for (const file of ['publication-state.js', 'publication-refresh.js', 'language.js', 'draft-guard.js', 'write-recovery.js', 'waypoint-lookup.js', 'posts-filter.js', 'editor-title-image.js',
-    'gallery-fence.js', 'media-api.js', 'gallery-library.js', 'editor-galleries.js', 'editor-linter.js',
+  for (const file of ['build-reporting.js', 'publication-state.js', 'publication-refresh.js', 'language.js', 'draft-guard.js', 'write-recovery.js', 'journeys-ui.js', 'waypoint-lookup.js', 'posts-filter.js', 'editor-title-image.js',
+    'gallery-fence.js', 'gallery-metadata-warnings.js', 'media-api.js', 'gallery-library.js', 'editor-galleries.js', 'editor-linter.js',
     'llm.js', 'editor-excerpt.js', 'country-centers.js', 'country-coordinates.js', 'tabs.js',
     'editor-review.js', 'editor-inspector.js', 'editor-gpx.js']) {
-    vm.runInContext(readFileSync('public/' + file, 'utf8'), context, { filename: file });
+    vm.runInContext(browserScript(file), context, { filename: file });
   }
   vm.runInContext(`SiteLanguage.accept({primary:'de',locales:['de','en'],lockedAt:null,updatedAt:'2026-10-27T00:00:00.000Z'})`, context);
   // Supply the real shared geometry module through the controller's dependency
@@ -292,11 +342,12 @@ function fullEditor(candidate: typeof preview, fetchOverride?: SetupOptions['fet
   const controller = context.GpxEditor as { wire(host: Record<string, unknown>): unknown };
   const wire = controller.wire;
   controller.wire = (host) => wire({ ...host, loadGeometry: async () => browserGeometry, loadPublicTrack: async () => browserPublicTrack });
-  const inline = html.slice(html.indexOf("'use strict'", html.lastIndexOf('<script>')), html.lastIndexOf('</script>'));
+  const inline = html.slice(html.indexOf("'use strict'", html.lastIndexOf('<script type="module">')), html.lastIndexOf('</script>'));
   vm.runInContext(inline, context, { filename: 'editor.html' });
   vm.runInContext(`language = SiteLanguage.config(); loadBlocked = false; writeRecovery.initialize('${owner}')`, context);
-  const editor = vm.runInContext('({ buildPayload, doSaveDraft, guard, gpxEditor, deMDE, addStopRow })', context) as {
-    buildPayload(): Omit<PostPair, 'status'>;
+  const editor = vm.runInContext('({ buildPayload, loadPost, doSaveDraft, guard, gpxEditor, deMDE, addStopRow })', context) as {
+    buildPayload(): Omit<PostPair, 'status'> & { updatedAt?: string };
+    loadPost(tk: string): Promise<boolean>;
     doSaveDraft(): Promise<boolean>;
     guard: { stashNow(): void; isDirty(): boolean };
     gpxEditor: GpxTestHarness['api'];
@@ -308,8 +359,21 @@ function fullEditor(candidate: typeof preview, fetchOverride?: SetupOptions['fet
     if (!found) throw new Error('missing #' + id);
     return found;
   };
+  const recovery = () => {
+    const box = dom.document.querySelector('.write-recovery');
+    if (!box) throw new Error('missing write-recovery section');
+    return box;
+  };
   return {
     editor, api: editor.gpxEditor, element, requests, local,
+    /** WriteRecovery's status line (the pause notice while the owner is unconfirmed). */
+    recoveryMessage: () => recovery().querySelector('p')!.textContent,
+    comparisonShown: () => !recovery().querySelector('details')!.hidden,
+    /** The paused state's sign-in link (a probe 401 pauses instead of redirecting). */
+    signInOffered: () => !recovery().querySelector('a')!.hidden,
+    /** The "Use stored" control of the comparison: adopt the stored version into the form. */
+    useStored: () => { recovery().querySelector('details')!.querySelector('button')!.click(); },
+    get locationHref() { return (context.location as { href: string }).href; },
     get state() { return vm.runInContext('({ tk: currentTk, baseUpdatedAt: loadedUpdatedAt })', context) as HostState; },
     get saveCalls() { return requests.filter(({ url, options }) => url === '/posts' && options.method === 'POST').length; },
   };
@@ -706,6 +770,144 @@ describe('private GPX editor lifecycle', () => {
   });
 });
 
+describe('GPX shares the real editor write queue', () => {
+  it('captures Save-and-attach before its queue slot starts and leaves later typing dirty', async () => {
+    const h = fullEditor(preview);
+    await settle();
+    h.element('deTitle').value = 'Attach this version';
+    h.element('deTitle').fire('input');
+    await importPreview(h);
+    h.element('gpxAttach').click();
+    h.element('deTitle').value = 'Later unsaved typing';
+    h.element('deTitle').fire('input');
+    await settle();
+    const save = h.requests.find(({ url, options }) => url === '/posts' && options.method === 'POST')!;
+    expect(JSON.parse(String(save.options.body)).de.title).toBe('Attach this version');
+    expect(h.element('deTitle').value).toBe('Later unsaved typing');
+    expect(h.editor.guard.isDirty()).toBe(true);
+    expect(h.saveCalls).toBe(1);
+    expect(routeWrites(h)).toHaveLength(1);
+  });
+
+  it.each([false, true])('saves the clicked form to the pair created by a pending first Save before attaching (later typing: %s)', async (laterTyping) => {
+    const posts = memoryPostStore();
+    const firstSave = Promise.withResolvers<void>();
+    const attachSave = Promise.withResolvers<void>();
+    const savedVersions: string[] = [];
+    let attachedAt = '';
+    let tk = ''; // the client's create-only identity (#305), not a server-chosen key
+    const h = fullEditor(preview, async (url, request) => {
+      if ((url === '/posts' && request.method === 'POST') || (url === '/posts/' + tk && request.method === 'PUT')) {
+        const payload = JSON.parse(String(request.body)) as PostPair & { updatedAt?: string };
+        if (url === '/posts') tk = payload.translationKey;
+        const stored = await posts.upsertDraft(payload, payload.updatedAt ? new Date(payload.updatedAt) : undefined);
+        const updatedAt = stored.updatedAt.toISOString();
+        savedVersions.push(updatedAt);
+        if (savedVersions.length === 1) await firstSave.promise;
+        if (savedVersions.length === 2) await attachSave.promise;
+        return response({ ...stored, updatedAt });
+      }
+      if (url.endsWith('/route') && request.method === 'PUT') {
+        attachedAt = new Date((await posts.get(tk))!.updatedAt.getTime() + 1).toISOString();
+        return response({ ...attachedRoute, updatedAt: attachedAt });
+      }
+      return undefined;
+    });
+    await settle();
+    h.element('deTitle').value = 'First save A';
+    h.element('deTitle').fire('input');
+    const saving = h.editor.doSaveDraft();
+    await settle();
+    expect(tk).toMatch(UUID_RE);
+    expect((await posts.get(tk))!.de.title).toBe('First save A');
+    h.element('deTitle').value = 'Save and attach B';
+    h.element('deTitle').fire('input');
+    await importPreview(h);
+    expect(h.element('gpxAttach').textContent).toBe(ui.en['gpx.newPostSaveFirst']);
+    h.element('gpxAttach').click();
+    if (laterTyping) {
+      h.element('deTitle').value = 'Later unsaved C';
+      h.element('deTitle').fire('input');
+    }
+    await settle();
+    expect(h.saveCalls).toBe(1);
+    expect(savedVersions).toHaveLength(1);
+    expect(routeWrites(h)).toHaveLength(0);
+    expect(h.element('gpxAttach').disabled).toBe(true);
+    firstSave.resolve();
+    expect(await saving).toBe(true);
+    await settle();
+    expect((await posts.get(tk))!.de.title).toBe('Save and attach B');
+    expect(routeWrites(h)).toHaveLength(0); // wait for B's reply, not just its commit
+    expect(h.element('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveSaving']);
+    const attachDraft = h.requests.find(({ url, options }) => url === '/posts/' + tk && options.method === 'PUT')!;
+    expect(JSON.parse(String(attachDraft.options.body))).toMatchObject({
+      translationKey: tk, updatedAt: savedVersions[0], de: { title: 'Save and attach B' },
+    });
+    attachSave.resolve();
+    await settle();
+    expect(h.saveCalls).toBe(1);
+    expect(await posts.list()).toHaveLength(1);
+    expect((await posts.get(tk))!.de.title).toBe('Save and attach B');
+    expect(h.requests.filter(({ url, options }) => url.startsWith('/posts') && ['POST', 'PUT'].includes(options.method ?? ''))
+      .map(({ url, options }) => [options.method, url])).toEqual([
+      ['POST', '/posts'], ['PUT', '/posts/' + tk], ['PUT', '/posts/' + tk + '/route'],
+    ]);
+    expect(routeWrites(h)).toHaveLength(1);
+    expect(JSON.parse(String(routeWrites(h)[0]!.options.body))).toMatchObject({
+      baseUpdatedAt: savedVersions[1], baseVersion: null, importId: preview.importId,
+    });
+    expect(h.state.baseUpdatedAt).toBe(attachedAt);
+    expect(h.api.hasPreview()).toBe(false);
+    expect(h.element('deTitle').value).toBe(laterTyping ? 'Later unsaved C' : 'Save and attach B');
+    expect(h.editor.guard.isDirty()).toBe(laterTyping);
+    expect(h.element('draftSaveState').textContent).toBe(ui.en[laterTyping ? 'editor.chrome.saveUnsaved' : 'editor.chrome.saveSaved']);
+    expect(await h.editor.doSaveDraft()).toBe(true);
+    const nextSave = h.requests.filter(({ url, options }) => url === '/posts/' + tk && options.method === 'PUT').at(-1)!;
+    expect(JSON.parse(String(nextSave.options.body)).updatedAt).toBe(attachedAt);
+  });
+
+  it('waits for a pending Save before detaching and keeps its busy guard until the route response', async () => {
+    const pendingSave = Promise.withResolvers<Reply>();
+    const pendingDetach = Promise.withResolvers<Reply>();
+    const h = fullEditor(preview, async (url, request) => {
+      if (url.endsWith('/route') && request.method === 'PUT') return response({
+        ...attachedRoute, updatedAt: '2026-10-24T10:01:00.000Z',
+      });
+      if (url.endsWith('/route') && request.method === 'DELETE') return pendingDetach.promise;
+      if (/^\/posts\/[^/]+$/.test(url) && request.method === 'PUT') return pendingSave.promise;
+      return undefined;
+    });
+    await settle();
+    await importPreview(h);
+    h.element('gpxAttach').click();
+    await settle();
+    expect(h.state.tk).toMatch(UUID_RE);
+    const saving = h.editor.doSaveDraft();
+    await settle();
+    h.element('gpxDetach').click();
+    await settle();
+    expect(routeWrites(h).map(({ options }) => options.method)).toEqual(['PUT']);
+    pendingSave.resolve(response({
+      translationKey: h.state.tk, updatedAt: '2026-10-24T10:02:00.000Z',
+      de: { slug: 'private-walk' }, en: { slug: '' },
+    }));
+    expect(await saving).toBe(true);
+    await settle();
+    const detach = routeWrites(h).at(-1)!;
+    expect(detach.options.method).toBe('DELETE');
+    expect(JSON.parse(String(detach.options.body))).toEqual({
+      baseVersion: attachedRoute.version, baseUpdatedAt: '2026-10-24T10:02:00.000Z', confirmDetach: true,
+    });
+    expect(await h.editor.doSaveDraft()).toBe(false);
+    expect(h.element('gpxDetach').disabled).toBe(true);
+    pendingDetach.resolve(response({ ...emptyRoute, version: 'd'.repeat(36), updatedAt: '2026-10-24T10:03:00.000Z' }));
+    await settle();
+    expect(h.state.baseUpdatedAt).toBe('2026-10-24T10:03:00.000Z');
+    expect(h.element('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveSaved']);
+  });
+});
+
 describe('GPX privacy through the real editor save and stash boundary', () => {
   it('keeps a failed first-save reason visible in the modal without attaching or discarding its preview', async () => {
     const h = fullEditor(preview, async (url, request) =>
@@ -999,4 +1201,420 @@ describe('candidate failure recovery boundaries', () => {
     expect(h.element('gpxAttach').disabled).toBe(true);
     expect(h.requests).toHaveLength(2);
   });
+});
+
+function reloadPostFixture(updatedAt = '2026-10-28T10:00:00.000Z'): PostPair & { updatedAt: string } {
+  const locale = (lang: 'de' | 'en') => ({
+    locale: lang, slug: lang + '-walk', title: lang + ' walk', excerpt: 'A walk',
+    country: 'Romania', heroImage: { src: 'https://img/hero', width: 900, height: 600, alt: 'Hills' },
+    bodyMarkdown: '## A walk\n\nAlong the hills.', images: {}, keyFacts: {},
+  });
+  return {
+    translationKey: 'pair-1', status: 'draft', updatedAt,
+    shared: { date: '2026-10-24', countryCode: 'RO', region: 'europe', coordinates: { lat: 44, lng: 26 }, categories: [], tags: [] },
+    de: locale('de'), en: locale('en'),
+  };
+}
+const routeReads = (h: { requests: RequestRecord[] }) => h.requests.filter(({ url, options }) =>
+  url.endsWith('/route') && options.method === 'GET');
+const publicationWrites = (h: { requests: RequestRecord[] }) => h.requests.filter(({ url }) =>
+  url.endsWith('/publish') || url.endsWith('/unpublish'));
+const draftWrites = (h: { requests: RequestRecord[] }) => h.requests.filter(({ url, options }) =>
+  /^\/posts(\/[^/]+)?$/.test(url) && (options.method === 'PUT' || options.method === 'POST'));
+type LocalStore = { length: number; key(index: number): string | null; getItem(key: string): string | null };
+/** Every DraftGuard record's payload, serialized as stored (the recovery a reader could restore). */
+const stashedPayloads = (h: { local: LocalStore }) => Array.from({ length: h.local.length }, (_, i) =>
+  JSON.stringify(JSON.parse(h.local.getItem(h.local.key(i)!)!).payload));
+
+// A conflicting save probes the stored version (#305); adopting it through the
+// comparison's "Use stored" control is the explicit reload the GPX controller
+// reconciles against, replacing the pre-#305 "Reload the latest version?" dialog.
+describe('explicitly adopting the stored version reconciles the real editor and GPX controller', () => {
+  it.each([
+    { name: 'attach', before: emptyRoute, after: attachedRoute, status: 'gpx.statusAttached', detach: true },
+    { name: 'replace', before: attachedRoute, after: { ...attachedRoute, version: 'e'.repeat(36) }, status: 'gpx.statusAttached', detach: true },
+    { name: 'detach', before: attachedRoute, after: { ...attachedRoute, version: 'f'.repeat(36), geometry: null }, status: 'gpx.statusDetached', detach: false },
+  ] as const)('reconciles another tab’s $name and publishes the post-save token with the reviewed route', async ({ before, after, status, detach }) => {
+    let stored = reloadPostFixture();
+    let route: typeof before | typeof after = before;
+    let saves = 0;
+    const savedAt = '2026-10-28T10:02:00.000Z';
+    const h = fullEditor(preview, async (url, options) => {
+      if (url.endsWith('/route') && options.method === 'GET') return response(route);
+      if (url === '/posts/pair-1' && options.method === 'PUT') {
+        if (++saves === 1) return response({ code: 'conflict' }, 409);
+        return response({ ...stored, updatedAt: savedAt });
+      }
+      if (url === '/posts/pair-1') return response(stored);
+      if (url.endsWith('/publish')) return response({ published: true, updatedAt: '2026-10-28T10:03:00.000Z', build: { ok: true, attemptId: 'r1', release: 'r1' } });
+      return undefined;
+    });
+    await h.editor.loadPost('pair-1');
+    route = after;
+    stored = { ...stored, updatedAt: '2026-10-28T10:01:00.000Z', en: { ...stored.en, title: 'Other tab’s title' } };
+    h.element('deTitle').value = 'Unsaved local title';
+    h.element('deTitle').fire('input');
+    expect(await h.editor.doSaveDraft()).toBe(false);
+    // The probe alone reconciles nothing: no route read, no foreign form yet.
+    expect(h.comparisonShown()).toBe(true);
+    expect(routeReads(h)).toHaveLength(1);
+    expect(h.element('enTitle').value).not.toBe(stored.en.title);
+    h.useStored();
+    await settle();
+    expect(routeReads(h)).toHaveLength(2);
+    expect(h.element('enTitle').value).toBe(stored.en.title);
+    expect(h.element('gpxRouteStatus').textContent).toBe(ui.en[status]);
+    expect(h.element('gpxDetach').hidden).toBe(!detach);
+    expect(h.element('gpxDetach').disabled).toBe(false);
+    expect(h.element('gpxReimport').hidden).toBe(!after.originalAvailable);
+    expect(h.element('gpxDownload').hidden).toBe(!after.originalAvailable);
+    h.element('publishBtn').click();
+    await settle();
+    expect(publicationWrites(h)).toHaveLength(1);
+    expect(JSON.parse(String(publicationWrites(h)[0]!.options.body))).toEqual({
+      baseUpdatedAt: savedAt, baseRouteVersion: after.version, baseLanguageUpdatedAt: '2026-10-27T00:00:00.000Z',
+    });
+    const save = h.requests.filter(({ url, options }) => url === '/posts/pair-1' && options.method === 'PUT')[1]!;
+    expect(JSON.parse(String(save.options.body)).updatedAt).toBe(stored.updatedAt);
+  });
+
+  it.each(['network', '500', 'json', 'version'] as const)('blocks pending/failed route reconciliation (%s) and recovers only after a successful explicit reload', async (failure) => {
+    const pending = Promise.withResolvers<Reply>();
+    let reads = 0;
+    let saves = 0;
+    let stored = reloadPostFixture();
+    const h = fullEditor(preview, async (url, options) => {
+      if (url === '/posts/pair-1' && options.method === 'PUT') {
+        saves++;
+        return response({ code: 'conflict' }, 409);
+      }
+      if (url === '/posts/pair-1') return response(stored);
+      if (url.endsWith('/route') && options.method === 'GET') {
+        reads++;
+        return reads === 2 ? pending.promise : response(attachedRoute);
+      }
+      return undefined;
+    });
+    await h.editor.loadPost('pair-1');
+    stored = reloadPostFixture('2026-10-28T10:01:00.000Z'); // another tab saved: the probe finds a changed version
+    const save = h.editor.doSaveDraft();
+    const queuedSave = h.editor.doSaveDraft(); // queued behind the conflict; refused by the unresolved comparison
+    h.element('publishBtn').click(); // same queue, same refusal
+    await settle();
+    expect(await save).toBe(false);
+    expect(await queuedSave).toBe(false);
+    expect(saves).toBe(1);
+    expect(publicationWrites(h)).toEqual([]);
+    expect(h.comparisonShown()).toBe(true);
+    h.useStored(); // the explicit reload: form adopted, route read pending
+    await settle();
+    expect(h.element('enTitle').value).toBe(reloadPostFixture().en.title);
+    expect(h.element('gpxRouteStatus').textContent).toBe(ui.en['gpx.statusLoading']);
+    for (const id of ['gpxReimport', 'gpxAttach', 'gpxDetach']) expect(h.element(id).disabled).toBe(true);
+    expect(await h.editor.doSaveDraft()).toBe(false);
+    h.element('publishBtn').click();
+    h.element('unpublishBtn').click();
+    h.element('gpxDetach').fire('click');
+    expect(() => h.api.publishVersion()).toThrow();
+    await settle();
+    expect(saves).toBe(1);
+    expect(routeWrites(h)).toEqual([]);
+    expect(publicationWrites(h)).toEqual([]);
+    if (failure === 'network') pending.reject(new Error('offline'));
+    else if (failure === '500') pending.resolve(response({ error: 'unavailable' }, 500));
+    else if (failure === 'json') pending.resolve({ status: 200, ok: true, json: async () => { throw new SyntaxError('invalid JSON'); } });
+    else pending.resolve(response({ ...emptyRoute, version: 42 }));
+    await settle();
+    expect(h.element('gpxRouteStatus').textContent).toBe(ui.en['gpx.statusUnavailable']);
+    expect(h.element('gpxRouteFeedback').textContent).toBe(ui.en['gpx.routeRefreshFailed']);
+    expect(h.element('gpxRouteFeedback').hidden).toBe(false);
+    expect(() => h.api.publishVersion()).toThrow();
+    expect(await h.editor.doSaveDraft()).toBe(false);
+    h.element('gpxDetach').fire('click');
+    h.element('publishBtn').click();
+    await settle();
+    expect(routeWrites(h)).toEqual([]);
+    expect(publicationWrites(h)).toEqual([]);
+    await h.editor.loadPost('pair-1');
+    expect(h.api.publishVersion()).toBe(attachedRoute.version);
+    expect(h.element('gpxRouteStatus').textContent).toBe(ui.en['gpx.statusAttached']);
+    expect(h.element('gpxRouteFeedback').hidden).toBe(true);
+    expect(h.element('gpxDetach').disabled).toBe(false);
+    expect(saves).toBe(1);
+  });
+
+  it.each([false, true])('preserves a pending preview while route loading blocks Attach, then uses the reconciled version (initial attachment: %s)', async (initiallyAttached) => {
+    const pending = Promise.withResolvers<Reply>();
+    let reads = 0;
+    const h = fullEditor(preview, async (url, options) => {
+      if (url === '/posts/pair-1') return response(reloadPostFixture());
+      if (url.endsWith('/route') && options.method === 'GET') return ++reads === 1 ? response(initiallyAttached ? { ...attachedRoute, version: 'earlier-version' } : emptyRoute) : pending.promise;
+      if (url.endsWith('/route') && options.method === 'PUT') return response({ ...attachedRoute, updatedAt: '2026-10-28T10:03:00.000Z' });
+      return undefined;
+    });
+    await h.editor.loadPost('pair-1');
+    await importPreview(h);
+    if (initiallyAttached) check(h, 'gpxReplaceConfirm');
+    h.element('gpxStart').value = '1';
+    h.element('gpxStart').fire('input');
+    await settle();
+    const loading = h.editor.loadPost('pair-1');
+    await settle();
+    h.element('gpxAttach').fire('click');
+    await settle();
+    expect(routeWrites(h)).toEqual([]);
+    expect(h.api.hasPreview()).toBe(true);
+    pending.resolve(response(attachedRoute));
+    await loading;
+    expect(h.api.hasPreview()).toBe(true);
+    expect(h.element('gpxStart').value).toBe('1');
+    expect(() => h.api.publishVersion()).toThrow();
+    expect(h.element('gpxReplaceScope').hidden).toBe(false);
+    expect(h.element('gpxReplaceConfirmLabel').hidden).toBe(false);
+    expect(h.element('gpxReplaceConfirm').checked).toBe(false);
+    expect(h.element('gpxAttach').disabled).toBe(true);
+    check(h, 'gpxReplaceConfirm');
+    h.element('gpxAttach').click();
+    await settle();
+    expect(routeWrites(h)).toHaveLength(1);
+    expect(JSON.parse(String(routeWrites(h)[0]!.options.body)).baseVersion).toBe(attachedRoute.version);
+  });
+
+  // Adopting a stored version whose population fails rolls the form back (#332):
+  // the route is never read, nothing is written, and the local draft stays stashed.
+  it('does not reconcile a route when adopting the stored version fails to populate, preserving local recovery', async () => {
+    let conflicted = false;
+    const h = fullEditor(preview, async (url, options) => {
+      if (url.endsWith('/route') && options.method === 'GET') return response(attachedRoute);
+      if (url === '/posts/pair-1' && options.method === 'PUT') return response({ code: 'conflict' }, 409);
+      if (url === '/posts/pair-1') {
+        if (!conflicted) return response(reloadPostFixture());
+        const post = reloadPostFixture('2026-10-28T12:00:00.000Z');
+        return response({ ...post, de: { ...post.de, bodyMarkdown: 'Break population' } });
+      }
+      return undefined;
+    });
+    await h.editor.loadPost('pair-1');
+    h.element('deTitle').value = 'Keep my draft';
+    h.element('deTitle').fire('input');
+    h.editor.guard.stashNow();
+    const before = structuredClone(h.editor.buildPayload());
+    const value = h.editor.deMDE.value.bind(h.editor.deMDE);
+    h.editor.deMDE.value = (text?: string) => {
+      const result = value(text);
+      if (text === 'Break population') throw new Error('form failed after DE changed');
+      return result;
+    };
+    conflicted = true;
+    expect(await h.editor.doSaveDraft()).toBe(false);
+    expect(h.comparisonShown()).toBe(true);
+    expect(routeReads(h)).toHaveLength(1);
+    h.useStored();
+    await settle();
+    expect(routeReads(h)).toHaveLength(1);
+    expect(h.element('deTitle').value).toBe('Keep my draft');
+    expect(h.editor.buildPayload()).toEqual(before);
+    expect(await h.editor.doSaveDraft()).toBe(false);
+    h.element('publishBtn').click();
+    h.element('gpxDetach').click();
+    await settle();
+    expect(draftWrites(h)).toHaveLength(1);
+    expect(publicationWrites(h)).toEqual([]);
+    expect(routeWrites(h)).toEqual([]);
+    expect(stashedPayloads(h)).toContain(JSON.stringify(before));
+    expect(h.editor.guard.isDirty()).toBe(true);
+  });
+
+  // When the stored version cannot be read at all, no reload is offered: the
+  // attempt stays unresolved, nothing is resent, and the route is not re-read.
+  it.each(['network', '500', '401'] as const)('does not reconcile a route when the conflict probe fails (%s), preserving local recovery', async (failure) => {
+    let conflicted = false;
+    const h = fullEditor(preview, async (url, options) => {
+      if (url.endsWith('/route') && options.method === 'GET') return response(attachedRoute);
+      if (url === '/posts/pair-1' && options.method === 'PUT') return response({ code: 'conflict' }, 409);
+      if (url === '/posts/pair-1') {
+        if (!conflicted) return response(reloadPostFixture());
+        if (failure === 'network') throw new Error('offline');
+        return response({}, Number(failure));
+      }
+      return undefined;
+    });
+    await h.editor.loadPost('pair-1');
+    h.element('deTitle').value = 'Keep my draft';
+    h.element('deTitle').fire('input');
+    h.editor.guard.stashNow();
+    const before = structuredClone(h.editor.buildPayload());
+    conflicted = true;
+    expect(await h.editor.doSaveDraft()).toBe(false);
+    expect(routeReads(h)).toHaveLength(1);
+    expect(h.comparisonShown()).toBe(false);
+    expect(h.recoveryMessage()).toBe(ui.en[failure === '401' ? 'editor.chrome.writeOwnerChanged' : 'editor.chrome.writeUnknown']);
+    expect(h.signInOffered()).toBe(failure === '401');
+    expect(h.editor.buildPayload()).toEqual(before);
+    expect(await h.editor.doSaveDraft()).toBe(false);
+    h.element('publishBtn').click();
+    await settle();
+    expect(draftWrites(h)).toHaveLength(1); // the conflicting attempt; never resent
+    expect(routeReads(h)).toHaveLength(1);
+    expect(publicationWrites(h)).toEqual([]);
+    expect(routeWrites(h)).toEqual([]);
+    expect(stashedPayloads(h)).toContain(JSON.stringify(before));
+    expect(h.editor.guard.isDirty()).toBe(true);
+    expect(h.locationHref).toBe('http://localhost/admin/editor.html');
+  });
+
+  it('cancelled conflict Reload keeps edits and does not read a route', async () => {
+    const h = fullEditor(preview, async (url, options) => {
+      if (url.endsWith('/route') && options.method === 'GET') return response(emptyRoute);
+      if (url === '/posts/pair-1') return response(options.method === 'PUT' ? { code: 'conflict' } : reloadPostFixture(), options.method === 'PUT' ? 409 : 200);
+      return undefined;
+    }, { confirm: async () => false });
+    await h.editor.loadPost('pair-1');
+    h.element('deTitle').value = 'Keep this title';
+    h.element('deTitle').fire('input');
+    expect(await h.editor.doSaveDraft()).toBe(false);
+    expect(h.element('deTitle').value).toBe('Keep this title');
+    expect(h.editor.guard.isDirty()).toBe(true);
+    expect(routeReads(h)).toHaveLength(1);
+  });
+
+  it('ignores an old route response after a newer explicit load changes identity', async () => {
+    const pending = Promise.withResolvers<Reply>();
+    const h = fullEditor(preview, async (url) => {
+      if (url === '/posts/pair-1') return response(reloadPostFixture());
+      if (url === '/posts/pair-2') return response({ ...reloadPostFixture(), translationKey: 'pair-2' });
+      if (url === '/posts/pair-1/route') return pending.promise;
+      if (url === '/posts/pair-2/route') return response({ ...emptyRoute, version: 'f'.repeat(36) });
+      return undefined;
+    });
+    const old = h.editor.loadPost('pair-1');
+    await settle();
+    await h.editor.loadPost('pair-2');
+    pending.resolve(response(attachedRoute));
+    await old;
+    expect(h.state.tk).toBe('pair-2');
+    expect(h.api.publishVersion()).toBe('f'.repeat(36));
+    expect(h.element('gpxRouteStatus').textContent).toBe(ui.en['gpx.statusDetached']);
+    expect(await h.editor.doSaveDraft()).toBe(true);
+  });
+
+  // An existing post's stash is keyed by the URL's tk; a new post's stash carries
+  // its client-chosen key and the unacknowledged first save, which the restore
+  // probe confirms before the identity gets its one route read.
+  it.each([false, true])('initialization offers stash before its single final route refresh (existing: %s)', async (existing) => {
+    const restore = Promise.withResolvers<boolean>();
+    const createKey = webcrypto.randomUUID();
+    const saveId = webcrypto.randomUUID();
+    const tk = existing ? 'pair-1' : createKey;
+    const payload = reloadPostFixture();
+    payload.translationKey = tk;
+    payload.de.title = 'Local recovered title';
+    const h = fullEditor(preview, async (url, options) => {
+      if (url === '/posts/' + tk && !options.method) return response({ ...reloadPostFixture(), translationKey: tk, lastSaveId: existing ? null : saveId });
+      if (url === '/posts/' + tk + '/route' && options.method === 'GET') return response(attachedRoute);
+      return undefined;
+    }, {
+      initialize: true, tk: existing ? tk : undefined,
+      stash: existing
+        ? stashRecord('post:pair-1', payload, '2026-10-28T10:00:00.000Z')
+        : stashRecord('new', payload, null, { createKey, attempts: [{ saveId, expectedOwnerId: EDITOR_OWNER, resource: createKey, baseUpdatedAt: null, generation: 1, sentPayload: payload }] }),
+      confirm: async (title) => title === ui.en['editor.chrome.restoreTitle'] ? restore.promise : true,
+    });
+    await settle();
+    expect(routeReads(h)).toHaveLength(0);
+    restore.resolve(true);
+    await settle();
+    expect(routeReads(h).map(({ url }) => url)).toEqual(['/posts/' + tk + '/route']);
+    expect(h.element('deTitle').value).toBe(payload.de.title);
+    expect(h.state.tk).toBe(tk);
+    expect(h.api.publishVersion()).toBe(attachedRoute.version);
+    expect(draftWrites(h)).toEqual([]); // restoring never resends the stashed attempt
+    h.editor.guard.stashNow();
+    for (let i = 0; i < h.local.length; i++) {
+      expect(h.local.getItem(h.local.key(i)!)).not.toMatch(/"(?:geometry|segments|importId|sourceBytes|baseVersion)"/);
+    }
+  });
+
+  it('initializes a new post without a route GET and permits its first save', async () => {
+    const h = fullEditor(preview, undefined, { initialize: true });
+    await settle();
+    expect(h.api.publishVersion()).toBeNull();
+    expect(h.element('gpxRouteStatus').textContent).toBe(ui.en['gpx.statusNone']);
+    expect(routeReads(h)).toEqual([]);
+    h.element('deTitle').value = 'My new walk';
+    h.element('deTitle').fire('input');
+    expect(await h.editor.doSaveDraft()).toBe(true);
+  });
+});
+
+describe('route refresh response ownership', () => {
+  it.each(['de', 'en'] as const)('announces loading and failure in %s without claiming attachment or absence', async (locale) => {
+    const pending = Promise.withResolvers<Reply>();
+    const h = setup({ locale, fetch: async () => pending.promise });
+    const loading = h.api.refresh();
+    expect(h.element('gpxRouteStatus').textContent).toBe(ui[locale]['gpx.statusLoading']);
+    pending.resolve(response({ version: '' }));
+    expect(await loading).toBe(false);
+    expect(h.element('gpxRouteStatus').textContent).toBe(ui[locale]['gpx.statusUnavailable']);
+    expect(h.element('gpxRouteFeedback').textContent).toBe(ui[locale]['gpx.routeRefreshFailed']);
+  });
+
+  it.each(['success', 'failure'] as const)('ignores obsolete %s for the same post after a newer refresh succeeds', async (outcome) => {
+    const pending = Promise.withResolvers<Reply>();
+    let reads = 0;
+    const h = setup({ fetch: async () => ++reads === 1 ? pending.promise : response({ ...emptyRoute, version: 'e'.repeat(36) }) });
+    const old = h.api.refresh();
+    expect(await h.api.refresh()).toBe(true);
+    if (outcome === 'failure') pending.reject(new Error('late network failure'));
+    else pending.resolve(response(attachedRoute));
+    expect(await old).toBe(false);
+    expect(h.api.publishVersion()).toBe('e'.repeat(36));
+    expect(h.element('gpxRouteStatus').textContent).toBe('statusDetached');
+    expect(h.element('gpxRouteFeedback').hidden).toBe(true);
+  });
+
+  it('ignores a failed response for a different identity even without a replacement refresh', async () => {
+    const pending = Promise.withResolvers<Reply>();
+    const h = setup({ fetch: async () => pending.promise });
+    const loading = h.api.refresh();
+    h.state.tk = 'other-pair';
+    pending.reject(new Error('old identity failed'));
+    await loading;
+    expect(h.element('gpxRouteStatus').textContent).toBe('statusLoading');
+    expect(h.element('gpxRouteFeedback').hidden).toBe(true);
+    expect(() => h.api.publishVersion()).toThrow();
+  });
+
+  it('redirects on a route 401 without admitting writes or claiming route reconciliation', async () => {
+    const h = fullEditor(preview, async (url) => {
+      if (url === '/posts/pair-1') return response(reloadPostFixture());
+      if (url.endsWith('/route')) return response({}, 401);
+      return undefined;
+    });
+    await h.editor.loadPost('pair-1');
+    expect(h.locationHref).toMatch(/^\/login\?next=/);
+    expect(h.element('gpxRouteStatus').textContent).toBe(ui.en['gpx.statusUnavailable']);
+    expect(await h.editor.doSaveDraft()).toBe(false);
+    h.element('gpxDetach').fire('click');
+    h.element('publishBtn').click();
+    await settle();
+    expect(routeWrites(h)).toEqual([]);
+    expect(publicationWrites(h)).toEqual([]);
+  });
+});
+
+it('keeps failed initialization in recovery mode without a route-only read after stash restoration', async () => {
+  const payload = reloadPostFixture();
+  payload.de.title = 'Recover this draft';
+  const h = fullEditor(preview, async (url) => url === '/posts/pair-1' ? response({}, 500) : undefined, {
+    initialize: true, tk: 'pair-1',
+    stash: stashRecord('post:pair-1', payload, '2026-10-28T10:00:00.000Z'),
+  });
+  await settle();
+  expect(h.element('deTitle').value).toBe(payload.de.title);
+  expect(routeReads(h)).toEqual([]);
+  expect(await h.editor.doSaveDraft()).toBe(false);
+  expect(draftWrites(h)).toEqual([]);
+  expect(h.editor.guard.isDirty()).toBe(true);
+  expect(stashedPayloads(h).some((stored) => stored.includes('Recover this draft'))).toBe(true);
 });

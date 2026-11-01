@@ -31,6 +31,7 @@ import { imagesMapError } from './body-content.js';
 import { isSafeSlug } from './posts.js';
 import { namespaceOf, reservation } from '../../site/src/lib/reserved-routes.js';
 import { isCanonicalJourneyHero, parseJourneySnapshot, type JourneySnapshot } from '../../site/src/lib/journey-snapshot.js';
+import { configuredOriginRoles, validateCanonicalRoles, type OriginRoles } from './canonical-origin.js';
 
 /**
  * v8 (issue #204) added reader `comments` (no email — the spec stores none;
@@ -59,6 +60,8 @@ export const PAGES_NAV_DUMP_VERSION = 13;
 export const LANGUAGE_DUMP_VERSION = 12;
 /** Introduction boundary, independent of later language/content format additions. */
 export const IDENTITY_DUMP_VERSION = 11;
+/** First version carrying the private `post_routes` table. */
+export const ROUTES_DUMP_VERSION = 10;
 /** Every version `readDump` accepts — an allow-list, not a minimum. */
 export const SUPPORTED_DUMP_VERSIONS: readonly number[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
 export const BACKUP_FILE_RE = /^db-\d{8}-\d{6}\.json\.gz$/;
@@ -199,7 +202,7 @@ async function captureDatabase(db: Connectable, dir: string, now: Date, options:
   let journeyLocales: Record<string, unknown>[] | undefined;
   let journeyMembers: Record<string, unknown>[] | undefined;
   let version = DUMP_VERSION;
-  let routeRows: RouteDumpRow[] = [];
+  let routeRows: RouteDumpRow[] | undefined = [];
   let routeArchive: RouteArchiveManifest | undefined;
   try {
     await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
@@ -316,15 +319,25 @@ async function captureDatabase(db: Connectable, dir: string, now: Date, options:
       await validateIdentityAssets({ version, createdAt: now.toISOString(),
         tables: { users, posts, site_identity: siteIdentity, site_identity_assets: identityAssets } });
     }
-    const rawRoutes = (await client.query(
-      'SELECT translation_key, version, geometry, source_id, source_sha256, source_bytes, updated_at FROM post_routes ORDER BY translation_key',
-    )).rows.map((row) => ({
-      ...row, updated_at: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at,
-    }));
-    validateRouteDumpRows(rawRoutes, posts);
-    routeRows = rawRoutes;
-    if (routeRows.length && !options.routeFiles) throw new BackupError('Private route storage is required for a complete backup.');
-    if (options.routeFiles) routeArchive = await createRouteArchive(options.routeFiles, dir, routeRows, now, options.isWritable);
+    // A database that predates private routes (v10) has no table to capture; its
+    // pre-migration recovery set is honestly labelled pre-v10 instead of failing boot.
+    const preRoutes = options.preLanguageMigration
+      && (await client.query("SELECT to_regclass('post_routes') IS NULL AS absent")).rows[0]?.absent === true;
+    if (preRoutes) {
+      if (version >= IDENTITY_DUMP_VERSION) throw new BackupError('Cannot capture identity recovery metadata without the private route schema.');
+      version = ROUTES_DUMP_VERSION - 1;
+      routeRows = undefined;
+    } else {
+      const rawRoutes = (await client.query(
+        'SELECT translation_key, version, geometry, source_id, source_sha256, source_bytes, updated_at FROM post_routes ORDER BY translation_key',
+      )).rows.map((row) => ({
+        ...row, updated_at: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at,
+      }));
+      validateRouteDumpRows(rawRoutes, posts);
+      routeRows = rawRoutes;
+      if (routeRows.length && !options.routeFiles) throw new BackupError('Private route storage is required for a complete backup.');
+      if (options.routeFiles) routeArchive = await createRouteArchive(options.routeFiles, dir, routeRows, now, options.isWritable);
+    }
     writable();
     await client.query('COMMIT');
   } catch (e) {
@@ -1149,7 +1162,7 @@ export function readDump(filePath: string): Dump {
       names.add(row.key);
     }
   }
-  if (dump.version >= 10) {
+  if (dump.version >= ROUTES_DUMP_VERSION) {
     validateRouteDumpRows(dump.tables.post_routes, dump.tables.posts);
     if (dump.tables.post_routes.length) validateRouteManifest(dump.routeArchive, dump.tables.post_routes);
     else if (dump.routeArchive !== undefined) throw new BackupError('Unexpected private route archive.');
@@ -1179,6 +1192,7 @@ const COMMENT_STATUS_ALLOW: readonly string[] = ['pending', 'approved', 'rejecte
 
 export interface RestoreOptions {
   routeFiles?: GpxFiles;
+  originRoles?: OriginRoles;
   assertOwner?: () => Promise<void>;
 }
 export interface RestoreCounts {
@@ -1195,6 +1209,11 @@ export async function restoreDatabase(pool: DbPool, filePath: string, options: R
 async function restoreDatabaseContents(pool: DbPool, filePath: string, options: RestoreOptions): Promise<RestoreCounts> {
   const dump = readDump(filePath);
   await validateIdentityAssets(dump);
+  const originRoles = options.originRoles ?? configuredOriginRoles();
+  if (dump.version >= IDENTITY_DUMP_VERSION) {
+    try { validateCanonicalRoles(dump.tables.site_identity![0]!.canonical_origin, originRoles); }
+    catch (error) { identityFailure(error instanceof IdentityError ? error.field : 'site_identity'); }
+  }
   const routes = dump.tables.post_routes ?? [];
   if (routes.length && !options.routeFiles) throw new BackupError('Private route storage is required for this restore.');
   let staged: StagedRouteRestore | undefined;
@@ -1224,7 +1243,10 @@ async function restoreDatabaseContents(pool: DbPool, filePath: string, options: 
       : null;
     let legacy = LEGACY_IDENTITY;
     if (dump.version < IDENTITY_DUMP_VERSION) {
-      try { legacy = normalizeIdentity({ ...legacy, canonicalOrigin: liveOrigin ?? legacy.canonicalOrigin }); }
+      try {
+        legacy = normalizeIdentity({ ...legacy, canonicalOrigin: liveOrigin ?? legacy.canonicalOrigin });
+        validateCanonicalRoles(legacy.canonicalOrigin, originRoles);
+      }
       catch (error) { identityFailure(error instanceof IdentityError ? error.field : 'site_identity'); }
     }
     await client.query('DELETE FROM site_identity_assets');

@@ -4,6 +4,7 @@ import Base from '../../layouts/Base.astro';
 import RegionFilter from '../RegionFilter.astro';
 import StoryGrid from '../StoryGrid.astro';
 import { useTranslations, type Locale, type UIKey } from '../../i18n/ui';
+import { countLabel } from '../../i18n/count';
 import { regionPath, regionsIndexPath, type Region } from '../../lib/paths';
 import { byLocale, liveRegions } from '../../lib/trips';
 import { identityTagline } from '../../lib/build-identity';
@@ -38,7 +39,7 @@ const alternates = !region
       <div class="flex flex-wrap items-end justify-between gap-4">
         <div>
           <p class="font-mono text-xs font-semibold tracking-log text-brand-red uppercase">
-            {trips.length} {t('stats.trips')}
+            {trips.length} {countLabel(trips.length, t('stats.trip'), t('stats.trips'))}
           </p>
           <h1 class="mt-1 text-3xl font-extrabold text-navy md:text-4xl">{title}</h1>
         </div>

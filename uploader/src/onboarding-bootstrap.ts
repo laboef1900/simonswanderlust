@@ -198,8 +198,7 @@ const NULLABLE_COLUMNS: Record<string, readonly string[]> = {
   pages: ['published_at','last_save_id','last_save_by'], upload_receipts: ['reason','result'],
   post_routes: ['geometry'], media: ['error','taken_at','camera','lens','lat','lng','format','encoding','uploaded_by'],
   import_jobs: ['finished_at','summary','error'], site_identity: ['saved_at','canonical_origin'],
-  comments: ['email','sender_hash'], onboarding_state: ['dismissed_at','retired_at'],
-  site_language: ['locked_at'],
+  comments: ['email','sender_hash'], site_language: ['locked_at'], onboarding_state: ['dismissed_at','retired_at'],
   journeys: ['published_snapshot', 'published_at'], journey_locales: ['hero_image', 'published_at'],
 };
 const PRIMARY_KEYS: Record<string, readonly string[]> = {
@@ -486,6 +485,11 @@ export async function assertBootstrapOnlyTarget(pool: DbPool, assertOwner: () =>
           throw new Error('Preparation refuses non-default language.');
         }
       }
+    }
+    if (tables.has('site_nav')) {
+      // The boot seed only: edited navigation is owner configuration (#288).
+      const rows = await client.query<{ id: number; config: unknown }>('SELECT id, config FROM site_nav');
+      if (rows.rows.some((row) => row.id !== 1 || !isDeepStrictEqual(row.config, DEFAULT_NAVIGATION))) throw new Error('Preparation refuses non-default navigation.');
     }
     if (tables.has('onboarding_state')) {
       const state = await readOnboardingState(client);

@@ -7,9 +7,9 @@ import Nav from '../components/Nav.astro';
 import Footer from '../components/Footer.astro';
 import { useTranslations, type Locale } from '../i18n/ui';
 import { imageOrigin, largestVariant } from '../lib/images';
-import { PROD_SITE, type SeoImage } from '../lib/seo';
+import type { SeoImage } from '../lib/seo';
 import { SHIKI_CSS } from '../lib/shiki-classes';
-import { identitySiteName } from '../lib/build-identity';
+import { identity, identitySiteName, buildSiteOrigin } from '../lib/build-identity';
 import { rssPath } from '../lib/paths';
 import { siteLanguage } from '../lib/site-language';
 import { getCollection, getEntry } from 'astro:content';
@@ -32,7 +32,7 @@ const { title, description, locale, alternates: requestedAlternates, image, ogTy
 const language = siteLanguage();
 const alternates = language.locales.length === 2 ? requestedAlternates : undefined;
 const t = useTranslations(locale);
-const site = Astro.site ?? PROD_SITE;
+const site = Astro.site ?? buildSiteOrigin();
 const canonical = new URL(Astro.url.pathname, site);
 const ogLocale: Record<Locale, string> = { de: 'de_DE', en: 'en_US' };
 const otherLocale: Locale = locale === 'de' ? 'en' : 'de';
@@ -69,7 +69,16 @@ const shikiStyle = `<style>${SHIKI_CSS}</style>`;
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{title} – {identitySiteName(locale)}</title>
     <meta name="description" content={description} />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    {identity.canonicalOrigin === null && <meta name="robots" content="noindex" />}
+    {identity.assets.favicon ? (
+      <>
+        <link rel="icon" type="image/png" sizes="32x32" href={identity.assets.favicon.png32} />
+        <link rel="icon" type="image/png" sizes="192x192" href={identity.assets.favicon.png192} />
+        <link rel="apple-touch-icon" href={identity.assets.favicon.appleTouch180} />
+      </>
+    ) : (
+      <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    )}
     <link
       rel="alternate"
       type="application/rss+xml"

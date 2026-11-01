@@ -63,8 +63,8 @@
     <script>
       const $ = (id) => document.getElementById(id);
       let redirecting = false;
-      let isAdmin = false;
       let authenticatedContext = null;
+      let isAdmin = false;
       const copy = EditorCopy[document.documentElement.lang === 'de' ? 'de' : 'en'];
       let observedPosts = [];
       let observedBuild = null;
@@ -397,8 +397,8 @@
         async ready(context) {
           if (!context) return;
           authenticatedContext = context;
-          Auth.renderHeader(context);
           isAdmin = context.isAdmin === true;
+          Auth.renderHeader(context);
           $('deskBuild').hidden = !isAdmin;
           $('deskAttentionSection').hidden = !isAdmin;
           $('deskPublicationSummary').hidden = !isAdmin;
@@ -409,9 +409,11 @@
             isAdmin: context.isAdmin,
             focusTarget: document.querySelector('.cms-page-title'),
           });
-          try { await SiteLanguage.get(); }
-          catch (error) { $('deskError').hidden = false; $('deskError').textContent = error.message; return; }
-          await loadDesk();
+          // Story labels need the language mode (#284) before the first paint.
+          SiteLanguage.get().then(() => loadDesk(), (error) => {
+            $('deskError').hidden = false;
+            $('deskError').textContent = error.message;
+          });
         },
         unavailable() {
           $('deskError').hidden = false;

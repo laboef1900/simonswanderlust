@@ -2,7 +2,7 @@
 import { useTranslations, type Locale } from '../i18n/ui';
 import { homePath } from '../lib/paths';
 import LangSwitcher from './LangSwitcher.astro';
-import { identitySiteName } from '../lib/build-identity';
+import { identity, identitySiteName } from '../lib/build-identity';
 import type { ResolvedNavItem } from '../lib/resolve-navigation';
 
 interface Props {
@@ -41,7 +41,17 @@ const idle = 'text-ink/80 hover:text-brand-red active:text-brand-red';
       href={homePath(locale)}
       class={`${link} -ml-2 min-w-0 max-w-full self-start text-sm font-extrabold tracking-wide text-navy uppercase hover:text-brand-red sm:self-auto`}
     >
-      <span class="min-w-0 [overflow-wrap:anywhere]">{identitySiteName(locale)}</span>
+      {identity.assets.logo ? (
+        <img
+          src={identity.assets.logo.path}
+          width={identity.assets.logo.width}
+          height={identity.assets.logo.height}
+          alt={identitySiteName(locale)}
+          class="h-8 w-auto min-w-0 max-w-full object-contain object-left"
+        />
+      ) : (
+        <span class="min-w-0 [overflow-wrap:anywhere]">{identitySiteName(locale)}</span>
+      )}
     </a>
     <nav
       aria-label={t('nav.ariaLabel')}

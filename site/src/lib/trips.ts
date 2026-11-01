@@ -1,5 +1,6 @@
 import type { CollectionEntry } from 'astro:content';
 import type { Locale, UIKey } from '../i18n/ui.js';
+import { countLabel } from '../i18n/count.js';
 import { storyPath, regions, type Region } from './paths.js';
 import { siteLanguage, type SiteLanguage } from './site-language.js';
 
@@ -47,11 +48,37 @@ export function heroAltOf(trip: Trip): string | undefined {
   return alt.toLowerCase() === trip.data.title.trim().toLowerCase() ? '' : undefined;
 }
 
+/**
+ * Code-point comparison: unlike `localeCompare`, the result never depends on
+ * the build host's ICU data or default locale.
+ */
+function compareCodePoints(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * One locale's stories, newest first. The single ordering rule behind the
+ * homepage cover, `entryNumberOf`, prev/next, region grids, footer and RSS.
+ *
+ * @ai-warning Equal dates are common (posts.date is a day, multi-part trips
+ * share one) and the input order is NOT data: it is the content store's
+ * insertion order, i.e. Postgres heap order from an unordered loader query,
+ * which moves whenever a row is saved — and the DE and EN rows move
+ * independently. Ties therefore break on `translationKey`, which both locales
+ * of a pair share, so the order is total, reproducible across rebuilds and
+ * identical in DE and EN. `id` is a last resort that only a corrupt set (two
+ * stories in one locale with one key) can reach. Issue #377.
+ */
 export function byLocale(trips: Trip[], locale: Locale, language: SiteLanguage = siteLanguage()): Trip[] {
   if (!language.locales.includes(locale)) return [];
   return trips
     .filter((t) => localeOf(t) === locale)
-    .sort((a, b) => b.data.date.getTime() - a.data.date.getTime());
+    .sort(
+      (a, b) =>
+        b.data.date.getTime() - a.data.date.getTime() ||
+        compareCodePoints(a.data.translationKey, b.data.translationKey) ||
+        compareCodePoints(a.id, b.id),
+    );
 }
 
 export function translationOf(trip: Trip, all: Trip[], language: SiteLanguage = siteLanguage()): Trip | undefined {
@@ -119,9 +146,9 @@ export function liveRegions(trips: Trip[], locale: Locale, keep?: Region, langua
 /** "20 REISEN · 10 LÄNDER · 3 KONTINENTE" — the expedition-log stat line. */
 export function statsLine(stats: TripStats, t: (key: UIKey) => string): string {
   return [
-    `${stats.trips} ${t('stats.trips')}`,
-    `${stats.countries} ${t('stats.countries')}`,
-    `${stats.continents} ${t('stats.continents')}`,
+    `${stats.trips} ${countLabel(stats.trips, t('stats.trip'), t('stats.trips'))}`,
+    `${stats.countries} ${countLabel(stats.countries, t('stats.country'), t('stats.countries'))}`,
+    `${stats.continents} ${countLabel(stats.continents, t('stats.continent'), t('stats.continents'))}`,
   ].join(' · ');
 }
 

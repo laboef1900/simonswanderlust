@@ -48,7 +48,8 @@ const trips = defineCollection({
 
 const pages = defineCollection({
   loader: postgresPagesLoader(),
-  schema: () => pageDataSchema,
+  // The loader derives `description` from the rendered body (#273 SEO) beside #289's page identity.
+  schema: () => pageDataSchema.and(z.object({ description: z.string() })),
 });
 
 const journeys = defineCollection({

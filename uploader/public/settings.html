@@ -306,6 +306,10 @@
           <h2 id="identityHeading" class="card-heading"></h2>
           <p id="identityIntro" class="muted"></p>
           <p id="identityTiming" class="muted"></p>
+          <p id="identityDomainNotice" class="muted" role="status" hidden>
+            <span id="identityDomainNoticeText"></span>
+            <a id="identityDomainNoticeLink" href="/admin/settings.html#identity"></a>
+          </p>
           <form id="identityForm" aria-describedby="identityTiming identityOptional">
             <fieldset id="identityFields" disabled>
               <p id="identityOptional" class="muted"></p>
@@ -319,6 +323,15 @@
                   <input id="identityAuthorName" type="text" data-identity-max-length="80" />
                 </div>
               </div>
+              <div>
+                <label id="identityCanonicalOriginLabel" for="identityCanonicalOrigin"></label>
+                <input id="identityCanonicalOrigin" type="url" autocomplete="off" spellcheck="false" aria-describedby="identityCanonicalHelp identityCanonicalAscii" />
+                <p id="identityCanonicalHelp" class="muted"></p>
+                <p id="identityCanonicalAscii" class="muted" role="status" hidden></p>
+                <div class="form-actions">
+                  <button id="identityUseBrowserOrigin" type="button" class="btn-secondary"></button>
+                </div>
+              </div>
               <div id="identityLocalized"></div>
               <h3 id="identitySocialHeading" class="section-label"></h3>
               <p id="identitySocialHelp" class="muted"></p>
@@ -330,6 +343,34 @@
               </div>
             </fieldset>
           </form>
+          <section class="identity-assets" aria-labelledby="identityAssetsHeading">
+            <h3 id="identityAssetsHeading" class="section-label"></h3>
+            <p id="identityAssetsHelp" class="muted"></p>
+            <div class="settings-field-pair">
+              <fieldset id="identity-logo-fields" class="identity-asset-fields" disabled>
+                <legend id="identity-logo-label"></legend>
+                <p id="identity-logo-state" class="muted"></p>
+                <label id="identity-logo-file-label" for="identity-logo-file"></label>
+                <input id="identity-logo-file" type="file" accept="image/png,image/jpeg,image/webp" aria-describedby="identityAssetsHelp identity-logo-help" />
+                <p id="identity-logo-help" class="muted"></p>
+                <div class="form-actions">
+                  <button id="identity-logo-upload" type="button" class="btn-secondary"></button>
+                  <button id="identity-logo-remove" type="button" class="btn-remove"></button>
+                </div>
+              </fieldset>
+              <fieldset id="identity-favicon-fields" class="identity-asset-fields" disabled>
+                <legend id="identity-favicon-label"></legend>
+                <p id="identity-favicon-state" class="muted"></p>
+                <label id="identity-favicon-file-label" for="identity-favicon-file"></label>
+                <input id="identity-favicon-file" type="file" accept="image/png,image/jpeg,image/webp" aria-describedby="identityAssetsHelp identity-favicon-help" />
+                <p id="identity-favicon-help" class="muted"></p>
+                <div class="form-actions">
+                  <button id="identity-favicon-upload" type="button" class="btn-secondary"></button>
+                  <button id="identity-favicon-remove" type="button" class="btn-remove"></button>
+                </div>
+              </fieldset>
+            </div>
+          </section>
           <div class="form-actions">
             <button id="identityReload" type="button" class="btn-secondary"></button>
             <button id="identityRebuild" type="button" class="btn-primary"></button>
@@ -541,7 +582,7 @@
       const OTHER_MODEL = ' other';
 
       let saved = null;               // registry part of the last /settings response
-      let form = null;                // { id } while the provider form is open; id null = Add
+      let form = null;                // { id, busy? }; a new object per opening, id null = Add
       let formPresetKind = 'openrouter';
       let reviewTestController = null;
       const modelCache = new Map();   // provider id -> { baseUrl, models } listed from this browser
@@ -657,7 +698,10 @@
       function renderProviders() {
         // Re-home the form before the rows go, so it is never dropped with one.
         $('providerFormSlot').appendChild($('providerForm'));
-        if (form && form.id && !providerById(form.id)) closeForm();
+        if (saved && form && form.id && !providerById(form.id)) {
+          closeForm();
+          $('providersOut').textContent = copy.settingsProviderRemoved;
+        }
         rowOutputs.clear();
         const list = $('providerList');
         list.replaceChildren();
@@ -704,6 +748,9 @@
 
       function syncForm() {
         if (!form) return;
+        setProviderBusy(Boolean(form.busy));
+        if (!saved) return;
+        if ($('providerFormOut').textContent === copy.settingsRegistryUnavailable) $('providerFormOut').textContent = '';
         const p = form.id ? providerById(form.id) : null;
         const kind = formKind();
         const info = KINDS[kind];
@@ -744,7 +791,7 @@
         $('addProvider').focus();
       });
 
-      /** One provider-registry request. The body's key is dropped and the key field cleared whatever happens. */
+      /** Drop the request body's key reference; only its originating form owns the input. */
       async function send(method, url, body) {
         try {
           const res = await fetch(url, body === undefined ? { method } : {
@@ -757,8 +804,12 @@
           return { ok: false, status: 0, result: {} };
         } finally {
           if (body) delete body.apiKey;
-          $('providerApiKey').value = '';
         }
+      }
+
+      function showProviderOutcome(message) {
+        const discarded = $('providersOut').textContent === copy.settingsProviderRemoved;
+        $('providersOut').textContent = (discarded ? copy.settingsProviderRemoved + ' ' : '') + message;
       }
 
       function outcome(r, success) {
@@ -766,13 +817,15 @@
       }
 
       function setProviderBusy(busy) {
-        for (const id of ['saveProvider', 'removeProviderKey', 'testProviderForm']) $(id).disabled = busy;
+        for (const id of ['saveProvider', 'removeProviderKey', 'testProviderForm']) $(id).disabled = busy || !saved;
       }
 
       $('providerForm').addEventListener('submit', async (event) => {
         event.preventDefault();
-        if (!form || !saved) return;
-        const p = form.id ? providerById(form.id) : null;
+        if (!form || !saved || form.busy) return;
+        const origin = form;
+        const p = origin.id ? providerById(origin.id) : null;
+        if (origin.id && !p) return;
         const kind = formKind();
         const name = $('providerName').value.trim();
         const baseUrl = $('providerBaseUrl').value.trim();
@@ -784,25 +837,35 @@
             '. ' + usesSentence(p.id) + ' No request is sent on save.',
           confirmLabel: 'Save new URL',
         })) return;
+        if (form !== origin || !saved || $('providerName').value.trim() !== name ||
+            $('providerBaseUrl').value.trim() !== baseUrl || formKind() !== kind ||
+            (!typedKey && $('providerApiKey').value !== '')) return;
         const body = p ? { name, baseUrl } : { name, kind, baseUrl };
         if (typedKey) body.apiKey = $('providerApiKey').value;
+        $('providerApiKey').value = '';
+        origin.busy = true;
         setProviderBusy(true);
         $('providerFormOut').textContent = 'Saving…';
         const r = await send(p ? 'PUT' : 'POST', p ? providerPath(p.id) : '/ai-providers', body);
-        setProviderBusy(false);
+        origin.busy = false;
+        if (form === origin) setProviderBusy(false);
         if (!r) return;
         // A refused request changed nothing: keep the form so the admin can fix it.
         const keepForm = r.status >= 400 && r.status < 500;
-        if (!keepForm) closeForm();
-        await reloadSettings();
+        if (form === origin && !keepForm) closeForm();
+        const refreshed = await reloadSettings();
         const message = outcome(r, p ? 'Saved “' + name + '”. No request was sent to the provider.' : 'Added “' + name + '”. No request was sent to the provider.');
-        $('providerFormOut').textContent = keepForm ? message : '';
-        if (!keepForm) $('providersOut').textContent = message;
+        if (refreshed) {
+          if (form === origin && keepForm) $('providerFormOut').textContent = message;
+          else showProviderOutcome(message);
+        } else if (!r.ok) $('providersOut').textContent += ' ' + message;
         syncForm();
       });
 
       $('removeProviderKey').addEventListener('click', async () => {
-        const p = form && form.id ? providerById(form.id) : null;
+        if (!form || !saved || form.busy) return;
+        const origin = form;
+        const p = origin.id ? providerById(origin.id) : null;
         if (!p || !p.hasApiKey) return;
         const uses = useCasesOn(p.id);
         if (!await AdminConfirm.ask({
@@ -812,13 +875,19 @@
           confirmLabel: 'Remove key',
           danger: true,
         })) return;
+        if (form !== origin || !saved) return;
+        $('providerApiKey').value = '';
+        origin.busy = true;
         setProviderBusy(true);
         const r = await send('PUT', providerPath(p.id), { apiKey: null });
-        setProviderBusy(false);
+        origin.busy = false;
+        if (form === origin) setProviderBusy(false);
         if (!r) return;
-        closeForm();
-        await reloadSettings();
-        $('providersOut').textContent = outcome(r, 'Removed the stored key for “' + p.name + '”.');
+        if (form === origin) closeForm();
+        const refreshed = await reloadSettings();
+        const message = outcome(r, 'Removed the stored key for “' + p.name + '”.');
+        if (refreshed) showProviderOutcome(message);
+        else if (!r.ok) $('providersOut').textContent += ' ' + message;
       });
 
       async function setDefault(id) {
@@ -833,10 +902,13 @@
             ' (' + current.baseUrl + '). No request is sent now.',
           confirmLabel: 'Set default',
         })) return;
+        if (!saved) return;
         const r = await send('POST', '/settings', { aiDefaultProviderId: p.id });
         if (!r) return;
-        await reloadSettings();
-        $('providersOut').textContent = outcome(r, '“' + p.name + '” is now the default provider.');
+        const refreshed = await reloadSettings();
+        const message = outcome(r, '“' + p.name + '” is now the default provider.');
+        if (refreshed) showProviderOutcome(message);
+        else if (!r.ok) $('providersOut').textContent += ' ' + message;
       }
 
       async function deleteProvider(id) {
@@ -854,16 +926,20 @@
             confirmLabel: 'Delete provider',
             danger: true,
           })) return;
+          if (!saved) return;
           r = await send('DELETE', providerPath(p.id));
           if (!r) return;
           if (r.ok) { testNotes.delete(p.id); modelCache.delete(p.id); modelFailures.delete(p.id); }
-          await reloadSettings();
+          if (!await reloadSettings()) {
+            if (!r.ok) $('providersOut').textContent += ' ' + outcome(r, '');
+            return;
+          }
           assigned = r.status === 409 && r.result.code === 'provider_in_use' && Array.isArray(r.result.useCases)
             ? r.result.useCases.filter((k) => Object.hasOwn(USE_CASES, k)).map((k) => USE_CASES[k].label) : [];
         }
-        $('providersOut').textContent = assigned.length
+        showProviderOutcome(assigned.length
           ? '“' + p.name + '” is assigned to ' + joinNames(assigned) + '. Assign another provider there first, then delete it.'
-          : outcome(r, 'Deleted “' + p.name + '”.');
+          : outcome(r, 'Deleted “' + p.name + '”.'));
       }
 
       /**
@@ -872,6 +948,7 @@
        * fetched for this one request. A stored key is never sent to an unsaved URL.
        */
       async function runProviderTest(id, report) {
+        if (!saved) return;
         const p = id ? providerById(id) : null;
         const formOpen = Boolean(form) && form.id === (id || null);
         if (!p && !formOpen) return;
@@ -907,14 +984,17 @@
       }
 
       $('testProviderForm').addEventListener('click', async () => {
-        if (!form) return;
+        if (!form || !saved || form.busy) return;
+        const origin = form;
         $('testProviderForm').disabled = true;
         try {
-          await runProviderTest(form.id, (text) => {
-            $('providerFormOut').textContent = text;
-            if (form && form.id) testNotes.set(form.id, text);
+          await runProviderTest(origin.id, (text) => {
+            if (origin.id) testNotes.set(origin.id, text);
+            if (form === origin && saved) $('providerFormOut').textContent = text;
           });
-        } finally { $('testProviderForm').disabled = false; }
+        } finally {
+          if (form === origin) setProviderBusy(Boolean(origin.busy));
+        }
       });
 
       /** Listed IDs, de-duplicated and sorted case-insensitively. */
@@ -1126,6 +1206,7 @@
         renderProviders();
         renderUseCaseSelects(fillFields ? { review: s.reviewProviderId, caption: s.captionProviderId } : null);
         syncForm();
+        if ($('providersOut').textContent === copy.settingsRegistryUnavailable) $('providersOut').textContent = '';
         $('saveAi').disabled = false;
         $('testReview').disabled = false;
       }
@@ -1139,12 +1220,13 @@
           return true;
         } catch {
           saved = null;
-          closeForm();
           renderProviders();
           renderUseCaseSelects(null);
+          syncForm();
           $('saveAi').disabled = true;
           $('testReview').disabled = true;
-          $('providersOut').textContent = 'Could not reload settings. Refresh this page before trying again.';
+          $('providersOut').textContent = copy.settingsRegistryUnavailable;
+          if (form) $('providerFormOut').textContent = copy.settingsRegistryUnavailable;
           return false;
         }
       }
@@ -1171,7 +1253,10 @@
         if (!r) return;
         // Success applies the server's values; a failure keeps the pending edits for a retry.
         if (r.ok) applyAi(r.result, true);
-        else await reloadSettings();
+        else if (!await reloadSettings()) {
+          $('aiOut').textContent = outcome(r, '') + ' ' + copy.settingsRegistryUnavailable;
+          return;
+        }
         $('aiOut').textContent = outcome(r, copy.writingSaved);
       });
 

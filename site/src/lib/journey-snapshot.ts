@@ -1,5 +1,5 @@
 import type { RemoteHeroImage } from './images.js';
-import { MAX_GALLERY_TEXT } from './gallery-layout.js';
+import { MAX_GALLERY_TEXT } from '../../../uploader/public/gallery-photo-line.js';
 
 export interface JourneySnapshotLocale {
   slug: string;

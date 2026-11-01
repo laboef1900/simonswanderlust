@@ -13,6 +13,7 @@ import { Protocol } from 'pmtiles';
 import { layers, namedTheme } from 'protomaps-themes-base';
 import type { PinCollection, TripGeometry } from '../lib/map-data';
 import { mapFrame } from '../../../uploader/public/map-frame.js';
+import { mapLandcoverAttribution, mapLandcoverLicense } from '../i18n/ui';
 
 // Vite must bundle the v6 worker's shared-module import, not copy it verbatim.
 setWorkerUrl(workerUrl);
@@ -34,10 +35,36 @@ export function baseStyle(): StyleSpecification {
     version: 8,
     glyphs: '/map/fonts/{fontstack}/{range}.pbf',
     sources: {
-      protomaps: { type: 'vector', url: PMTILES_URL, attribution: '© OpenStreetMap' },
+      // The source's required English credit is retained in both dictionaries.
+      // 2020 is the Daylight source year, not the planet or app release year;
+      // artifact/provenance evidence: docs/third-party-image-evidence.json.
+      protomaps: { type: 'vector', url: PMTILES_URL, attribution:
+        '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> | ' +
+        `<a href="https://esa-worldcover.org/en/data-access">${mapLandcoverAttribution}</a> ` +
+        `(<a href="https://creativecommons.org/licenses/by/4.0/">${mapLandcoverLicense}</a>)`,
+      },
     },
     layers: layers('protomaps', namedTheme('light')),
   } as StyleSpecification;
+}
+
+function createMap(container: HTMLElement): MapLibreMap {
+  // Like the editor's gpx-map: v6 returns a partial Map rather than throwing
+  // when WebGL2 is unavailable. Probe before allocating that partial instance.
+  const context = document.createElement('canvas').getContext('webgl2');
+  if (!context) throw new Error('map_webgl_unavailable');
+  context.getExtension('WEBGL_lose_context')?.loseContext();
+
+  const map = new MapLibreMap({ container, style: baseStyle(), attributionControl: {} });
+  if (!map.getCanvas().getContext('webgl2')) {
+    // A context can still fail after the probe. remove() itself throws on a
+    // painter-less v6 Map; always discard its empty, keyboard-focusable canvas.
+    try { map.remove(); } catch { /* Incomplete MapLibre initialization. */ }
+    container.replaceChildren();
+    container.classList.remove('maplibregl-map');
+    throw new Error('map_webgl_unavailable');
+  }
+  return map;
 }
 
 export function initFullMap(
@@ -45,7 +72,7 @@ export function initFullMap(
   geojson: PinCollection,
   labels: { readStory: string },
 ): void {
-  const map = new MapLibreMap({ container, style: baseStyle(), attributionControl: {} });
+  const map = createMap(container);
   map.addControl(new NavigationControl({ showCompass: false }));
 
   map.on('load', () => {
@@ -106,12 +133,7 @@ export function initMiniMap(container: HTMLElement, geometry: TripGeometry): voi
     ...feats.map((feature) => [feature.geometry.coordinates]),
   ]);
   const position = ([lng, lat]: [number, number]): [number, number] => [frame.longitude(lng), lat];
-  const map = new MapLibreMap({
-    container,
-    style: baseStyle(),
-    interactive: true,
-    attributionControl: {},
-  });
+  const map = createMap(container);
 
   let framed = false;
   let basemapFailed = false;

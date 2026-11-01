@@ -1,5 +1,5 @@
 import { z } from 'astro/zod';
-import { MAX_GALLERY_TEXT } from './gallery-layout.js';
+import { MAX_GALLERY_TEXT } from '../../../uploader/public/gallery-photo-line.js';
 import { isPageKind } from './page-kinds.js';
 import type { Locale } from '../i18n/ui.js';
 
