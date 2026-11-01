@@ -388,7 +388,7 @@ async function loadEditor(options: EditorOptions = {}) {
     guard.redirectToLogin = () => { redirects += 1; redirect(); };
     return guard;
   };
-  for (const file of ['waypoint-lookup.js', 'posts-filter.js', 'editor-title-image.js', 'gallery-fence.js', 'gallery-metadata-warnings.js', 'media-api.js', 'gallery-library.js', 'editor-galleries.js', 'editor-linter.js', 'llm.js', 'editor-excerpt.js', 'country-centers.js', 'country-coordinates.js', 'tabs.js', 'editor-review.js', 'editor-inspector.js']) {
+  for (const file of ['journeys-ui.js', 'waypoint-lookup.js', 'posts-filter.js', 'editor-title-image.js', 'gallery-fence.js', 'gallery-metadata-warnings.js', 'media-api.js', 'gallery-library.js', 'editor-galleries.js', 'editor-linter.js', 'llm.js', 'editor-excerpt.js', 'country-centers.js', 'country-coordinates.js', 'tabs.js', 'editor-review.js', 'editor-inspector.js']) {
     vm.runInContext(browserScript(file), ctx, {
       filename: resolve('public/' + file),
       importModuleDynamically: vm.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER,
@@ -435,6 +435,22 @@ function storedComparison(h: { document: { querySelector(selector: string): Elem
   const compare = required(panel, 'details');
   return { compare, status: required(panel, '[role="status"]'), useStored: required(compare, 'button') };
 }
+
+describe('story journey membership', () => {
+  it('shows only the current claimant as a read-only escaped link, without altering the story payload', async () => {
+    let claim: object | null = { id: '11111111-2222-4333-8444-555555555555', titles: { de: '<img src=x>', en: 'Journey' } };
+    const h = await loadEditor({ fetch: async (url) => response(url.startsWith('/journey-admin?member=') ? claim : url === '/posts/tk1' ? fullPair() : []) });
+    await h.api.loadPost('tk1'); await settle();
+    expect(h.el('journeyClaim').hidden).toBe(false);
+    expect(h.el('journeyClaim').querySelector('img')).toBeNull();
+    expect(h.el('journeyClaim').querySelector('input')).toBeNull();
+    expect(h.el('journeyClaim').querySelector('a')?.href).toBe('/admin/journey-editor.html?id=11111111-2222-4333-8444-555555555555');
+    expect(h.el('journeyClaim').textContent).toContain('<img src=x>');
+    expect(h.api.buildPayload()).not.toHaveProperty('journey');
+    claim = null; await h.api.loadPost('tk1'); await settle();
+    expect(h.el('journeyClaim').hidden).toBe(true);
+  });
+});
 
 function fullPair(): PostPair {
   const loc = (locale: 'de' | 'en', slug: string, title: string, country: string) => ({

@@ -141,33 +141,30 @@ window.SettingsNavigation = (function () {
     });
     $('navigationForm').addEventListener('submit', async (event) => {
       event.preventDefault(); if (busy || conflicted || !config) return;
-      lock(true); status(copy.navigationSaving);
-      publication.beginAction();
+      lock(true); publication.beginAction(); status(copy.navigationSaving);
       try {
         const response = await fetch('/settings/navigation', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ config, updatedAt }) });
         if (response.status === 401) { location.href = '/login'; return; }
         const result = await response.json();
         if (response.ok) {
           config = result.saved.config; updatedAt = result.saved.updatedAt; locales = result.saved.language.locales;
-          // The save is acknowledged either way; a failed rebuild names its cause (#297).
-          const failed = result.build && result.build.ok === false;
-          dirty = false; paint(); status(failed ? copy.navigationBuildFailed + ' ' + BuildReporting.failure(result.build.code) : copy.navigationSaved, true);
+          dirty = false; paint(); BuildReporting.renderOutcome($('navigationStatus'), 'navigation', result); $('navigationStatus').focus();
         } else if (response.status === 409) { conflicted = true; status(copy.navigationConflict, true); }
         else if (response.status === 400) status(copy.navigationInvalid, true);
-        else { conflicted = true; status(copy.navigationFailed, true); }
-      } catch { conflicted = true; status(copy.navigationFailed, true); }
+        else { conflicted = true; status(BuildReporting.text('unknown'), true); }
+      } catch { conflicted = true; status(BuildReporting.text('unknown'), true); }
       finally { lock(false); publication.endAction(); }
     });
     $('navigationRebuild').addEventListener('click', async () => {
       if (busy || !await AdminConfirm.ask({ title: copy.identityRebuild, body: copy.navigationRebuildConfirm, confirmLabel: copy.identityRebuild })) return;
-      lock(true); status(copy.identityRebuilding);
-      publication.beginAction();
+      lock(true); publication.beginAction(); status(copy.identityRebuilding);
       try {
         const response = await fetch('/rebuild', { method: 'POST' });
         if (response.status === 401) { location.href = '/login'; return; }
         const result = await response.json();
-        status(response.ok && result.ok ? copy.identityRebuilt : copy.navigationRebuildFailed, true);
-      } catch { status(copy.navigationRebuildFailed, true); }
+        if (response.ok) { BuildReporting.renderOutcome($('navigationStatus'), 'rebuild', result); $('navigationStatus').focus(); }
+        else status(BuildReporting.text('unknown'), true);
+      } catch { status(BuildReporting.text('unknown'), true); }
       finally { lock(false); publication.endAction(); }
     });
     return load();

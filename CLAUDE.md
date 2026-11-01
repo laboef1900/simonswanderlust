@@ -150,6 +150,7 @@ Classify a change before implementing it:
   body-HTML render path, gallery URL allow-listing, `safeFetch`/WXR import, path-traversal guards,
   EXIF/GPS handling, the schema in `uploader/src/db.ts`, backup/restore, the build/publish
   pipeline, the site identity tables and exported identity/content build snapshot, the
+  journey tables, published snapshots and transactional membership cleanup,
   canonical-origin/comment-origin roles, `/data` layout, AI credentials (the provider registry,
   `app_secrets` slots, `/ai-providers*` and `/ai-config`), or **any slug or route change**.
 
@@ -574,6 +575,7 @@ blog/
 │       ├── i18n/ui.ts                          # ALL UI strings, both locales (completeness-tested)
 │       ├── lib/                                # tested helpers: paths, trips, format, images, map data
 │       │   ├── postgres-loader.ts              #   Astro Content Layer loader — syncs trips from Postgres at build time
+│       │   ├── journey-snapshot.ts             #   strict shared journey snapshot/hero boundary (uploader, recovery and site)
 │       │   ├── body-images.ts                  #   transforms Markdown body: <BodyImage> → <picture>, ```gallery → gallery
 │       │   ├── gallery-layout.ts               #   justified-row partition + #layout: directive reader (pure; also runs under tsx)
 │       │   └── map-data.ts                     #   export tripPins() and tripGeometry() for map layers
@@ -585,14 +587,25 @@ blog/
 └── uploader/                      # self-hosted app: CMS + image service + blog serving (Node/Fastify/sharp)
     ├── src/                       #   variants · pipeline · storage · db · users · sessions · authn · server · main · cli · settings · posts · pages · body-content · build · backup · export · preview · wxr-parse · wp-content · wp-images · wp-import
     │                              #   media-files (disk) · media-store (database) · media-sync (reconcile) · encode-queue · work-lock · disk · exif
+    │                              #   journeys · journey-cleanup · journeys-admin (working copies, snapshots and language-first cleanup)
     ├── public/                    #   index.html (hero upload) · import.html (WordPress import) · editor/posts/about/settings/users
     │                              #   media.html + media-api/media-ai/media-ai-dialog/media-browser/media-picker.js · posts-filter.js
+    │                              #   journeys.html · journey-editor.html (ordered, bilingual journey authoring)
     ├── test/                      #   Vitest suites (integration suites run when TEST_DATABASE_URL is set)
     └── .env.example · README.md
 ```
 
 ## Project Status and Remaining Phases
 
+- **Implemented, qualification pending:** #309 journey authoring under the owner-approved
+  #308 contract. Separate journey, locale and ordered-member tables; author draft editing,
+  admin-only publication/unpublication/deletion; permanent per-locale URL history and explicit
+  secondary omission. The language lock includes dormant journey publication. Story removal
+  scrubs every working and retained snapshot reference inside the same transaction. Recovery
+  format v14 carries all three tables; every restore into this schema needs a journey-aware,
+  security-compliant reader, including pre-v14 recovery sets. Public output belongs to #310.
+  Full suites, runtime/browser qualification, CI and actual-target reverse-collision evidence
+  remain release gates; no deployment or owner-content operation is implied.
 - **Done:** Phase 1 (skeleton) + Phase 1b (expedition-log layer) — merged to `main`.
 - **Done:** Phase A (Postgres CMS foundation) — Postgres Content Layer loader, body-image pipeline,
   runtime `blog-builder` service, compose/volume wiring — merged to `main`.

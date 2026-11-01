@@ -4,7 +4,7 @@
 **Issue:** #308, child of epic #307. It blocks #309 (storage, admin, backups) and #310 (public pages).
 **Risk:** HIGH. It adds new public routes (Golden Rule 2 territory), new tables in
 `uploader/src/db.ts`, a new `DUMP_VERSION`, and a restore allow-list change.
-**Status:** **OWNER APPROVED, 2026-10-28 — implementation contract, not implemented.** The owner
+**Status:** **OWNER APPROVED, 2026-10-28 — implementation qualification tracked in §21.** The owner
 approved D1–D10, selecting D3's permanent per-locale first-publication slug lock and D4's required
 non-empty plain-text intro (§20). No implementation PR, merge, deployment, publication, existing
 story URL rename or owner-data operation is approved by this record. #309 and #310 retain their
@@ -936,3 +936,121 @@ shared-build-snapshot contracts, landing dump-version allocation, implementation
 and all archived #309/#310 acceptance checks remain required. This record does not label any
 journey feature implemented or authorize merge, deployment, publication, an existing story URL
 rename, or an owner-data/content operation.
+
+## 21. #309 implementation and qualification boundary (2026-10-29)
+
+The authoring implementation uses `uploader/src/journeys.ts`, `journey-cleanup.ts` and
+`journeys-admin.ts`. Its three tables are separate from posts; the only post-store coupling
+is same-transaction reference removal. `site/src/lib/journey-snapshot.ts` is the strict,
+versioned snapshot boundary shared by storage, recovery and the public reader. Native
+recovery format **14** follows pages/navigation format 13; allocation must be rechecked
+against the integration branch before landing.
+
+The API owns **`/journey-admin`**, not `/journeys`. Static reservation and synthetic
+collision/route regression coverage do **not** establish the actual-target reverse gate.
+The owner/deployment target must supply the read-only report for `(root, journey-admin)`,
+covering story/page working and committed slug claims, before merge. No target-content
+read, rewrite, publication, deployment or collision clearance is claimed here.
+
+Source regression coverage accompanies the store, real PostgreSQL lock races, ownership
+loss, cleanup, recovery, authenticated routes and editor. Source completion is not evidence
+that those checks ran: the integration owner must run the full affected suites with
+`TEST_DATABASE_URL`, type checking, a real main-process build/publication smoke, and
+keyboard/browser qualification after merging the source slices. The approved security
+floors, human implementation-PR approval and rollback/recovery limits in §§13/16 remain.
+
+### Observed #309 qualification
+
+The subsequent isolated run at `0c87708` used actual `main.ts`, PostgreSQL18.6, Astro
+builds and native browser controls. Its81 retained observations cover author creation,
+keyboard ordering/reload, authorization refusals, two-tab409 without token adoption,
+permanent slug history, omitted/disabled locales, committed-snapshot isolation, and
+all-reference story cleanup with compact retained ordering. Confirmed journey deletion
+preserved member story identities/URLs; the terminal editor emitted no further mutation.
+
+A genuine navigation-save postcommit release-write failure retained the saved token and
+old live release; restoring exact permissions and choosing Rebuild promoted the saved
+navigation without a second PUT. Native-owned offline N14 dump/read/restore matched
+journey and language state. An immutable pre-journey318 writer emitted a genuine unedited
+N13 dump; restoring it into a separate fresh EN-only journey target with explicit
+cross-mode consent cleared all journey tables and restored matching DE-primary language.
+Immediate N14 dump/read/restore also succeeded. Undo sets and hashes are retained.
+
+Desktop/320/390px controls and keyboard outcomes were inspected. All owned apps/tabs
+were closed and permissions restored; no owner content was used. The actual-target
+collision report, landing format allocation, human implementation approval and applicable
+physical/screen-reader checks remain separate gates, not established by these fixtures.
+
+Independent implementation review identified two editor state defects: a stale clean
+Unpublish adopted a newer token without its working copy, and recovery of a never-saved
+journey left automatic derivation enabled for a manually chosen slug. Lifecycle results
+now adopt working copy and token together; a newer input generation retains its original
+editing base rather than silently accepting a newer token. Recovered nonempty slugs disable
+automatic derivation, while empty ones remain automatic. Both consumer regressions failed
+before repair; all19 journey editor cases passed afterward.
+
+Actual `9288b32` qualification used two native browser tabs and genuine PostgreSQL-backed
+routes/builds. B saved both introductions, EN title, hero metadata/focus and reordered
+membership. Stale clean A's Unpublish returned and displayed B's working copy; A's next
+one-field Save used that returned token. HTTP and independent SQL confirmed that B's other
+values/order survived. Native typing could not modify the disabled form during the real
+Unpublish build. A separate new-journey recovery used actual debounced/beforeunload storage
+and the real confirmation dialog: the next title edit preserved the manual DE slug while
+the recovered empty EN slug derived normally. POST, GET and SQL agreed. Desktop/320px
+keyboard states were inspected. The record discloses rejected fixture attempts and an
+initially cancelled recovery; successful qualification was separate. Owned sessions,
+browser storage/tabs and app were closed, with synthetic data and evidence retained.
+
+### Database-suite isolation qualification
+
+CI run `40979505214` exposed a real harness race in the inherited journey contract:
+its PostgreSQL cases ran in the parallel unit project, and `ensureSchema` encountered
+`could not open relation with OID 26988` while another fixture dropped a schema.
+A per-case search path does not isolate database-wide catalog reads. The preceding
+local run forced file serialization and therefore did not exercise that scheduling.
+
+Every mixed database-backed suite in the integrated stack now uses the existing
+serialized `.integration.test.ts` lane: journey stores, navigation stores, build
+routes, language API, Media impact and write receipts. The assertions and production
+bootstrap behavior are unchanged; the unit project retains its normal parallelism.
+
+At `2e916d8`, all six checks passed with two uploader workers and no file-parallelism
+override: 160 uploader files / 3,861 tests, 40 site files / 573 tests, both type checks
+and the actual build. CI run `40981249705` then passed. The original failing run is
+retained alongside the repair; a blind retry did not establish qualification.
+
+## #309 implementation approval and current-dev integration (2026-11-01)
+
+**Implementation approval (G2).** The owner approved implementing #309 (journey
+authoring) and #310 (public journeys) in the 2026-10-31 held-PR plan decision
+("G2: Approve partial (#309 journeys)"). This records that approval for #309;
+#310 additionally keeps its screen-reader gate (G3, 320/390 px) before merge.
+No story URL, slug or owner-data operation is approved by this record.
+
+**Integration.** PR #491 was retargeted from the `feature/issue-309-prerequisites`
+comparison branch to `dev` once #485 and #489 had landed, and merged `origin/dev`
+at `1d8b291`. The dump format stays **v14** (dev is at v13; no re-allocation).
+Resolutions: boot order is schema → read-only namespace report → onboarding →
+`repairJourneyOrphans`; `APP_SEGMENTS` reserves `gallery`, `journey-admin` and
+`publication`; the onboarding catalog keeps the journey nullable columns beside
+dev's; navigation saves render the #297 build outcome inside #317's publication
+begin/end; `journey-snapshot.ts` takes `MAX_GALLERY_TEXT` from its new home; the
+#492 pre-route recovery set reports no journey tables; the split-origin boot test
+places journey heroes on the image origin.
+
+**Boot report (G1 follow-up).** Booting this head against an isolated restored
+copy of the owner database (`pg_dump` read only; owner DB untouched) wrote a v9
+pre-migration recovery set (18 posts, 2 pages, 698 media), migrated, built the
+initial release and printed **no** reserved-route collision or unknown-page lines,
+matching the 2026-10-31 G1 inventory; `/`, `/uber-mich/`, `/en/about-me/`,
+`/karte/` answered 200 and `/rundreisen/`, `/en/journeys/` 404 (public rendering
+is #310).
+
+**Verification.** Uploader `tsc` and full suite with isolated PostgreSQL
+4692/4692; site 795/795 with PostgreSQL, `astro check` 0/0/0, `npm run build`.
+Runtime on a fresh database: two published stories; journey create 201, reorder
+200, a second tab's stale save 409 `conflict`, publish 200 with a successful
+build, renaming a published locale's slug without confirmation 409 `slug_locked`,
+deleting a member story removes it from the journey; an in-app backup is v14 with
+journeys, locales, members and the published snapshot, and restores into a fresh
+migrated schema with the same counts.

@@ -405,6 +405,11 @@ describe('Auth navigation shell', () => {
       expect(pages.html.match(/aria-current="page"/g)).toHaveLength(1);
       expect(pages.html).toMatch(/href="\/admin\/pages\.html" class="cms-nav-item" aria-current="page"/);
     }
+    for (const path of ['/admin/journeys.html', '/admin/journey-editor.html']) {
+      const journeys = shellSandbox(path, { isAdmin: false });
+      expect(journeys.html.match(/aria-current="page"/g)).toHaveLength(1);
+      expect(journeys.html).toMatch(/href="\/admin\/journeys\.html" class="cms-nav-item" aria-current="page"/);
+    }
   });
 
   it('offers the admin pages in the sidebar to admins only', () => {
@@ -417,7 +422,7 @@ describe('Auth navigation shell', () => {
     expect(adminLinks).toEqual(expect.arrayContaining(adminOnly));
     expect(admin!.part('.cms-user-role').textContent).toBe('Admin');
 
-    expect(authorLinks).toEqual(['/admin/', '/admin/posts.html', '/admin/media.html']);
+    expect(authorLinks).toEqual(['/admin/', '/admin/posts.html', '/admin/journeys.html', '/admin/media.html']);
     for (const href of adminOnly) expect(author!.html).not.toContain('href="' + href + '"');
     expect(author!.part('.cms-user-role').textContent).toBe('Author');
   });

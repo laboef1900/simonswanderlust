@@ -206,6 +206,7 @@ maybe('private v10 recovery with isolated PostgreSQL state', () => {
     await posts.publish(row.translation_key, { baseUpdatedAt: state.pair.updatedAt, baseRouteVersion: state.routeVersion, baseLanguageUpdatedAt: state.language.updatedAt });
     const { path, dump } = await capture();
     dump.version = version;
+    delete dump.tables.journeys; delete dump.tables.journey_locales; delete dump.tables.journey_members;
     delete dump.tables.site_language;
     for (const post of dump.tables.posts) {
       delete post.omitted;
@@ -337,6 +338,7 @@ maybe('private v10 recovery with isolated PostgreSQL state', () => {
     const previous = await seed();
     const { path, dump } = await capture();
     dump.version = version; delete dump.tables.post_routes; delete dump.routeArchive;
+    delete dump.tables.journeys; delete dump.tables.journey_locales; delete dump.tables.journey_members;
     delete dump.tables.site_identity; delete dump.tables.site_identity_assets;
     await writeFile(path, gzipSync(JSON.stringify(dump)));
     expect(readDump(path).version).toBe(version);

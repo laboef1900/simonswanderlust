@@ -57,6 +57,7 @@ window.Auth = (function () {
   const NAV = [
     { group: 'Journal', label: 'Desk', href: '/admin/', icon: ICON.desk },
     { group: 'Journal', label: 'Posts', href: '/admin/posts.html', icon: ICON.posts },
+    { group: 'Journal', get label() { return EditorCopy.en.journeyTitle; }, href: '/admin/journeys.html', icon: ICON.posts },
     { group: 'Journal', label: 'Media', href: '/admin/media.html', icon: ICON.media },
     { group: 'Journal', get label() { return EditorCopy.en.pagesTitle; }, href: '/admin/pages.html', admin: true, icon: ICON.about },
     { group: 'Journal', label: 'Comments', href: '/admin/comments.html', admin: true, icon: ICON.comments },
@@ -82,6 +83,7 @@ window.Auth = (function () {
     if (p === '/admin' || p === '/admin/index.html') return '/admin/';
     if (p === '/admin/editor.html') return '/admin/posts.html';
     if (p === '/admin/about.html') return '/admin/pages.html';
+    if (p === '/admin/journey-editor.html') return '/admin/journeys.html';
     return p;
   }
 

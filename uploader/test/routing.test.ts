@@ -102,6 +102,38 @@ function build(extra: Partial<ServerConfig> = {}) {
 }
 
 describe('host routing', () => {
+  it.each<LanguageConfig>([
+    { primary: 'de', locales: ['de', 'en'] }, { primary: 'en', locales: ['en', 'de'] },
+    { primary: 'de', locales: ['de'] }, { primary: 'en', locales: ['en'] },
+  ])('keeps journey public paths disjoint from authentication in $primary / $locales', async (mode) => {
+    const files: Record<string, string> = { 'index.html': `<html data-site-primary="${mode.primary}" data-site-locales="${mode.locales.join(',')}"></html>`, '404.html': 'not built' };
+    const paths = mode.locales.flatMap(locale => {
+      const base = (locale === mode.primary ? '' : '/' + locale) + '/' + (locale === 'de' ? 'rundreisen' : 'journeys');
+      return [base, base + '/expedition'];
+    });
+    for (const path of paths) files[path.slice(1) + '/index.html'] = 'journey fixture ' + path;
+    await release('journeys', files);
+    let sessionReads = 0;
+    const sessions = memorySessionStore();
+    sessions.find = async () => { sessionReads++; throw new Error('Public files must not read sessions'); };
+    const language = memoryLanguageStore(mode);
+    const app = build({ sessions, language });
+    try {
+      for (const path of paths) {
+        const slashless = await app.inject({ url: path, headers: { host: MAIN }, cookies: { sid: 'old-admin-cookie' } });
+        expect(slashless.statusCode, path).toBe(301); expect(slashless.headers.location).toBe(path + '/');
+        const canonical = await app.inject({ url: path + '/', headers: { host: MAIN }, cookies: { sid: 'old-admin-cookie' } });
+        expect(canonical.statusCode, path).toBe(200); expect(canonical.body).toBe('journey fixture ' + path);
+      }
+      for (const path of ['/rundreisen', '/en/journeys', '/journeys', '/de/rundreisen']) {
+        if (paths.includes(path)) continue;
+        for (const suffix of ['', '/', '/expedition', '/expedition/']) expect((await app.inject({ url: path + suffix, headers: { host: MAIN } })).statusCode).toBe(404);
+      }
+      expect(sessionReads).toBe(0);
+      expect((await app.inject({ url: '/journey-admin', headers: { host: MAIN } })).statusCode).toBe(401);
+      expect(sessionReads).toBe(0);
+    } finally { await app.close(); }
+  });
   it('serves an image variant on the img host, 404s it on the main host', async () => {
     await mkdir(join(dir, 'images'), { recursive: true });
     await writeFile(join(dir, 'images', 'k-640.webp'), 'img-bytes');

@@ -1437,6 +1437,34 @@ deliberate trade-off, not an oversight:
   restart, and a 503 there would mask a real DB outage. The public blog already answers 503
   "site is building" in that state, so the flag discloses nothing new.
 
+### Journey authoring and recovery
+
+`/journey-admin*` is authenticated: authors may read/create/save, while publish/unpublish/delete
+are admin-only and retain the ordinary storage-owner/tracked-write admission checks. There is
+no new public write route. Member claims combine working membership and live snapshots;
+retained unpublished snapshots still participate in transactional deletion/boot cleanup.
+Language-first, sorted pair/journey locks serialize writers. Publication permanently locks
+locale slugs and the installation's primary language, including dormant journeys.
+
+Titles and intros are plain text, never trusted markup. Heroes must be canonical unsuffixed
+HTTP(S) bases at the configured image origin with safe keys; publish requires known ready media,
+not a legacy missing-row exemption. Working and retained snapshot heroes join media usage
+protection. The #310 public contract reads snapshots only and resolves members through published
+story entries; drafts, omitted locales, private route sources and EXIF are not public inputs.
+
+Version 14 recovery requires all three journey arrays. Strict validation covers complete
+locale pairs, history/coverage against the dump's mode, publication latch, canonical heroes,
+ordered unique membership and every retained reference. It rejects duplicate working/live
+claims and unknown snapshot fields without echoing content. Every restore into this schema,
+including pre-v14 input, uses a journey-aware reader: journeys are cleared before posts and
+matching language/content commits atomically. Pre-v14 input means empty journeys. The verified
+undo set contains journeys and language; orphan repair never rewrites incompatible modes.
+Keep #398 offline exclusive-owner/fencing admission, source/archive/undo validation and
+cross-mode consent. Rollback is journey-only on a compliant image: retain sharp ≥0.35.5,
+heif ≥1.23.2, rsvg ≥2.63.2 and applicable #369 controls, or fix forward. Tables are not dropped.
+Implementation verification and target-specific API collision evidence remain parent gates;
+this documentation records no production migration or recovery operation.
+
 ### Backups
 
 - App upgrades follow the [canonical recovery runbook](ARCHITECTURE.md#app-upgrades-and-supported-recovery).
@@ -1516,9 +1544,10 @@ deliberate trade-off, not an oversight:
   This guidance reconfirms the unchanged [GPX storage-owner boundary](#gpx-routes--private-source-and-public-snapshot):
   exclusive ownership and absence of app sessions are mandatory, never bypassed by killing
   sessions or disabling fencing.
-  Current v11 recovery replaces `users`, `posts`, `pages`, `media`, `media_folders`,
-  `app_secrets`, `comments`, `post_routes`, `site_identity` and `site_identity_assets`,
-  with manifest-paired private originals.
+  Current v14 recovery replaces `users`, `posts`, `pages`, `media`, `media_folders`,
+  `app_secrets`, `comments`, `post_routes`, `site_identity`, `site_identity_assets`,
+  `site_language`, `site_nav`, `journeys`, `journey_locales` and `journey_members`,
+  with manifest-paired private originals. Older versions retain their documented exceptions.
   [Database dumps](ARCHITECTURE.md#database-dumps) documents legacy absent-field behavior.
   Sessions are not restored; deleting users invalidates every login. Settings/key escrow
   remain external. The CLI validates the source set, prints a credential-free target and

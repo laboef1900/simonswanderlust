@@ -21,6 +21,7 @@ const track = { version: 1, type: 'MultiLineString', coordinates: [[[1, 2], [3, 
 function fixture(language: LanguageConfig): Dump {
   return { version: DUMP_VERSION, createdAt: stamp, tables: {
     users: [], post_routes: [], site_identity: [identityDumpRow()], site_identity_assets: [],
+    journeys: [], journey_locales: [], journey_members: [],
     pages: [], site_nav: [{ id: 1, config: DEFAULT_NAVIGATION, updated_at: stamp }],
     site_language: [{ id: true, primary_locale: language.primary, enabled_locales: language.locales, locked_at: stamp, updated_at: stamp }],
     posts: (['de', 'en'] as const).map(locale => ({ translation_key: 'story', locale,
@@ -86,6 +87,7 @@ describe('version-aware language and snapshot recovery', () => {
   it.each(SUPPORTED_DUMP_VERSIONS.filter(version => version < LANGUAGE_DUMP_VERSION))('explicitly normalizes legacy v%i, retaining its two-snapshot GPX rule', async version => {
     const dump = fixture(DEFAULT_LANGUAGE);
     dump.version = version;
+    delete dump.tables.journeys; delete dump.tables.journey_locales; delete dump.tables.journey_members;
     for (const row of dump.tables.posts) {
       row.omitted = true; // not a declared field in the historical version
       row.published_snapshot = { track }; row.published_at = stamp; row.status = 'published';
@@ -106,6 +108,7 @@ describe('version-aware language and snapshot recovery', () => {
     it.each([undefined, null, 'invalid'])('normalizes optional historical createdAt=%j without trusting undeclared language data', async createdAt => {
       const dump = fixture(DEFAULT_LANGUAGE);
       dump.version = version;
+      delete dump.tables.journeys; delete dump.tables.journey_locales; delete dump.tables.journey_members;
       dump.tables.posts = [];
       dump.tables.site_language = [{ primary_locale: 'en', enabled_locales: ['en'], updated_at: null }];
       if (version < 11) { delete dump.tables.site_identity; delete dump.tables.site_identity_assets; }

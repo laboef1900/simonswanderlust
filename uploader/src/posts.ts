@@ -13,6 +13,7 @@ import { publishedTrackOf, type PublishedTrackRow, type PublishedTrackProjection
 import { DEFAULT_LANGUAGE, assertLanguageNamespace, memoryLanguageStore, pgLanguageStore, readLanguage, type LanguageConfig, type LanguageState, type LanguageStore } from './language.js';
 import { namespaceOf, reservation } from '../../site/src/lib/reserved-routes.js';
 import { lockContentNamespaces, registerMemoryClaims, memorySlugOwner } from './content-namespace.js';
+import { registerMemoryJourneyPosts, scrubMemoryJourneyReferences, scrubJourneyReferences } from './journey-cleanup.js';
 import type { Publication, PublicationFact } from './publication-contract.js';
 import { PUBLISHED_SNAPSHOT_DIGEST_SQL } from '../../site/src/lib/publication-manifest.js';
 import type { MediaImpactStory } from './media-impact.js';
@@ -638,6 +639,7 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
   const byKey = new Map<string, Stored>();
   const receipts = new Map<string, SaveReceipt>();
   const language = opts.language ?? memoryLanguageStore();
+  registerMemoryJourneyPosts(language, (key) => byKey.has(key));
   registerMemoryClaims(language, function* () {
     for (const pair of byKey.values()) for (const locale of ['de', 'en'] as const) {
       yield { type: 'story' as const, name: pair.translationKey, locale, slug: pair[locale].slug, bodyMarkdown: pair[locale].bodyMarkdown };
@@ -867,6 +869,7 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
       return language.runExclusive(() => withPair(tk, async () => {
         if (!byKey.has(tk)) throw new PostError('post not found');
         await opts.comments?.removeByTranslationKey(tk);
+        scrubMemoryJourneyReferences(language, [tk]);
         receipts.delete(tk);
         byKey.delete(tk);
         revisionsByKey.delete(tk);
@@ -1405,6 +1408,7 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
           await lockPostPair(client, tk);
           const rows = await client.query('SELECT locale FROM posts WHERE translation_key=$1 ORDER BY locale FOR UPDATE', [tk]);
           if (rows.rowCount === 0) throw new PostError('post not found', 'not_found');
+          await scrubJourneyReferences(client, [tk]);
           const sources = await client.query<{ source_id: string }>('DELETE FROM post_routes WHERE translation_key=$1 RETURNING source_id', [tk]);
           await enqueueRouteCleanup(client, [
             ...leftovers,

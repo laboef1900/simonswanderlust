@@ -356,6 +356,30 @@ posts-only. Public generic pages/navigation rendering is #289, not this API slic
 See [authoring](../docs/authoring-workflow.md#editable-pages) and the
 [#287 implementation interface](../docs/superpowers/specs/2026-10-27-issue-287-pages-navigation.md).
 
+## Journeys
+
+Authors use the Journeys catalogue and editor to group up to 50 existing stories in manual
+order, including draft stories. Move-up/down controls support keyboard reordering. Both
+locale working copies are retained; primary content is required at Publish, while a
+never-published secondary can be explicitly omitted. Save never updates the live snapshot.
+Only admins publish, unpublish or delete. Publication validates every requested locale,
+including a nonblank plain-text introduction and a canonical unsuffixed hero backed by a
+ready media row. Per-locale slugs remain locked after first publication, even after unpublish.
+The story editor shows its claiming journey read-only. Deleting a journey leaves stories
+and their URLs untouched; deleting a story removes every journey reference transactionally.
+
+Logical dump **v14** backs up `journeys`, `journey_locales` and `journey_members`, including
+retained snapshots/history and working order. Export all remains stories-only; journeys
+have no MDX export, preview or revision history. Use the
+[offline recovery procedure](../ARCHITECTURE.md#database-dumps), never a live restore.
+Every restore into a journey schema needs a journey-aware, security-compliant reader even
+when the input predates v14: old input clears journeys and restores its matching language
+state in the same transaction. The verified pre-restore set is the undo. Preserve stopped
+writers, exclusive ownership, private archive validation and explicit cross-mode consent.
+Rollback keeps additive tables inert and patched codecs/ownership safeguards intact;
+an older reader accepting the dump version is not sufficient schema compatibility.
+Public journey pages and member strips are the separate #310 integration.
+
 ## Media library
 
 `/admin/media.html` is the browsable store behind every photo the blog serves — one row per

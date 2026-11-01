@@ -2,16 +2,20 @@ import { publishTokens } from './publish-tokens.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
-import { randomBytes } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { mkdtemp, mkdir, symlink, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createPool, ensureSchema, type DbPool } from '../src/db.js';
 import { pgPostStore } from '../src/posts.js';
 import { pgUserStore } from '../src/users.js';
 import { pgSecretsStore } from '../src/secrets.js';
+import { pgJourneyStore } from '../src/journeys.js';
+import { pgMediaStore } from '../src/media-store.js';
+import sharp from 'sharp';
 
 import { seedSiteIdentity, type IdentityRecord } from '../src/site-identity.js';
 const url = process.env.TEST_DATABASE_URL;
@@ -81,9 +85,13 @@ maybe.each(['split', 'loopback'] as const)('production boot (src/main.ts, Postgr
   const encryptionKey = randomBytes(32);
   let settingsPath: string;
   let bootLog = '';
+  const orphanJourneyId = randomUUID();
+  let journeyId: string | undefined;
+  let heroKey: string;
   const previousRelease = '1760000000000-1-0000';
   const interruptedAttempt = '1760000001000-1-0001';
   const interruptedStartedAt = new Date(1760000001000).toISOString();
+  let initialBuildStatus: { status: number; cacheControl: string | null; body: unknown; disk: string };
 
   beforeAll(async () => {
     owner = createPool(url!);
@@ -135,6 +143,34 @@ maybe.each(['split', 'loopback'] as const)('production boot (src/main.ts, Postgr
     blogOrigin = topology === 'split' ? 'https://blog.example' : base;
     blogHost = new URL(blogOrigin).host;
     imageOrigin = topology === 'split' ? 'https://images.example' : base;
+    // The real builder runs the installed Astro binary against a minimal site;
+    // no fake builder or fake executable can hide a missing production wire-up.
+    const siteApp = join(dir, 'site-app');
+    await mkdir(join(siteApp, 'src', 'pages'), { recursive: true });
+    await symlink(fileURLToPath(new URL('../../site/node_modules', import.meta.url)), join(siteApp, 'node_modules'), 'dir');
+    await writeFile(join(siteApp, 'package.json'), JSON.stringify({ type: 'module' }));
+    await writeFile(join(siteApp, 'src', 'pages', 'index.astro'), '<!doctype html><html lang="en"><title>Boot fixture</title><body>Boot fixture</body></html>');
+    heroKey = 'journey-boot-' + stamp;
+    await mkdir(join(dir, 'images'), { recursive: true });
+    const hero = sharp({ create: { width: 640, height: 400, channels: 3, background: '#416486' } });
+    await Promise.all([
+      hero.clone().jpeg().toFile(join(dir, 'images', heroKey + '-orig.jpg')),
+      hero.clone().webp().toFile(join(dir, 'images', heroKey + '-640.webp')),
+      hero.clone().avif().toFile(join(dir, 'images', heroKey + '-640.avif')),
+    ]);
+    await pgMediaStore(pool, { baseUrl: imageOrigin }).upsert({ key: heroKey, width: 640, height: 400, origBytes: 1, status: 'ready',
+      exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null }, uploadedBy: null });
+    // Both working and retained snapshot orphans must be repaired before admission.
+    const snapshot = { version: 1, members: [tk, 'missing-journey-boot-story'], locales: {
+      de: { slug: 'boot-journey-' + stamp, title: 'Boot journey', intro: 'Intro', heroImage: { src: imageOrigin + '/' + heroKey, width: 640, height: 400, alt: 'Landscape' } },
+      en: { slug: 'boot-journey-' + stamp, title: 'Boot journey', intro: 'Intro', heroImage: { src: imageOrigin + '/' + heroKey, width: 640, height: 400, alt: 'Landscape' } },
+    } };
+    await pool.query("INSERT INTO journeys(id,status,published_snapshot,published_at,updated_at) VALUES ($1,'draft',$2,now(),'2020-01-01')", [orphanJourneyId, snapshot]);
+    for (const locale of ['de', 'en'] as const) {
+      const row = snapshot.locales[locale];
+      await pool.query('INSERT INTO journey_locales(journey_id,locale,slug,title,intro,hero_image,omitted,published_at) VALUES($1,$2,$3,$4,$5,$6,false,now())', [orphanJourneyId, locale, row.slug, row.title, row.intro, row.heroImage]);
+    }
+    await pool.query('INSERT INTO journey_members(journey_id,translation_key,position) VALUES ($1,$2,0),($1,$3,1)', [orphanJourneyId, 'missing-journey-boot-story', tk]);
     commentHeaders = {
       'content-type': 'application/json', host: blogHost, origin: blogOrigin,
       'x-forwarded-proto': new URL(blogOrigin).protocol.slice(0, -1),
@@ -153,7 +189,7 @@ maybe.each(['split', 'loopback'] as const)('production boot (src/main.ts, Postgr
         STORAGE_DIR: join(dir, 'images'),
         SETTINGS_PATH: settingsPath,
         SITE_DIR: join(dir, 'site'),
-        SITE_APP_DIR: join(dir, 'no-site-app'),
+        SITE_APP_DIR: siteApp,
         BACKUP_DIR: join(dir, 'backup'),
         MAP_DIR: join(dir, 'map'),
       },
@@ -168,6 +204,16 @@ maybe.each(['split', 'loopback'] as const)('production boot (src/main.ts, Postgr
       child.stderr!.on('data', (b: Buffer) => { bootLog += b.toString(); });
       child.once('exit', (code) => reject(new Error(`main.ts exited ${code}:\n${bootLog}`)));
     });
+    // Capture boot facts before any test can legitimately promote a new release.
+    const login = await fetch(`${base}/login`, {
+      method: 'POST', headers: { 'content-type': 'application/json', origin: base },
+      body: JSON.stringify({ username, password }),
+    });
+    expect(login.status).toBe(200);
+    const cookie = (login.headers.get('set-cookie') ?? '').split(';')[0]!;
+    const response = await fetch(`${base}/rebuild/status`, { headers: { cookie } });
+    initialBuildStatus = { status: response.status, cacheControl: response.headers.get('cache-control'),
+      body: await response.json(), disk: await readFile(join(dir, 'site', 'build-state.json'), 'utf8') };
   }, 30_000);
 
   afterAll(async () => {
@@ -176,6 +222,9 @@ maybe.each(['split', 'loopback'] as const)('production boot (src/main.ts, Postgr
       child.kill('SIGKILL');
       await exited;
     }
+    if (journeyId) await pool.query('DELETE FROM journeys WHERE id=$1', [journeyId]);
+    await pool?.query('DELETE FROM journeys WHERE id=$1', [orphanJourneyId]);
+    if (heroKey) await pool.query('DELETE FROM media WHERE key=$1', [heroKey]);
     if (tk) await pgPostStore(pool).remove(tk);
     if (username) await pool.query('DELETE FROM users WHERE username = $1', [username]);
     await pool?.query("DELETE FROM app_secrets WHERE key IN ('ai_api_key', 'ai_provider_key:openrouter')");
@@ -183,6 +232,32 @@ maybe.each(['split', 'loopback'] as const)('production boot (src/main.ts, Postgr
     if (owner) { await owner.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`); await owner.end(); }
     if (dir) await rm(dir, { recursive: true, force: true });
   });
+
+  it('repairs all orphan references before serving and wires journey publication through the real builder', async () => {
+    // Journey heroes live on the image origin, which differs from the app origin in the split topology.
+    const media = pgMediaStore(pool, { baseUrl: imageOrigin });
+    const store = pgJourneyStore(pool, media, imageOrigin);
+    const repaired = await store.get(orphanJourneyId);
+    expect(repaired?.members).toEqual([tk]);
+    expect(repaired?.publishedSnapshot?.members).toEqual([tk]);
+    expect(repaired!.updatedAt.getTime()).toBeGreaterThan(Date.parse('2020-01-01'));
+    const positions = await pool.query('SELECT position FROM journey_members WHERE journey_id=$1 ORDER BY position', [orphanJourneyId]);
+    expect(positions.rows).toEqual([{ position: 0 }]);
+    // Release the boot fixture's working claim, without touching its retained snapshot.
+    const writable = (row: NonNullable<typeof repaired>['de']) => ({ slug: row.slug, title: row.title, intro: row.intro, heroImage: row.heroImage, omitted: row.omitted });
+    await store.save(orphanJourneyId, { de: writable(repaired!.de), en: writable(repaired!.en), members: [] }, repaired!.updatedAt);
+    const login = await fetch(base + '/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username, password }) });
+    const cookie = (login.headers.get('set-cookie') ?? '').split(';')[0]!;
+    const locale = { slug: heroKey, title: 'Journey', intro: 'A real boot publication', heroImage: { src: imageOrigin + '/' + heroKey, width: 640, height: 400, alt: 'Landscape', focus: { x: 30, y: 70 } }, omitted: false };
+    const created = await fetch(base + '/journey-admin', { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify({ de: locale, en: locale, members: [tk] }) });
+    expect(created.status).toBe(201);
+    const row = await created.json() as { id: string; updatedAt: string }; journeyId = row.id;
+    const published = await fetch(`${base}/journey-admin/${row.id}/publish`, { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify({ baseUpdatedAt: row.updatedAt }) });
+    expect(published.status).toBe(200);
+    expect(await published.json()).toMatchObject({ build: { ok: true }, saved: { status: 'published' } });
+    expect((await store.get(row.id))?.publishedSnapshot?.locales.de?.heroImage.focus).toEqual({ x: 30, y: 70 });
+    expect(await readFile(join(dir, 'site', 'current', 'index.html'), 'utf8')).toContain('Boot fixture');
+  }, 60_000);
 
   it('refuses an unknown trust policy before acquiring storage ownership', async () => {
     const refused = spawn(process.execPath, ['--import', 'tsx', 'src/main.ts'], {
@@ -342,22 +417,15 @@ maybe.each(['split', 'loopback'] as const)('production boot (src/main.ts, Postgr
   });
 
   it('initializes interrupted history after storage ownership even when a live release already exists', async () => {
-    const login = await fetch(`${base}/login`, {
-      method: 'POST', headers: { 'content-type': 'application/json', origin: base },
-      body: JSON.stringify({ username, password }),
-    });
-    expect(login.status).toBe(200);
-    const cookie = (login.headers.get('set-cookie') ?? '').split(';')[0]!;
-    const response = await fetch(`${base}/rebuild/status`, { headers: { cookie } });
-    expect(response.status).toBe(200);
-    expect(response.headers.get('cache-control')).toBe('no-store');
-    expect(await response.json()).toMatchObject({
+    expect(initialBuildStatus.status).toBe(200);
+    expect(initialBuildStatus.cacheControl).toBe('no-store');
+    expect(initialBuildStatus.body).toMatchObject({
       live: { release: previousRelease }, running: null, record: 'ok',
       last: { attemptId: interruptedAttempt, startedAt: interruptedStartedAt, result: 'interrupted',
         finishedAt: null, release: null, failure: null, beforeBoot: true, triggers: ['publish'] },
     });
     // Boot observation is read-only; only a later build may supersede this record.
-    expect(JSON.parse(await readFile(join(dir, 'site', 'build-state.json'), 'utf8')).running.attemptId).toBe(interruptedAttempt);
+    expect(JSON.parse(initialBuildStatus.disk).running.attemptId).toBe(interruptedAttempt);
   });
 
   it('keeps author projection and paginated moderation aligned beyond 500 older comments', async () => {

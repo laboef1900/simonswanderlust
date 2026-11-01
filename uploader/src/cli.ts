@@ -59,7 +59,7 @@ function describeDatabase(databaseUrl: string): string {
   }
 }
 
-const RESTORE_TABLES = ['users', 'posts', 'pages', 'media', 'media_folders', 'comments', 'post_routes', 'site_identity', 'site_identity_assets', 'site_language'] as const;
+const RESTORE_TABLES = ['users', 'posts', 'pages', 'media', 'media_folders', 'comments', 'post_routes', 'site_identity', 'site_identity_assets', 'site_language', 'site_nav', 'journeys', 'journey_locales', 'journey_members'] as const;
 type RowCounts = Record<(typeof RESTORE_TABLES)[number], number>;
 
 /** `users 3, posts 12, …` — the same shape for the dump and for the live rows,
@@ -133,6 +133,10 @@ async function restoreMain(args: string[]): Promise<void> {
     site_identity: dump.version < IDENTITY_DUMP_VERSION ? 1 : dump.tables.site_identity!.length,
     site_identity_assets: dump.tables.site_identity_assets?.length ?? 0,
     site_language: 1,
+    site_nav: dump.tables.site_nav?.length ?? 0,
+    journeys: dump.tables.journeys?.length ?? 0,
+    journey_locales: dump.tables.journey_locales?.length ?? 0,
+    journey_members: dump.tables.journey_members?.length ?? 0,
   };
   const { createPool } = await import('./db.js');
   let owner: StorageOwner | undefined;
@@ -215,7 +219,7 @@ async function restoreMain(args: string[]): Promise<void> {
     const counts = await restoreWithOnboarding(pool, file, {
       storageDir: process.env.STORAGE_DIR ?? '/data/images', routeFiles, assertOwner, originRoles,
     });
-    console.log(`restored ${counts.users} users, ${counts.posts} posts, ${counts.pages} pages, ${counts.media} media rows, ${counts.comments} comments, and ${counts.routes} private routes (all sessions invalidated).`);
+    console.log(`restored ${counts.users} users, ${counts.posts} posts, ${counts.pages} pages, ${counts.media} media rows, ${counts.comments} comments, ${counts.journeys} journeys (${dumpCounts.journey_locales} journey_locales, ${dumpCounts.journey_members} journey_members), and ${counts.routes} private routes (all sessions invalidated).`);
     console.log(counts.appSecrets === null ? 'app_secrets preserved.' : `restored ${counts.appSecrets} encrypted app_secrets rows.`);
     console.log(dump.version < IDENTITY_DUMP_VERSION
       ? 'identity: restored legacy brand (dump predates identity). Review Settings → Site identity'

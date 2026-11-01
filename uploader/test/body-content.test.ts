@@ -6,6 +6,9 @@ import {
 } from '../src/body-content.js';
 import { escapeMeta, unescapeMeta } from '../public/gallery-photo-line.js';
 import type { ImageDims } from '../../site/src/lib/body-images.js';
+import type { HeroImage } from '../src/posts.js';
+import type { RemoteHeroImage } from '../../site/src/lib/images.js';
+import type { JourneySnapshotLocale } from '../../site/src/lib/journey-snapshot.js';
 
 const A = 'https://img.example.com/trips/x/a-1a2b3c4d';
 const B = 'https://img.example.com/trips/x/b-9f8e7d6c';
@@ -35,6 +38,10 @@ type SameKeys<A, B> = [keyof A] extends [keyof B] ? ([keyof B] extends [keyof A]
 
 const SHAPES_MATCH: Mutual<ImageMeta, ImageDims> = true;
 const KEYS_MATCH: SameKeys<ImageMeta, ImageDims> = true;
+const HERO_SHAPES_MATCH: Mutual<HeroImage, RemoteHeroImage> = true;
+const HERO_KEYS_MATCH: SameKeys<HeroImage, RemoteHeroImage> = true;
+const JOURNEY_HERO_SHAPES_MATCH: Mutual<HeroImage, JourneySnapshotLocale['heroImage']> = true;
+const JOURNEY_HERO_KEYS_MATCH: SameKeys<HeroImage, JourneySnapshotLocale['heroImage']> = true;
 
 describe('ImageMeta ↔ site ImageDims stay structurally identical', () => {
   it('is enforced by the type-checker, not by a comment', () => {
@@ -42,6 +49,7 @@ describe('ImageMeta ↔ site ImageDims stay structurally identical', () => {
     // the moment the shapes drift. This body only keeps the suite honest about
     // them existing.
     expect([SHAPES_MATCH, KEYS_MATCH]).toEqual([true, true]);
+    expect([HERO_SHAPES_MATCH, HERO_KEYS_MATCH, JOURNEY_HERO_SHAPES_MATCH, JOURNEY_HERO_KEYS_MATCH]).toEqual([true, true, true, true]);
   });
 });
 

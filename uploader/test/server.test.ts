@@ -195,28 +195,39 @@ describe('Postgres navigation API boundary', () => {
       expect(s.calls).toHaveLength(1);
     } finally { await b.app.close(); }
   });
-  it.each(['outcome', 'throw'] as const)('acknowledges committed state on a %s rebuild failure', async (failure) => {
+  it('acknowledges committed navigation with a sanitized failed-build report', async () => {
     const language = memoryLanguageStore();
     const navigation = memoryNavigationStore(language);
-    const builder = stubBuilder({ ok: false, attemptId: 'failed', code: 'internal', error: buildFailureMessage('internal') }).builder;
-    if (failure === 'throw') builder.build = async () => { throw new Error('private infrastructure detail'); };
+    const builder = stubBuilder({ ok: false, attemptId: '1793300000000-1-1234', liveRelease: '1793290000000-1-1234', code: 'build_failed', error: 'private infrastructure detail' }).builder;
     const b = build({ language, navigation, builder });
     try {
       const { cookie } = await authed(b);
       const updatedAt = (await navigation.get()).updatedAt.toISOString();
       const saved = await b.app.inject({ method: 'PUT', url: '/settings/navigation', cookies: cookie,
         payload: { updatedAt, config: { ...DEFAULT_NAVIGATION, footer: [] } } });
+      expect(saved.statusCode).toBe(200);
+      expect(saved.json()).toMatchObject({ saved: { config: { footer: [] } },
+        build: { ok: false, attemptId: '1793300000000-1-1234', liveRelease: '1793290000000-1-1234', code: 'build_failed' } });
+      expect(saved.json()).not.toHaveProperty('persisted');
+      expect(saved.body).not.toContain('private infrastructure detail');
+      expect((await navigation.get()).updatedAt.toISOString()).toBe(saved.json().saved.updatedAt);
+      expect((await navigation.get()).config.footer).toEqual([]);
+    } finally { await b.app.close(); }
+  });
+  it('keeps committed navigation and leaks nothing when the builder throws', async () => {
+    const language = memoryLanguageStore();
+    const navigation = memoryNavigationStore(language);
+    const builder = stubBuilder().builder;
+    builder.build = async () => { throw new Error('private infrastructure detail'); };
+    const b = build({ language, navigation, builder });
+    try {
+      const { cookie } = await authed(b);
+      const updatedAt = (await navigation.get()).updatedAt.toISOString();
+      const saved = await b.app.inject({ method: 'PUT', url: '/settings/navigation', cookies: cookie,
+        payload: { updatedAt, config: { ...DEFAULT_NAVIGATION, footer: [] } } });
+      expect(saved.statusCode).toBe(500);
       expect(saved.body).not.toContain('infrastructure');
       expect((await navigation.get()).config.footer).toEqual([]);
-      if (failure === 'throw') {
-        // A builder that throws is an internal error; the commit stands and nothing leaks.
-        expect(saved.statusCode).toBe(500);
-        return;
-      }
-      // #297: the save is acknowledged with its own failed build evidence.
-      expect(saved.statusCode).toBe(200);
-      expect(saved.json()).toMatchObject({ saved: { config: { footer: [] } }, build: { ok: false } });
-      expect((await navigation.get()).updatedAt.toISOString()).toBe(saved.json().saved.updatedAt);
     } finally { await b.app.close(); }
   });
 });

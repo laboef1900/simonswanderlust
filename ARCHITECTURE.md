@@ -111,6 +111,17 @@ Rollback leaves additive storage inert; removing a public line requires an autho
 rebuild, not merely an image redeploy. Full failure/recovery contracts and approval gates
 are in the specification.
 
+## Journey authoring
+
+Journeys group existing story translation keys without creating posts or changing story URLs.
+Authors save ordered working copies; admins publish, unpublish and delete through
+`/journey-admin`. Publication commits a strict version-1 snapshot, per-locale first-publication
+history and the persistent language lock before rebuilding. Slug locks survive unpublish.
+The public journey collection is the separate #310 read path: it uses only committed journey
+snapshots and resolves members through published `trips` in the same build snapshot. A locale
+without any published member has no public journey page. Journeys do not enter story numbering,
+RSS, region statistics or the global story map. No MDX export, preview or revision store is added.
+
 ## Content pipeline (keyboard → published page)
 
 1. **Author** writes a post (DE + EN) in the in-admin editor (`/admin/editor.html`, EasyMDE). Body
@@ -674,6 +685,17 @@ Created idempotently by `uploader/src/db.ts` (`ensureSchema`):
   orphan sweeps prevent a revision outliving its page. Not included in logical dumps.
 - **`site_nav`** — singleton `id = 1`, typed JSON `config`, optimistic `updated_at`;
   idempotently seeded to the approved header/footer defaults, never overwritten on boot.
+- **`journeys`** — UUID, draft/published status, retained version-1 `published_snapshot`,
+  publication time and creation/update tokens.
+- **`journey_locales`** — exactly DE and EN rows per journey: slug/title/plain-text intro,
+  canonical unsuffixed hero, explicit omission and sticky per-locale publication history.
+  Nonempty `(locale, slug)` is unique; omitted locales cannot have publication history.
+- **`journey_members`** — ordered story translation keys, with unique working claims and
+  contiguous positions. Both child tables cascade from `journeys`; there is no FK to the
+  non-unique `posts.translation_key`. Story deletion scrubs all working and retained snapshot
+  references in its transaction, compacts positions and advances changed journey tokens.
+  Boot performs the same orphan repair before writers, never destructive mode normalization.
+  Lock order is language → sorted post pairs → sorted journeys → later namespace locks.
 - **`post_routes`** — one private row per `translation_key`: route version, nullable trimmed
   geometry and latest-original identity/digest/size. No FK to the non-unique locale pair key.
   Post deletion removes this row and records source cleanup in the same transaction.
@@ -775,8 +797,9 @@ and the [approved contract](docs/superpowers/specs/2026-10-27-issue-278-first-ru
 ## Backups & disaster recovery
 
 Full recovery needs the **Postgres content** (`users`, `posts`, `pages`, `media`,
-`media_folders`, `app_secrets`, `comments`, `post_routes`, `site_identity` and
-`site_identity_assets` in current v11 dumps), the
+`media_folders`, `app_secrets`, `comments`, `post_routes`, `site_identity`,
+`site_identity_assets`, `site_language`, `site_nav` and the journey tables in current v14
+dumps), the
 **`/data` files** (image originals + variants, private GPX originals, settings, site releases,
 MDX exports and backups), and **separately escrowed configuration/key material**. A logical
 dump is not a copy of `/data`: retain its manifest-paired private route archive, the complete
@@ -804,7 +827,7 @@ disposable `/data` host path and the credential-free database target printed by 
 `uploader/src/backup.ts` provides app-native logical dumps (no `pg_dump`, no sidecar container):
 
 - **Dump format** — one file per run, `/data/backup/db/db-<YYYYMMDD-HHmmss>.json.gz`, containing
-  `{ "version": 13, "createdAt": <ISO>, "tables": { "users": […], "posts": […], "pages": […], "media": […], "media_folders": […], "app_secrets": […], "comments": […], "post_routes": […], "site_identity": […], "site_identity_assets": […], "site_language": […], "site_nav": […] } }`
+  `{ "version": 14, "createdAt": <ISO>, "tables": { "users": […], "posts": […], "pages": […], "media": […], "media_folders": […], "app_secrets": […], "comments": […], "post_routes": […], "site_identity": […], "site_identity_assets": […], "site_language": […], "site_nav": […], "journeys": […], "journey_locales": […], "journey_members": […] } }`
   with full column fidelity — an integration test diffs the dumped `posts` keys against
   `information_schema.columns`, so a column added in `db.ts` without touching `backup.ts` fails
   the suite instead of silently vanishing from every backup. The table reads run on one
@@ -816,7 +839,7 @@ disposable `/data` host path and the credential-free database target printed by 
   the directory, so the finished temp file is published with `link(2)` (fails with `EEXIST`
   where `rename` would clobber) and a taken name advances to the next free second while
   `createdAt` keeps the real time (#114).
-  `version` lets restore reject incompatible dumps; the guard is an **allow-list** (1 to 13), so
+  `version` lets restore reject incompatible dumps; the guard is an **allow-list** (1 to 14), so
   every bump must widen it or newly written dumps become unrestorable. v1 predates `pages`, v2
   predates the media tables, v3 predates `posts.categories`/`tags`/`scheduled_at`, v4 predates
   `posts.featured` (the homepage-cover flag); all still restore and leave what they never
@@ -865,6 +888,21 @@ disposable `/data` host path and the credential-free database target printed by 
   The boot migration captures a compatible pre-migration recovery set before adding
   the new columns/table and keeps inherited identity/language recovery safeguards.
   MDX export remains posts-only: the logical DB dump is the backup of record for pages/nav.
+  v14 (`JOURNEYS_DUMP_VERSION = 14`) captures all three journey tables with explicit columns
+  in the same repeatable-read snapshot. They are mandatory arrays in v14 and forbidden keys
+  in older formats. The shared snapshot parser and recovery validator reject unknown fields,
+  malformed/history-inconsistent locale coverage, noncanonical heroes, dangling references,
+  gaps in positions and competing working/live-snapshot claims.
+  Every restore into a journey schema requires a journey-aware reader, even for an older
+  dump or an application rollback. The transaction deletes journeys (cascading children)
+  **before posts**, then restores content and its matching language state together.
+  Pre-v14 input therefore restores an empty journey set, not the destination's former
+  snapshots under another mode. The verified undo set includes journey rows and language;
+  transaction failure preserves both. Orphan repair is not a cross-mode recovery mechanism.
+  Keep writers stopped and use the exclusive-owner offline procedure below. Rollback leaves
+  additive tables inert; every recovery image retains patched codecs (sharp ≥0.35.5,
+  heif ≥1.23.2, rsvg ≥2.63.2), applicable #369 controls and ownership/admission safeguards.
+  If no compliant journey-aware recovery image exists, fix forward rather than downgrade.
   The CLI names replacement versus preservation and its pre-restore undo dump includes
   current encrypted secrets. Pause AI/settings edits during restore and reconcile the
   providers in settings.json before resuming: that file is not part of a logical DB dump.
@@ -1001,9 +1039,11 @@ The syntax is `prepare-native-restore [--yes]`; outside Docker use
 `node --import tsx src/cli.ts prepare-native-restore [--yes]` from `uploader/` with the same
 configuration. It checks the existing restore lease and drained app sessions, validates the
 data root/fence and admits only an empty or recognized partial/complete bootstrap-only schema.
-Accounts/content/operational tables must be empty; About rows must match the exact defaults,
+Accounts/content/operational tables, including journeys and both child tables, must be empty;
+About rows must match the exact defaults, navigation must be absent or the exact default,
 identity must be missing or neutral/unsaved with no assets, and any onboarding row must be
-retired. Unknown tables/shapes, saved/non-default values or uncertain inspection refuse
+retired. The catalog admits exact current and recognized previous additive schemas, never
+unknown tables/shapes or altered CHECK/FK/unique/index/default semantics. Saved/non-default values or uncertain inspection refuse
 **before migrations/seeding**. Populated targets use ordinary guarded restore; an incomplete
 populated schema needs separately backed-up operator recovery, not deletion or this shortcut.
 
@@ -1308,10 +1348,11 @@ recovery never implies a cluster downgrade.
    (**Settings → Rebuild site now**, or `POST /rebuild`), then rescan and verify restored content
    before reopening ingress. On failure keep the app stopped and preserve recovery evidence.
 
-Current v11 dumps cover `users`, `posts`, `pages`, `media`, `media_folders`, `app_secrets`,
-`comments`, `post_routes`, `site_identity` and `site_identity_assets`, plus manifest-paired private
-originals. See [Database dumps](#database-dumps) for version-specific absent-field behavior:
-old dumps are not equivalent to v11. `settings.json` and the permanent restore fence are
+Current v14 dumps cover `users`, `posts`, `pages`, `media`, `media_folders`, `app_secrets`,
+`comments`, `post_routes`, `site_identity`, `site_identity_assets`, `site_language`, `site_nav`,
+`journeys`, `journey_locales` and `journey_members`, plus manifest-paired private originals.
+See [Database dumps](#database-dumps) for version-specific absent-field behavior:
+old dumps are not equivalent to v14. `settings.json` and the permanent restore fence are
 external; sessions are never restored and every login is invalidated. Prefer the
 `pg_dump`/`psql` path above as primary for full database fidelity; neither database format
 replaces image/private-file recovery, fencing or settings/key escrow.
