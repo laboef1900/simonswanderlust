@@ -3,6 +3,7 @@ import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promi
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { createHash } from 'node:crypto';
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
@@ -97,5 +98,23 @@ describe('static legal distribution', () => {
     await put('site/package-lock.json', '{"packages":{}}');
     await put('source-release.json', '{"repository":"owner/project","revision":"\\" onclick=\\"bad"}');
     expect(() => run('site')).toThrow();
+  });
+});
+
+// #291: the published inventory (and the legal/ copies built from it) must describe the
+// dependencies that actually ship. A lockfile or evidence change without
+// `node uploader/scripts/generate-third-party-inventory.mjs` silently publishes stale notices.
+describe('committed third-party inventory', () => {
+  it('was generated from the committed lockfiles and evidence', async () => {
+    const root = new URL('../../', import.meta.url);
+    const digest = async (path: string) => createHash('sha256').update(await readFile(new URL(path, root))).digest('hex');
+    const inventory = JSON.parse(await readFile(new URL('docs/third-party-inventory.json', root), 'utf8'));
+    const stale = [];
+    for (const tree of ['site', 'uploader']) {
+      if (inventory.lockfiles[tree].sha256 !== await digest(`${tree}/package-lock.json`)) stale.push(`${tree}/package-lock.json`);
+    }
+    if (inventory.evidence.sha256 !== await digest(inventory.evidence.path)) stale.push(inventory.evidence.path);
+    if (inventory.imageEvidence.sha256 !== await digest(inventory.imageEvidence.path)) stale.push(inventory.imageEvidence.path);
+    expect(stale, 'regenerate with: node uploader/scripts/generate-third-party-inventory.mjs').toEqual([]);
   });
 });
