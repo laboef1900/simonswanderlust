@@ -100,3 +100,58 @@ drill, encrypted offsite proof or #295 acceptance. The precise remaining prerequ
 #296 is the owner's existing encrypted backup **tool/system, non-secret destination
 identifier and independently recoverable escrow/access method**, followed by the authorized
 offsite-only drill using that system. Neither #295 nor #296 recovery acceptance is waived.
+
+## Owner decisions for G4 — 2026-11-01
+
+Recorded in an interview with the owner; non-secret only.
+
+| Question | Decision |
+| --- | --- |
+| Offsite tool / system | **Veeam**, backing up the server to the owner's **dedicated backup system** (a separate failure domain from the server). |
+| Destination identifier | The owner's dedicated Veeam backup repository (name kept by the owner; no credentials recorded). |
+| Job scope | **Whole server / whole disk**: includes `uploader/data` (photos, dumps, route and image archives, `settings.json`) and the deployment folder (`docker-compose.yml`, `.env`). |
+| Encryption at rest | Veeam job encryption **enabled**; its password is in the owner's password manager. |
+| Retention | **≥ 14 daily restore points**, meeting the approved 14-generation policy. |
+| Coherence | The in-app daily backup (Settings → Site & backups) is scheduled to **finish before** the Veeam window, so each restore point carries a completed dump. |
+| Key escrow | `ENCRYPTION_KEY` and the Veeam password are kept in the owner's **password manager**, reachable without the server. |
+| `ENCRYPTION_KEY` inside the disk image | **Accepted residual risk.** The whole-disk image also contains `.env` with the key, so ciphertext and key share one backup, protected by Veeam encryption whose password is escrowed separately. The drill uses the escrowed key, never the restored `.env`. Review together with any change to the Veeam setup. |
+
+Residual risk carried from the approved contract: the write freeze is approximated by the
+schedule (dump first, image later), not enforced. Photos or settings changed between the dump
+and the Veeam snapshot appear in the snapshot without matching rows; the rescan reconciles
+photos, and a provider change in that window can mismatch settings and credentials. Avoid
+provider changes during the backup window.
+
+### Offsite-only drill with Veeam (owner runs it)
+
+Run on a disposable machine or directory **not** the server, using only the Veeam copy plus the
+password manager. Follow the #295 procedure in
+[`docs/2026-10-29-restore-rehearsal.md`](../../2026-10-29-restore-rehearsal.md) §§1–5, with
+these Veeam-specific inputs:
+
+1. **Pick the restore point.** In Veeam, choose the newest restore point whose time is after the
+   last successful in-app backup (Settings → Site & backups → Last backup). Record its date and ID.
+2. **File-level restore** (Veeam file-level recovery, not a full machine restore and never back
+   to the server's original paths) into an empty directory on the drill machine, e.g.
+   `/absolute/disposable/restore-296-<id>/input/`:
+   - `uploader/data/backup/db/` — the newest `db-*.json.gz`, its manifest-paired `routes-*.tar`
+     and **all** `images-*.tar` archives (the full chain);
+   - `uploader/data/settings.json` (and `settings.json.pre-ai-registry` if present);
+   - `docker-compose.yml` and `.env` from the deployment folder (reference only; the drill's own
+     `compose.yml` comes from §1 of the #295 procedure).
+   Unlock the restore with the Veeam password from the password manager. Do not copy any value
+   into notes or chat.
+3. **Restore** exactly as #295 §§1–4: separate absolute target, own Compose project, non-3000
+   loopback port, fresh `pgdata`, restore CLI with the dump, image chain oldest-first, then
+   `settings.json`. Take `ENCRYPTION_KEY` from the **password manager**, not from the restored
+   `.env`.
+4. **Prove it** as #295 §5: rebuild, rescan (no missing/demoted media), both locales of a story
+   with gallery render at desktop and phone width, comments in the right state, the AI provider
+   credential decrypts in Settings without calling the provider.
+5. **Record** (in this spec, redacted): restore-point date/ID, file names with sizes and SHA-256,
+   dump version and per-table counts before and after, rescan report counts, the rendered story
+   URLs checked, pass/fail per step, and any deviation. No passwords, keys, `.env` values,
+   cookies or private GPS.
+6. **Clean up** only the disposable target; keep the restored input until the record is written.
+
+When this record is added and every step passes, #296's last acceptance item is met.
