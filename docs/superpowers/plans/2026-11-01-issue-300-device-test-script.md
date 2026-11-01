@@ -18,7 +18,7 @@ observation.
 | Bluetooth keyboard | Any; must pair with both phones. | Make/model. |
 | USB cables + the Mac | Safari Web Inspector (iPhone: `Settings → Safari → Advanced → Web Inspector` on; Mac Safari `Develop` menu). Android: `chrome://inspect#devices` in desktop Chrome with USB debugging on. | — |
 | Disposable instance behind **trusted TLS** | Spec §8 option 1 (staging hostname) or option 2 (LAN proxy + a CA both phones trust). Plain HTTP is ruled out (spec §15). | Hostname, the environment option used, the app build (`git rev-parse HEAD` of the checkout or the image tag). |
-| The build under test | Whichever `dev` or feature build the owner names. #301/#302 are being prepared in parallel; the run is valid against any build but **the SHA goes into every evidence record** (`app_build`). | SHA / tag. |
+| The build under test | Whichever `dev` or feature build the owner names — for the implementation checks, the heads of PR #500 (#301 Media) and PR #501 (#302 editor), or `dev` once they merge. The run is valid against any build but **the SHA goes into every evidence record** (`app_build`). The PRs' audit notes (`docs/superpowers/specs/2026-11-01-phone-media-upload-audit.md`, `2026-11-01-phone-compose-audit.md`) list their own device rows. | SHA / tag. |
 | Two audit accounts | `audit-admin` (admin) and `audit-author` (non-admin). Generated passwords ≥ 12 chars, never the owner's, never typed where a camera records. | Usernames only. |
 | Time | Roughly 2.5 h per gating cell (J1–J12 × 2 roles × 2 input modes), 8 gating cells, plus probes and the DT run. Plan two sessions per platform. | Dates. |
 

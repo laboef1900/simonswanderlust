@@ -14,7 +14,7 @@
   "lockfiles": {
     "site": {
       "path": "site/package-lock.json",
-      "sha256": "190a503c577842e69a0e94fc07ccb44912f3838deb0858171644d4b723207271",
+      "sha256": "72c579813ea4a177e5b30f9777268b72bb6bdb90d4ecd4b4d420239bfca8b1c8",
       "lockfileVersion": 3,
       "entries": 489
     },

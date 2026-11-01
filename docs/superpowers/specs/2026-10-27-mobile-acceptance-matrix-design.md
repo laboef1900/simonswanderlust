@@ -447,6 +447,7 @@ bring-up with `TRUSTED_PROXY`, fixture preparation, the J1–J12 journey per cel
 procedures, what to capture and the pass/fail rule per row) is
 [`docs/superpowers/plans/2026-11-01-issue-300-device-test-script.md`](../plans/2026-11-01-issue-300-device-test-script.md).
 It refers to the #301/#302 behaviours generically (per-file upload outcomes, preview fallback,
-background stash) because both implementation PRs are being prepared in parallel; the script is
+background stash); the implementations are PR #500 (#301) and PR #501 (#302), each with an
+audit note and device rows. The script is
 run against whichever build the owner names, and that build's SHA is the `app_build` in every §9
 record.
