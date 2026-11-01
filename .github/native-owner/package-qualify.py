@@ -4,7 +4,9 @@ Input DATABASE_URL is read from a private env file; no secret is passed in argv.
 All database/volume/container names are unique to --prefix. Retains fixtures; stops only
 containers this invocation created. Run only against an explicitly owned PG fixture.
 Upload only output/sanitized-evidence; private env, dumps and binaries never leave
-the fixture runner. Named-volume proof does not qualify deployment-mounted storage.
+the fixture runner. Named-volume proof does not qualify deployment-mounted storage;
+--data-root runs the same matrix on bind-mounted subdirectories of one owner-authorized,
+empty directory on the deployment filesystem (the G6 gate), and qualifies only that mount.
 """
 import argparse
 import base64
@@ -33,6 +35,9 @@ P.add_argument('--output', required=True)
 P.add_argument('--prefix', required=True)
 P.add_argument('--port', type=int, default=34315)
 P.add_argument('--source-root', required=True)
+P.add_argument('--data-root', help='Absolute, empty directory created for this run on the '
+               'deployment filesystem. Each scenario binds a fresh subdirectory to /data. '
+               'Without it, Docker named volumes are used (development/CI evidence only).')
 A = P.parse_args()
 assert re.fullmatch(r'[0-9a-f]{40}', A.source_sha), 'Full frozen source SHA required'
 assert re.fullmatch(r'swl_305_package_[a-z0-9_]{1,35}', A.prefix), 'Owned unique prefix required'
@@ -41,6 +46,15 @@ OUT = Path(A.output).resolve()
 assert not OUT.exists() or not any(OUT.iterdir()), 'Use a new empty private evidence directory'
 OUT.mkdir(parents=True, exist_ok=True, mode=0o700)
 os.chmod(OUT, 0o700)
+DATA_ROOT = None
+if A.data_root:
+    DATA_ROOT = Path(A.data_root)
+    assert DATA_ROOT.is_absolute() and DATA_ROOT.is_dir() and not DATA_ROOT.is_symlink(), \
+        '--data-root must be an existing absolute directory, not a symlink'
+    assert not any(DATA_ROOT.iterdir()), '--data-root must be empty and created for this run'
+    # Never inside a live data root: production's /data carries the stable owner lock.
+    for parent in [DATA_ROOT, *DATA_ROOT.parents]:
+        assert not (parent / '.storage-owner.lock').exists(), 'Refusing a directory inside a live data root'
 SECRET = []
 CREATED = []
 VOLUMES = []
@@ -49,7 +63,18 @@ E = {'sourceSha': A.source_sha, 'imageTag': A.image, 'expectedArch': A.expected_
      'startedAt': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'steps': [],
      'fixtures': {'prefix': A.prefix, 'pgContainer': A.pg_container, 'containers': CREATED,
                   'volumes': VOLUMES, 'databases': DATABASES},
-     'deploymentMountGate': 'NOT qualified: mandatory independent operational predeployment/preenablement gate'}
+     'deploymentMountGate': ('Evaluated on --data-root (see dataRoot): qualifies only that filesystem/mount for this image'
+                             if DATA_ROOT else
+                             'NOT qualified: mandatory independent operational predeployment/preenablement gate')}
+if DATA_ROOT:
+    E['dataRoot'] = {'path': str(DATA_ROOT),
+                     'hostFsType': subprocess.run(['stat', '-f', '-c', '%T', str(DATA_ROOT)], text=True,
+                                                  capture_output=True).stdout.strip() or None}
+
+
+def data_mount(volume):
+    """The /data mount for a scenario: a bind of its own subdirectory, or a named volume."""
+    return ('type=bind,src=' if DATA_ROOT else 'type=volume,src=') + volume + ',dst=/data'
 
 
 def clean(text, limit=16000):
@@ -85,7 +110,7 @@ def docker(args, **kw):
 def node(volume, envfile, code, *, timeout=90, user=None, name=None):
     name = name or A.prefix + '_helper_' + secrets.token_hex(5)
     args = ['run', '--rm', '-i', '--platform=linux/' + A.expected_arch,
-            '--network', PG_NETWORK, '--mount', 'type=volume,src=' + volume + ',dst=/data']
+            '--network', PG_NETWORK, '--mount', data_mount(volume)]
     if user:
         args += ['--user', user]
     if envfile:
@@ -141,8 +166,13 @@ def make_db(suffix):
 
 def make_volume(suffix):
     name = A.prefix + '_' + suffix
-    assert docker(['volume', 'inspect', name], ok=False).returncode != 0, 'Volume already exists'
-    docker(['volume', 'create', '--label', 'swl.private-qualification=305', name])
+    if DATA_ROOT:
+        path = DATA_ROOT / name
+        os.mkdir(path, 0o700)  # FileExistsError: never reuse a scenario directory
+        name = str(path)
+    else:
+        assert docker(['volume', 'inspect', name], ok=False).returncode != 0, 'Volume already exists'
+        docker(['volume', 'create', '--label', 'swl.private-qualification=305', name])
     VOLUMES.append(name)
     node(name, None, "import fs from 'node:fs'; fs.chownSync('/data',1000,1000); fs.chmodSync('/data',0o700);", user='0')
     persist()
@@ -154,7 +184,7 @@ def start(suffix, volume, envfile, command=None, port=False):
     assert docker(['container', 'inspect', name], ok=False).returncode != 0, 'Container already exists'
     args = ['run', '-d', '--name', name, '--platform=linux/' + A.expected_arch,
             '--label', 'swl.private-qualification=305', '--env-file', str(envfile),
-            '--network', PG_NETWORK, '--mount', 'type=volume,src=' + volume + ',dst=/data']
+            '--network', PG_NETWORK, '--mount', data_mount(volume)]
     if port:
         args += ['-p', '127.0.0.1:' + str(A.port) + ':3000']
     args += [A.image, *(command or [])]
@@ -170,7 +200,7 @@ def cli(suffix, volume, envfile, args, success):
     CREATED.append(name)
     persist()
     r = docker(['run', '--name', name, '--platform=linux/' + A.expected_arch,
-                '--network', PG_NETWORK, '--env-file', str(envfile), '--mount', 'type=volume,src=' + volume + ',dst=/data',
+                '--network', PG_NETWORK, '--env-file', str(envfile), '--mount', data_mount(volume),
                 A.image, 'node', '--import', 'tsx', 'src/cli.ts', *args], timeout=180, ok=False)
     (OUT / (suffix + '.log')).write_text(clean(r.stdout + r.stderr))
     assert (r.returncode == 0) == success, suffix + ': ' + clean(r.stdout + r.stderr)
