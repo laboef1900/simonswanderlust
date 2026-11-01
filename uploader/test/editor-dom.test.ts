@@ -57,6 +57,8 @@ interface EditorOptions {
   isAdmin?: boolean;
   mobile?: boolean;
   search?: string;
+  /** window.open; default: the browser blocks the popup (returns null). */
+  open?: (url: string, target: string) => unknown;
   /** One answer for every AdminConfirm prompt, or an answer per prompt. */
   confirm?: boolean | ((prompt: ConfirmPrompt) => boolean);
   publishVersion?: () => string | null;
@@ -308,6 +310,7 @@ async function loadEditor(options: EditorOptions = {}) {
     console,
     alert() {},
     confirm: () => false,
+    open: options.open ?? (() => null),
     navigator,
     UploadRecovery: { run: options.upload ?? (() => Promise.reject(new Error('Unexpected upload in fixture'))) },
     matchMedia: (query: string) => query === '(max-width: 900px)'
@@ -1310,6 +1313,67 @@ describe('acknowledged publication survives failed rebuilds', () => {
     h.el('deTitle').fire('input');
     expect(await h.api.doSaveDraft()).toBe(otherWriter === 'none');
     expect(storedTitle).toBe(otherWriter === 'none' ? 'My edit' : 'Another writer');
+  });
+});
+
+describe('phone compose: preview and publish controls (#302)', () => {
+  const saved = (calls: string[]) => async (url: string, options?: RequestInit) => {
+    if (url === '/posts/tk1' && options?.method === 'PUT') {
+      calls.push('save');
+      return response({ ...fullPair(), publication: publication('draft'), updatedAt: '2026-10-24T09:01:00.000Z' });
+    }
+    if (url === '/posts/tk1') return response({ ...fullPair(), publication: publication('draft'), updatedAt: '2026-10-24T09:00:00.000Z' });
+    if (url.endsWith('/revisions')) throw new Error('optional refresh unavailable');
+    if (url.endsWith('/alt-audit')) return response({ images: [] });
+    throw new Error('Unexpected request ' + url);
+  };
+
+  it('opens the preview tab inside the tap and sends it to the preview once the draft is saved', async () => {
+    const calls: string[] = [];
+    const tab = { opener: {} as unknown, closed: false, location: { href: '' }, close() { this.closed = true; } };
+    const h = await loadEditor({ isAdmin: true, search: '?tk=tk1', fetch: saved(calls), open: () => { calls.push('open'); return tab; } });
+    for (let i = 0; i < 8; i++) await settle();
+    h.el('previewBtn').click();
+    expect(calls).toEqual(['open']); // synchronous with the tap, before any await
+    expect(tab.opener).toBeNull();
+    for (let i = 0; i < 8; i++) await settle();
+    expect(calls).toEqual(['open', 'save']);
+    expect(tab.location.href).toBe('/posts/tk1/preview?locale=de');
+  });
+
+  it('offers a working link when the browser blocks the preview window', async () => {
+    const calls: string[] = [];
+    const h = await loadEditor({ isAdmin: true, search: '?tk=tk1', fetch: saved(calls), open: () => null });
+    for (let i = 0; i < 8; i++) await settle();
+    h.el('previewBtn').click();
+    for (let i = 0; i < 8; i++) await settle();
+    const link = h.el('actionStatus').querySelector('a');
+    expect(link?.getAttribute('href')).toBe('/posts/tk1/preview?locale=de');
+    expect((link as unknown as { target?: string } | null)?.target).toBe('_blank');
+    expect(h.el('actionStatus').textContent).toContain(ui.en['editor.chrome.previewBlocked']);
+  });
+
+  it('closes the pre-opened tab when the save fails instead of previewing stale content', async () => {
+    const tab = { opener: {} as unknown, closed: false, location: { href: '' }, close() { this.closed = true; } };
+    const h = await loadEditor({
+      isAdmin: true, search: '?tk=tk1', open: () => tab,
+      fetch: async (url, options) => {
+        if (url === '/posts/tk1' && options?.method === 'PUT') return response({ error: 'title required' }, 400);
+        return saved([])(url, options);
+      },
+    });
+    for (let i = 0; i < 8; i++) await settle();
+    h.el('previewBtn').click();
+    for (let i = 0; i < 8; i++) await settle();
+    expect(tab.closed).toBe(true);
+    expect(tab.location.href).toBe('');
+  });
+
+  it.each([true, false])('shows Publish only to an admin (admin: %s)', async (isAdmin) => {
+    const h = await loadEditor({ isAdmin, search: '?tk=tk1', fetch: saved([]) });
+    for (let i = 0; i < 8; i++) await settle();
+    expect(h.el('publishBtn').hidden).toBe(!isAdmin);
+    expect(h.el('unpublishBtn').hidden).toBe(true); // a draft has nothing to unpublish
   });
 });
 

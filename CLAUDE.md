@@ -1180,4 +1180,10 @@ blog/
   - **#98 `nameFromUrl` non-injectivity** — `foo.jpg`/`foo.png` collide on one key. Any fix must keep
     keys deterministic; #85's disk-derived resume depends on that.
 
+- **In review (#302, held for G5 devices):** phone compose — Preview opens its tab inside the
+  tap (fallback link if blocked), DraftGuard also stashes on `visibilitychange` → hidden
+  (#138 keys/#22 generations unchanged), Publish/Unpublish shown to admins only, 16px field
+  text and 24px checkboxes on coarse pointers (`--control-font`). See
+  `docs/superpowers/specs/2026-11-01-phone-compose-audit.md`.
+
 Architecture overview: `ARCHITECTURE.md` · security model: `SECURITY.md` · top-level guide: `README.md`.
