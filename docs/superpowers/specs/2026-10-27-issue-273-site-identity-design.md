@@ -1247,3 +1247,58 @@ allocation. The asset-route registration and fingerprinted identity cache policy
 combined with the baseline trusted-proxy type and native static-serving policy;
 neither boundary is replaced. Prior runtime evidence remains historical, with new
 integration checks recorded separately in the local preparation ledger.
+
+## 26. #276 canonical-origin qualification (2026-10-29)
+
+`site/scripts/canonical-build-matrix.mjs` passed twelve real Astro builds: legacy,
+changed and unconfigured origins under DE-primary bilingual, EN-primary bilingual,
+DE-only and EN-only fixtures. The matrix checks output filenames and route paths,
+canonical/social/JSON-LD origins, locale alternates, feeds, sitemaps, robots/noindex
+policy and unchanged image origins. Fixtures are synthetic; no database rows are
+mutated by this script. The prerequisite RSS correction derives the endpoint locale
+from Astro's URL-derived `currentLocale`, not cached endpoint props.
+
+Retained evidence is under
+`.local/backlog-execution-2026-10-27/issue-276-runtime/canonical-modes-1793273261849/`,
+with exact source identity, per-mode manifests, private logs and all output artifacts.
+The separate `issue-276-runtime/proof.json` records 132 runtime assertions, including
+the real admin form and split-host comment path. These observations do not authorize
+an owner-domain change, production content mutation, deployment or PR merge; final
+actual-PR review and required CI remain separate gates.
+
+Final integrated source `a614ab5baf94d8e847d959bae4b081414d929371` passed a
+fresh twelve-build matrix under `canonical-modes-1793283746741/` and a separate
+actual-`main.ts` run under `final-head-1793283762700/`: 168 assertions passed,
+including two application-triggered builds, browser domain confirmation/cancel/save,
+revision conflicts, immediate comment-Origin changes and unchanged image URLs.
+The synthetic fixture's existing posts/pages/media/language rows stayed unchanged;
+only the exercised identity save, pending comment and operational state changed.
+Earlier evidence above retains its original source attribution. Production DNS,
+public TLS, deployed ingress, other browser engines and outbound providers were not
+qualified by this loopback run. Both required CI jobs and the independent actual-PR
+review passed at the qualified source; stack retargeting still needs requalification.
+
+## 27. #276 current-dev integration (2026-11-01)
+
+Merged `dev` after #275 (logo/favicon) and #284/#285 (language modes) landed. #275 had
+written its tests and docs against a reserved, read-only canonical origin; with #276 the
+origin is an editable required field of every text save, so the two dev tests that stripped
+it from the payload now send the stored identity unchanged. `SECURITY.md` keeps #275's asset
+subsection and replaces its "not implemented by #274/#275" paragraph with this change's
+canonical-origin paragraph. `Base.astro` emits both the unset-origin `noindex` and #275's
+favicon group; `seo.ts` keeps dev's `proseDescription` and drops `PROD_SITE` as before. The
+Settings form keeps one shared revision for text and asset writes, with the domain-change
+confirmation in front of text saves only.
+
+Verification at the merge: uploader `tsc` 0; the eight affected uploader files 505/505 with
+PostgreSQL; the full PostgreSQL-enabled suite 3612/3615 before the two test adaptations above,
+the third failure being the load-sensitive `gpx-worker` cap test that passes in isolation;
+site 688/689 with the load-sensitive `gallery-partition` property test passing in isolation;
+`astro check` 0 errors and `astro build` OK. The real app from this worktree built an
+unconfigured site (`canonical` under `https://unconfigured.invalid/`, `noindex`,
+`Disallow: /`), stored `https://BÜCHER.example:443/` as `https://xn--bcher-kva.example`,
+uploaded a favicon on the shared revision (a stale text save then answered 409), refused an
+origin with credentials, and after a rebuild served the configured canonical, an `Allow`/
+`Sitemap` robots file and content-hashed favicon PNGs with `nosniff`. On loopback the
+image-role comparison is exempt by design, so the topology refusal itself rests on the
+existing unit and restore tests.

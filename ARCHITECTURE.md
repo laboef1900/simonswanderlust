@@ -365,15 +365,15 @@ registered with a Fastify **host constraint** for the hostname of `PUBLIC_BASE_U
 via `IMG_HOST`), so on the img host the constrained `/` wildcard wins and image URLs behave exactly
 as before the merge. All other routes (admin, blog, map) are unconstrained.
 
-Reader comments use the **blog request's origin**, not `PUBLIC_BASE_URL` (#319).
-Until canonical identity is configured by #276, the allowed origin is the trusted request
-protocol plus the verbatim `Host`; `X-Forwarded-Host`, Origin and Referer never supply that
-authority. A supplied `ServerConfig.commentsOrigin` override takes precedence and fails closed
-if invalid. The image authority from `PUBLIC_BASE_URL` and the actual `IMG_HOST` are excluded,
-even under another scheme; the existing single-origin loopback development topology is the
-exception. Origin equality remains a CSRF check, not authentication or a domain allow-list:
-the reverse proxy must reject unintended public hostnames. #276 will put the current validated
-canonical identity between the explicit override and this temporary fallback.
+Reader comments use the **canonical blog origin** when configured, not `PUBLIC_BASE_URL`
+(#319/#276). A supplied `ServerConfig.commentsOrigin` override takes precedence and fails
+closed if invalid; otherwise the current validated canonical identity precedes the fallback.
+Only an unset canonical origin uses the trusted request protocol plus verbatim `Host`;
+`X-Forwarded-Host`, Origin and Referer never supply that authority. The image authority
+from `PUBLIC_BASE_URL` and actual `IMG_HOST` are excluded, even under another scheme;
+the existing single-origin loopback development topology is the exception. Origin equality
+remains a CSRF check, not authentication or a domain allow-list: the reverse proxy must
+reject unintended public hostnames.
 
 Legacy WordPress URLs are 301-redirected by the not-found handler (blog host only, before the
 404/503 fallbacks): the `/feed/` family (`/feed/`, its `/feed/{atom,rss2,rss,rdf}/` aliases,
@@ -1077,9 +1077,13 @@ separate owner action, not part of the dependency PR.
 
 Origin roles remain distinct: `PUBLIC_BASE_URL` supplies image URLs and the body/gallery
 allow-list; `IMG_HOST` controls actual image-host routing; the request scheme/forwarded
-`Host` describes the serving/admin origin. The stored canonical blog origin is reserved
-in #274. #276 will connect it to SEO, comments and outbound identification, with the
-topology validation in the approved spec. This table does not introduce an operator env knob.
+`Host` describes the serving/admin origin. The stored canonical blog origin drives SEO,
+feeds/sitemaps, comment-Origin equality and outbound identification, with the approved
+image-topology validation. Static output uses the exported build snapshot; comment checks
+use the current cached identity immediately after a successful save. Unconfigured static
+output retains absolute metadata under `https://unconfigured.invalid`, adds `noindex`,
+and emits `Disallow: /` without a `Sitemap:` line. Editing identity does not rebuild,
+rename paths or change image configuration. This introduces no operator env knob.
 
 ## Trust boundaries
 

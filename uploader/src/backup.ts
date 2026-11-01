@@ -24,6 +24,7 @@ import { LEGACY_IDENTITY } from './site-identity-legacy.js';
 import { IDENTITY_ASSET_ROLES, validateIdentityAsset, validateIdentityAssetMetadata, type StoredIdentityAsset } from './site-identity-assets.js';
 import { DEFAULT_LANGUAGE, type LanguageConfig } from './language.js';
 import { validatePublicTrack } from '../public/gpx-public-track.js';
+import { configuredOriginRoles, validateCanonicalRoles, type OriginRoles } from './canonical-origin.js';
 
 /**
  * v8 (issue #204) added reader `comments` (no email — the spec stores none;
@@ -976,6 +977,7 @@ const COMMENT_STATUS_ALLOW: readonly string[] = ['pending', 'approved', 'rejecte
 
 export interface RestoreOptions {
   routeFiles?: GpxFiles;
+  originRoles?: OriginRoles;
   assertOwner?: () => Promise<void>;
 }
 export interface RestoreCounts {
@@ -992,6 +994,11 @@ export async function restoreDatabase(pool: DbPool, filePath: string, options: R
 async function restoreDatabaseContents(pool: DbPool, filePath: string, options: RestoreOptions): Promise<RestoreCounts> {
   const dump = readDump(filePath);
   await validateIdentityAssets(dump);
+  const originRoles = options.originRoles ?? configuredOriginRoles();
+  if (dump.version >= IDENTITY_DUMP_VERSION) {
+    try { validateCanonicalRoles(dump.tables.site_identity![0]!.canonical_origin, originRoles); }
+    catch (error) { identityFailure(error instanceof IdentityError ? error.field : 'site_identity'); }
+  }
   const routes = dump.tables.post_routes ?? [];
   if (routes.length && !options.routeFiles) throw new BackupError('Private route storage is required for this restore.');
   let staged: StagedRouteRestore | undefined;
@@ -1015,7 +1022,10 @@ async function restoreDatabaseContents(pool: DbPool, filePath: string, options: 
       : null;
     let legacy = LEGACY_IDENTITY;
     if (dump.version < IDENTITY_DUMP_VERSION) {
-      try { legacy = normalizeIdentity({ ...legacy, canonicalOrigin: liveOrigin ?? legacy.canonicalOrigin }); }
+      try {
+        legacy = normalizeIdentity({ ...legacy, canonicalOrigin: liveOrigin ?? legacy.canonicalOrigin });
+        validateCanonicalRoles(legacy.canonicalOrigin, originRoles);
+      }
       catch (error) { identityFailure(error instanceof IdentityError ? error.field : 'site_identity'); }
     }
     await client.query('DELETE FROM site_identity_assets');

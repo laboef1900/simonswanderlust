@@ -4905,7 +4905,8 @@ describe('identity asset administration and release serving (#275)', () => {
       expect(await readdir(dir)).toEqual([]);
       expect(b.enqueued).toEqual([]);
       expect(builder.calls).toEqual([]);
-      const { canonicalOrigin: _reserved, ...identity } = identityStore.get().identity;
+      // #276: the canonical origin is an editable, required field of every text save.
+      const identity = identityStore.get().identity;
       const text = await b.app.inject({ method: 'PUT', url: '/settings/identity', cookies: cookie, payload: { revision: 2, identity: { ...identity, siteName: 'Field notes' } } });
       expect(text.statusCode).toBe(200);
       const stale = await assetRequest(b, cookie, [source], 2);

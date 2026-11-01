@@ -217,6 +217,35 @@ suite('one PostgreSQL view for the complete build', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+  it.each(['public-image', 'routing-image', 'invalid-authority'])('rejects a %s canonical role collision without replacing the live release', async kind => {
+    const root = await mkdtemp(join(tmpdir(), 'canonical-release-'));
+    const siteAppDir = join(root, 'app');
+    await mkdir(siteAppDir);
+    let calls = 0;
+    const originRoles = { baseUrl: 'https://cdn.example', imgHost: 'images.example' };
+    const builder = createSiteBuilder({
+      pool, siteAppDir, releasesRoot: join(root, 'site'), originRoles,
+      runBuild: async outDir => {
+        calls++;
+        await mkdir(outDir, { recursive: true });
+        await writeFile(join(outDir, 'index.html'), 'previous release');
+      },
+    });
+    try {
+      await pool.query("UPDATE site_identity SET canonical_origin='https://blog.example'");
+      expect((await builder.build()).ok).toBe(true);
+      if (kind === 'invalid-authority') originRoles.imgHost = 'user@images.example';
+      else await pool.query('UPDATE site_identity SET canonical_origin=$1',
+        [kind === 'public-image' ? 'https://cdn.example' : 'https://IMAGES.example:443/']);
+      const outcome = await builder.build();
+      expect(outcome.ok).toBe(false);
+      expect(calls).toBe(1);
+      expect(await readFile(join(root, 'site', 'current', 'index.html'), 'utf8')).toBe('previous release');
+    } finally {
+      await pool.query('UPDATE site_identity SET canonical_origin=NULL');
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 
   it('reports a committed promotion as published when the snapshot is cancelled during cleanup (#397)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'promotion-cancel-'));

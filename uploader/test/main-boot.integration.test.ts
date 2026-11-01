@@ -13,7 +13,7 @@ import { pgPostStore } from '../src/posts.js';
 import { pgUserStore } from '../src/users.js';
 import { pgSecretsStore } from '../src/secrets.js';
 
-import type { IdentityRecord } from '../src/site-identity.js';
+import { seedSiteIdentity, type IdentityRecord } from '../src/site-identity.js';
 const url = process.env.TEST_DATABASE_URL;
 const maybe = url ? describe : describe.skip;
 
@@ -65,6 +65,9 @@ function commentsOf(body: unknown): Record<string, unknown>[] {
  */
 maybe.each(['split', 'loopback'] as const)('production boot (src/main.ts, Postgres, %s origins)', (topology) => {
   let pool: DbPool;
+  let owner: DbPool;
+  let fixtureDatabaseUrl: string;
+  const schema = `main_boot_${randomBytes(12).toString('hex')}`;
   let dir: string;
   let child: ChildProcess;
   let base: string;
@@ -80,8 +83,16 @@ maybe.each(['split', 'loopback'] as const)('production boot (src/main.ts, Postgr
   let bootLog = '';
 
   beforeAll(async () => {
-    pool = createPool(url!);
+    owner = createPool(url!);
+    await owner.query(`CREATE SCHEMA ${schema}`);
+    const fixtureUrl = new URL(url!);
+    fixtureUrl.searchParams.set('options', `-c search_path=${schema}`);
+    fixtureDatabaseUrl = fixtureUrl.href;
+    pool = createPool(fixtureDatabaseUrl);
     await ensureSchema(pool);
+    // This scenario exercises #319's request-origin fallback, not legacy upgrade
+    // seeding. Seed the isolated fresh install before it gains fixture content.
+    await seedSiteIdentity(pool);
     const stamp = Date.now();
     username = `boot${stamp}`;
     await pgUserStore(pool).create({ username, password, isAdmin: true });
@@ -123,7 +134,7 @@ maybe.each(['split', 'loopback'] as const)('production boot (src/main.ts, Postgr
       env: {
         ...env,
         ENCRYPTION_KEY: encryptionKey.toString('hex'),
-        DATABASE_URL: url!,
+        DATABASE_URL: fixtureDatabaseUrl,
         PORT: String(port),
         HOST: '127.0.0.1',
         PUBLIC_BASE_URL: imageOrigin,
@@ -158,6 +169,7 @@ maybe.each(['split', 'loopback'] as const)('production boot (src/main.ts, Postgr
     if (username) await pool.query('DELETE FROM users WHERE username = $1', [username]);
     await pool?.query("DELETE FROM app_secrets WHERE key IN ('ai_api_key', 'ai_provider_key:openrouter')");
     await pool?.end();
+    if (owner) { await owner.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`); await owner.end(); }
     if (dir) await rm(dir, { recursive: true, force: true });
   });
 
@@ -290,7 +302,7 @@ maybe.each(['split', 'loopback'] as const)('production boot (src/main.ts, Postgr
     const identityResponse = await fetch(`${base}/settings/identity`, { headers: { cookie } });
     expect(identityResponse.status).toBe(200);
     const original = await identityResponse.json() as IdentityRecord;
-    const { canonicalOrigin: _reserved, ...editable } = original.identity;
+    const editable = original.identity;
     let revision = original.revision;
     try {
       for (const authorName of ['Configured author', 'Renamed author', '']) {

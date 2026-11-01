@@ -121,6 +121,65 @@ describe('browser caption credentials', () => {
   });
 });
 
+describe('browser OpenRouter identity headers', () => {
+  function transport(identity?: { canonicalOrigin: string | null; siteName: string }) {
+    const fetcher = vi.fn<typeof fetch>(async (_url, options) => {
+      // Exercise the browser's ByteString constraint, not just a plain header object.
+      new Headers(options?.headers);
+      return Response.json({ choices: [{ message: { content: '{"excerpt":"Walking through the old town."}' } }] });
+    });
+    const window: {
+      SiteIdentity?: { canonicalOrigin: string | null; siteName: string };
+      LLM?: { suggestExcerpt(base: string, model: string, guidance: string,
+        draft: { locale: string; title: string; markdown: string }, key: string | null, timeout: number): Promise<unknown> };
+    } = { SiteIdentity: identity };
+    new Function('window', 'fetch', src)(window, fetcher);
+    const request = (base = 'https://openrouter.ai/api/v1', key: string | null = 'request-key') =>
+      window.LLM!.suggestExcerpt(base, 'model', '', {
+        locale: 'en', title: 'Old town', markdown: 'We walked through the old town.',
+      }, key, 5000);
+    return { window, fetcher, request };
+  }
+
+  it.each(['Field notes', 'Café unterwegs', 'x'.repeat(80), '\u00a0\u00ff'])('sends printable Latin-1 title %j and the canonical origin directly', async (siteName) => {
+    const h = transport({ canonicalOrigin: 'https://xn--bcher-kva.example:8443', siteName });
+    await h.request();
+    const [url, options] = h.fetcher.mock.calls[0]!;
+    expect(String(url)).toBe('https://openrouter.ai/api/v1/chat/completions');
+    expect(options?.headers).toMatchObject({
+      'HTTP-Referer': 'https://xn--bcher-kva.example:8443', 'X-Title': siteName, Authorization: 'Bearer request-key',
+    });
+    expect(options).toMatchObject({ credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer' });
+  });
+
+  it.each(['', 'x'.repeat(81), 'Notes 🗺', '旅', 'A\nB', 'A\rB', 'A\tB', 'A\n', 'A\r', '\u007f', '\u0080', '\u009f'])(
+    'omits unsafe title %j without failing inference', async (siteName) => {
+      const h = transport({ canonicalOrigin: 'https://blog.example', siteName });
+      await expect(h.request()).resolves.toBe('Walking through the old town.');
+      const headers = new Headers(h.fetcher.mock.calls[0]![1]?.headers);
+      expect(headers.get('x-title')).toBeNull();
+      expect(headers.get('http-referer')).toBe('https://blog.example');
+    },
+  );
+
+  it('omits unset identity and never carries headers or credentials into another provider request', async () => {
+    const h = transport();
+    await h.request();
+    h.window.SiteIdentity = { canonicalOrigin: null, siteName: 'Field notes' };
+    await h.request();
+    h.window.SiteIdentity = { canonicalOrigin: 'https://blog.example', siteName: 'Field notes' };
+    await h.request();
+    await h.request('http://localhost:1234/v1', null);
+    await h.request('https://openrouter.ai.attacker.example/v1', null);
+    const headers = h.fetcher.mock.calls.map(([, options]) => new Headers(options?.headers));
+    expect(headers.map((header) => header.get('http-referer'))).toEqual([null, null, 'https://blog.example', null, null]);
+    expect(headers.map((header) => header.get('x-title'))).toEqual([null, 'Field notes', 'Field notes', null, null]);
+    expect(headers.map((header) => header.get('authorization'))).toEqual([
+      'Bearer request-key', 'Bearer request-key', 'Bearer request-key', null, null,
+    ]);
+  });
+});
+
 // #351: the reply the request returns decides; a draft never fills the field.
 describe('browser caption replies', () => {
   const IMAGE = 'data:image/jpeg;base64,AA==';

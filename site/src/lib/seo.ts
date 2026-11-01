@@ -13,12 +13,6 @@ export function localeAlternates(path: (locale: Locale, language: SiteLanguage) 
   return language.locales.length === 2 ? { de: path('de', language), en: path('en', language) } : undefined;
 }
 
-/**
- * Production origin — fallback base URL when `Astro.site` is unset.
- * Single source of truth; mirrors `site` in astro.config.mjs.
- */
-export const PROD_SITE = new URL('https://simonswanderlust.com');
-
 const htmlParser = unified().use(rehypeParse, { fragment: true });
 const nonProseTags: Record<string, true> = {
   figure: true,

@@ -19,8 +19,11 @@ import { memoryCommentStore, pgCommentStore } from '../src/comments.js';
 import { memoryCommentAdminStore, withPublicLocaleMetadata } from '../src/comments-admin.js';
 import { commentLimiters, fixedWindowLimiter } from '../src/rate-limit.js';
 import { commentAuthorityOrigin, requestOrigin } from '../src/comments-public.js';
-import { memoryLanguageStore } from '../src/language.js';
 import { createPool, ensureSchema } from '../src/db.js';
+import { memoryLanguageStore } from '../src/language.js';
+import pg from 'pg';
+import { memorySiteIdentityStore, pgSiteIdentityStore, seedSiteIdentity } from '../src/site-identity.js';
+import { neutralIdentity } from '../../site/src/lib/site-identity.js';
 
 let dir: string;
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'cpub-')); });
@@ -101,6 +104,78 @@ function post(b: B, payload: unknown, headers: Record<string, string> = { origin
 }
 
 const PUBLIC_KEYS = ['id', 'authorName', 'body', 'createdAt', 'isAuthor', 'postedLocale'].sort();
+describe('canonical comment-origin precedence (#276)', () => {
+  it('uses the current cached identity, explicit override first, then restores #319 fallback when cleared', async () => {
+    const identityStore = memorySiteIdentityStore({ ...neutralIdentity(), canonicalOrigin: 'https://new.example' });
+    const b = build({ identityStore });
+    const tk = await published(b);
+    const find = vi.spyOn(b.sessions, 'find').mockRejectedValue(new Error('database unavailable'));
+    const overridden = build({ identityStore, commentsOrigin: 'https://override.example', posts: b.posts, comments: b.comments });
+    const invalid = build({ identityStore, commentsOrigin: 'https://user@new.example', posts: b.posts, comments: b.comments });
+    try {
+      expect((await post(b, good(tk), { origin: 'https://new.example' }, { sid: 'owner-cookie' })).statusCode).toBe(201);
+      for (const origin of [BASE, 'https://img.simonswanderlust.com', 'https://new.example.evil.test', 'https://user@new.example']) {
+        expect((await post(b, good(tk), { origin })).statusCode).toBe(403);
+      }
+      expect((await post(b, good(tk), { referer: 'https://new.example@evil.test/trip/' })).statusCode).toBe(403);
+      expect((await post(b, good(tk), { referer: 'https://new.example/trip/' })).statusCode).toBe(201);
+      expect((await post(overridden, good(tk), { origin: 'https://new.example' })).statusCode).toBe(403);
+      expect((await post(overridden, good(tk), { origin: 'https://override.example' })).statusCode).toBe(201);
+      expect((await post(invalid, good(tk), { origin: 'https://new.example' })).statusCode).toBe(403);
+      await identityStore.update(1, { ...identityStore.get().identity, canonicalOrigin: null });
+      expect((await post(b, good(tk))).statusCode).toBe(201);
+      expect((await post(b, good(tk), { origin: 'https://new.example' })).statusCode).toBe(403);
+      expect(find).not.toHaveBeenCalled();
+    } finally { await Promise.all([b.app.close(), overridden.app.close(), invalid.app.close()]); }
+  });
+  it('keeps limiter then honeypot ahead of canonical origin refusal', async () => {
+    const identityStore = memorySiteIdentityStore({ ...neutralIdentity(), canonicalOrigin: 'https://new.example' });
+    const b = build({ identityStore, commentIpLimiter: fixedWindowLimiter({ max: 1, windowMs: 60_000 }) });
+    try {
+      expect((await post(b, good('missing', { website: 'bot' }))).statusCode).toBe(204);
+      expect((await post(b, good('missing', { website: 'bot' }))).statusCode).toBe(429);
+      expect(b.comments.all()).toEqual([]);
+    } finally { await b.app.close(); }
+  });
+});
+
+it.skipIf(!process.env.TEST_DATABASE_URL)('switches canonical comments immediately through the real identity save and Postgres stores', async () => {
+  const schema = `canonical_${randomUUID().replaceAll('-', '')}`;
+  const owner = new pg.Pool({ connectionString: process.env.TEST_DATABASE_URL });
+  let pool: pg.Pool | undefined;
+  let app: B['app'] | undefined;
+  try {
+    await owner.query(`CREATE SCHEMA ${schema}`);
+    pool = new pg.Pool({ connectionString: process.env.TEST_DATABASE_URL, options: `-c search_path=${schema}` });
+    await ensureSchema(pool);
+    await seedSiteIdentity(pool);
+    const identityStore = await pgSiteIdentityStore(pool);
+    const posts = pgPostStore(pool), comments = pgCommentStore(pool);
+    const tk = randomUUID();
+    await posts.upsertDraft(pair(tk));
+    await posts.publish(tk, await publishTokens(posts, tk));
+    const b = build({ identityStore, posts, comments });
+    app = b.app;
+    const admin = await b.users.create({ username: 'fixture-admin', password: 'fixture-password-1234', isAdmin: true });
+    const cookies = { sid: await b.sessions.create(admin.id, 60_000) };
+    expect((await post(b, good(tk))).statusCode).toBe(201);
+    const save = await app.inject({ method: 'PUT', url: '/settings/identity', cookies,
+      payload: { revision: 1, identity: { ...identityStore.get().identity, canonicalOrigin: 'https://NEW.example:443/' } } });
+    expect(save.statusCode).toBe(200);
+    expect((await pgSiteIdentityStore(pool)).get().identity.canonicalOrigin).toBe('https://new.example');
+    for (const origin of [BASE, 'https://img.simonswanderlust.com', 'https://new.example.evil.test', 'https://new.example@evil.test']) {
+      expect((await post(b, good(tk), { origin })).statusCode).toBe(403);
+    }
+    expect((await post(b, good(tk), { origin: 'https://new.example' })).statusCode).toBe(201);
+    expect(await comments.listForAdmin({ translationKey: tk, status: 'pending' })).toHaveLength(2);
+    expect(await comments.listApproved(tk)).toEqual([]);
+  } finally {
+    await app?.close();
+    await pool?.end();
+    await owner.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+    await owner.end();
+  }
+});
 
 describe('committed comment locale coverage', () => {
   it.each(['de', 'en'] as const)('keeps saved secondary work private until publication with %s primary', async (primary) => {

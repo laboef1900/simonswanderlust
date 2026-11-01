@@ -38,8 +38,9 @@ describe('reserved public namespaces', () => {
     let settings = defaultSettings();
     await Promise.all(['images', 'map', 'site/current'].map(path => mkdir(join(root, path), { recursive: true })));
     const app = buildServer({
+      trustProxy: TEST_TRUST,
       storageDir: join(root, 'images'), siteDir: join(root, 'site'), mapDir: join(root, 'map'),
-      baseUrl: 'https://images.example', imgHost: 'images.example', backupDir: join(root, 'backup'), trustProxy: TEST_TRUST,
+      baseUrl: 'https://images.example', imgHost: 'images.example', backupDir: join(root, 'backup'),
       users: memoryUserStore(), sessions: memorySessionStore(), posts, pages: memoryPageStore(posts.language),
       media: memoryMediaStore({ baseUrl: 'https://images.example' }), secrets: memorySecretsStore(), gpx,
       settings: { get: () => settings, update: patch => { settings = validate({ ...settings, ...patch }); return settings; } },

@@ -305,6 +305,10 @@
           <h2 id="identityHeading" class="card-heading"></h2>
           <p id="identityIntro" class="muted"></p>
           <p id="identityTiming" class="muted"></p>
+          <p id="identityDomainNotice" class="muted" role="status" hidden>
+            <span id="identityDomainNoticeText"></span>
+            <a id="identityDomainNoticeLink" href="/admin/settings.html#identity"></a>
+          </p>
           <form id="identityForm" aria-describedby="identityTiming identityOptional">
             <fieldset id="identityFields" disabled>
               <p id="identityOptional" class="muted"></p>
@@ -316,6 +320,15 @@
                 <div>
                   <label id="identityAuthorNameLabel" for="identityAuthorName"></label>
                   <input id="identityAuthorName" type="text" data-identity-max-length="80" />
+                </div>
+              </div>
+              <div>
+                <label id="identityCanonicalOriginLabel" for="identityCanonicalOrigin"></label>
+                <input id="identityCanonicalOrigin" type="url" autocomplete="off" spellcheck="false" aria-describedby="identityCanonicalHelp identityCanonicalAscii" />
+                <p id="identityCanonicalHelp" class="muted"></p>
+                <p id="identityCanonicalAscii" class="muted" role="status" hidden></p>
+                <div class="form-actions">
+                  <button id="identityUseBrowserOrigin" type="button" class="btn-secondary"></button>
                 </div>
               </div>
               <div id="identityLocalized"></div>

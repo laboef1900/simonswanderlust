@@ -1,5 +1,6 @@
-// Text and assets save independently but share one revision. Asset writes must
-// never repaint the text form or discard its unsaved inputs.
+// Text and assets save independently but share one revision. Only the active locale
+// projection of the text form is sent; asset writes must never repaint the text form
+// or discard its unsaved inputs.
 window.SettingsIdentity = (function () {
   function init() {
     const $ = (id) => document.getElementById(id);
@@ -17,6 +18,7 @@ window.SettingsIdentity = (function () {
     let dirty = false;
     let busy = false;
     let conflicted = false;
+    let canonicalOrigin = null;
     let assets = { logo: false, favicon: false };
     const roles = ['logo', 'favicon'];
     for (const [id, key] of Object.entries({
@@ -27,6 +29,9 @@ window.SettingsIdentity = (function () {
       identityAddLink: 'identityAddLink', identitySave: 'identitySave', identityReload: 'identityReload',
       identityRebuild: 'identityRebuild', identityAssetsHeading: 'identityAssetsHeading',
       identityAssetsHelp: 'identityAssetsHelp',
+      identityCanonicalOriginLabel: 'identityCanonicalOrigin', identityCanonicalHelp: 'identityCanonicalHelp',
+      identityCanonicalAscii: 'identityCanonicalAscii', identityUseBrowserOrigin: 'identityUseBrowserOrigin',
+      identityDomainNoticeText: 'identityDomainUnset', identityDomainNoticeLink: 'identityDomainConfigure',
     })) $(id).textContent = copy[key];
 
     function status(text, focus = false) {
@@ -197,6 +202,12 @@ window.SettingsIdentity = (function () {
       $('identityAddLink').disabled = links.length >= 6;
       if (focusIndex >= 0) $('identity-link-' + focusAction + '-' + focusIndex)?.focus();
     }
+    function paintCanonical(origin) {
+      canonicalOrigin = origin;
+      $('identityCanonicalOrigin').value = origin || '';
+      $('identityDomainNotice').hidden = origin !== null;
+      $('identityCanonicalAscii').hidden = !origin || !new URL(origin).hostname.split('.').some((label) => label.startsWith('xn--'));
+    }
     async function load() {
       lock(true);
       status(copy.identityLoading);
@@ -209,6 +220,7 @@ window.SettingsIdentity = (function () {
         locales = data.locales;
         $('identitySiteName').value = data.identity.siteName;
         $('identityAuthorName').value = data.identity.authorName;
+        paintCanonical(data.identity.canonicalOrigin);
         paintLocalized(data.identity);
         links = data.identity.socialLinks.map((link) => ({ ...link }));
         paintLinks();
@@ -222,6 +234,12 @@ window.SettingsIdentity = (function () {
       } finally { lock(false); }
     }
     $('identityForm').addEventListener('input', () => { dirty = true; });
+    $('identityUseBrowserOrigin').addEventListener('click', () => {
+      if (busy) return;
+      $('identityCanonicalOrigin').value = location.origin;
+      dirty = true;
+      $('identityCanonicalOrigin').focus();
+    });
     $('identityAddLink').addEventListener('click', () => {
       if (busy || links.length >= 6) return;
       links.push({ label: '', url: '' });
@@ -248,11 +266,32 @@ window.SettingsIdentity = (function () {
           return;
         }
       }
-      const identity = { siteName: $('identitySiteName').value, authorName: $('identityAuthorName').value, socialLinks: links };
+      const canonicalInput = $('identityCanonicalOrigin').value;
+      const requestedOrigin = canonicalInput.trim() === '' ? null : canonicalInput;
+      let serializedOrigin = null;
+      try {
+        if (requestedOrigin !== null) serializedOrigin = new URL(requestedOrigin).origin;
+      } catch {
+        status(copy.identityInvalid + ' ' + copy.identityCanonicalOrigin);
+        $('identityCanonicalOrigin').focus();
+        return;
+      }
+      const identity = { siteName: $('identitySiteName').value, authorName: $('identityAuthorName').value,
+        canonicalOrigin: requestedOrigin, socialLinks: links };
       for (const field of fields) {
         identity[field] = Object.fromEntries(locales.map((language) => [language, $('identity-' + field + '-' + language).value]));
       }
       lock(true);
+      if (serializedOrigin !== canonicalOrigin) {
+        const confirmed = await AdminConfirm.ask({
+          title: copy.identityCanonicalConfirmTitle,
+          body: copy.identityCanonicalConfirmBody
+            .replace('{from}', canonicalOrigin || copy.identityCanonicalUnset)
+            .replace('{to}', serializedOrigin || copy.identityCanonicalUnset),
+          confirmLabel: copy.identitySave,
+        });
+        if (!confirmed) { lock(false); return; }
+      }
       status(copy.identitySaving);
       try {
         const response = await fetch('/settings/identity', {
@@ -270,6 +309,8 @@ window.SettingsIdentity = (function () {
           status(copy.identityFailed, true);
         } else {
           revision = result.revision;
+          // The server accepted the full input; display its WHATWG origin serialization.
+          paintCanonical(serializedOrigin);
           dirty = false;
           status(copy.identitySaved);
         }
