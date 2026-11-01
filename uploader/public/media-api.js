@@ -24,7 +24,9 @@ window.MediaApi = (function () {
    */
   function uploadRefusal(file) {
     var type = typeof file.type === 'string' ? file.type.toLowerCase() : '';
-    if (/^image\/hei[cf](-sequence)?$/.test(type) || /\.hei[cf]$/i.test(String(file.name || ''))) return 'heic';
+    // The name only decides when the browser supplies no type: a transcoded
+    // JPEG that kept its .HEIC name is still sent.
+    if (/^image\/hei[cf](-sequence)?$/.test(type) || (!type && /\.hei[cf]$/i.test(String(file.name || '')))) return 'heic';
     if (type && type.indexOf('image/') !== 0) return 'not_image';
     if (typeof file.size === 'number' && file.size > MAX_UPLOAD_BYTES) return 'too_large';
     return null;

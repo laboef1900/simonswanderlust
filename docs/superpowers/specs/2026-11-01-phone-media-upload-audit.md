@@ -21,8 +21,8 @@ matrix (#300, PR #471, §6/§15). Labels: `[STATIC]` read in code, `[HOST]` run 
 
 ## Change
 
-- `media-api.js` `uploadRefusal(file)`: **HEIC/HEIF** (type `image/heic|heif[-sequence]` or a
-  `.heic`/`.heif` name), a **non-image** type, or **> 25 MiB** → the file is queued as
+- `media-api.js` `uploadRefusal(file)`: **HEIC/HEIF** (type `image/heic|heif[-sequence]`, or a
+  `.heic`/`.heif` name when the browser gives no type — a transcoded JPEG keeps going), a **non-image** type, or **> 25 MiB** → the file is queued as
   `refused` with that reason and **never transmitted**. A missing type or size is never a reason;
   the server stays authoritative. Refusals count separately, are final for Retry, and are
   removed by Clear finished / Clear waiting files.

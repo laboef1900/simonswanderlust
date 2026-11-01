@@ -270,16 +270,18 @@ describe('MediaApi upload queue', () => {
       { name: 'c.jpg', type: 'image/jpeg', size: 25 * 1024 * 1024 + 1 }, { name: 'd.txt', type: 'text/plain', size: 10 },
       // At the limit, or with nothing known about it, the server decides.
       { name: 'e.jpg', type: 'image/jpeg', size: 25 * 1024 * 1024 }, { name: 'f.jpg' },
+      // A browser-transcoded JPEG that kept its HEIC name is sent: the type decides.
+      { name: 'IMG_7.HEIC', type: 'image/jpeg', size: 10 },
     ]);
     expect(q.snapshot().items.map((i) => [i.state, i.error])).toEqual([
       ['refused', 'heic'], ['refused', 'heic'], ['refused', 'too_large'], ['refused', 'not_image'],
-      ['uploading', null], ['uploading', null],
+      ['uploading', null], ['uploading', null], ['uploading', null],
     ]);
-    expect(instances).toHaveLength(2);
+    expect(instances).toHaveLength(3);
     instances.forEach((x) => x.resolve());
     await flush();
     q.retryFailed();
-    expect(instances).toHaveLength(2);
+    expect(instances).toHaveLength(3);
     q.clearFinished();
     expect(q.snapshot().items.filter((i) => i.state === 'refused')).toEqual([]);
   });
