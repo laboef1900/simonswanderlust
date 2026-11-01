@@ -186,10 +186,9 @@ to signed-in authors for browser-direct requests.
 
 ## Backups
 
-Your journal deserves a copy somewhere else. The built-in database dumps and incremental
-image archives live under `/data/backup/db`, on the **same disk as the running app**.
-Schedule a host-level offsite backup of `./uploader/data` as well; keep any AI encryption
-master key separately. A local backup alone is not disaster recovery.
+Your journal deserves a copy somewhere else. App-created database dumps, image archives and
+private GPX companion archives normally live under `/data/backup/db`, on the **same disk as
+the running app**. Settings lists local files, not verified offsite delivery.
 
 [Backup and restore procedures](ARCHITECTURE.md#backups--disaster-recovery) ·
 [App upgrade and supported recovery runbook](ARCHITECTURE.md#app-upgrades-and-supported-recovery).
