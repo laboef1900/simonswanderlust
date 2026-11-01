@@ -1069,6 +1069,11 @@ having no comments needs no setup action. Users cannot legitimately have an empt
 authenticated list (first-admin setup precedes access), while Import's idle state is
 the existing export-file chooser, not a second onboarding workflow.
 
+Phone acceptance targets current-stable iOS Safari and Android Chrome under the
+[approved measured matrix and manual audit](docs/superpowers/specs/2026-10-27-mobile-acceptance-matrix-design.md),
+run with the [G5 device script](docs/superpowers/plans/2026-11-01-issue-300-device-test-script.md).
+Physical-device execution remains blocked; this records the target, not a passed qualification.
+
 Admin tokens live on `:root` in `uploader/public/admin.css`, so the shell, the login page
 and the `<dialog>`s appended to `<body>` share one set:
 
