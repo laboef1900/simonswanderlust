@@ -2,17 +2,18 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { constants, statSync } from 'node:fs';
 import { open, readFile, type FileHandle } from 'node:fs/promises';
-import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply } from 'fastify';
+import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply, type RouteOptions } from 'fastify';
 import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import cookie from '@fastify/cookie';
+import type { DbClient } from './db.js';
 import { encodeVariant, normalizeProcessOptions, outputFormatForExtension, probeImage, type ImageProbe } from './pipeline.js';
 import { WIDTHS } from './variants.js';
 import { contentHashKey, storeOriginal, heroSnippet, assertSafeKey } from './storage.js';
 import { deleteMedia, imageUsage, VARIANT_FILE_RE } from './media-files.js';
 import {
   libraryKey, redactForNonAdmin, MediaStoreError, assertSafeFolder,
-  type MediaItem, type MediaQuery, type MediaStatus, type MediaStore,
+  type MediaError, type MediaItem, type MediaQuery, type MediaStatus, type MediaStore,
 } from './media-store.js';
 import { BacklogFullError, type EncodeQueue } from './encode-queue.js';
 import type { WorkLock } from './work-lock.js';
@@ -33,24 +34,26 @@ import {
 } from './ai-providers.js';
 import { validateDraft, validateForPublish, PostError, type PostStore, type PostPair, type StoredPostPair, type PostUsageRow, assertNotStale, assertPublishTokens, type PublishTokens } from './posts.js';
 import { GpxError } from './gpx-errors.js';
-import { analyzeBodyImages, bodyImageKey } from './publish-gate.js';
+import { analyzeBodyContent, bodyImageKey } from './publish-gate.js';
 import { auditAltText } from './alt-audit.js';
 import { renderPreviewHtml, previewCsp } from './preview.js';
 import { loadGalleryMetadata } from './gallery-metadata.js';
-import { type PageStore, type PagePair, type PageContent, type ImageDims, PageError } from './pages.js';
+import { analyzeGallerySource } from '../../site/src/lib/gallery-source.js';
+import { type PageStore, type PagePair, type PageUpdate, type PageContent, type ImageDims, PageError } from './pages.js';
 import { exportPost, exportAll } from './export.js';
 import type { SiteBuilder } from './build.js';
+import { projectBuildReport } from './build-state.js';
 import { prepareImport, ImportTooLargeError, ImportInsufficientSpaceError, type ImportDeps, type PreparedImport } from './wp-import.js';
 import { WxrParseError } from './wxr-parse.js';
 import { createImportRunner, memoryImportJobStore, ImportBusyError, type ImportRunner, type ImportJob } from './import-jobs.js';
 import { createRehostResume } from './wp-images.js';
 import { fixedWindowLimiter, rateLimitPreHandler, accountLockoutLimiter, commentLimiters, type RateLimiter, type AccountLimiter } from './rate-limit.js';
 import type { CommentStore } from './comments.js';
-import { registerPublicComments } from './comments-public.js';
+import { commentAuthorityOrigin, commentOrigin, registerPublicComments } from './comments-public.js';
 import { BACKUP_FILE_RE, IMAGES_ARCHIVE_RE, type DbBackup } from './backup.js';
-import { legacyRedirect } from './redirects.js';
+import { legacyRedirectForRelease } from './redirects.js';
 import { compressionHook } from './compress.js';
-import { CommentError, isCommentStatus, UUID_RE as COMMENT_ID_RE, type CommentAdminStore } from './comments-admin.js';
+import { CommentError, isCommentStatus, isModerationOffset, withPublicLocaleMetadata, UUID_RE as COMMENT_ID_RE, type CommentAdminStore } from './comments-admin.js';
 import { ui } from '../../site/src/i18n/ui.js';
 import { createGeocoder, GeocodingError } from './geocoding.js';
 import { registerGpxRoutes } from './gpx-routes.js';
@@ -61,8 +64,14 @@ import { StorageReadOnlyError } from './storage-owner.js';
 import { IdentityConflictError, type SiteIdentityStore } from './site-identity.js';
 import { IdentityError, neutralIdentity } from '../../site/src/lib/site-identity.js';
 import { OnboardingError, type OnboardingStore } from './onboarding.js';
+import type { TrustPolicy } from './trusted-proxy.js';
+import { LanguageError, validateLanguage, type LanguageConfig, type LanguageStore, type LanguageLocale, type LanguageBlocker } from './language.js';
+import { publicPath } from './public-paths.js';
+import { validateCanonicalRoles } from './canonical-origin.js';
+import { registerIdentityAssetRoutes } from './site-identity-routes.js';
 
 export interface ServerConfig {
+  trustProxy: TrustPolicy['trust'];
   storageDir: string;
   baseUrl: string;
   users: UserStore;
@@ -71,6 +80,9 @@ export interface ServerConfig {
   secrets: SecretsStore;
   identityStore?: SiteIdentityStore;
   onboarding?: OnboardingStore;
+  language?: LanguageStore;
+  /** Observe the real registered table for reserved-root namespace parity. */
+  onRoute?: (route: RouteOptions) => void;
   posts: PostStore;
   pages: PageStore;
   imgHost: string;   // Host header that serves image variants (img subdomain)
@@ -129,8 +141,8 @@ export interface ServerConfig {
   /** Site-wide comments switch. Defaults to OFF (fail closed): POST answers 409. */
   commentsEnabled?: () => boolean;
   /**
-   * Exact Origin a browser POST /comments must carry. Defaults to the origin
-   * of `baseUrl` (PUBLIC_BASE_URL). Compared by equality, never prefix.
+   * Explicit blog-origin override for POST /comments. Invalid values fail closed.
+   * Otherwise use trusted protocol + raw Host, excluding production image hosts.
    */
   commentsOrigin?: string;
   /** Injectable for tests; defaults to fresh `commentLimiters()` maps. */
@@ -175,15 +187,10 @@ export function buildServer(cfg: ServerConfig): AppServer {
   // @fastify/static requires an absolute root; tolerate a relative STORAGE_DIR
   // (e.g. ./data/images from env) by resolving against the process cwd.
   const storageDir = resolve(cfg.storageDir);
-  // @ai-warning: trustProxy makes Fastify read X-Forwarded-* (so req.ip and the
-  // cookie `secure` flag reflect the real client). `trustProxy: 1` trusts exactly
-  // ONE hop — the reverse proxy in front of the container — so req.ip is the
-  // RIGHTMOST X-Forwarded-For entry, the one that proxy appended; any leftmost,
-  // client-supplied entries are ignored. `true` trusted every hop, which made
-  // req.ip (and with it the per-IP auth limiter) spoofable by a client that
-  // rotates the header (#108). A second proxy layer needs `2`, never `true`.
-  // The compose file publishes port 3000 on loopback only, so the host proxy
-  // is the sole ingress and the one hop this trusts.
+  // @ai-warning: validate the immediate socket address AND stop at hop zero.
+  // Never use `true`, a bare hop count, or a hop-only function: they let an
+  // untrusted peer forge req.ip and req.protocol. A second proxy layer needs
+  // a new spec, not a larger number (#369 dependency/proxy-trust spec).
   // @ai-note: http.Server#requestTimeout bounds how long the server waits to
   // fully RECEIVE a request (headers + body) — it does not bound how long a
   // handler then takes to process it (e.g. encoding an upload). Fastify sets
@@ -191,8 +198,10 @@ export function buildServer(cfg: ServerConfig): AppServer {
   // default, so without an explicit value a stalled request would never time
   // out at this layer. 120s is generous for even a large multipart upload
   // over a slow connection while still bounding one that stalls outright.
-  const app = Fastify({ logger: false, trustProxy: 1, requestTimeout: 120_000 });
+  const app = Fastify({ logger: false, trustProxy: cfg.trustProxy, requestTimeout: 120_000 });
+  if (cfg.onRoute) app.addHook('onRoute', cfg.onRoute);
   const { users, sessions } = cfg;
+  const language = cfg.language ?? cfg.posts.language;
   let mutationsClosed = false;
   const activeMutations = new Set<Promise<void>>();
   const isWritable = () => !mutationsClosed && cfg.isWritable?.() !== false;
@@ -250,7 +259,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     reply.header('X-Content-Type-Options', 'nosniff');
     const url = req.raw.url ?? '';
     const route = req.routeOptions.url;
-    if (route === '/auth/me' || route === '/onboarding' || route === '/settings' || route?.startsWith('/settings/identity') || route === '/ai-config' || route?.startsWith('/ai-providers')
+    if (route === '/auth/me' || route === '/onboarding' || route === '/language' || route === '/settings' || route?.startsWith('/settings/identity') || route === '/ai-config' || route?.startsWith('/ai-providers')
       || route === '/posts/:tk/publish' || route === '/posts/bulk') reply.header('Cache-Control', 'no-store');
     if (route !== undefined && !PUBLIC_ROUTES[route]) {
       reply.header('X-Frame-Options', 'DENY');
@@ -271,10 +280,9 @@ export function buildServer(cfg: ServerConfig): AppServer {
     // immutable by construction — while `${siteDir}/current` is a symlink a
     // publish repoints, which is exactly why the DOCUMENT must not be cached:
     // it is what points at the new asset names.
-    // @ai-note Set here rather than via the mount's `setHeaders`, which
-    // @fastify/static overwrites with its own cacheControl value (see the
-    // image mount below); an onSend `reply.header` is the last writer.
-    if (path.startsWith('/_astro/') && reply.statusCode < 400) {
+    // Apply the fingerprint-specific policy after static serving; the rest of
+    // the blog mount retains its native revalidation policy.
+    if ((path.startsWith('/_astro/') || /^\/_identity\/(?:logo|favicon-32|favicon-192|apple-touch-180)-[a-f0-9]{16}\.png$/.test(path)) && reply.statusCode < 400) {
       reply.header('cache-control', 'public, max-age=31536000, immutable');
     }
   });
@@ -348,9 +356,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
   // (wp-images.ts) stay deterministic so re-imports are idempotent, so
   // re-importing a remote image that changed since the first import is the one
   // residual path that can rewrite bytes under an immutable-cached URL —
-  // accepted trade-off. (A custom setHeaders is overwritten by
-  // @fastify/static's own cacheControl, so use the native maxAge + immutable
-  // options instead.)
+  // accepted trade-off. Use the native maxAge + immutable options.
   app.register(fastifyStatic, {
     root: storageDir,
     prefix: '/',
@@ -360,7 +366,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     constraints: { host: cfg.imgHost },
     // Public variants must be readable by the editor on a different origin.
     // Scope CORS to this file mount, never authenticated APIs or private originals.
-    setHeaders: (res) => { res.setHeader('Access-Control-Allow-Origin', '*'); },
+    setHeaders: (reply) => { reply.header('Access-Control-Allow-Origin', '*'); },
     // Only finished variants (`<key>-<width>.<avif|webp|jpeg>`) are web assets.
     // Untouched full-resolution originals (`<key>-orig.<ext>`) live in
     // storageDir so the incremental backup tar captures them, but they are a
@@ -403,6 +409,24 @@ export function buildServer(cfg: ServerConfig): AppServer {
   /** Cap on any `keys[]` batch: an unbounded array is an authenticated
    *  N-round-trip amplifier against the process that also serves the blog. */
   const MAX_BULK_KEYS = 100;
+
+  /**
+   * Move a `processing` row that nothing will encode — its enqueue was refused
+   * or its original could not be written — to `s`, resolving whether this
+   * caller's write landed (#348).
+   *
+   * @ai-warning Call only inside the queue's same-key admission boundary.
+   * The active check and awaited CAS must exclude Upload, Retry and recovery
+   * admission until the rollback lands; CAS alone cannot protect an accepted
+   * job that is still processing. The CAS also preserves a settled encode.
+   */
+  const releaseUnqueued = async (key: string, s: MediaStatus, e?: MediaError): Promise<boolean> => {
+    if (cfg.encodeQueue.isActive(key)) return false;
+    return cfg.media.setStatusIfProcessing(key, s, e).catch((err: unknown) => {
+      console.error(`could not roll back status for ${key}:`, err);
+      return false;
+    });
+  };
 
   /**
    * Single-file upload. The request returns as soon as the untouched ORIGINAL
@@ -501,74 +525,108 @@ export function buildServer(cfg: ServerConfig): AppServer {
     }
     const format = outputFormatForExtension(probe.ext, encoding);
 
-    // Re-uploading identical bytes is the NORMAL case when a folder is dropped
-    // twice, so all three states of an existing row are handled explicitly.
-    const existing = await cfg.media.get(versionedKey);
-    if (existing && existing.status === 'ready') {
-      // Metadata the caller supplied still applies — it is not silently
-      // discarded — but the STORED values win: alt fills only a blank slot,
-      // and the folder only if the photo is still in the root (#135). The
-      // browser always sends the folder that is currently open, so a second
-      // drop of the same camera export must not relocate a curated photo.
-      const fillFolder = folder !== '' && existing.folder === '';
-      let stored = existing;
-      if (alt || title || fillFolder) {
-        // Best-effort on a duplicate — but the response reports what was
-        // PERSISTED, so a failed patch cannot claim a folder the photo is not in.
-        stored = await cfg.media.patch(versionedKey, {
-          ...(title ? { title } : {}), ...(fillFolder ? { folder } : {}),
-          ...(alt ? { alt: { de: existing.alt.de || alt, en: existing.alt.en || alt } } : {}),
-        }).catch(() => existing);
+    return cfg.encodeQueue.withAdmission(versionedKey, async () => {
+      // Read inside the same-key boundary: a preceding refusal may have changed
+      // processing to failed while this request was waiting.
+      const existing = await cfg.media.get(versionedKey);
+      if (existing && existing.status === 'ready') {
+        // Metadata the caller supplied still applies — it is not silently
+        // discarded — but the STORED values win: alt fills only a blank slot,
+        // and the folder only if the photo is still in the root (#135). The
+        // browser always sends the folder that is currently open, so a second
+        // drop of the same camera export must not relocate a curated photo.
+        const fillFolder = folder !== '' && existing.folder === '';
+        let stored = existing;
+        if (alt || title || fillFolder) {
+          // Best-effort on a duplicate — but the response reports what was
+          // PERSISTED, so a failed patch cannot claim a folder the photo is not in.
+          stored = await cfg.media.patch(versionedKey, {
+            ...(title ? { title } : {}), ...(fillFolder ? { folder } : {}),
+            ...(alt ? { alt: { de: existing.alt.de || alt, en: existing.alt.en || alt } } : {}),
+          }).catch(() => existing);
+        }
+        return reply.send({
+          src, key: versionedKey, width: existing.width, height: existing.height,
+          status: existing.status, duplicate: true, folder: stored.folder,
+          ...(existing.format ? { format: existing.format } : {}),
+          snippet: heroSnippet(src, existing.width, existing.height, existing.alt.de || alt, existing.format),
+        });
+      }
+      if (existing && (existing.status === 'processing' ||
+        (existing.status === 'failed' && existing.error === 'queue_full'))) {
+        // #348: processing alone does not prove a job exists. Restore the
+        // original before admitting an orphan left by a crash or old refusal.
+        if (!cfg.encodeQueue.isActive(versionedKey)) {
+          // A backlog refusal never invalidates this photo's curated metadata or
+          // immutable encoding profile. Recover it without a destructive upsert.
+          await cfg.media.setStatus(versionedKey, 'processing');
+          try {
+            await storeOriginal(versionedKey, buf, probe.ext, { storageDir, ...runtime });
+          } catch (e) {
+            await releaseUnqueued(versionedKey, 'failed', 'write_failed');
+            console.error(`could not store the original for ${versionedKey}:`, e);
+            return reply.code(500).send({ error: 'internal server error' });
+          }
+          try {
+            cfg.encodeQueue.enqueue(versionedKey);
+          } catch (e) {
+            if (!(e instanceof BacklogFullError)) throw e;
+            // Hold the boundary until the write lands; subsequent admissions
+            // must re-read this settled status, not a stale processing snapshot.
+            await releaseUnqueued(versionedKey, 'failed', 'queue_full');
+            return reply.code(429).send({ error: e.message });
+          }
+        }
+        return reply.send({
+          src, key: versionedKey, width: existing.width, height: existing.height,
+          status: 'processing', duplicate: true, folder: existing.folder,
+          ...(existing.format ? { format: existing.format } : {}),
+          snippet: heroSnippet(src, existing.width, existing.height, existing.alt.de || alt, existing.format),
+        });
+      }
+
+      const exif = parseExif(probe.exif);
+      // Persist the immutable profile before the original becomes recoverable
+      // from disk. A crash after this point leaves a deterministic processing
+      // row for boot recovery instead of an origin-only orphan that has lost the
+      // setting snapshot.
+      // Recovering identical bytes keeps a curated folder, just like ready duplicates.
+      const stored = await cfg.media.upsert({
+        key: versionedKey, folder: existing?.folder || folder, title,
+        alt: { de: alt, en: alt },
+        width: probe.width, height: probe.height, origBytes: buf.length,
+        status: 'processing', exif, uploadedBy: req.authUser?.id ?? null,
+        ...(format ? { format } : {}),
+        encoding,
+      });
+      try {
+        await storeOriginal(versionedKey, buf, probe.ext, { storageDir, ...runtime });
+      } catch (e) {
+        if (existing) await cfg.media.setStatus(versionedKey, 'failed', 'write_failed').catch(() => {});
+        else await cfg.media.remove(versionedKey).catch(() => {});
+        console.error(`could not store the original for ${versionedKey}:`, e);
+        return reply.code(500).send({ error: 'internal server error' });
+      }
+      // @ai-warning A refused enqueue MUST NOT leave an unqueued processing row
+      // (#348). Restore an existing failure; keep a new photo as failed/queue_full
+      // with its original so Retry, Delete and re-upload remain available.
+      try {
+        cfg.encodeQueue.enqueue(versionedKey);
+      } catch (e) {
+        if (!(e instanceof BacklogFullError)) throw e;
+        await releaseUnqueued(
+          versionedKey,
+          existing ? existing.status : 'failed',
+          existing ? existing.error ?? undefined : 'queue_full',
+        );
+        return reply.code(429).send({ error: e.message });
       }
       return reply.send({
-        src, key: versionedKey, width: existing.width, height: existing.height,
-        status: existing.status, duplicate: true, folder: stored.folder,
-        ...(existing.format ? { format: existing.format } : {}),
-        snippet: heroSnippet(src, existing.width, existing.height, existing.alt.de || alt, existing.format),
+        src, key: versionedKey, width: probe.width, height: probe.height,
+        status: 'processing', folder: stored.folder,
+        ...(format ? { format } : {}),
+        snippet: heroSnippet(src, probe.width, probe.height, alt, format),
       });
-    }
-    if (existing && existing.status === 'processing') {
-      // Do NOT re-enqueue: the job is already in the queue.
-      return reply.send({
-        src, key: versionedKey, width: existing.width, height: existing.height,
-        status: 'processing', duplicate: true, folder: existing.folder,
-        ...(existing.format ? { format: existing.format } : {}),
-        snippet: heroSnippet(src, existing.width, existing.height, alt, existing.format),
-      });
-    }
-
-    const exif = parseExif(probe.exif);
-    // Persist the immutable profile before the original becomes recoverable
-    // from disk. A crash after this point leaves a deterministic processing
-    // row for boot recovery instead of an origin-only orphan that has lost the
-    // setting snapshot.
-    await cfg.media.upsert({
-      key: versionedKey, folder, title,
-      alt: { de: alt, en: alt },
-      width: probe.width, height: probe.height, origBytes: buf.length,
-      status: 'processing', exif, uploadedBy: req.authUser?.id ?? null,
-      ...(format ? { format } : {}),
-      encoding,
-    });
-    try {
-      await storeOriginal(versionedKey, buf, probe.ext, { storageDir, ...runtime });
-    } catch (e) {
-      if (existing) await cfg.media.setStatus(versionedKey, 'failed', 'write_failed').catch(() => {});
-      else await cfg.media.remove(versionedKey).catch(() => {});
-      console.error(`could not store the original for ${versionedKey}:`, e);
-      return reply.code(500).send({ error: 'internal server error' });
-    }
-    try {
-      cfg.encodeQueue.enqueue(versionedKey);
-    } catch (e) {
-      if (e instanceof BacklogFullError) return reply.code(429).send({ error: e.message });
-      throw e;
-    }
-    return reply.send({
-      src, key: versionedKey, width: probe.width, height: probe.height,
-      status: 'processing',
-      ...(format ? { format } : {}),
-      snippet: heroSnippet(src, probe.width, probe.height, alt, format),
     });
   });
 
@@ -706,26 +764,32 @@ export function buildServer(cfg: ServerConfig): AppServer {
   // The flip has to come FIRST despite that, not after a successful enqueue:
   // the queue can start the job immediately, and a fast encode would then
   // write `ready` before our write landed, leaving the row stuck at
-  // `processing` after a perfectly successful encode.
+  // `processing` after a perfectly successful encode. The rollback itself goes
+  // through releaseUnqueued, so it can never undo a concurrent `ready`.
   app.post('/media/retry', { preHandler: requireAuth }, async (req, reply) => {
     const b = (req.body ?? {}) as { keys?: unknown };
     const keys = Array.isArray(b.keys) ? b.keys.map(String).slice(0, MAX_BULK_KEYS) : [];
     let queued = 0;
     for (const key of keys) {
-      const item = await cfg.media.get(key);
-      // `missing` is retryable too: media-sync marks a row missing when its
-      // files vanish, and the retained original may well still be there.
-      if (!item || item.status === 'ready' || item.status === 'processing') continue;
-      await cfg.media.setStatus(key, 'processing');
       try {
-        cfg.encodeQueue.enqueue(key);
+        const admitted = await cfg.encodeQueue.withAdmission(key, async () => {
+          const item = await cfg.media.get(key);
+          // `missing` is retryable too: its retained original may still exist.
+          if (!item || item.status === 'ready' || item.status === 'processing') return false;
+          await cfg.media.setStatus(key, 'processing');
+          try {
+            cfg.encodeQueue.enqueue(key);
+          } catch (e) {
+            await releaseUnqueued(key, item.status, item.error ?? undefined);
+            throw e;
+          }
+          return true;
+        });
+        if (admitted) queued++;
       } catch (e) {
-        await cfg.media.setStatus(key, item.status, item.error ?? undefined)
-          .catch((err) => console.error(`could not restore status for ${key}:`, err));
         if (e instanceof BacklogFullError) return reply.code(429).send({ error: e.message, queued });
         throw e;
       }
-      queued++;
     }
     return reply.send({ ok: true, queued });
   });
@@ -948,9 +1012,46 @@ export function buildServer(cfg: ServerConfig): AppServer {
     }
   });
 
+  app.get('/language', { preHandler: requireAuth }, async (_req, reply) => reply.send(await language.get()));
+  app.put('/language', { preHandler: requireAdmin }, async (req, reply) => {
+    try {
+      if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)
+        || Object.keys(req.body).some((key) => key !== 'primary' && key !== 'locales')) throw new LanguageError('Choose a supported language mode.');
+      const next = validateLanguage(req.body);
+      let changed = false;
+      const saved = await language.update(next, async (candidate, client) => {
+        changed = true;
+        // About is the only current page. #288 extends this same locked preflight
+        // to its published registry, rather than querying a separate connection.
+        const about = client
+          ? (await client.query<{ locale: LanguageLocale; body_markdown: string; images: Record<string, ImageDims> }>(
+            `SELECT locale,body_markdown,images FROM pages WHERE key='about' FOR UPDATE`)).rows
+          : (await cfg.pages.keys()).includes('about')
+            ? await cfg.pages.get('about').then((pair) => (['de', 'en'] as const).map((locale) => ({ locale, body_markdown: pair[locale].bodyMarkdown, images: pair[locale].images })))
+            : [];
+        const blockers: LanguageBlocker[] = [];
+        for (const row of about) {
+          if (!candidate.locales.includes(row.locale)) continue;
+          const reason = await pageImageFailure(row.body_markdown, row.images, candidate, row.locale, client);
+          if (reason) blockers.push({ key: 'about', locale: row.locale, field: 'images', reason });
+        }
+        if (blockers.length) throw new LanguageError('Prepare the page images before activating this language.', 'language_pages_incomplete', blockers);
+      });
+      if (!changed) return reply.send(saved);
+      const build = projectBuildReport(await cfg.builder.build('rebuild'));
+      return reply.send({ ...saved, build });
+    } catch (error) {
+      if (error instanceof LanguageError) return reply.code(error.code === 'invalid_language' ? 400 : 409).send({
+        code: error.code, error: error.message, ...(error.blockers ? { blockers: error.blockers } : {}),
+        ...(error.owner ? { owner: error.owner } : {}),
+      });
+      throw error;
+    }
+  });
+  registerIdentityAssetRoutes(app, { store: cfg.identityStore, requireAdmin, workLock: cfg.workLock, storageDir, isWritable });
   app.get('/settings/identity', { preHandler: requireAdmin }, async (_req, reply) => {
     if (!cfg.identityStore) return reply.code(503).send({ error: 'Site identity unavailable.' });
-    return { ...cfg.identityStore.get(), locales: ['de', 'en'] };
+    return { ...cfg.identityStore.get(), assets: cfg.identityStore.getAssetState(), locales: (await language.get()).locales };
   });
   app.put('/settings/identity', { preHandler: requireAdmin }, async (req, reply) => {
     if (!cfg.identityStore) return reply.code(503).send({ error: 'Site identity unavailable.' });
@@ -959,6 +1060,8 @@ export function buildServer(cfg: ServerConfig): AppServer {
       const body = req.body as Record<string, unknown>;
       if (Object.keys(body).some((key) => key !== 'revision' && key !== 'identity')) throw new IdentityError('identity');
       if (typeof body.revision !== 'number' || !Number.isInteger(body.revision) || body.revision < 1) throw new IdentityError('revision');
+      if (!body.identity || typeof body.identity !== 'object' || Array.isArray(body.identity)) throw new IdentityError('identity');
+      validateCanonicalRoles((body.identity as Record<string, unknown>).canonicalOrigin, cfg);
       const saved = await cfg.identityStore.update(body.revision, body.identity);
       return { revision: saved.revision, savedAt: saved.savedAt, takesEffect: 'next_build' };
     } catch (error) {
@@ -1337,12 +1440,10 @@ export function buildServer(cfg: ServerConfig): AppServer {
   app.delete('/users/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const id = (req.params as { id: string }).id;
     if (req.authUser && req.authUser.id === id) return reply.code(409).send({ error: 'you cannot delete your own account' });
-    const target = await users.findById(id);
-    if (!target) return reply.code(404).send({ error: 'user not found' });
-    if (target.isAdmin && (await users.countAdmins()) <= 1) {
-      return reply.code(409).send({ error: 'cannot remove the last admin' });
-    }
-    await users.remove(id);
+    const outcome = await users.remove(id);
+    if (outcome === 'not_found') return reply.code(404).send({ error: 'user not found' });
+    if (outcome === 'last_admin') return reply.code(409).send({ error: 'cannot remove the last admin' });
+    await sessions.destroyAllForUser(id);
     return reply.send({ ok: true });
   });
 
@@ -1383,7 +1484,10 @@ export function buildServer(cfg: ServerConfig): AppServer {
   });
 
   const { posts } = cfg;
-  const geocode = createGeocoder({ endpoint: () => cfg.settings.get().geocodingSearchUrl });
+  const geocode = createGeocoder({
+    endpoint: () => cfg.settings.get().geocodingSearchUrl,
+    canonicalOrigin: () => cfg.identityStore?.get().identity.canonicalOrigin ?? null,
+  });
   app.post('/geocode', { preHandler: requireAuth, bodyLimit: 2048 }, async (req, reply) => {
     reply.header('Cache-Control', 'no-store');
     const query = req.body && typeof req.body === 'object' && 'query' in req.body ? req.body.query : undefined;
@@ -1393,6 +1497,25 @@ export function buildServer(cfg: ServerConfig): AppServer {
       if (!(error instanceof GeocodingError)) throw error;
       if (error.status === 429) reply.header('Retry-After', '2');
       return reply.code(error.status).send({ code: error.code });
+    }
+  });
+
+  // Unsaved source analysis only: inherit the same JSON body ceiling as /posts.
+  app.post('/gallery/analyze', {
+    onRequest: async (_req, reply) => { reply.header('Cache-Control', 'no-store'); },
+    preHandler: requireAuth,
+  }, async (req, reply) => {
+    const body = req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body)
+      || !('bodyMarkdown' in body) || typeof body.bodyMarkdown !== 'string') {
+      return reply.code(400).send({ error: 'bodyMarkdown must be a string' });
+    }
+    try {
+      return reply.send(await analyzeGallerySource(body.bodyMarkdown));
+    } catch {
+      // Parser diagnostics may contain source. Keep them out of the global
+      // error logger while preserving its sanitized unexpected-error response.
+      throw new Error('Gallery source analysis failed');
     }
   });
 
@@ -1424,12 +1547,18 @@ export function buildServer(cfg: ServerConfig): AppServer {
         .filter(([key]) => key.startsWith('editor.chrome.'))
         .map(([key, value]) => [key.slice('editor.chrome.'.length), value])) },
     ]));
+    const buildCopy = Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [
+      locale, Object.fromEntries(Object.entries(strings)
+        .filter(([key]) => key.startsWith('admin.build.'))
+        .map(([key, value]) => [key.slice('admin.build.'.length), value])),
+    ]));
     const { siteName, studioDescriptor, canonicalOrigin } = cfg.identityStore?.get().identity ?? neutralIdentity();
     reply.header('Cache-Control', 'no-store');
     return reply.type('application/javascript').send(
       `window.EditorImageCopy = ${JSON.stringify(copy)};\n` +
       `window.EditorGalleryCopy = ${JSON.stringify(galleryCopy)};\n` +
       `window.EditorCopy = ${JSON.stringify(editorCopy)};\n` +
+      `window.BuildCopy = ${JSON.stringify(buildCopy)};\n` +
       `window.SiteIdentity = ${JSON.stringify({ siteName, studioDescriptor, canonicalOrigin })};\n` +
       `window.EditorGalleryImageOrigin = ${JSON.stringify(new URL(cfg.baseUrl).origin)};`,
     );
@@ -1453,14 +1582,17 @@ export function buildServer(cfg: ServerConfig): AppServer {
   }
 
   /** Render once per locale; metadata alone is never a publication reference. */
-  async function publicationImages(pair: StoredPostPair): Promise<{ foreign: string[]; keys: string[] }> {
+  async function publicationBody(pair: StoredPostPair, mode: LanguageConfig): Promise<{ foreign: string[]; keys: string[] }> {
     const foreign = new Set<string>();
     const keys = new Set<string>();
-    for (const locale of ['de', 'en'] as const) {
+    for (const locale of mode.locales.filter((locale) => !pair[locale].omitted)) {
       const l = pair[locale];
-      const body = await analyzeBodyImages(l.bodyMarkdown, l.images, imageBase);
+      const body = await analyzeBodyContent(l.bodyMarkdown, l.images, imageBase, locale);
+      if (body.hasH1) {
+        throw new PostError(`${locale}: body must not contain an H1; the story hero provides the page H1`);
+      }
       for (const src of body.foreign) foreign.add(src);
-      const storyUrl = new URL(`${locale === 'en' ? '/en' : ''}/${l.slug}/`, imageBase).href;
+      const storyUrl = new URL(publicPath(mode, locale, 'story', l.slug), imageBase).href;
       for (const src of body.sources) {
         const key = bodyImageKey(src, imageBase, storyUrl);
         if (key !== null) keys.add(key);
@@ -1489,16 +1621,16 @@ export function buildServer(cfg: ServerConfig): AppServer {
    * URLs with NO media row do not block: WordPress-imported and legacy files
    * predate the library and exist on disk perfectly well.
    */
-  async function notReadyPhotos(pair: StoredPostPair, keys: string[]): Promise<string[]> {
+  async function notReadyPhotos(pair: StoredPostPair, keys: string[], mode: LanguageConfig, client?: DbClient): Promise<string[]> {
     if (keys.length === 0) return [];
-    const notReady = await cfg.media.notReadyKeys(keys);
+    const notReady = await cfg.media.notReadyKeys(keys, client);
     // Title images are new library selections, not pre-library legacy heroes.
     // Unknown keys must not slip through notReadyKeys' legacy exception.
-    for (const locale of ['de', 'en'] as const) {
+    for (const locale of mode.locales.filter((locale) => !pair[locale].omitted)) {
       const image = pair[locale].titleImage;
       if (!image) continue;
       const key = srcToKey(image.src, imageBase);
-      if (key !== null && !(await cfg.media.get(key))) notReady.add(key);
+      if (key !== null && !(await cfg.media.get(key, client))) notReady.add(key);
     }
     return [...notReady];
   }
@@ -1507,6 +1639,39 @@ export function buildServer(cfg: ServerConfig): AppServer {
   const FOREIGN_EXAMPLES = 5;
   function foreignImagesMessage(n: number): string {
     return `${n} image(s) in the body or title banner are not hosted here — replace them with library photos or re-host imported body images, then publish again`;
+  }
+
+  async function pageImageFailure(body: string, images: Record<string, ImageDims>, mode: LanguageConfig, locale: LanguageLocale, client?: DbClient): Promise<string | null> {
+    const analyzed = await analyzeBodyContent(body, images, imageBase, locale);
+    if (analyzed.foreign.length) return foreignImagesMessage(analyzed.foreign.length);
+    const url = new URL(publicPath(mode, locale, 'about'), imageBase).href;
+    const keys = analyzed.sources.map((src) => bodyImageKey(src, imageBase, url)).filter((key): key is string => key !== null);
+    const notReady = await cfg.media.notReadyKeys(keys, client);
+    return notReady.size ? `${notReady.size} photo(s) are not ready to publish.` : null;
+  }
+  class PublicationImageError extends PostError {
+    constructor(readonly foreign: string[], readonly notReady: string[]) {
+      super(foreign.length ? foreignImagesMessage(foreign.length)
+        : `${notReady.length} photo(s) are still processing or failed to encode — wait for them to finish, then publish again`,
+      foreign.length ? 'foreign_images' : 'images_not_ready');
+    }
+  }
+  /**
+   * Body analysis renders once per locale on the reviewed pair, before any
+   * mutation (#375). Under the language lock only media readiness is re-read:
+   * the publish tokens already prove the locked pair is the analyzed one.
+   */
+  function publicationReadiness(keys: string[]) {
+    return async (pair: StoredPostPair, mode: LanguageConfig, client?: DbClient): Promise<void> => {
+      const notReady = await notReadyPhotos(pair, keys, mode, client);
+      if (notReady.length) throw new PublicationImageError([], notReady);
+    };
+  }
+  function foreignImagesReply(reply: FastifyReply, foreign: string[]) {
+    return reply.code(409).send({
+      error: foreignImagesMessage(foreign.length), code: 'foreign_images',
+      foreignImages: foreign.slice(0, FOREIGN_EXAMPLES), foreignImageCount: foreign.length,
+    });
   }
 
   app.get('/posts', { preHandler: requireAuth }, async () => posts.list());
@@ -1528,7 +1693,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
   app.get('/posts/:tk/alt-audit', { preHandler: requireAuth }, async (req, reply) => {
     const pair = await posts.get((req.params as { tk: string }).tk);
     if (!pair) return reply.code(404).send({ error: 'post not found' });
-    const audit = auditAltText(pair, await loadGalleryMetadata(pair, cfg.media, imageBase));
+    const audit = await auditAltText(pair, await loadGalleryMetadata(pair, cfg.media, imageBase), (await language.get()).locales);
     return reply.send({ count: audit.count, images: audit.images });
   });
 
@@ -1541,8 +1706,9 @@ export function buildServer(cfg: ServerConfig): AppServer {
   // build will; a media-store failure is a sanitized 500, never stale text.
   app.get('/posts/:tk/preview', { preHandler: requireAuth }, async (req, reply) => {
     const q = (req.query ?? {}) as { locale?: unknown };
-    const locale = q.locale === undefined ? 'de' : String(q.locale);
-    if (locale !== 'de' && locale !== 'en') {
+    const mode = await language.get();
+    const locale = q.locale === undefined ? mode.primary : String(q.locale);
+    if ((locale !== 'de' && locale !== 'en') || !mode.locales.includes(locale)) {
       return reply.code(400).send({ error: "locale must be 'de' or 'en'" });
     }
     const pair = await posts.get((req.params as { tk: string }).tk);
@@ -1561,7 +1727,8 @@ export function buildServer(cfg: ServerConfig): AppServer {
       // non-string title etc. are 400s naming the field, never a TypeError or
       // a Postgres 22P02/23502 surfacing as a sanitized 500.
       const raw = req.body ?? {};
-      validateDraft(raw);
+      const mode = await language.get();
+      validateDraft(raw, mode);
       // `updatedAt` is the optimistic-concurrency echo (the value the editor
       // loaded), not part of the pair itself — strip it before storing. It is
       // optional: callers without it (new posts, WP importer) skip the check.
@@ -1587,8 +1754,9 @@ export function buildServer(cfg: ServerConfig): AppServer {
       // never implicit: an existing non-empty slug only changes when the client
       // says it meant to. Filling an unset ('') slug needs no consent; published
       // posts are still refused outright by the store (slug_locked).
-      if (existing && existing.status !== 'published' && !confirmSlugChange) {
-        for (const locale of ['de', 'en'] as const) {
+      if (existing && !confirmSlugChange) {
+        for (const locale of mode.locales) {
+          if (existing[locale].publishedAt) continue;
           const from = existing[locale].slug;
           const to = pair[locale].slug ?? '';
           if (from !== '' && to !== from) {
@@ -1599,15 +1767,15 @@ export function buildServer(cfg: ServerConfig): AppServer {
           }
         }
       }
-      return reply.send(await posts.upsertDraft(pair, baseUpdatedAt ?? existing?.updatedAt));
+      return reply.send(await posts.upsertDraft(pair, baseUpdatedAt ?? existing?.updatedAt, mode.updatedAt));
     } catch (e) {
       if (e instanceof PostError) {
         if (e.code === 'storage_read_only') return readOnly(reply);
         // `code` lets the editor tell a stale-tab 409 ('conflict' → offer a
         // reload) apart from duplicate_slug/slug_locked 409s.
         const status = e.code === 'not_found' ? 404
-          : e.code === 'duplicate_slug' || e.code === 'slug_locked' || e.code === 'conflict' ? 409 : 400;
-        return reply.code(status).send({ error: e.message, ...(e.code ? { code: e.code } : {}) });
+          : ['duplicate_slug', 'slug_locked', 'conflict', 'locale_published', 'reserved_slug'].includes(e.code ?? '') ? 409 : 400;
+        return reply.code(status).send({ error: e.message, ...(e.code ? { code: e.code } : {}), ...(e.owner ? { owner: e.owner } : {}) });
       }
       throw e;
     }
@@ -1657,8 +1825,12 @@ export function buildServer(cfg: ServerConfig): AppServer {
   app.post<{ Params: { tk: string } }>('/posts/:tk/publish', { preHandler: requireAdmin, bodyLimit: 4096 }, async (req, reply) => {
     const body = req.body;
     if (!body || typeof body !== 'object' || Array.isArray(body)
-      || Object.keys(body).length !== 2
-      || !('baseUpdatedAt' in body) || !('baseRouteVersion' in body)
+      || Object.keys(body).length !== 3
+      || !('baseUpdatedAt' in body) || !('baseRouteVersion' in body) || !('baseLanguageUpdatedAt' in body)
+      || typeof body.baseLanguageUpdatedAt !== 'string'
+      || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(body.baseLanguageUpdatedAt)
+      || !Number.isFinite(Date.parse(body.baseLanguageUpdatedAt))
+      || new Date(body.baseLanguageUpdatedAt).toISOString() !== body.baseLanguageUpdatedAt
       || typeof body.baseUpdatedAt !== 'string'
       || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(body.baseUpdatedAt)
       || !Number.isFinite(Date.parse(body.baseUpdatedAt))
@@ -1667,42 +1839,38 @@ export function buildServer(cfg: ServerConfig): AppServer {
         && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.baseRouteVersion))) {
       return reply.code(400).send({ error: 'invalid publish tokens', code: 'invalid_publish_tokens' });
     }
-    const tokens: PublishTokens = { baseUpdatedAt: new Date(body.baseUpdatedAt), baseRouteVersion: body.baseRouteVersion };
+    const tokens: PublishTokens = { baseUpdatedAt: new Date(body.baseUpdatedAt), baseRouteVersion: body.baseRouteVersion, baseLanguageUpdatedAt: new Date(body.baseLanguageUpdatedAt) };
     const tk = req.params.tk;
     const state = await posts.getPublishState(tk);
     if (!state) return reply.code(404).send({ error: 'post not found' });
     const { pair } = state;
-    try { assertPublishTokens(state, tokens); validateForPublish(pair); } catch (e) {
+    let analysis: { foreign: string[]; keys: string[] };
+    try {
+      assertPublishTokens(state, tokens);
+      validateForPublish(pair, state.language);
+      analysis = await publicationBody(pair, state.language);
+    } catch (e) {
       if (e instanceof PostError) return reply.code(e.code === 'conflict' ? 409 : 400).send({ error: e.message, code: e.code });
       throw e;
     }
-    const { foreign, keys: imageKeys } = await publicationImages(pair);
-    if (foreign.length > 0) {
-      return reply.code(409).send({
-        error: foreignImagesMessage(foreign.length),
-        foreignImages: foreign.slice(0, FOREIGN_EXAMPLES),
-        foreignImageCount: foreign.length,
-      });
-    }
-    const notReady = await notReadyPhotos(pair, imageKeys);
-    if (notReady.length > 0) {
-      return reply.code(409).send({
-        error: `${notReady.length} photo(s) are still processing or failed to encode — wait for them to finish, then publish again`,
-        notReady,
-      });
-    }
-    // Read BEFORE publishing: the audit below must judge the library text the
-    // live page will show, and a failed read must refuse here rather than turn
-    // an already-published post into a 500 (publishing changes no media row).
+    if (analysis.foreign.length > 0) return foreignImagesReply(reply, analysis.foreign);
+    // Analyze BEFORE publishing: the audit judges the library text the live
+    // page will show. A failed read or source analysis must refuse before any
+    // mutation; successfully computed warnings remain advisory.
     const galleryMetadata = await loadGalleryMetadata(pair, cfg.media, imageBase);
+    const audit = await auditAltText(pair, galleryMetadata, state.language.locales);
     let committed: { updatedAt: Date };
-    try { committed = await posts.publish(tk, tokens); }
+    try { committed = await posts.publish(tk, tokens, publicationReadiness(analysis.keys)); }
     catch (e) {
+      if (e instanceof PublicationImageError) return reply.code(409).send({
+        error: e.message, code: e.code,
+        ...(e.foreign.length ? { foreignImages: e.foreign.slice(0, FOREIGN_EXAMPLES), foreignImageCount: e.foreign.length } : { notReady: e.notReady }),
+      });
       if (e instanceof GpxError) return reply.code(e.statusCode).send({ error: e.code, code: e.code, ...(e.counts ? { counts: e.counts } : {}) });
       if (e instanceof PostError) return reply.code(e.code === 'storage_read_only' ? 503 : e.code === 'not_found' ? 404 : 409).send({ error: e.message, code: e.code });
       throw e;
     }
-    const build = await cfg.builder.build();
+    const build = projectBuildReport(await cfg.builder.build('publish'));
     // Best-effort: a failed MDX backup must not undo a publish that is already
     // live, but it must not be silent either (#145) — a bare-dev BACKUP_DIR
     // pointing at /data used to fail every publish's export without a trace.
@@ -1714,7 +1882,6 @@ export function buildServer(cfg: ServerConfig): AppServer {
     // altAudit rides along so the editor can name the photos that went live
     // undescribed (src/alt-audit.ts) without a second round trip. It is
     // reported AFTER the publish succeeded, on purpose: it never gates one.
-    const audit = auditAltText(pair, galleryMetadata);
     return reply.send({
       published: true,
       build,
@@ -1753,11 +1920,15 @@ export function buildServer(cfg: ServerConfig): AppServer {
   type BulkAction = (typeof BULK_ACTIONS)[number];
 
   app.post('/posts/bulk', { preHandler: requireAdmin }, async (req, reply) => {
-    const b = (req.body ?? {}) as { action?: unknown; keys?: unknown };
+    const b = (req.body ?? {}) as { action?: unknown; keys?: unknown; baseLanguageUpdatedAt?: unknown };
     const action = String(b.action ?? '') as BulkAction;
     if (!BULK_ACTIONS.includes(action)) {
       return reply.code(400).send({ error: `action must be one of ${BULK_ACTIONS.join(', ')}` });
     }
+    if (action === 'publish' && (typeof b.baseLanguageUpdatedAt !== 'string'
+      || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(b.baseLanguageUpdatedAt)
+      || !Number.isFinite(Date.parse(b.baseLanguageUpdatedAt))
+      || new Date(b.baseLanguageUpdatedAt).toISOString() !== b.baseLanguageUpdatedAt)) return reply.code(400).send({ code: 'invalid_publish_tokens', error: 'invalid language token' });
     if (!Array.isArray(b.keys)) return reply.code(400).send({ error: 'keys must be an array' });
     if (b.keys.length > MAX_BULK_KEYS) {
       return reply.code(400).send({ error: `at most ${MAX_BULK_KEYS} posts per request` });
@@ -1777,14 +1948,11 @@ export function buildServer(cfg: ServerConfig): AppServer {
         const pair = action === 'publish' ? state?.pair : await posts.get(tk);
         if (!pair) throw new PostError('post not found');
         if (action === 'publish') {
-          validateForPublish(pair);
-          const { foreign, keys: imageKeys } = await publicationImages(pair);
-          if (foreign.length > 0) throw new PostError(foreignImagesMessage(foreign.length));
-          const notReady = await notReadyPhotos(pair, imageKeys);
-          if (notReady.length > 0) {
-            throw new PostError(`${notReady.length} photo(s) are still processing or failed to encode`);
-          }
-          await posts.publish(tk, { baseUpdatedAt: pair.updatedAt, baseRouteVersion: state!.routeVersion });
+          validateForPublish(pair, state!.language);
+          const analysis = await publicationBody(pair, state!.language);
+          if (analysis.foreign.length > 0) throw new PostError(foreignImagesMessage(analysis.foreign.length));
+          await posts.publish(tk, { baseUpdatedAt: pair.updatedAt, baseRouteVersion: state!.routeVersion,
+            baseLanguageUpdatedAt: new Date(String(b.baseLanguageUpdatedAt)) }, publicationReadiness(analysis.keys));
           liveChanged = true;
           await posts.getPublishedTrack(tk)
             .then((track) => exportPost(pair, cfg.backupDir, track))
@@ -1814,7 +1982,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
       }
     }
     const succeeded = results.filter((r) => r.ok).length;
-    const build = liveChanged ? await cfg.builder.build() : undefined;
+    const build = liveChanged ? projectBuildReport(await cfg.builder.build('bulk')) : undefined;
     return reply.send({ action, succeeded, failed: results.length - succeeded, results, ...(build ? { build } : {}), ...(cleanupPending ? { cleanupPending: true } : {}) });
   });
 
@@ -1825,8 +1993,9 @@ export function buildServer(cfg: ServerConfig): AppServer {
     const pair = await posts.get(tk);
     if (!pair) return reply.code(404).send({ error: 'post not found' });
     if (pair.status !== 'published') return reply.code(409).send({ error: 'post is not published' });
+    let committed: { previousUpdatedAt: Date; updatedAt: Date };
     try {
-      await posts.unpublish(tk);
+      committed = await posts.unpublish(tk);
     } catch (e) {
       if (e instanceof PostError) {
         if (e.code === 'storage_read_only') return readOnly(reply);
@@ -1834,8 +2003,12 @@ export function buildServer(cfg: ServerConfig): AppServer {
       }
       throw e;
     }
-    const build = await cfg.builder.build();
-    return reply.send({ unpublished: true, build });
+    const build = projectBuildReport(await cfg.builder.build('unpublish'));
+    // Both tokens belong to this transaction, not a later writer during the build.
+    return reply.send({
+      unpublished: true, build,
+      previousUpdatedAt: committed.previousUpdatedAt, updatedAt: committed.updatedAt,
+    });
   });
 
   // Hard delete (both locale rows), freeing the slugs for reuse. MDX backups in
@@ -1859,7 +2032,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     }
     const cleanupPending = await cleanupDeletedRoutes();
     if (wasPublished) {
-      const build = await cfg.builder.build();
+      const build = projectBuildReport(await cfg.builder.build('delete'));
       return reply.send({ deleted: true, build, ...(cleanupPending ? { cleanupPending: true } : {}) });
     }
     return reply.send({ deleted: true, ...(cleanupPending ? { cleanupPending: true } : {}) });
@@ -1905,24 +2078,43 @@ export function buildServer(cfg: ServerConfig): AppServer {
   // The limiter maps are the comment route's own, never `loginLimiter`.
   {
     const fresh = commentLimiters();
+    const imageOrigin = new URL(cfg.baseUrl).origin;
+    const imageAuthority = new URL(imageOrigin).host;
+    // Preserve alternate-scheme exclusions, including an explicitly configured
+    // default port, without excluding unrelated ports on the same hostname.
+    const servingImageAuthorities = ['http', 'https'].map((protocol) => {
+      const origin = commentAuthorityOrigin(protocol, cfg.imgHost);
+      return origin === null ? null : new URL(origin).host;
+    });
     registerPublicComments(app, {
       comments: cfg.comments,
       posts: cfg.posts,
-      allowedOrigin: cfg.commentsOrigin ?? new URL(cfg.baseUrl).origin,
+      allowedOrigin: (req) => {
+        if (cfg.commentsOrigin !== undefined) return commentOrigin(cfg.commentsOrigin);
+        const canonical = cfg.identityStore?.get().identity.canonicalOrigin;
+        if (canonical !== undefined && canonical !== null) {
+          try { return validateCanonicalRoles(canonical, cfg); }
+          catch (error) {
+            if (error instanceof IdentityError) return null;
+            throw error;
+          }
+        }
+        const origin = commentAuthorityOrigin(req.protocol, req.headers.host);
+        if (origin === null) return null;
+        if (servingImageAuthorities.some((authority) => authority === null)) return null;
+        // Normalize every authority under the actual request protocol. A default
+        // port in either image setting must not evade the image-host exclusion.
+        const servesImages = servingImageAuthorities.some((authority) =>
+          commentAuthorityOrigin(req.protocol, authority) === origin);
+        if (commentAuthorityOrigin(req.protocol, imageAuthority) === origin || servesImages) {
+          return imgHostServesBlog && servesImages && origin === imageOrigin ? origin : null;
+        }
+        return origin;
+      },
       // Falls back to the persisted global switch (default false = fail closed).
       commentsEnabled: cfg.commentsEnabled ?? (() => cfg.settings.get().commentsEnabled === true),
       ipLimiter: cfg.commentIpLimiter ?? fresh.ip,
       globalLimiter: cfg.commentGlobalLimiter ?? fresh.global,
-      // Author replies (#205) are `approved` + `is_author`; the public store's
-      // shape has no flag, so the id set comes from the admin store's approved
-      // list — a read of approved rows only, never pending ones.
-      ...(cfg.commentsAdmin ? {
-        isAuthorIds: async (tk: string) => new Set(
-          (await cfg.commentsAdmin!.list('approved'))
-            .filter((c) => c.translationKey === tk && c.isAuthor)
-            .map((c) => c.id),
-        ),
-      } : {}),
     });
   }
 
@@ -1941,10 +2133,17 @@ export function buildServer(cfg: ServerConfig): AppServer {
   const noStore = (reply: FastifyReply) => { void reply.code(503).send({ error: 'comments are not available' }); };
 
   app.get('/moderation/comments', { preHandler: requireAdmin }, async (req, reply) => {
-    const status = (req.query as { status?: string }).status ?? 'pending';
+    reply.header('cache-control', 'no-store');
+    const query = req.query as { status?: unknown; offset?: unknown };
+    const status = query.status ?? 'pending';
     if (!isCommentStatus(status)) return reply.code(400).send({ error: 'status must be pending or approved' });
+    const rawOffset = query.offset ?? '0';
+    if (typeof rawOffset !== 'string' || !/^[0-9]+$/.test(rawOffset) || !isModerationOffset(Number(rawOffset))) {
+      return reply.code(400).send({ error: 'invalid pagination' });
+    }
     if (!commentsAdmin) return noStore(reply);
-    return reply.header('cache-control', 'no-store').send({ comments: await commentsAdmin.list(status) });
+    const page = await commentsAdmin.list(status, Number(rawOffset));
+    return reply.send({ ...page, comments: await withPublicLocaleMetadata(page.comments, posts) });
   });
 
   app.post('/moderation/comments/:id/status', { preHandler: requireAdmin }, async (req, reply) => {
@@ -1981,7 +2180,12 @@ export function buildServer(cfg: ServerConfig): AppServer {
   });
 
   // Replaces the old secret-gated POST /build on the builder container.
-  app.post('/rebuild', { preHandler: requireAdmin }, async () => cfg.builder.build());
+  app.post('/rebuild', { preHandler: requireAdmin }, async () => projectBuildReport(await cfg.builder.build('rebuild')));
+
+  app.get('/rebuild/status', { preHandler: requireAdmin }, async (_req, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    return reply.send(await cfg.builder.status());
+  });
 
   app.get('/pages/:key', { preHandler: requireAuth }, async (req, reply) => {
     const key = (req.params as { key: string }).key;
@@ -1991,7 +2195,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
   // Admin-only: writing a page rebuilds the public site (like publishing a post).
   app.put('/pages/:key', { preHandler: requireAdmin }, async (req, reply) => {
     const key = (req.params as { key: string }).key;
-    const b = (req.body ?? {}) as Partial<Record<'de' | 'en', Partial<PageContent>>> & { updatedAt?: unknown };
+    const b = (req.body ?? {}) as Partial<Record<'de' | 'en', Partial<PageContent>>> & { updatedAt?: unknown; prepareLocale?: unknown };
     const mkLocale = (loc: 'de' | 'en'): PageContent => {
       const src = b[loc] ?? {};
       return {
@@ -2005,7 +2209,9 @@ export function buildServer(cfg: ServerConfig): AppServer {
         images: (src.images ?? {}) as Record<string, ImageDims>,
       };
     };
-    const pair: PagePair = { key, de: mkLocale('de'), en: mkLocale('en') };
+    const pair: PageUpdate = { key, ...(b.de !== undefined ? { de: mkLocale('de') } : {}), ...(b.en !== undefined ? { en: mkLocale('en') } : {}) };
+    if (b.prepareLocale !== undefined && b.prepareLocale !== 'de' && b.prepareLocale !== 'en') return reply.code(400).send({ error: 'invalid preparation locale' });
+    if (b.prepareLocale !== undefined && !Object.hasOwn(b, 'updatedAt')) return reply.code(400).send({ error: 'Preparation requires the loaded updatedAt token.' });
     // `updatedAt` is the optimistic-concurrency echo (issue #141), same
     // contract as posts: optional, and only ever able to make a save fail.
     let baseUpdatedAt: Date | undefined;
@@ -2014,9 +2220,17 @@ export function buildServer(cfg: ServerConfig): AppServer {
       if (Number.isNaN(baseUpdatedAt.getTime())) return reply.code(400).send({ error: 'invalid updatedAt' });
     }
     try {
-      const saved = await cfg.pages.save(pair, baseUpdatedAt);
-      const build = await cfg.builder.build();
-      return reply.send({ saved, build });
+      const { galleryWarnings, ...saved } = await cfg.pages.save(pair, baseUpdatedAt, {
+        prepareLocale: b.prepareLocale,
+        validate: async (candidate, mode, client) => {
+          for (const locale of mode.locales) {
+            const reason = await pageImageFailure(candidate[locale].bodyMarkdown, candidate[locale].images, mode, locale, client);
+            if (reason) throw new PageError(reason, 'images_not_ready');
+          }
+        },
+      });
+      const build = projectBuildReport(await cfg.builder.build('page'));
+      return reply.send({ saved, build, galleryWarnings });
     } catch (e) {
       if (e instanceof PageError) {
         // A stale-tab 409 carries `code` so the page can offer a reload; a
@@ -2137,6 +2351,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     try {
       prepared = await (cfg.prepareImport ?? prepareImport)(xml, {
         postStore: cfg.posts, storageDir: cfg.storageDir, baseUrl: cfg.baseUrl,
+        language: await language.get(),
         delayMs: importDelayMs,
         retries: importRetries,
         encoding: { convertJpeg, webpQuality, avifQuality },
@@ -2169,9 +2384,9 @@ export function buildServer(cfg: ServerConfig): AppServer {
       if (e instanceof ImportInsufficientSpaceError) return reply.code(507).send({ error: e.message });
       throw e;
     }
-    // 400 only when the export yielded no groups at all. Every group lands in exactly
-    // one bucket (issue #100), so an all-published or all-rejected export is a job
-    // with an honest summary — a 400 cannot say WHICH groups were rejected and why.
+    // 400 only when there are no reportable units: Polylang groups plus individual
+    // untranslated DE/EN posts (#387). All-published or all-rejected exports are
+    // jobs with honest summaries — a generic 400 would hide each refusal's reason.
     if (prepared.groups === 0) {
       return reply.code(400).send({ error: 'no importable posts found in export' });
     }
@@ -2243,19 +2458,20 @@ export function buildServer(cfg: ServerConfig): AppServer {
     // before any 404/503 — see redirects.ts (issue #35). Static files always
     // win: this handler only runs after @fastify/static misses. Explicit
     // code+header instead of reply.redirect() (its signature changed in v5).
-    const target = legacyRedirect(req.raw.url ?? '');
-    if (target) return reply.code(301).header('location', target).send();
-    if (!cfg.builder.hasRelease()) {
-      return reply
-        .code(503)
-        .header('retry-after', '30')
-        .type('text/html')
-        .send('<!doctype html><meta charset="utf-8"><title>Building…</title><h1>Site is building</h1><p>The first build is in progress — try again in a moment.</p>');
-    }
-    return readFile(join(currentDir, '404.html'), 'utf8').then(
-      (html) => reply.code(404).type('text/html').send(html),
-      () => reply.code(404).send('Not found'),
-    );
+    return legacyRedirectForRelease(req.raw.url ?? '', currentDir).then((target) => {
+      if (target) return reply.code(301).header('location', target).send();
+      if (!cfg.builder.hasRelease()) {
+        return reply
+          .code(503)
+          .header('retry-after', '30')
+          .type('text/html')
+          .send('<!doctype html><meta charset="utf-8"><title>Building…</title><h1>Site is building</h1><p>The first build is in progress — try again in a moment.</p>');
+      }
+      return readFile(join(currentDir, '404.html'), 'utf8').then(
+        (html) => reply.code(404).type('text/html').send(html),
+        () => reply.code(404).send('Not found'),
+      );
+    });
   });
 
   return Object.assign(app, { quiesceMutations });

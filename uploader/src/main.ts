@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolveTrustPolicy, type TrustPolicy } from './trusted-proxy.js';
 import { mkdir } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { buildServer } from './server.js';
@@ -8,7 +10,7 @@ import { pgSessionStore } from './sessions.js';
 import { pgPostStore } from './posts.js';
 import { pgPageStore } from './pages.js';
 import { bootstrapRelease, createSiteBuilder } from './build.js';
-import { createDbBackup, createRouteManifestPinReader, isBackupDue, resolveBackupDir } from './backup.js';
+import { createDbBackup, createRouteManifestPinReader, isBackupDue, resolveBackupDir, dumpDatabase } from './backup.js';
 import { createImportRunner, pgImportJobStore } from './import-jobs.js';
 import { createShutdown } from './shutdown.js';
 import { makeDbCheck } from './health.js';
@@ -36,6 +38,15 @@ if (!databaseUrl) {
   process.exit(1);
 }
 
+let proxyPolicy: TrustPolicy;
+try {
+  proxyPolicy = resolveTrustPolicy(process.env.TRUSTED_PROXY, () => readFileSync('/proc/net/route', 'utf8'));
+} catch (error) {
+  console.error(error instanceof Error ? error.message : 'TRUSTED_PROXY configuration is invalid.');
+  process.exit(1);
+}
+console.info(`trusted proxy peers: ${proxyPolicy.describe}`);
+
 // Validate before connecting/migrating. Absence disables only optional remote AI.
 const encryptionKey = parseEncryptionKey(process.env.ENCRYPTION_KEY);
 if (encryptionKey === undefined) console.info('ENCRYPTION_KEY not configured in .env; encrypted remote AI credentials are unavailable.');
@@ -52,6 +63,21 @@ const settings = createSettingsStore({ path: settingsPath, defaults: defaultSett
 const pool = createPool(databaseUrl, owner.applicationName);
 pool.on('error', () => console.error('Application database connection unavailable.'));
 const bootEvidence = await captureBootEvidence(pool, owner.assertWritable);
+// A logical pre-migration recovery set precedes the first language schema write.
+// Fresh databases have no content to back up; partial boot migrations stay recoverable.
+const languageMigration = await pool.query<{ posts: string | null; language: string | null; omitted: boolean; constraint_present: boolean }>(`
+  SELECT to_regclass('posts')::text AS posts, to_regclass('site_language')::text AS language,
+    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='posts' AND column_name='omitted') AS omitted,
+    EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid=to_regclass('posts') AND conname='posts_omitted_unpublished') AS constraint_present
+`);
+const migration = languageMigration.rows[0]!;
+if (migration.posts && (!migration.language || !migration.omitted || !migration.constraint_present)) {
+  const migrationFiles = createGpxFiles({ storageDir, isWritable: owner.isWritable });
+  await dumpDatabase(pool, join(resolveBackupDir(), 'db'), new Date(), {
+    routeFiles: migrationFiles, isWritable: owner.isWritable, preLanguageMigration: true,
+  });
+  owner.assertWritable();
+}
 await initializeApplicationSchema(pool, owner.assertWritable);
 await initializeOnboarding(pool, { storageDir, settingsPath, backupDir, siteDir }, bootEvidence, owner.assertWritable);
 const identityStore = await pgSiteIdentityStore(pool);
@@ -82,7 +108,7 @@ const importJobs = createImportRunner({ store: pgImportJobStore(pool, runtime), 
 await importJobs.recover();
 owner.assertWritable();
 
-const baseUrl = process.env.PUBLIC_BASE_URL ?? 'https://img.simonswanderlust.com';
+const baseUrl = process.env.PUBLIC_BASE_URL ?? 'http://localhost:3000';
 let imgHost: string;
 try {
   imgHost = process.env.IMG_HOST ?? new URL(baseUrl).host;
@@ -102,9 +128,13 @@ const builder = createSiteBuilder({
   releasesRoot: siteDir,
   lock: workLock,
   pool,
+  originRoles: { baseUrl, imgHost },
   ...runtime,
   applicationName: owner.applicationName + ':build',
 });
+// Ownership is acquired above; only this owner may interpret a persisted run as interrupted.
+owner.assertWritable();
+await builder.initialize();
 const media = pgMediaStore(pool, { baseUrl });
 const encodeQueue = createEncodeQueue({ store: media, storageDir, lock: workLock, ...runtime });
 const reconciler = createReconciler({
@@ -148,6 +178,7 @@ const housekeepingTimer = setInterval(housekeeping, 3_600_000);
 housekeepingTimer.unref();
 
 const app = buildServer({
+  trustProxy: proxyPolicy.trust,
   storageDir,
   baseUrl,
   imgHost,
@@ -158,6 +189,7 @@ const app = buildServer({
   settings,
   identityStore,
   onboarding: pgOnboardingStore(pool, owner.isWritable),
+  language: posts.language,
   secrets,
   posts,
   pages,

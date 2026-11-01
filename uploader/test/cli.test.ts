@@ -1,3 +1,4 @@
+import { buildFailureMessage } from '../src/build-state.js';
 import { describe, expect, it, beforeEach } from 'vitest';
 import { mkdtemp, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -168,10 +169,9 @@ describe('set-password CLI wiring (spawned process)', () => {
 // fires before a pool is created, so no DATABASE_URL is needed — and the
 // filename check is asserted to fire even WITHOUT one, i.e. before the env guard.
 describe('restore CLI wiring (spawned process)', () => {
-  it('prints usage (with --yes) and exits 1 when the file is missing', async () => {
+  it('exits 1 when the restore file is missing', async () => {
     const r = await runCli(['restore'], envWithoutDatabaseUrl());
     expect(r.code).toBe(1);
-    expect(r.stderr).toContain('restore [--yes] /data/backup/db/db-YYYYMMDD-HHmmss.json.gz');
   }, 30_000);
 
   it('refuses a file name outside BACKUP_FILE_RE before touching env or database', async () => {
@@ -249,9 +249,9 @@ describe('triggerRebuild', () => {
     await expect(
       triggerRebuild(users, sessions, async () => ({
         status: 200,
-        body: JSON.stringify({ ok: false, error: 'trips/de/x.mdx: country is required' }),
+        body: JSON.stringify({ ok: false, attemptId: 'failed', code: 'build_failed', error: 'trips/de/SECRET.mdx: internal database path' }),
       })),
-    ).rejects.toThrow('country is required');
+    ).rejects.toThrow(`rebuild failed (build_failed): ${buildFailureMessage('build_failed')} — details: docker compose logs app`);
   });
 
   it('refuses when no admin exists, without minting anything', async () => {

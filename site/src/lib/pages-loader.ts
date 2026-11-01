@@ -1,7 +1,10 @@
 import type { Loader } from 'astro/loaders';
 import { loaderPool, withLoaderSnapshot } from './loader-pool.js';
-import { transformBodyImages, type ImageDims } from './body-images.js';
+import { ABOUT_BODY_SIZES, transformBodyImages, type ImageDims } from './body-images.js';
 import { imageOrigin, retargetImageOrigins } from './images.js';
+import { siteLanguage } from './site-language.js';
+import { assertLoaderLanguage } from './build-language.js';
+import { proseDescription } from './seo.js';
 
 interface PageRow {
   key: string; locale: 'de' | 'en'; title: string; body_markdown: string;
@@ -35,19 +38,26 @@ export function postgresPagesLoader(): Loader {
       // See postgres-loader.ts: the one origin a ```gallery fence may reference.
       const galleryOrigin = imageOrigin(process.env.PUBLIC_BASE_URL);
       const pool = loaderPool(url);
+      const language = siteLanguage();
       try {
         store.clear();
-        const { rows } = await withLoaderSnapshot(pool, (client) => client.query<PageRow>(
-          `SELECT key, locale, title, body_markdown, images FROM pages`,
-        ));
-        for (const row of rows) {
+        const { rows } = await withLoaderSnapshot(pool, async (client) => {
+          await assertLoaderLanguage(client, language);
+          return client.query<PageRow>('SELECT key, locale, title, body_markdown, images FROM pages');
+        });
+        const enabledRows = rows.filter((row) => language.locales.includes(row.locale));
+        for (const row of enabledRows) {
           const input = rowToPageEntry(row, galleryOrigin);
-          const data = await parseData({ id: input.id, data: input.data });
           const rendered = await renderMarkdown(input.body);
-          rendered.html = transformBodyImages(rendered.html, input.images, galleryOrigin);
+          // Extract before responsive figures can split an image's paragraph.
+          const data = await parseData({
+            id: input.id,
+            data: { ...input.data, description: proseDescription(rendered.html, '') },
+          });
+          rendered.html = await transformBodyImages(rendered.html, input.images, galleryOrigin, { locale: row.locale, inlineSizes: ABOUT_BODY_SIZES });
           store.set({ id: input.id, data, body: input.body, rendered });
         }
-        logger.info(`postgres-pages: loaded ${rows.length} entries`);
+        logger.info(`postgres-pages: loaded ${enabledRows.length} entries`);
       } finally {
         await pool.end();
       }

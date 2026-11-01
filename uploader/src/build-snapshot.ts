@@ -5,6 +5,8 @@ import { assertDatabaseSnapshot } from '../../site/src/lib/database-snapshot.js'
 import { toIdentitySnapshot, type IdentitySnapshot } from '../../site/src/lib/site-identity.js';
 import { identityFromRow, type IdentityRow } from './site-identity.js';
 import { validateIdentityAsset } from './site-identity-assets.js';
+import { readLanguage, type LanguageConfig } from './language.js';
+import { configuredOriginRoles, validateCanonicalRoles, type OriginRoles } from './canonical-origin.js';
 
 export interface BuildAsset {
   role: string;
@@ -16,10 +18,18 @@ export interface BuildAsset {
 export interface BuildSnapshot {
   databaseSnapshot: string;
   identity: IdentitySnapshot;
+  language: LanguageConfig;
   assets: readonly BuildAsset[];
   signal: AbortSignal;
 }
 interface AssetRow { role: string; sha256: string; width: number; height: number; bytes: Buffer }
+
+export class BuildSnapshotTimeoutError extends Error {
+  constructor(readonly timeoutMs: number) {
+    super('Build snapshot deadline exceeded');
+    this.name = 'BuildSnapshotTimeoutError';
+  }
+}
 
 /** One immutable view for configuration AND every child content loader. Future
  * configuration reads belong on this exporter client, never on another pool query.
@@ -27,12 +37,12 @@ interface AssetRow { role: string; sha256: string; width: number; height: number
  */
 export async function withBuildSnapshot<T>(
   pool: pg.Pool,
-  options: { timeoutMs: number; signal?: AbortSignal },
+  options: { timeoutMs: number; signal?: AbortSignal; originRoles?: OriginRoles },
   consume: (snapshot: BuildSnapshot) => Promise<T>,
 ): Promise<T> {
   const deadline = new AbortController();
   const signal = options.signal ? AbortSignal.any([options.signal, deadline.signal]) : deadline.signal;
-  const timer = setTimeout(() => deadline.abort(new Error('Build snapshot deadline exceeded')), options.timeoutMs);
+  const timer = setTimeout(() => deadline.abort(new BuildSnapshotTimeoutError(options.timeoutMs)), options.timeoutMs);
   let client: pg.PoolClient | undefined;
   let released = false;
   let consuming: Promise<T> | undefined;
@@ -71,7 +81,10 @@ export async function withBuildSnapshot<T>(
     assertDatabaseSnapshot(databaseSnapshot);
     const { rows } = await client.query<IdentityRow>('SELECT * FROM site_identity WHERE id = true');
     if (rows.length !== 1) throw new Error('Site identity singleton missing');
-    const identity = toIdentitySnapshot(identityFromRow(rows[0]!));
+    const languageState = await readLanguage(client);
+    const language: LanguageConfig = { primary: languageState.primary, locales: languageState.locales };
+    const identity = toIdentitySnapshot(identityFromRow(rows[0]!), language.locales);
+    validateCanonicalRoles(identity.canonicalOrigin, options.originRoles ?? configuredOriginRoles());
     const { rows: assetRows } = await client.query<AssetRow>('SELECT role, sha256, width, height, bytes FROM site_identity_assets ORDER BY role');
     const assets: BuildAsset[] = [];
     for (const row of assetRows) {
@@ -91,7 +104,7 @@ export async function withBuildSnapshot<T>(
     signal.throwIfAborted();
     consuming = Promise.resolve().then(() => {
       signal.throwIfAborted();
-      return consume({ databaseSnapshot, identity, assets, signal });
+      return consume({ databaseSnapshot, identity, language, assets, signal });
     });
     return consuming;
   };

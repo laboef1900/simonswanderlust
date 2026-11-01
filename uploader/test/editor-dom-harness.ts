@@ -119,6 +119,7 @@ export class EditorElement {
   toggleAttribute(name: string, on: boolean) { if (on) this.setAttribute(name, ''); else this.removeAttribute(name); }
 
   appendChild(child: EditorElement) { child.remove(); child.parentElement = this; this.childNodes.push(child); return child; }
+  prepend(child: EditorElement) { child.remove(); child.parentElement = this; this.childNodes.unshift(child); }
   append(...children: (EditorElement | string)[]) {
     for (const child of children) {
       if (typeof child !== 'string') this.appendChild(child);

@@ -34,12 +34,15 @@
         <ul class="desk-meta-list">
           <li id="deskQueue" aria-live="polite"></li>
           <li id="deskRelease" aria-live="polite"></li>
+          <li id="deskBuild" role="status" hidden></li>
         </ul>
       </section>
     </main>
 
     <script src="/admin/editor-image-copy.js"></script>
+    <script src="/admin/build-reporting.js"></script>
     <script src="/admin/auth.js"></script>
+    <script src="/admin/language.js"></script>
     <script src="/admin/posts-filter.js"></script>
     <script src="/admin/desk.js"></script>
     <script src="/admin/admin-confirm.js"></script>
@@ -48,6 +51,7 @@
       const $ = (id) => document.getElementById(id);
       let redirecting = false;
       let authenticatedContext = null;
+      let isAdmin = false;
       const copy = EditorCopy[document.documentElement.lang === 'de' ? 'de' : 'en'];
 
       function say(msg) { $('deskStatus').textContent = msg; }
@@ -98,7 +102,7 @@
       function tripLink(post, label) {
         const a = el('a', 'desk-title');
         a.href = editorHref(post.translationKey);
-        a.textContent = label || post.titleDe || '(German title not set)';
+        a.textContent = label || post.title || SiteLanguage.text('Untitled');
         return a;
       }
 
@@ -141,7 +145,7 @@
         const bits = [
           post.country,
           post.region,
-          Desk.englishBodyLabel(post.hasEnBody),
+          Desk.secondaryBodyLabel(post.secondaryStatus, SiteLanguage.config()),
         ].filter(Boolean);
         const edited = Desk.formatUpdatedAt(post.updatedAt);
         if (edited) bits.push('Last edited ' + edited);
@@ -283,11 +287,19 @@
         },
       );
 
+      const loadBuild = Desk.resilientLoader(BuildReporting.fetchStatus, {
+        loading() { setMessage($('deskBuild'), BuildReporting.text('loading')); },
+        ready(status) { if (!redirecting) BuildReporting.renderStatus($('deskBuild'), status); },
+        unavailable() {
+          if (!redirecting) showUnavailable($('deskBuild'), BuildReporting.text('unavailable'), BuildReporting.text('retryStatus'), loadBuild);
+        },
+      });
+
       async function loadDesk() {
         $('deskError').hidden = true;
         $('deskError').textContent = '';
         say('Loading desk…');
-        await Promise.all([loadPosts(), loadQueue(), loadRelease()]);
+        await Promise.all([loadPosts(), loadQueue(), loadRelease(), ...(isAdmin ? [loadBuild()] : [])]);
         if (!redirecting) say('');
       }
 
@@ -296,14 +308,20 @@
         ready(context) {
           if (!context) return;
           authenticatedContext = context;
+          isAdmin = context.isAdmin === true;
           Auth.renderHeader(context);
+          $('deskBuild').hidden = !isAdmin;
           Onboarding.init({
             root: $('onboardingChecklist'),
             openerRoot: $('onboardingOpener'),
             isAdmin: context.isAdmin,
             focusTarget: document.querySelector('.cms-page-title'),
           });
-          loadDesk();
+          // Story labels need the language mode (#284) before the first paint.
+          SiteLanguage.get().then(() => loadDesk(), (error) => {
+            $('deskError').hidden = false;
+            $('deskError').textContent = error.message;
+          });
         },
         unavailable() {
           $('deskError').hidden = false;

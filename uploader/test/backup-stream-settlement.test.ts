@@ -37,8 +37,14 @@ vi.mock('../src/disk.js', async (original) => ({
   },
 }));
 
-const query = async (sql: string) => ({ rows: sql.includes('to_regclass')
-  ? [{ present: true }] : sql.includes('FROM site_identity ORDER') ? [identityDumpRow()] : [] });
+const query = async (sql: string) => ({
+  rows: sql.includes('to_regclass') ? [{ present: true }]
+    : sql.includes('FROM site_language') ? [{
+      id: true, primary_locale: 'de', enabled_locales: ['de', 'en'],
+      locked_at: null, updated_at: '2026-10-27T12:00:00.000Z',
+    }]
+      : sql.includes('FROM site_identity ORDER') ? [identityDumpRow()] : [],
+});
 const db: Connectable = { query, connect: async () => ({ query, release() {} }) };
 let root: string;
 let storage: string;
@@ -151,6 +157,7 @@ describe('image archive writer settlement (#430)', () => {
     const controller = new AbortController();
     const service = createDbBackup({ db, dir: backups, storageDir: storage, retention: () => 5, signal: controller.signal });
     const initial = await service.runNow();
+    expect(initial.lastError).toBeUndefined();
     const prior = service.listImageArchives()[0]!;
     const priorBytes = await readFile(join(backups, prior.name));
     await writeFile(join(storage, 'new-orig.jpeg'), bytes);

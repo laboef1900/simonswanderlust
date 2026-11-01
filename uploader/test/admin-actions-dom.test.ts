@@ -1,3 +1,4 @@
+import { TEST_TRUST } from './trusted-proxy-fixture.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -124,6 +125,13 @@ function loadPage(file: string, extraGlobals: Record<string, unknown>, scripts: 
   };
   // ARIA tabs carry their state in markup that tabs.js reads; mirror just that.
   const attr = (tag: string, name: string): string | undefined => new RegExp(`\\s${name}="([^"]*)"`).exec(tag)?.[1];
+  for (const [tag] of markup.matchAll(/<[a-z]+\b[^>]*\bid="[^"]+"[^>]*>/g)) {
+    const node = el(attr(tag, 'id')!);
+    for (const name of ['role', 'aria-describedby']) {
+      const value = attr(tag, name);
+      if (value) node.attrs[name] = value;
+    }
+  }
   const tabs = [...markup.matchAll(/<button\b[^>]*\brole="tab"[^>]*>/g)].map(([tag]) => {
     const tab = el(attr(tag, 'id')!);
     tab.dataset.tab = attr(tag, 'data-tab') ?? '';
@@ -147,8 +155,10 @@ function loadPage(file: string, extraGlobals: Record<string, unknown>, scripts: 
     document: Object.assign(element(), {
       referrer: '',
       title: '',
+      documentElement: { lang: /<html\b[^>]*lang="([^"]+)"/.exec(html)?.[1] ?? 'en' },
       getElementById: (id: string): Element | null => (ids.has(id) ? el(id) : null),
       createElement: () => element(),
+      createTextNode: (text: string) => Object.assign(element(), { textContent: text }),
     }),
     location: {
       href: 'http://localhost/admin/posts.html',
@@ -175,12 +185,20 @@ function loadPage(file: string, extraGlobals: Record<string, unknown>, scripts: 
       },
     },
     EditorCopy: { en: EDITOR_COPY },
+    BuildCopy: Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [
+      locale, Object.fromEntries(Object.entries(strings).filter(([key]) => key.startsWith('admin.build.'))
+        .map(([key, value]) => [key.slice('admin.build.'.length), value])),
+    ])),
     AdminConfirm: { ask: async () => true, liveUrls: () => ({ de: '', en: '' }), urlsPlain: () => '' },
     ...extraGlobals,
   };
   ctx.window = ctx;
   vm.createContext(ctx);
   vm.runInContext(renderGpxCopy(), ctx);
+  vm.runInContext(readFileSync('public/build-reporting.js', 'utf8'), ctx);
+  vm.runInContext(readFileSync('public/language.js', 'utf8'), ctx);
+  vm.runInContext(`SiteLanguage.accept({primary:'de',locales:['de','en'],lockedAt:null,updatedAt:'2026-10-27T00:00:00.000Z'});
+    SiteLanguage.get = async () => SiteLanguage.config();`, ctx);
   for (const dependency of scripts) vm.runInContext(readFileSync(dependency, 'utf8'), ctx, { filename: dependency });
   vm.runInContext(script, ctx);
   return { ctx, el, windowListeners };
@@ -201,7 +219,193 @@ function loadPosts(extraGlobals: Record<string, unknown> = {}) {
   });
 }
 
-const post = { translationKey: 'tk1', titleDe: 'Bukarest', slugDe: 'bukarest', slugEn: 'bucharest', status: 'published' };
+describe('import.html rejection accounting', () => {
+  it('shows a rejection-only completed summary and renders HTML-like slugs only as text', () => {
+    const { ctx, el } = loadPage('public/import.html', {});
+    const warning = '<img src=x onerror=alert(1)> (de): no translation (untranslated post) — rejected';
+    const renderFinished = vm.runInContext('renderFinished', ctx) as (job: unknown) => void;
+    renderFinished({
+      status: 'done',
+      summary: {
+        imported: 0, updated: 0, skippedPublished: 0, rejected: 1, failed: 0,
+        images: { total: 0, hosted: 0, failed: 0 }, warnings: [warning],
+      },
+    });
+    expect(el('results').style.display).toBe('');
+    expect(el('counts').textContent).toContain('Rejected: 1');
+    expect(el('importRejected').style.display).toBe('');
+    expect(el('importRejected').textContent).toContain('1 post group(s)');
+    expect(el('warnings').children).toHaveLength(1);
+    expect(el('warnings').children[0]!.textContent).toBe(warning);
+    expect(el('warnings').children[0]!.innerHTML).toBe('');
+    expect(el('warnings').children[0]!.children).toEqual([]);
+  });
+});
+
+const post = { translationKey: 'tk1', title: 'Bukarest', slugs: { de: 'bukarest', en: 'bucharest' }, status: 'published' };
+
+describe('users.html failure recovery', () => {
+  const user = { id: 2, username: 'author2', isAdmin: false };
+
+  it.each(['http', 'network'] as const)('recovers the user list after a %s failure without clearing form entries', async (failure) => {
+    const pending = Promise.withResolvers<Response>();
+    const fetcher = vi.fn()
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValueOnce(Response.json([user]))
+      .mockResolvedValueOnce(Response.json({ error: 'unavailable' }, { status: 500 }))
+      .mockResolvedValueOnce(Response.json([]));
+    const { el } = loadPage('public/users.html', { fetch: fetcher });
+    el('username').value = 'unsaved-author';
+    el('password').value = 'unsaved-password';
+    const loading = el('reloadUsers').click();
+    expect(el('reloadUsers').disabled).toBe(true);
+    await el('reloadUsers').click();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    if (failure === 'http') pending.resolve(Response.json({ error: 'unavailable' }, { status: 500 }));
+    else pending.reject(NETWORK_DOWN);
+    await loading;
+    expect(el('list').children).toHaveLength(0);
+    expect(el('reloadUsers').disabled).toBe(false);
+
+    await el('reloadUsers').click();
+    expect(el('list').children.map((row) => row.children[0]?.textContent)).toEqual([user.username]);
+    // A failed refresh must not retain actionable rows from an obsolete list.
+    await el('reloadUsers').click();
+    expect(el('list').children).toHaveLength(0);
+    expect(el('listout').textContent).toBe(ui.en['editor.chrome.usersLoadFailed'].replace('{status}', '500'));
+    await el('reloadUsers').click();
+    expect(el('list').children).toHaveLength(0);
+    expect(el('username').value).toBe('unsaved-author');
+    expect(el('password').value).toBe('unsaved-password');
+  });
+
+  it('refreshes after Add even while an older user list is pending', async () => {
+    const stale = Promise.withResolvers<Response>();
+    const fresh = Promise.withResolvers<Response>();
+    const fetcher = vi.fn()
+      .mockReturnValueOnce(stale.promise)
+      .mockResolvedValueOnce(Response.json(user, { status: 201 }))
+      .mockReturnValueOnce(fresh.promise);
+    const { el } = loadPage('public/users.html', { fetch: fetcher });
+    const oldLoad = el('reloadUsers').click();
+    el('username').value = user.username;
+    el('password').value = 'fixture-new-password';
+    const add = el('addForm').fire('submit');
+    await Promise.resolve();
+    await Promise.resolve();
+    stale.resolve(Response.json([]));
+    await oldLoad;
+    expect(el('reloadUsers').disabled).toBe(true);
+    expect(el('listout').textContent).toBe(ui.en['editor.chrome.usersLoading']);
+    fresh.resolve(Response.json([user]));
+    await add;
+    expect(el('list').children.map((row) => row.children[0]?.textContent)).toEqual([user.username]);
+    expect(el('reloadUsers').disabled).toBe(false);
+  });
+
+  it('does not restore a removed account when an older reload completes last', async () => {
+    const deletion = Promise.withResolvers<Response>();
+    const stale = Promise.withResolvers<Response>();
+    const deletionStarted = Promise.withResolvers<void>();
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(Response.json([user]))
+      .mockImplementationOnce(() => { deletionStarted.resolve(); return deletion.promise; })
+      .mockReturnValueOnce(stale.promise)
+      .mockResolvedValueOnce(Response.json([]));
+    const { el } = loadPage('public/users.html', { fetch: fetcher });
+    await el('reloadUsers').click();
+    const remove = el('list').children[0]!.children[2]!.click();
+    await deletionStarted.promise;
+    const oldLoad = el('reloadUsers').click();
+    deletion.resolve(new Response(null, { status: 204 }));
+    await remove;
+    // The successful mutation's fresh read must finish independently of the old GET.
+    for (let index = 0; index < 12; index++) await Promise.resolve();
+    expect(el('listout').textContent).toBe(ui.en['editor.chrome.usersLoaded'].replace('{count}', '0'));
+    stale.resolve(Response.json([user]));
+    await oldLoad;
+    expect(el('list').children).toHaveLength(0);
+    expect(el('listout').textContent).toBe(ui.en['editor.chrome.usersLoaded'].replace('{count}', '0'));
+  });
+
+  const actions = [
+    { form: 'addForm', button: 'add', status: 'out',
+      fields: [['username', 'author2'], ['password', 'fixture-new-password']] },
+    { form: 'pwForm', button: 'changepw', status: 'pwout',
+      fields: [['curpw', 'fixture-current-password'], ['newpw', 'fixture-new-password']] },
+  ] as const;
+
+  it.each(actions)('$form preserves entries on rejection, prevents duplicate submission, and permits a successful retry', async (action) => {
+    const pending = Promise.withResolvers<Response>();
+    const fetcher = vi.fn()
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValueOnce(Response.json({ ok: true }))
+      .mockResolvedValueOnce(Response.json([user]));
+    const logger = { log: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const { el } = loadPage('public/users.html', { fetch: fetcher, console: logger });
+    for (const [id, value] of action.fields) el(id).value = value;
+    el('isAdmin').checked = true;
+    const submitting = el(action.form).fire('submit');
+    expect(el(action.button).disabled).toBe(true);
+    await el(action.form).fire('submit');
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    pending.reject(new Error('Transport failed: ' + action.fields.map(([, value]) => value).join(' ')));
+    await submitting;
+    expect(el(action.button).disabled).toBe(false);
+    for (const [id, value] of action.fields) {
+      expect(el(id).value).toBe(value);
+      if (id !== 'username') expect(el(action.status).textContent).not.toContain(value);
+    }
+    expect(el('isAdmin').checked).toBe(true);
+    for (const log of Object.values(logger)) expect(log).not.toHaveBeenCalled();
+
+    await el(action.form).fire('submit');
+    expect(el(action.button).disabled).toBe(false);
+    for (const [id] of action.fields) expect(el(id).value).toBe('');
+    if (action.form === 'addForm') {
+      expect(el('isAdmin').checked).toBe(false);
+      expect(el('list').children[0]?.children[0]?.textContent).toBe(user.username);
+    }
+  });
+
+  it.each(actions)('$form keeps entries after an HTTP refusal and retains newer edits when a retry succeeds', async (action) => {
+    const pending = Promise.withResolvers<Response>();
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValueOnce(Response.json([user]));
+    const { el } = loadPage('public/users.html', { fetch: fetcher });
+    for (const [id, value] of action.fields) el(id).value = value;
+    await el(action.form).fire('submit');
+    expect(el(action.button).disabled).toBe(false);
+    for (const [id, value] of action.fields) expect(el(id).value).toBe(value);
+
+    const retry = el(action.form).fire('submit');
+    for (const [id] of action.fields) el(id).value = 'newer-unsaved-entry';
+    pending.resolve(Response.json({ ok: true }));
+    await retry;
+    expect(el(action.button).disabled).toBe(false);
+    for (const [id] of action.fields) expect(el(id).value).toBe('newer-unsaved-entry');
+  });
+
+  it('keeps confirmed account creation separate from a failed list refresh', async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(Response.json({ ok: true }, { status: 201 }))
+      .mockResolvedValueOnce(Response.json({ error: 'unavailable' }, { status: 500 }))
+      .mockResolvedValueOnce(Response.json([user]));
+    const { el } = loadPage('public/users.html', { fetch: fetcher });
+    el('username').value = user.username;
+    el('password').value = 'fixture-new-password';
+    await el('addForm').fire('submit');
+    expect(el('username').value).toBe('');
+    expect(el('password').value).toBe('');
+    expect(el('add').disabled).toBe(false);
+    expect(el('reloadUsers').disabled).toBe(false);
+    await el('reloadUsers').click();
+    expect(el('list').children[0]?.children[0]?.textContent).toBe(user.username);
+    expect(fetcher.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
+  });
+});
 
 describe('posts.html actions survive a dropped connection', () => {
   it('deletePost re-enables the row button and names the failure', async () => {
@@ -210,7 +414,7 @@ describe('posts.html actions survive a dropped connection', () => {
     const deletePost = vm.runInContext('deletePost', ctx) as (p: unknown, btn: Element) => Promise<void>;
     await deletePost(post, btn);
     expect(btn.disabled).toBe(false);
-    expect(el('out').textContent).toBe('Delete failed: TypeError: Failed to fetch');
+    expect(el('out').textContent).toBe(ui.en['admin.build.unknown']);
   });
 
   it('unpublishPost re-enables the row button and names the failure', async () => {
@@ -219,7 +423,7 @@ describe('posts.html actions survive a dropped connection', () => {
     const unpublishPost = vm.runInContext('unpublishPost', ctx) as (p: unknown, btn: Element) => Promise<void>;
     await unpublishPost(post, btn);
     expect(btn.disabled).toBe(false);
-    expect(el('out').textContent).toBe('Unpublish failed: TypeError: Failed to fetch');
+    expect(el('out').textContent).toBe(ui.en['admin.build.unknown']);
   });
 
   it('runBulk re-enables all three bulk buttons and names the failure', async () => {
@@ -228,7 +432,7 @@ describe('posts.html actions survive a dropped connection', () => {
     const runBulk = vm.runInContext('runBulk', ctx) as (action: string) => Promise<void>;
     await runBulk('delete');
     for (const id of ['bulkPublish', 'bulkUnpublish', 'bulkDelete']) expect(el(id).disabled).toBe(false);
-    expect(el('out').textContent).toBe('Bulk delete failed: TypeError: Failed to fetch');
+    expect(el('out').textContent).toBe(ui.en['admin.build.unknown']);
     // The selection is only cleared once the server confirmed the batch.
     expect(vm.runInContext('selected.size', ctx)).toBe(1);
   });
@@ -249,11 +453,54 @@ describe('posts.html actions survive a dropped connection', () => {
 
   it('a failed refresh keeps the action outcome the caller already reported', async () => {
     // Unpublish succeeded but its rebuild failed (200 with build.ok=false), then
-    // the list refresh dies: the admin must still see that the old release is live.
+    // the list refresh dies: acknowledged CMS facts must remain visible.
     const { ctx, el } = loadPosts();
     const load = vm.runInContext('load', ctx) as (statusMsg?: string) => Promise<void>;
     await load('Unpublished "Bukarest". Rebuild failed: astro exited 1');
     expect(el('out').textContent).toBe('Unpublished "Bukarest". Rebuild failed: astro exited 1\nCould not load posts: TypeError: Failed to fetch');
+  });
+});
+
+describe('posts action build reporting', () => {
+  it.each(['delete', 'unpublish'])('%s preserves the CMS acknowledgement when its rebuild fails', async (action) => {
+    const { ctx, el } = loadPosts({
+      fetch: async (_url: string, init?: RequestInit) => init?.method
+        ? Response.json({ [action === 'delete' ? 'deleted' : 'unpublished']: true, build: { ok: false, code: 'no_space', error: 'SECRET', liveRelease: null } })
+        : Response.json([]),
+    });
+    const fn = vm.runInContext(action === 'delete' ? 'deletePost' : 'unpublishPost', ctx) as (post: unknown, button: Element) => Promise<void>;
+    await fn(post, element());
+    expect(el('out').textContent).toContain('CMS');
+    expect(el('out').textContent).toContain('No live release yet');
+    expect(el('out').textContent).not.toContain('SECRET');
+    expect(el('out').children.some((node) => node.href === '/admin/settings.html#site')).toBe(true);
+  });
+
+  it.each([true, false])('bulk keeps explicitly successful/failed counts with build success=%s', async (ok) => {
+    const { ctx, el } = loadPosts({
+      fetch: async (_url: string, init?: RequestInit) => init?.method
+        ? Response.json({ succeeded: 1, failed: 1, results: [{ key: 'tk1', ok: true }, { key: 'tk2', ok: false, error: 'invalid_post' }],
+          build: { ok, release: ok ? '1793000000000-1-0001' : undefined, code: 'build_stopped', error: 'SECRET' } })
+        : Response.json([]),
+    });
+    vm.runInContext("selected.add('tk1'); selected.add('tk2'); allPosts = [" + JSON.stringify(post) + ']', ctx);
+    const runBulk = vm.runInContext('runBulk', ctx) as (action: string) => Promise<void>;
+    await runBulk('publish');
+    expect(el('out').textContent).toContain('1 saved in the CMS, 1 failed');
+    expect(el('out').textContent).toContain('Live release status is unavailable');
+    expect(el('out').textContent).not.toContain('SECRET');
+    if (!ok) expect(el('out').children.some((node) => node.textContent === ui.en['admin.build.stoppedRecovery'])).toBe(true);
+  });
+
+  it('draft deletion says no rebuild without guessing a live consequence', async () => {
+    const { ctx, el } = loadPosts({
+      fetch: async (_url: string, init?: RequestInit) => Response.json(init?.method ? { deleted: true } : []),
+    });
+    const remove = vm.runInContext('deletePost', ctx) as (post: unknown, button: Element) => Promise<void>;
+    await remove({ ...post, status: 'draft' }, element());
+    expect(el('out').textContent).toContain('Deleted draft');
+    expect(el('out').textContent).toContain('The site was not rebuilt');
+    expect(el('out').textContent).not.toContain('live');
   });
 });
 
@@ -272,8 +519,8 @@ describe('posts.html selection, recovery and disclosures', () => {
   it('keeps cross-filter selections visible, reviews every title, and clears them explicitly', async () => {
     const { ctx, el } = loadPosts({ PostsFilter: filterStub });
     const posts = [
-      { ...post, translationKey: 'draft', titleDe: 'Draft story', status: 'draft' },
-      { ...post, translationKey: 'live', titleDe: 'Live story', status: 'published' },
+      { ...post, translationKey: 'draft', title: 'Draft story', status: 'draft' },
+      { ...post, translationKey: 'live', title: 'Live story', status: 'published' },
     ];
     vm.runInContext(`me = { isAdmin: true }; allPosts = ${JSON.stringify(posts)};
       selected.add('draft'); selected.add('live');`, ctx);
@@ -305,32 +552,33 @@ describe('posts.html selection, recovery and disclosures', () => {
           return { status: 200, ok: true, json: async () => ({ succeeded: 2, failed: 0, results: [] }) };
         }
         return { status: 200, ok: true, json: async () => [
-          { ...post, translationKey: 'a', titleDe: 'Alpha' },
-          { ...post, translationKey: 'b', titleDe: 'Beta' },
-          { ...post, translationKey: 'c', titleDe: 'Gamma' },
+          { ...post, translationKey: 'a', title: 'Alpha' },
+          { ...post, translationKey: 'b', title: 'Beta' },
+          { ...post, translationKey: 'c', title: 'Gamma' },
         ] };
       },
     });
     const posts = [
-      { ...post, translationKey: 'a', titleDe: 'Alpha' },
-      { ...post, translationKey: 'b', titleDe: 'Beta' },
-      { ...post, translationKey: 'c', titleDe: 'Gamma' },
+      { ...post, translationKey: 'a', title: 'Alpha' },
+      { ...post, translationKey: 'b', title: 'Beta' },
+      { ...post, translationKey: 'c', title: 'Gamma' },
     ];
     vm.runInContext(`allPosts = ${JSON.stringify(posts)}; selected.add('a'); selected.add('b');`, ctx);
-    mutateSelection = () => vm.runInContext(`selected.clear(); selected.add('c');`, ctx);
+    mutateSelection = () => vm.runInContext(`selected.clear(); selected.add('c');
+      SiteLanguage.accept({primary:'en',locales:['en','de'],lockedAt:null,updatedAt:'2026-10-28T00:00:00.000Z'});`, ctx);
 
     await (vm.runInContext('runBulk', ctx) as (action: string) => Promise<void>)('publish');
 
     expect(confirmBody).toContain('"Alpha"');
     expect(confirmBody).toContain('"Beta"');
-    expect(JSON.parse(requestBody)).toEqual({ action: 'publish', keys: ['a', 'b'] });
+    expect(JSON.parse(requestBody)).toEqual({ action: 'publish', keys: ['a', 'b'], baseLanguageUpdatedAt: '2026-10-27T00:00:00.000Z' });
     expect(vm.runInContext('[...selected]', ctx)).toEqual(['c']);
   });
 
   it('retains only failed stories after a partial bulk result so they can be retried', async () => {
     const posts = [
-      { ...post, translationKey: 'a', titleDe: 'Alpha' },
-      { ...post, translationKey: 'b', titleDe: 'Beta' },
+      { ...post, translationKey: 'a', title: 'Alpha' },
+      { ...post, translationKey: 'b', title: 'Beta' },
     ];
     const { ctx, el } = loadPosts({
       fetch: async (url: string) => url === '/posts/bulk'
@@ -363,7 +611,7 @@ describe('posts.html selection, recovery and disclosures', () => {
   });
 
   it('reports actionable route failures without hiding unrelated bulk Publish errors', async () => {
-    const rows = ['limit', 'timeout', 'media'].map((key) => ({ ...post, translationKey: key, titleDe: key }));
+    const rows = ['limit', 'timeout', 'media'].map((key) => ({ ...post, translationKey: key, title: key }));
     const { ctx, el } = loadPosts({
       fetch: async (url: string) => ({
         status: 200, ok: true, json: async () => url === '/posts/bulk' ? {
@@ -398,15 +646,15 @@ describe('posts.html selection, recovery and disclosures', () => {
       },
     });
     el('fSearch').value = 'Rhodes & sun';
-    el('fStatus').value = 'missing-en';
+    el('fStatus').value = 'missing-secondary';
     const editorHref = vm.runInContext('editorHref', ctx) as (key?: string) => string;
     const href = new URL(editorHref('pair/key'), 'http://localhost');
     expect(href.searchParams.get('tk')).toBe('pair/key');
-    expect(href.searchParams.get('returnTo')).toBe('/admin/posts.html?q=Rhodes+%26+sun&status=missing-en');
+    expect(href.searchParams.get('returnTo')).toBe('/admin/posts.html?q=Rhodes+%26+sun&status=missing-secondary');
     (vm.runInContext('render', ctx) as (updateUrl?: boolean) => void)(true);
     const newHref = new URL(el('newPost').href, 'http://localhost');
     expect(newHref.searchParams.has('tk')).toBe(false);
-    expect(newHref.searchParams.get('returnTo')).toBe('/admin/posts.html?q=Rhodes+%26+sun&status=missing-en');
+    expect(newHref.searchParams.get('returnTo')).toBe('/admin/posts.html?q=Rhodes+%26+sun&status=missing-secondary');
   });
 
   it('removes stale actions on load failure and Retry reaches a clean loaded state', async () => {
@@ -478,20 +726,714 @@ describe('posts.html selection, recovery and disclosures', () => {
 });
 
 describe('comments.html moderation view', () => {
+  const comment = (id: string) => ({
+    id, name: id, isAuthor: false, translationKey: 'tk1', locale: 'de',
+    createdAt: '2026-09-29T04:56:50Z', status: 'pending', body: 'Hallo',
+  });
+  interface CommentResponse {
+    status: number;
+    ok: boolean;
+    json(): Promise<unknown>;
+  }
+  const response = (data: Record<string, unknown> = {}): CommentResponse => ({
+    status: 200, ok: true, json: async () => 'comments' in data ? { hasMore: false, ...data } : data,
+  });
+  function commentsPage(fetch: (url: string, options: { method: string; body?: string }) => Promise<unknown>) {
+    const page = loadPage('public/comments.html', { fetch });
+    const doc = page.ctx.document as Element & {
+      body: Element; activeElement: Element; createElement: () => Element;
+    };
+    doc.body = element();
+    doc.activeElement = doc.body;
+    doc.createElement = () => {
+      const node = Object.assign(element(), {
+        selectionStart: 0, selectionEnd: 0, selectionDirection: 'none',
+        setSelectionRange(start: number, end: number, direction: string) {
+          this.selectionStart = start;
+          this.selectionEnd = end;
+          this.selectionDirection = direction;
+        },
+      });
+      node.focus = () => { if (!node.disabled) doc.activeElement = node; };
+      return node;
+    };
+    page.el('statusFilter').focus = () => { doc.activeElement = page.el('statusFilter'); };
+    for (const id of ['previousPage', 'nextPage', 'pageIndicator']) {
+      page.el(id).focus = () => { if (!page.el(id).disabled) doc.activeElement = page.el(id); };
+    }
+    page.el('statusFilter').value = 'pending';
+    const list = page.el('list');
+    list.replaceChildren = () => {
+      if (list.contains(doc.activeElement)) doc.activeElement = doc.body;
+      list.children.length = 0;
+    };
+    const load = vm.runInContext('load', page.ctx) as () => Promise<void>;
+    const row = (id: string) => {
+      const node = page.el('list').children.find((child) => child.children[0]?.children[0]?.textContent === id);
+      if (!node) throw new Error('Missing comment ' + id);
+      const form = node.children.find((child) => child.className === 'comment-reply');
+      if (!form) throw new Error('Missing reply form ' + id);
+      const ta = form.children[0] as Element & {
+        selectionStart: number; selectionEnd: number; selectionDirection: string;
+        setSelectionRange(start: number, end: number, direction: string): void;
+      };
+      const send = form.children[1];
+      const actions = node.children.find((child) => child.className === 'comment-actions');
+      if (!ta || !send || !actions) throw new Error('Missing comment controls ' + id);
+      return { form, ta, send, action: (label: string) => actions.children.find((child) => child.textContent === label)! };
+    };
+    const type = async (id: string, text: string) => {
+      const { ta } = row(id);
+      ta.value = text;
+      await ta.fire('input');
+      return ta;
+    };
+    return { ...page, doc, load, row, type };
+  }
+
+  it('keeps A’s latest draft and selection while approving B, then clears actions during refresh', async () => {
+    const refresh = Promise.withResolvers<CommentResponse>();
+    const loading = Promise.withResolvers<void>();
+    const mutation = Promise.withResolvers<CommentResponse>();
+    let reads = 0;
+    const fetch = vi.fn(async (_url: string, options: { method: string }) => {
+      if (options.method === 'GET') {
+        if (++reads === 2) { loading.resolve(); return refresh.promise; }
+        return response({ comments: [comment('A'), comment('B')] });
+      }
+      return mutation.promise;
+    });
+    const page = commentsPage(fetch);
+    await page.load();
+    await page.type('A', 'Thanks Anna,');
+    const approve = page.row('B').action('Approve');
+    approve.focus();
+    const pending = approve.click();
+    const ta = await page.type('A', 'Thanks Anna, the hike was');
+    ta.focus();
+    ta.setSelectionRange(7, 11, 'backward');
+    mutation.resolve(response());
+    await loading.promise;
+    expect(page.el('list').children).toHaveLength(0);
+    expect(page.el('list').getAttribute('aria-busy')).toBe('true');
+    refresh.resolve(response({ comments: [comment('A')] }));
+    await pending;
+    expect(fetch).toHaveBeenCalledWith('/moderation/comments/B/status', expect.objectContaining({
+      method: 'POST', body: JSON.stringify({ status: 'approved' }),
+    }));
+    expect(page.row('A').ta.value).toBe('Thanks Anna, the hike was');
+    expect(page.doc.activeElement).toBe(page.row('A').ta);
+    expect(page.row('A').ta.selectionStart).toBe(7);
+    expect(page.row('A').ta.selectionEnd).toBe(11);
+    expect(page.row('A').ta.selectionDirection).toBe('backward');
+  });
+
+  it('keeps hidden drafts across views and does not steal focus from the filter', async () => {
+    const page = commentsPage(async (url) => response({
+      comments: new URL(url, 'http://localhost').searchParams.get('status') === 'approved' ? [] : [comment('A')],
+    }));
+    await page.load();
+    await page.type('A', 'Unsent reply');
+    page.el('statusFilter').value = 'approved';
+    page.el('statusFilter').focus();
+    await page.load();
+    expect(page.el('list').children).toHaveLength(0);
+    page.el('statusFilter').value = 'pending';
+    await page.load();
+    expect(page.row('A').ta.value).toBe('Unsent reply');
+    expect(page.doc.activeElement).toBe(page.el('statusFilter'));
+  });
+
+  it('sends B unchanged, clears only its successful reply, and never restores it on reload', async () => {
+    const fetch = vi.fn(async (_url: string, options: { method: string }) =>
+      response(options.method === 'GET' ? { comments: [comment('A'), comment('B')] } : {}));
+    const page = commentsPage(fetch);
+    await page.load();
+    await page.type('A', 'Still writing');
+    await page.type('B', ' Ready to publish ');
+    page.row('B').send.focus();
+    await page.row('B').form.fire('submit');
+    expect(fetch).toHaveBeenCalledWith('/moderation/comments/B/reply', expect.objectContaining({
+      method: 'POST', body: JSON.stringify({ body: ' Ready to publish ' }),
+    }));
+    expect(page.row('B').ta.value).toBe('');
+    expect(page.doc.activeElement).toBe(page.row('B').send);
+    await page.load();
+    expect(page.row('B').ta.value).toBe('');
+    expect(page.row('A').ta.value).toBe('Still writing');
+  });
+
+  it('retains failed replies and re-enables submit', async () => {
+    const page = commentsPage(async (_url, options) => {
+      if (options.method === 'POST') throw NETWORK_DOWN;
+      return response({ comments: [comment('A')] });
+    });
+    await page.load();
+    await page.type('A', 'Please keep this');
+    await page.row('A').form.fire('submit');
+    expect(page.row('A').send.disabled).toBe(false);
+    await page.load();
+    expect(page.row('A').ta.value).toBe('Please keep this');
+  });
+
+  it('retains edits made during a successful reply request, even across an intervening reload', async () => {
+    const sent = Promise.withResolvers<CommentResponse>();
+    const page = commentsPage(async (_url, options) => options.method === 'POST'
+      ? sent.promise : response({ comments: [comment('A')] }));
+    await page.load();
+    await page.type('A', 'First reply');
+    const pending = page.row('A').form.fire('submit');
+    await page.load();
+    const ta = await page.type('A', 'Second reply in progress');
+    ta.focus();
+    ta.setSelectionRange(5, 5, 'none');
+    sent.resolve(response());
+    await pending;
+    expect(page.row('A').ta.value).toBe('Second reply in progress');
+    expect(page.doc.activeElement).toBe(page.row('A').ta);
+    expect(page.row('A').ta.selectionStart).toBe(5);
+  });
+
+  it.each(['success', 'failure'] as const)('keeps recreated replies single-flight and releases the visible control after %s', async (outcome) => {
+    const sent = Promise.withResolvers<CommentResponse>();
+    const posted: string[] = [];
+    const page = commentsPage(async (url, options) => {
+      if (url.endsWith('/reply')) {
+        posted.push(String(options.body));
+        return posted.length === 1 ? sent.promise : response();
+      }
+      return response({ comments: new URL(url, 'http://localhost').searchParams.get('status') === 'approved' ? [] : [comment('A'), comment('B')] });
+    });
+    await page.load();
+    await page.type('A', 'Publish only once');
+    page.row('A').send.focus();
+    const pending = page.row('A').form.fire('submit');
+    page.doc.activeElement = page.doc.body;
+    await page.row('B').action('Approve').click();
+    expect(page.row('A').send.disabled).toBe(true);
+    page.el('statusFilter').value = 'approved';
+    await page.load();
+    page.el('statusFilter').value = 'pending';
+    await page.load();
+    expect(page.row('A').ta.value).toBe('Publish only once');
+    expect(page.row('A').send.disabled).toBe(true);
+    await page.row('A').form.fire('submit');
+    expect(posted).toHaveLength(1);
+    await page.type('A', 'Newer unsent text');
+    if (outcome === 'success') sent.resolve(response());
+    else sent.reject(NETWORK_DOWN);
+    await pending;
+    expect(page.row('A').send.disabled).toBe(false);
+    expect(page.row('A').ta.value).toBe('Newer unsent text');
+    await page.row('A').form.fire('submit');
+    const bodies: unknown[] = posted.map((body) => JSON.parse(body));
+    expect(bodies).toEqual([{ body: 'Publish only once' }, { body: 'Newer unsent text' }]);
+    expect(page.row('A').ta.value).toBe('');
+  });
+
+  it('does not resurrect a sent draft when the follow-up list request fails', async () => {
+    let reads = 0;
+    const page = commentsPage(async (_url, options) => {
+      if (options.method === 'GET' && ++reads === 2) throw NETWORK_DOWN;
+      return response({ comments: [comment('A')] });
+    });
+    await page.load();
+    await page.type('A', 'Published once');
+    await page.row('A').form.fire('submit');
+    expect(page.el('out').textContent).toContain('Could not load comments: Failed to fetch');
+    expect(page.el('list').children).toHaveLength(0);
+    await page.load();
+    expect(page.row('A').ta.value).toBe('');
+  });
+
+  it('does not clear a reply when the request redirects an expired session to login', async () => {
+    const page = commentsPage(async (_url, options) => options.method === 'POST'
+      ? { ...response(), status: 401, ok: false }
+      : response({ comments: [comment('A')] }));
+    await page.load();
+    await page.type('A', 'Not published');
+    await page.row('A').form.fire('submit');
+    expect(page.ctx.location).toEqual(expect.objectContaining({ href: '/login' }));
+    expect(page.row('A').ta.value).toBe('Not published');
+    expect(page.el('out').textContent).not.toBe('Reply published.');
+  });
+
+  it.each(['Delete', 'Spam'])('clears only the successfully %s-deleted draft', async (action) => {
+    const page = commentsPage(async () => response({ comments: [comment('A'), comment('B')] }));
+    await page.load();
+    await page.type('A', 'Keep A');
+    await page.type('B', 'Remove B');
+    await page.row('B').action(action).click();
+    // Return B again to prove its draft was removed, not merely hidden.
+    expect(page.row('A').ta.value).toBe('Keep A');
+    expect(page.row('B').ta.value).toBe('');
+  });
+
+  it.each(['cancelled', 'failed'])('keeps the draft after a %s deletion', async (outcome) => {
+    const page = commentsPage(async (_url, options) => {
+      if (options.method === 'DELETE') throw NETWORK_DOWN;
+      return response({ comments: [comment('A')] });
+    });
+    if (outcome === 'cancelled') page.ctx.AdminConfirm = { ask: async () => false };
+    await page.load();
+    await page.type('A', 'Keep A');
+    await page.row('A').action('Delete').click();
+    if (outcome === 'failed') expect(page.el('out').textContent).toContain('Failed: Failed to fetch');
+    await page.load();
+    expect(page.row('A').ta.value).toBe('Keep A');
+  });
+
+  it('moves focus to the view filter when the focused action’s row disappears', async () => {
+    let removed = false;
+    const page = commentsPage(async (_url, options) => {
+      if (options.method === 'POST') removed = true;
+      return response({ comments: removed ? [] : [comment('A')] });
+    });
+    await page.load();
+    const approve = page.row('A').action('Approve');
+    approve.focus();
+    await approve.click();
+    expect(page.doc.activeElement).toBe(page.el('statusFilter'));
+  });
+
+  it('clears obsolete rows and actions immediately and retains drafts after a failed filter refresh', async () => {
+    const failed = Promise.withResolvers<CommentResponse>();
+    const page = commentsPage(async (url) => new URL(url, 'http://localhost').searchParams.get('status') === 'approved'
+      ? failed.promise : response({ comments: [comment('A')] }));
+    await page.load();
+    await page.type('A', 'Unsent through failure');
+    page.el('statusFilter').focus();
+    page.el('statusFilter').value = 'approved';
+    const refresh = page.el('statusFilter').fire('change');
+    expect(page.el('list').children).toHaveLength(0);
+    expect(page.el('out').textContent).toBe('Loading approved comments…');
+    expect(page.el('list').getAttribute('aria-busy')).toBe('true');
+    failed.reject(NETWORK_DOWN);
+    await refresh;
+    expect(page.el('list').children).toHaveLength(0);
+    expect(page.el('out').textContent).toBe('Could not load comments: Failed to fetch');
+    expect(page.el('list').getAttribute('aria-busy')).toBe('false');
+    page.el('statusFilter').value = 'pending';
+    await page.load();
+    expect(page.row('A').ta.value).toBe('Unsent through failure');
+    expect(page.doc.activeElement).toBe(page.el('statusFilter'));
+  });
+
+  it.each(['success', 'failure'] as const)('ignores an obsolete list %s after the newest view has rendered', async (outcome) => {
+    const old = Promise.withResolvers<CommentResponse>();
+    const newest = Promise.withResolvers<CommentResponse>();
+    let reads = 0;
+    const page = commentsPage(async () => ++reads === 1 ? old.promise : newest.promise);
+    const previous = page.load();
+    page.el('statusFilter').value = 'approved';
+    page.el('statusFilter').focus();
+    const current = page.load();
+    newest.resolve(response({ comments: [{ ...comment('Newest'), status: 'approved' }] }));
+    await current;
+    if (outcome === 'success') old.resolve(response({ comments: [comment('Obsolete')] }));
+    else old.reject(NETWORK_DOWN);
+    await previous;
+    expect(page.el('list').children).toHaveLength(1);
+    expect(page.row('Newest').action('Unapprove')).toBeDefined();
+    expect(page.el('out').textContent).toBe('');
+    expect(page.el('list').getAttribute('aria-busy')).toBe('false');
+    expect(page.doc.activeElement).toBe(page.el('statusFilter'));
+  });
+
+  it('keeps the newest loading state when an obsolete request fails first', async () => {
+    const old = Promise.withResolvers<CommentResponse>();
+    const newest = Promise.withResolvers<CommentResponse>();
+    let reads = 0;
+    const page = commentsPage(async () => ++reads === 1 ? old.promise : newest.promise);
+    const previous = page.load();
+    page.el('statusFilter').value = 'approved';
+    const current = page.load();
+    old.reject(NETWORK_DOWN);
+    await previous;
+    expect(page.el('out').textContent).toBe('Loading approved comments…');
+    expect(page.el('list').getAttribute('aria-busy')).toBe('true');
+    newest.resolve(response({ comments: [] }));
+    await current;
+    expect(page.el('out').textContent).toBe('No approved comments.');
+    expect(page.el('list').getAttribute('aria-busy')).toBe('false');
+  });
+
+  it.each(['approve', 'reply'] as const)('does not let a late %s completion replace the newer filter view or status', async (action) => {
+    const mutation = Promise.withResolvers<CommentResponse>();
+    const fetch = vi.fn(async (url: string, options: { method: string }) => options.method === 'POST'
+      ? mutation.promise : response({ comments: new URL(url, 'http://localhost').searchParams.get('status') === 'approved' ? [] : [comment('A')] }));
+    const page = commentsPage(fetch);
+    await page.load();
+    await page.type('A', 'Sent reply');
+    const pending = action === 'reply' ? page.row('A').form.fire('submit') : page.row('A').action('Approve').click();
+    page.el('statusFilter').value = 'approved';
+    page.el('statusFilter').focus();
+    await page.load();
+    mutation.resolve(response());
+    await pending;
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(page.el('list').children).toHaveLength(0);
+    expect(page.el('out').textContent).toBe('No approved comments.');
+    expect(page.doc.activeElement).toBe(page.el('statusFilter'));
+    page.el('statusFilter').value = 'pending';
+    await page.load();
+    expect(page.row('A').ta.value).toBe(action === 'reply' ? '' : 'Sent reply');
+  });
+
+  it.each(['approve', 'delete', 'reply'] as const)('refreshes both concurrent %s completions in the same filter', async (action) => {
+    const mutations = { A: Promise.withResolvers<CommentResponse>(), B: Promise.withResolvers<CommentResponse>() };
+    let stored = [comment('A'), comment('B')];
+    if (action === 'reply') stored = stored.map((c) => ({ ...c, status: 'approved' }));
+    const page = commentsPage(async (url, options) => {
+      if (options.method === 'GET') return response({ comments: [...stored] });
+      const id = url.includes('/A') ? 'A' : 'B';
+      await mutations[id].promise;
+      if (action === 'reply') stored.push({ ...comment('Reply-' + id), status: 'approved', isAuthor: true });
+      else stored = stored.filter((c) => c.id !== id);
+      return response();
+    });
+    if (action === 'reply') page.el('statusFilter').value = 'approved';
+    await page.load();
+    await page.type('A', 'Reply to A');
+    await page.type('B', 'Reply to B');
+    const start = (id: string) => action === 'reply'
+      ? page.row(id).form.fire('submit')
+      : page.row(id).action(action === 'approve' ? 'Approve' : 'Delete').click();
+    const first = start('A');
+    const second = start('B');
+    mutations.A.resolve(response());
+    await first;
+    expect(page.row('B')).toBeDefined();
+    mutations.B.resolve(response());
+    await second;
+    const names = page.el('list').children.map((row) => row.children[0]?.children[0]?.textContent);
+    expect(names).toEqual(action === 'reply' ? ['A', 'B', 'Reply-A', 'Reply-B'] : []);
+  });
+
+  it.each([
+    ['approve', 'reply'], ['approve', 'filter'], ['approve', 'filter-then-body'],
+    ['reply', 'reply'], ['reply', 'filter'], ['reply', 'filter-then-body'],
+  ] as const)('preserves the latest focus across overlapping %s refreshes unless navigation supersedes it: %s', async (action, destination) => {
+    const mutations = { A: Promise.withResolvers<CommentResponse>(), B: Promise.withResolvers<CommentResponse>() };
+    const firstRefresh = Promise.withResolvers<CommentResponse>();
+    const refreshStarted = Promise.withResolvers<void>();
+    let stored = [comment('A'), comment('B'), comment('C')];
+    let reads = 0;
+    const page = commentsPage(async (url, options) => {
+      if (options.method === 'GET') {
+        if (++reads === 2) { refreshStarted.resolve(); return firstRefresh.promise; }
+        return response({ comments: [...stored] });
+      }
+      const id = url.includes('/A') ? 'A' : 'B';
+      await mutations[id].promise;
+      if (action === 'approve') stored = stored.filter((c) => c.id !== id);
+      return response();
+    });
+    await page.load();
+    await page.type('A', 'Reply to A');
+    await page.type('B', 'Reply to B');
+    const start = (id: string) => {
+      const row = page.row(id);
+      (action === 'reply' ? row.send : row.action('Approve')).focus();
+      return action === 'reply' ? row.form.fire('submit') : row.action('Approve').click();
+    };
+    const first = start('A');
+    const second = start('B');
+    const draft = await page.type('C', 'Keep this unsent reply');
+    draft.focus();
+    draft.setSelectionRange(5, 9, 'backward');
+    mutations.A.resolve(response());
+    await refreshStarted.promise;
+    expect(page.doc.activeElement).toBe(page.doc.body);
+    if (destination !== 'reply') {
+      page.el('statusFilter').focus();
+      await page.doc.fire('focusin');
+      if (destination === 'filter-then-body') page.doc.activeElement = page.doc.body;
+    }
+    mutations.B.resolve(response());
+    await second;
+    firstRefresh.resolve(response({ comments: [comment('B'), comment('C')] }));
+    await first;
+    expect(page.row('C').ta.value).toBe('Keep this unsent reply');
+    expect(page.el('list').children.map((row) => row.children[0]?.children[0]?.textContent))
+      .toEqual(action === 'reply' ? ['A', 'B', 'C'] : ['C']);
+    if (destination === 'reply') {
+      expect(page.doc.activeElement).toBe(page.row('C').ta);
+      expect([page.row('C').ta.selectionStart, page.row('C').ta.selectionEnd, page.row('C').ta.selectionDirection]).toEqual([5, 9, 'backward']);
+    } else {
+      expect(page.doc.activeElement).toBe(destination === 'filter' ? page.el('statusFilter') : page.doc.body);
+    }
+  });
+
+  it('keeps a newer same-comment reply locked when an older refresh finishes', async () => {
+    const oldRefresh = Promise.withResolvers<CommentResponse>();
+    const oldRefreshStarted = Promise.withResolvers<void>();
+    const newReply = Promise.withResolvers<CommentResponse>();
+    const newReplyStarted = Promise.withResolvers<void>();
+    const bodies: string[] = [];
+    let reads = 0;
+    const page = commentsPage(async (url, options) => {
+      if (options.method === 'GET') {
+        if (++reads === 2) { oldRefreshStarted.resolve(); return oldRefresh.promise; }
+        return response({ comments: url.endsWith('approved') ? [] : [comment('A')] });
+      }
+      bodies.push(JSON.parse(options.body!).body);
+      if (bodies.length === 2) { newReplyStarted.resolve(); return newReply.promise; }
+      return response();
+    });
+    await page.load();
+    await page.type('A', 'First reply');
+    const first = page.row('A').form.fire('submit');
+    await oldRefreshStarted.promise;
+    page.el('statusFilter').value = 'approved';
+    await page.load();
+    page.el('statusFilter').value = 'pending';
+    await page.load();
+    await page.type('A', 'Second reply');
+    const second = page.row('A').form.fire('submit');
+    await newReplyStarted.promise;
+    oldRefresh.resolve(response({ comments: [comment('A')] }));
+    await first;
+    expect(page.row('A').send.disabled).toBe(true);
+    await page.row('A').form.fire('submit');
+    expect(bodies).toEqual(['First reply', 'Second reply']);
+    newReply.resolve(response());
+    await second;
+    expect(page.row('A').send.disabled).toBe(false);
+    expect(page.row('A').ta.value).toBe('');
+  });
+
+  it.each(['approve', 'reply'] as const)('suppresses a late %s failure while the newer filter is loading', async (action) => {
+    const mutation = Promise.withResolvers<CommentResponse>();
+    const refresh = Promise.withResolvers<CommentResponse>();
+    const page = commentsPage(async (url, options) => options.method === 'POST'
+      ? mutation.promise : new URL(url, 'http://localhost').searchParams.get('status') === 'approved' ? refresh.promise : response({ comments: [comment('A')] }));
+    await page.load();
+    await page.type('A', 'Unsent after failure');
+    const pending = action === 'reply' ? page.row('A').form.fire('submit') : page.row('A').action('Approve').click();
+    page.el('statusFilter').value = 'approved';
+    const current = page.load();
+    mutation.reject(NETWORK_DOWN);
+    await pending;
+    expect(page.el('out').textContent).toBe('Loading approved comments…');
+    expect(page.el('list').getAttribute('aria-busy')).toBe('true');
+    refresh.resolve(response({ comments: [] }));
+    await current;
+    page.el('statusFilter').value = 'pending';
+    await page.load();
+    expect(page.row('A').ta.value).toBe('Unsent after failure');
+    expect(page.row('A').send.disabled).toBe(false);
+  });
+
   it('switching the view clears the previous view\'s empty-state message', async () => {
     const approved = {
       id: 'c1', name: 'Reader', isAuthor: false, translationKey: 'tk1', locale: 'de',
       createdAt: '2026-09-29T04:56:50Z', status: 'approved', body: 'Hallo',
     };
-    const { el } = loadPage('public/comments.html', {
-      fetch: async () => ({ status: 200, ok: true, json: async () => ({ comments: [approved] }) }),
-    });
+    const { el } = commentsPage(async () => response({ comments: [approved] }));
     el('out').textContent = 'No pending comments.';
     el('statusFilter').value = 'approved';
     await el('statusFilter').fire('change');
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(el('list').children).toHaveLength(1);
     expect(el('out').textContent).toBe('');
+  });
+
+  it.each(['de', 'en'])('keeps %s discussion visible to moderators and explains why it is not public', (locale) => {
+    const { ctx } = loadPage('public/comments.html', {});
+    const row = vm.runInContext('row', ctx) as (comment: unknown) => Element;
+    const rendered = row({ id: 'c1', name: '<reader>', translationKey: 'tk1', locale, createdAt: '2026-10-27T00:00:00Z', status: 'approved', body: 'Retained discussion', publicLocale: false });
+    expect(rendered.children.some((child) => child.textContent.includes('not published for this story'))).toBe(true);
+    expect(rendered.children.some((child) => child.textContent === 'Retained discussion')).toBe(true);
+    expect(rendered.children.find((child) => child.textContent.includes('not published for this story'))!.textContent)
+      .toContain(locale === 'de' ? 'German' : 'English');
+  });
+
+  it('traverses beyond 500 approved rows in both directions, preserving drafts and navigation focus', async () => {
+    const stored = Array.from({ length: 551 }, (_, i) => ({ ...comment(String(i)), status: 'approved' }));
+    const page = commentsPage(async (url) => {
+      const offset = Number(new URL(url, 'http://localhost').searchParams.get('offset'));
+      return response({ comments: stored.slice(offset, offset + 50), hasMore: offset + 50 < stored.length });
+    });
+    page.el('statusFilter').value = 'approved';
+    await page.load();
+    expect(page.row('0').action('Unapprove')).toBeDefined();
+    expect(page.el('previousPage').disabled).toBe(true);
+    await page.type('0', 'Keep this across all pages');
+    for (let n = 2; n <= 12; n++) {
+      await page.el('nextPage').click();
+      expect(page.el('pageIndicator').textContent).toBe(`Page ${n}`);
+      expect(page.doc.activeElement).toBe(page.el('pageIndicator'));
+      expect(page.el('list').children.length).toBeLessThanOrEqual(50);
+    }
+    expect(page.row('550').action('Delete')).toBeDefined();
+    expect(page.el('nextPage').disabled).toBe(true);
+    for (let n = 11; n >= 1; n--) await page.el('previousPage').click();
+    expect(page.row('0').ta.value).toBe('Keep this across all pages');
+    expect(page.el('pageIndicator').textContent).toBe('Page 1');
+    expect(page.el('previousPage').disabled).toBe(true);
+  });
+
+  it.each(['Approve', 'Unapprove', 'Delete', 'Spam', 'Reply'])('resets to page one after %s without skipping a shifted boundary row', async (action) => {
+    const status = action === 'Unapprove' ? 'approved' : 'pending';
+    let stored = Array.from({ length: 101 }, (_, i) => ({ ...comment(String(i)), status }));
+    const requests: number[] = [];
+    const page = commentsPage(async (url, options) => {
+      if (options.method !== 'GET') {
+        if (action !== 'Reply') stored = stored.filter((c) => c.id !== '50');
+        return response();
+      }
+      const offset = Number(new URL(url, 'http://localhost').searchParams.get('offset'));
+      requests.push(offset);
+      return response({ comments: stored.slice(offset, offset + 50), hasMore: offset + 50 < stored.length });
+    });
+    page.el('statusFilter').value = status;
+    await page.load();
+    await page.type('0', 'Still writing on page one');
+    await page.el('nextPage').click();
+    if (action === 'Reply') {
+      await page.type('50', 'Publish this reply');
+      await page.row('50').form.fire('submit');
+    } else await page.row('50').action(action).click();
+    expect(requests).toEqual([0, 50, 0]);
+    expect(page.row('0').ta.value).toBe('Still writing on page one');
+    expect(page.el('pageIndicator').textContent).toBe('Page 1');
+    await page.el('nextPage').click();
+    expect(page.row(action === 'Reply' ? '50' : '51')).toBeDefined();
+    if (action === 'Reply') expect(page.row('50').ta.value).toBe('');
+  });
+
+  it.each(['Delete', 'Spam'])('a cancelled %s leaves the current page and drafts untouched without a request', async (action) => {
+    const fetch = vi.fn(async (url: string) => {
+      const offset = Number(new URL(url, 'http://localhost').searchParams.get('offset'));
+      return response({ comments: [comment(offset ? 'B' : 'A')], hasMore: !offset });
+    });
+    const page = commentsPage(fetch);
+    page.ctx.AdminConfirm = { ask: async () => false };
+    await page.load();
+    await page.el('nextPage').click();
+    await page.type('B', 'Keep this');
+    await page.row('B').action(action).click();
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(page.row('B').ta.value).toBe('Keep this');
+    expect(page.el('pageIndicator').textContent).toBe('Page 2');
+  });
+
+  it('keeps Previous usable when another moderator empties the last page and resets on filter change', async () => {
+    const fetch = vi.fn(async (url: string) => {
+      const offset = Number(new URL(url, 'http://localhost').searchParams.get('offset'));
+      return response({ comments: offset ? [] : [comment('A')], hasMore: !offset });
+    });
+    const page = commentsPage(fetch);
+    await page.load();
+    await page.el('nextPage').click();
+    expect(page.el('out').textContent).toBe(EDITOR_COPY.commentsEmptyPage);
+    expect(page.el('nextPage').disabled).toBe(true);
+    expect(page.el('previousPage').disabled).toBe(false);
+    await page.el('previousPage').click();
+    expect(page.row('A')).toBeDefined();
+    await page.el('nextPage').click();
+    page.el('statusFilter').value = 'approved';
+    await page.el('statusFilter').fire('change');
+    expect(fetch).toHaveBeenLastCalledWith('/moderation/comments?status=approved&offset=0', expect.objectContaining({ method: 'GET' }));
+    expect(page.el('pageIndicator').textContent).toBe('Page 1');
+  });
+
+  it('disables stale navigation and actions during a failed page request; reselecting the filter recovers', async () => {
+    const pending = Promise.withResolvers<CommentResponse>();
+    const page = commentsPage(async (url) => url.includes('offset=50')
+      ? pending.promise : response({ comments: [comment('A')], hasMore: true }));
+    await page.load();
+    await page.type('A', 'Survives a failed page');
+    const next = page.el('nextPage').click();
+    expect(page.el('previousPage').disabled).toBe(true);
+    expect(page.el('nextPage').disabled).toBe(true);
+    expect(page.el('list').children).toHaveLength(0);
+    pending.resolve({ status: 400, ok: false, json: async () => ({ error: 'invalid pagination' }) });
+    await next;
+    expect(page.el('out').textContent).toBe(EDITOR_COPY.commentsPaginationError);
+    expect(page.el('previousPage').disabled).toBe(true);
+    expect(page.el('nextPage').disabled).toBe(true);
+    await page.el('statusFilter').fire('change');
+    expect(page.row('A').ta.value).toBe('Survives a failed page');
+    expect(page.el('nextPage').disabled).toBe(false);
+  });
+
+  it.each(['success', 'failure'])('ignores an obsolete offset response (%s) after returning to the same status at page one', async (outcome) => {
+    const old = Promise.withResolvers<CommentResponse>();
+    const page = commentsPage(async (url) => url.includes('offset=50')
+      ? old.promise : response({ comments: [comment('A')], hasMore: true }));
+    await page.load();
+    const next = page.el('nextPage').click();
+    await page.el('statusFilter').fire('change');
+    if (outcome === 'success') old.resolve(response({ comments: [comment('Obsolete')], hasMore: false }));
+    else old.reject(NETWORK_DOWN);
+    await next;
+    expect(page.row('A')).toBeDefined();
+    expect(page.el('pageIndicator').textContent).toBe('Page 1');
+    expect(page.el('nextPage').disabled).toBe(false);
+    expect(page.el('previousPage').disabled).toBe(true);
+    expect(page.el('out').textContent).toBe('');
+  });
+
+  it.each(['Approve', 'Reply'])('a late %s completion cannot reset a newly selected page', async (action) => {
+    const mutation = Promise.withResolvers<CommentResponse>();
+    const fetch = vi.fn(async (url: string, options: { method: string }) => {
+      if (options.method !== 'GET') return mutation.promise;
+      const offset = Number(new URL(url, 'http://localhost').searchParams.get('offset'));
+      return response({ comments: [comment(offset ? 'B' : 'A')], hasMore: !offset });
+    });
+    const page = commentsPage(fetch);
+    await page.load();
+    await page.type('A', 'My reply');
+    const saving = action === 'Reply' ? page.row('A').form.fire('submit') : page.row('A').action('Approve').click();
+    await page.el('nextPage').click();
+    mutation.resolve(response());
+    await saving;
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(page.row('B')).toBeDefined();
+    expect(page.el('pageIndicator').textContent).toBe('Page 2');
+  });
+
+  it('uses the localized immediate-public-read deletion warning with the target reader name', async () => {
+    const ask = vi.fn(async () => false);
+    const page = commentsPage(async () => response({ comments: [{ ...comment('Reader <name>'), status: 'approved' }] }));
+    page.ctx.AdminConfirm = { ask };
+    await page.load();
+    await page.row('Reader <name>').action('Delete').click();
+    expect(ask).toHaveBeenCalledWith(expect.objectContaining({
+      body: EDITOR_COPY.commentsDeleteApprovedBody!.replace('{name}', 'Reader <name>'),
+      danger: true,
+    }));
+  });
+
+  it('refreshes each concurrent page-two mutation even after the first resets pagination', async () => {
+    const mutations = { '50': Promise.withResolvers<CommentResponse>(), '51': Promise.withResolvers<CommentResponse>() };
+    let stored = Array.from({ length: 52 }, (_, i) => comment(String(i)));
+    const offsets: number[] = [];
+    const page = commentsPage(async (url, options) => {
+      if (options.method !== 'GET') {
+        const id = url.includes('/50/') ? '50' : '51';
+        await mutations[id].promise;
+        stored = stored.filter((c) => c.id !== id);
+        return response();
+      }
+      const offset = Number(new URL(url, 'http://localhost').searchParams.get('offset'));
+      offsets.push(offset);
+      return response({ comments: stored.slice(offset, offset + 50), hasMore: offset + 50 < stored.length });
+    });
+    await page.load();
+    await page.el('nextPage').click();
+    const first = page.row('50').action('Approve').click();
+    const second = page.row('51').action('Approve').click();
+    mutations['50'].resolve(response());
+    await first;
+    expect(page.el('pageIndicator').textContent).toBe('Page 1');
+    expect(page.el('nextPage').disabled).toBe(false);
+    mutations['51'].resolve(response());
+    await second;
+    expect(offsets).toEqual([0, 50, 0, 0]);
+    expect(page.el('nextPage').disabled).toBe(true);
   });
 });
 
@@ -503,10 +1445,10 @@ describe('posts.html status views and language states', () => {
     return windowStub.PostsFilter;
   };
   const library = [
-    { ...post, translationKey: 'a', titleDe: 'Altstadt', status: 'draft', country: 'Romania', region: 'europe', hasEnBody: true },
-    { ...post, translationKey: 'b', titleDe: 'Parks', status: 'published', hasUnpublishedChanges: true, country: 'Romania', region: 'europe', hasEnBody: false },
-    { ...post, translationKey: 'c', titleDe: 'Donau', status: 'published', country: 'Hungary', region: 'europe', hasEnBody: true },
-    { ...post, translationKey: 'd', titleDe: 'Burg', status: 'draft', country: 'Hungary', region: 'europe' },
+    { ...post, translationKey: 'a', title: 'Altstadt', status: 'draft', country: 'Romania', region: 'europe', secondaryStatus: 'started' },
+    { ...post, translationKey: 'b', title: 'Parks', status: 'published', hasUnpublishedChanges: true, country: 'Romania', region: 'europe', secondaryStatus: 'empty' },
+    { ...post, translationKey: 'c', title: 'Donau', status: 'published', country: 'Hungary', region: 'europe', secondaryStatus: 'started' },
+    { ...post, translationKey: 'd', title: 'Burg', status: 'draft', country: 'Hungary', region: 'europe' },
   ];
   const views = (el: (id: string) => Element) => el('statusViews').children.map((button) => ({
     status: button.attrs['data-status'],
@@ -535,7 +1477,7 @@ describe('posts.html status views and language states', () => {
       { status: 'draft', pressed: 'false', count: '1' },
       { status: 'published', pressed: 'true', count: '1' },
       { status: 'unpublished', pressed: 'false', count: '1' },
-      { status: 'missing-en', pressed: 'false', count: '1' },
+      { status: 'missing-secondary', pressed: 'false', count: '1' },
     ]);
 
     el('fSearch').value = 'no such story';
@@ -563,7 +1505,7 @@ describe('posts.html status views and language states', () => {
     expect(views(el).map((v) => v.count)).toEqual(['2', '1', '1', '1', '1']);
 
     // The select is the same state: changing it moves the pressed view.
-    el('fStatus').value = 'missing-en';
+    el('fStatus').value = 'missing-secondary';
     await el('fStatus').fire('input');
     expect(views(el).map((v) => v.pressed)).toEqual(['false', 'false', 'false', 'false', 'true']);
   });
@@ -577,11 +1519,11 @@ describe('posts.html status views and language states', () => {
     expect(views(el).map((v) => v.count)).toEqual(['', '', '', '', '']);
   });
 
-  it('reports EN as present, missing or unknown only from hasEnBody, and keeps trip meta', () => {
+  it('reports secondary body state without claiming publish readiness, and keeps trip meta', () => {
     const { ctx, el } = loadPosts({ PostsFilter: realFilter() });
     const rows = [
-      { ...post, translationKey: 'p', country: 'Romania', date: '2024-05-01', hasEnBody: true },
-      { ...post, translationKey: 'm', country: 'Romania', date: '2024-05-01', hasEnBody: false },
+      { ...post, translationKey: 'p', country: 'Romania', date: '2024-05-01', secondaryStatus: 'started' },
+      { ...post, translationKey: 'm', country: 'Romania', date: '2024-05-01', secondaryStatus: 'empty' },
       { ...post, translationKey: 'u', country: 'Romania', date: '2024-05-01' },
     ];
     (vm.runInContext('renderRows', ctx) as (posts: unknown[]) => void)(rows);
@@ -592,12 +1534,12 @@ describe('posts.html status views and language states', () => {
       return languages.children.map((badge) => ({ code: badge.textContent, className: badge.className, name: badge.attrs['aria-label'] }));
     });
     for (const rowBadges of badges) {
-      expect(rowBadges[0]).toEqual({ code: 'DE', className: 'post-language', name: EDITOR_COPY.postsGermanLocale });
+      expect(rowBadges[0]).toEqual({ code: 'DE', className: 'post-language', name: 'German: primary language' });
     }
     expect(badges.map((rowBadges) => rowBadges[1])).toEqual([
-      { code: 'EN', className: 'post-language', name: EDITOR_COPY.postsEnglishPresent },
-      { code: 'EN', className: 'post-language is-missing', name: EDITOR_COPY.postsEnglishMissing },
-      { code: 'EN', className: 'post-language is-unknown', name: EDITOR_COPY.postsEnglishUnknown },
+      { code: 'EN', className: 'post-language', name: ui.en['editor.chrome.languageBodyStarted'].replace('{language}', 'English') },
+      { code: 'EN', className: 'post-language is-missing', name: ui.en['editor.chrome.languageBodyEmpty'].replace('{language}', 'English') },
+      { code: 'EN', className: 'post-language', name: ui.en['editor.chrome.languageBodyUnknown'].replace('{language}', 'English') },
     ]);
 
     // Country and trip date survive under the title; only a confirmed missing
@@ -609,6 +1551,19 @@ describe('posts.html status views and language states', () => {
       ['Romania', 'post-trip-sep', '2024-05-01', 'post-trip-sep', 'post-locale-state'],
       ['Romania', 'post-trip-sep', '2024-05-01'],
     ]);
+  });
+
+  it.each([{ locales: ['en'] }, { locales: ['en', 'de'] }])('shows only enabled language indicators in primary order: %j', ({ locales }) => {
+    const { ctx, el } = loadPosts();
+    vm.runInContext(`SiteLanguage.accept({primary:'en',locales:${JSON.stringify(locales)},lockedAt:null,updatedAt:'2026-10-27T00:00:00.000Z'})`, ctx);
+    const renderRows = vm.runInContext('renderRows', ctx) as (rows: unknown[]) => void;
+    renderRows([{ ...post, title: 'English title', secondaryStatus: locales.length === 1 ? 'none' : 'omitted' }]);
+    const cells = el('postsList').children[0]!.children;
+    const badges = cells.find((cell) => cell.className === 'col-languages')!.children[0]!.children;
+    expect(badges.map((badge) => badge.textContent)).toEqual(locales.map((locale) => locale.toUpperCase()));
+    expect(badges[0]!.attrs['aria-label']).toBe('English: primary language');
+    if (locales.length === 2) expect(badges[1]!.attrs['aria-label']).toBe('German: not requested for publication');
+    expect(cells.find((cell) => cell.className === 'col-title')!.children.some((child) => child.textContent === 'English title')).toBe(true);
   });
 });
 
@@ -741,8 +1696,8 @@ async function chooseModel(el: (id: string) => Element, id: string, label: strin
 
 /** settings.html over a contract-shaped fake API. `route` answers first; /settings is served from `state`. */
 async function apiPage(initial: SettingsResponse, opts: {
-  confirm?: (question: Question) => boolean;
-  route?: (request: ApiRequest, setState: (next: SettingsResponse) => void) => Response | undefined;
+  confirm?: (question: Question) => boolean | Promise<boolean>;
+  route?: (request: ApiRequest, setState: (next: SettingsResponse) => void) => Response | undefined | Promise<Response | undefined>;
   listModels?: (baseUrl: string, apiKey: string | null) => Promise<string[]>;
   mixedContentWarning?: (url: string, protocol: string) => string;
   hash?: string;
@@ -751,13 +1706,14 @@ async function apiPage(initial: SettingsResponse, opts: {
   const setState = (next: SettingsResponse) => { state = next; };
   const requests: ApiRequest[] = [];
   const questions: Question[] = [];
+  const storageWrite = vi.fn();
   const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
     const request: ApiRequest = {
       url, method: init?.method ?? 'GET',
       ...(typeof init?.body === 'string' ? { body: JSON.parse(init.body) as Record<string, unknown> } : {}),
     };
     requests.push(request);
-    const routed = opts.route?.(request, setState);
+    const routed = await opts.route?.(request, setState);
     if (routed) return routed;
     if (url === '/settings' && request.method === 'POST') state = { ...state, ...(request.body as Partial<SettingsResponse>) };
     if (url === '/settings') return Response.json(state);
@@ -767,6 +1723,7 @@ async function apiPage(initial: SettingsResponse, opts: {
   const listModels = vi.fn(opts.listModels ?? listedByDefault);
   const page = loadSettingsPage({
     fetch: fetcher,
+    localStorage: { setItem: storageWrite }, sessionStorage: { setItem: storageWrite },
     LLM: { mixedContentWarning: opts.mixedContentWarning ?? (() => ''), listModels },
     AdminConfirm: {
       ask: async (question: Question) => { questions.push(question); return opts.confirm ? opts.confirm(question) : true; },
@@ -779,13 +1736,13 @@ async function apiPage(initial: SettingsResponse, opts: {
     }),
   });
   await callPage(page.ctx, 'fill', state);
-  return { ...page, requests, questions, listModels, fetcher };
+  return { ...page, requests, questions, listModels, fetcher, storageWrite };
 }
 
 const calls = (requests: ApiRequest[]) => requests.map((r) => r.method + ' ' + r.url);
 
 describe('settings.html tabs', () => {
-  const PANELS = ['panel-ai-models', 'panel-images', 'panel-comments', 'panel-identity', 'panel-site'];
+  const PANELS = ['panel-ai-models', 'panel-images', 'panel-comments', 'panel-identity', 'panel-language', 'panel-site'];
 
   function tabsPage(hash = '', narrow = false) {
     const replaced: string[] = [];
@@ -827,6 +1784,14 @@ describe('settings.html tabs', () => {
     await t.el('tabbtn-identity').fire('keydown', { key: 'ArrowUp' });
     expect(t.visible()).toEqual(['panel-comments']);
     expect(t.replaced).toEqual(['#comments']);
+  });
+
+  it('opens language settings directly and includes the panel in keyboard navigation', async () => {
+    const t = tabsPage('#language');
+    expect(t.visible()).toEqual(['panel-language']);
+    expect(t.title()).toBe(' · Languages');
+    await t.el('tabbtn-language').fire('keydown', { key: 'ArrowDown' });
+    expect(t.visible()).toEqual(['panel-site']);
   });
 
   it('a vertical index moves with Up/Down, Home/End, and mirrors the tab in the hash and title', async () => {
@@ -882,7 +1847,7 @@ describe('settings.html actions survive a dropped connection', () => {
     const { el } = loadSettingsPage();
     await el('rebuild').click();
     expect(el('rebuild').disabled).toBe(false);
-    expect(el('out').textContent).toBe('Rebuild failed: TypeError: Failed to fetch');
+    expect(el('out').textContent).toBe(ui.en['admin.build.unknown']);
   });
 
   it('Rebuild does not start when the confirm is declined', async () => {
@@ -893,7 +1858,358 @@ describe('settings.html actions survive a dropped connection', () => {
   });
 });
 
+describe('Settings rebuild report and independent status', () => {
+  it.each([true, false])('shows promoted=%s separately from the latest attempt and live observation', async (ok) => {
+    const requests: string[] = [];
+    const { el } = loadSettingsPage({
+      fetch: async (url: string) => {
+        requests.push(url);
+        if (url === '/rebuild') return Response.json({ ok, release: ok ? '1793000000000-1-0001' : undefined, code: 'build_failed', error: 'SECRET', liveRelease: null });
+        if (url === '/rebuild/status') return Response.json({ record: 'unreadable', running: null, last: null, live: { release: '1793000000000-1-0001', stampedAt: '2026-10-26T00:00:00Z' } });
+        throw new Error('Unexpected ' + url);
+      },
+    });
+    await el('rebuild').click();
+    expect(requests).toEqual(['/rebuild', '/rebuild/status']);
+    expect(el('out').textContent).toContain(ok ? 'was promoted' : 'failed before a release was promoted');
+    expect(el('out').textContent).toContain('No live release yet');
+    expect(el('out').textContent).not.toContain('SECRET');
+    expect(el('buildStatus').textContent).toContain('record could not be read');
+    expect(el('buildStatus').textContent).toContain('observed serving');
+    expect(el('buildStatus').textContent).not.toContain('succeeded');
+  });
+});
+
 describe('settings.html providers', () => {
+  it.each(['default', 'ai', 'delete'] as const)('preserves an unsubmitted Add form across unrelated %s work', async (action) => {
+    const state = settingsResponse({ aiProviders: [LOCAL, ROUTER, DEEPSEEK] });
+    const page = await apiPage(state, {
+      route: (request, setState) => {
+        if (request.method === 'DELETE') {
+          const next = { ...state, aiProviders: [LOCAL, ROUTER] };
+          setState(next);
+          return Response.json(next);
+        }
+        if (request.url === '/ai-providers' && request.method === 'POST') return Response.json(state, { status: 201 });
+        return undefined;
+      },
+    });
+    const { el } = page;
+    await el('addProvider').click();
+    const formNode = el('providerForm');
+    el('providerName').value = 'Pending provider';
+    el('providerBaseUrl').value = 'https://pending.example/v1';
+    el('providerApiKey').value = 'fixture-unsubmitted-add';
+    if (action === 'default') await rowButton(providerRow(el, ROUTER.name), 'Set default').click();
+    else if (action === 'ai') await el('saveAi').click();
+    else await rowButton(providerRow(el, DEEPSEEK.name), 'Delete').click();
+    expect(el('providerForm')).toBe(formNode);
+    expect(formNode.hidden).toBe(false);
+    expect(el('providerName').value).toBe('Pending provider');
+    expect(el('providerBaseUrl').value).toBe('https://pending.example/v1');
+    expect(el('providerKind').value).toBe('openrouter');
+    expect(el('providerApiKey').value).toBe('fixture-unsubmitted-add');
+    expect(page.requests.every((r) => !r.body || !Object.hasOwn(r.body, 'apiKey'))).toBe(true);
+    await el('providerForm').fire('submit');
+    const writes = page.requests.filter((r) => r.body && Object.hasOwn(r.body, 'apiKey'));
+    expect(writes).toEqual([{
+      url: '/ai-providers', method: 'POST',
+      body: { name: 'Pending provider', kind: 'openrouter', baseUrl: 'https://pending.example/v1', apiKey: 'fixture-unsubmitted-add' },
+    }]);
+    expect(el('providerApiKey').value).toBe('');
+    expect(pageText(el)).not.toContain('fixture-unsubmitted-add');
+    expect(page.storageWrite).not.toHaveBeenCalled();
+  });
+
+  it.each(['default', 'ai'] as const)('keeps an Edit replacement bound to its original provider after %s', async (action) => {
+    const state = settingsResponse({ aiProviders: [LOCAL, ROUTER, DEEPSEEK] });
+    const page = await apiPage(state, {
+      route: (request) => request.method === 'PUT' ? Response.json(state) : undefined,
+    });
+    const { el } = page;
+    await rowButton(providerRow(el, ROUTER.name), 'Edit').click();
+    el('providerName').value = 'Pending rename';
+    el('providerBaseUrl').value = 'https://replacement.example/v1';
+    el('providerApiKey').value = 'fixture-bound-replacement';
+    if (action === 'default') await rowButton(providerRow(el, DEEPSEEK.name), 'Set default').click();
+    else await el('saveAi').click();
+    expect(providerRow(el, ROUTER.name).children).toContain(el('providerForm'));
+    expect(el('providerApiKey').value).toBe('fixture-bound-replacement');
+    expect(el('providerKeyMoveWarning').hidden).toBe(true);
+    page.questions.length = 0;
+    await el('providerForm').fire('submit');
+    expect(page.questions).toEqual([]);
+    expect(page.requests.filter((r) => r.body && Object.hasOwn(r.body, 'apiKey'))).toEqual([{
+      url: '/ai-providers/openrouter', method: 'PUT',
+      body: { name: 'Pending rename', baseUrl: 'https://replacement.example/v1', apiKey: 'fixture-bound-replacement' },
+    }]);
+    expect(page.listModels.mock.calls.some((args) => args.includes('fixture-bound-replacement'))).toBe(false);
+    expect(pageText(el)).not.toContain('fixture-bound-replacement');
+    expect(page.storageWrite).not.toHaveBeenCalled();
+  });
+
+  it.each(['refused', 'network'] as const)('retains a pending key after unrelated %s failure and successful refresh', async (failure) => {
+    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER] }), {
+      route: (request) => {
+        if (request.method !== 'POST') return undefined;
+        if (failure === 'network') throw NETWORK_DOWN;
+        return Response.json({ error: 'Settings refused.' }, { status: 409 });
+      },
+    });
+    await rowButton(providerRow(page.el, ROUTER.name), 'Edit').click();
+    page.el('providerApiKey').value = 'fixture-retained-on-failure';
+    await page.el('saveAi').click();
+    expect(page.el('providerApiKey').value).toBe('fixture-retained-on-failure');
+    expect(page.el('providerForm').hidden).toBe(false);
+    expect(page.el('saveProvider').disabled).toBe(false);
+    expect(calls(page.requests)).toEqual(['POST /settings', 'GET /settings']);
+    expect(page.el('aiOut').textContent).toContain(failure === 'network' ? 'outcome is unknown' : 'Settings refused.');
+  });
+
+  it('retains and blocks an Edit form on failed refresh without interpreting it as Add', async () => {
+    let failRefresh = true;
+    const state = settingsResponse({ aiProviders: [LOCAL, ROUTER, DEEPSEEK] });
+    const page = await apiPage(state, {
+      route: (request) => {
+        if (request.method === 'GET' && request.url === '/settings' && failRefresh) throw NETWORK_DOWN;
+        if (request.method === 'PUT') return Response.json(state);
+        return undefined;
+      },
+    });
+    const { el } = page;
+    await rowButton(providerRow(el, ROUTER.name), 'Edit').click();
+    const staleAction = rowButton(providerRow(el, DEEPSEEK.name), 'Set default');
+    el('providerName').value = 'Pending edit';
+    el('providerBaseUrl').value = 'https://pending.example/v1';
+    el('providerApiKey').value = 'fixture-blocked-key';
+    await staleAction.click();
+    expect(el('providerForm').hidden).toBe(false);
+    expect(el('providerApiKey').value).toBe('fixture-blocked-key');
+    expect(el('providerName').value).toBe('Pending edit');
+    expect(el('providerBaseUrl').value).toBe('https://pending.example/v1');
+    expect(el('providerKindField').hidden).toBe(true);
+    expect(el('providersOut').textContent).toBe(EDITOR_COPY.settingsRegistryUnavailable);
+    for (const id of ['saveProvider', 'removeProviderKey', 'testProviderForm', 'addProvider', 'saveAi']) {
+      expect(el(id).disabled).toBe(true);
+    }
+    const before = page.requests.length;
+    await el('providerForm').fire('submit');
+    await el('removeProviderKey').click();
+    await el('testProviderForm').click();
+    await el('saveAi').click();
+    await staleAction.click();
+    expect(page.requests).toHaveLength(before);
+    failRefresh = false;
+    await callPage(page.ctx, 'reloadSettings');
+    expect(el('saveProvider').disabled).toBe(false);
+    expect(el('providersOut').textContent).toBe('');
+    expect(el('providerFormOut').textContent).toBe('');
+    expect(el('providerApiKey').value).toBe('fixture-blocked-key');
+    await el('providerForm').fire('submit');
+    expect(page.requests.find((r) => r.method === 'PUT')).toMatchObject({
+      url: '/ai-providers/openrouter', body: { apiKey: 'fixture-blocked-key', baseUrl: 'https://pending.example/v1' },
+    });
+    expect(page.requests.some((r) => r.url === '/ai-providers')).toBe(false);
+    expect(page.storageWrite).not.toHaveBeenCalled();
+  });
+
+  it('still confirms a genuinely blank-key URL move after unrelated work and retains edits when declined', async () => {
+    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER, DEEPSEEK] }), {
+      confirm: (question) => question.confirmLabel !== 'Save new URL',
+    });
+    const { el } = page;
+    await rowButton(providerRow(el, ROUTER.name), 'Edit').click();
+    el('providerName').value = 'Pending URL edit';
+    el('providerBaseUrl').value = 'https://blank-key.example/v1';
+    await el('saveAi').click();
+    expect(el('providerKeyMoveWarning').hidden).toBe(false);
+    const before = page.requests.length;
+    await el('providerForm').fire('submit');
+    expect(page.requests).toHaveLength(before);
+    expect(page.questions).toHaveLength(1);
+    expect(page.questions[0]!.body).toContain(ROUTER.baseUrl);
+    expect(page.questions[0]!.body).toContain('https://blank-key.example/v1');
+    expect(el('providerName').value).toBe('Pending URL edit');
+    expect(el('providerBaseUrl').value).toBe('https://blank-key.example/v1');
+    expect(el('providerApiKey').value).toBe('');
+    expect(el('providerForm').hidden).toBe(false);
+  });
+
+  it('does not erase input typed while an unrelated settings response is pending', async () => {
+    const pending = Promise.withResolvers<Response>();
+    const state = settingsResponse({ aiProviders: [LOCAL, ROUTER] });
+    const page = await apiPage(state, {
+      route: (request) => request.method === 'POST' ? pending.promise : undefined,
+    });
+    await page.el('addProvider').click();
+    const saving = page.el('saveAi').click();
+    page.el('providerName').value = 'Typed while saving';
+    page.el('providerBaseUrl').value = 'https://later.example/v1';
+    page.el('providerApiKey').value = 'fixture-later-key';
+    pending.resolve(Response.json(state));
+    await saving;
+    expect(page.el('providerApiKey').value).toBe('fixture-later-key');
+    expect(page.el('providerName').value).toBe('Typed while saving');
+    expect(page.el('providerBaseUrl').value).toBe('https://later.example/v1');
+  });
+
+  it.each([200, 409, 500])('keeps a replacement form intact when an older provider save returns %s', async (status) => {
+    const pending = Promise.withResolvers<Response>();
+    const state = settingsResponse({ aiProviders: [LOCAL, ROUTER, DEEPSEEK] });
+    const page = await apiPage(state, {
+      route: (request) => request.method === 'PUT' ? pending.promise : undefined,
+    });
+    const { el } = page;
+    await rowButton(providerRow(el, ROUTER.name), 'Edit').click();
+    el('providerBaseUrl').value = 'https://original-operation.example/v1';
+    el('providerApiKey').value = 'fixture-submitted-snapshot';
+    const saving = el('providerForm').fire('submit');
+    expect(el('providerApiKey').value).toBe('');
+    await rowButton(providerRow(el, DEEPSEEK.name), 'Edit').click();
+    el('providerName').value = 'New pending form';
+    el('providerBaseUrl').value = 'https://new-form.example/v1';
+    el('providerApiKey').value = 'fixture-new-form-key';
+    pending.resolve(Response.json(status === 200 ? state : {
+      code: status === 500 ? 'settings_partial_failure' : 'refused',
+      error: 'Original operation failed. Reload settings before retrying.',
+    }, { status }));
+    await saving;
+    expect(el('providerForm').hidden).toBe(false);
+    expect(providerRow(el, DEEPSEEK.name).children).toContain(el('providerForm'));
+    expect(el('providerApiKey').value).toBe('fixture-new-form-key');
+    expect(el('providerName').value).toBe('New pending form');
+    expect(el('providerBaseUrl').value).toBe('https://new-form.example/v1');
+    expect(el('providerFormOut').textContent).toBe('');
+    expect(el('saveProvider').disabled).toBe(false);
+    expect(page.requests[0]).toMatchObject({
+      url: '/ai-providers/openrouter',
+      body: { baseUrl: 'https://original-operation.example/v1', apiKey: 'fixture-submitted-snapshot' },
+    });
+    expect(el('providersOut').textContent).toContain(status === 200 ? 'Saved' : 'Original operation failed');
+    expect(pageText(el)).not.toContain('fixture-');
+  });
+
+  it('clears a submitted key before a 401 and follows login without persistence', async () => {
+    const page = await apiPage(settingsResponse(), {
+      route: (request) => request.method === 'POST' ? Response.json({}, { status: 401 }) : undefined,
+    });
+    await page.el('addProvider').click();
+    page.el('providerApiKey').value = 'fixture-auth-loss';
+    const saving = page.el('providerForm').fire('submit');
+    expect(page.el('providerApiKey').value).toBe('');
+    await saving;
+    expect(page.ctx.location).toMatchObject({ href: '/login' });
+    expect(calls(page.requests)).toEqual(['POST /ai-providers']);
+    expect(page.storageWrite).not.toHaveBeenCalled();
+  });
+
+  it('retains keys on local validation and declined removal, but clears intentional Cancel', async () => {
+    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER] }), { confirm: () => false });
+    await rowButton(providerRow(page.el, ROUTER.name), 'Edit').click();
+    page.el('providerName').value = '';
+    page.el('providerApiKey').value = 'fixture-not-submitted';
+    await page.el('providerForm').fire('submit');
+    await page.el('removeProviderKey').click();
+    expect(page.el('providerApiKey').value).toBe('fixture-not-submitted');
+    expect(page.requests).toEqual([]);
+    await page.el('cancelProvider').click();
+    expect(page.el('providerApiKey').value).toBe('');
+  });
+
+  it('reports a partial provider failure even when its refresh also fails', async () => {
+    const error = 'API key change saved, but settings were not saved. Reload settings before retrying.';
+    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER] }), {
+      route: (request) => request.method === 'PUT'
+        ? Response.json({ code: 'settings_partial_failure', error }, { status: 500 })
+        : Response.json({}, { status: 503 }),
+    });
+    await rowButton(providerRow(page.el, ROUTER.name), 'Edit').click();
+    page.el('providerApiKey').value = 'fixture-partial-refresh-failure';
+    await page.el('providerForm').fire('submit');
+    expect(page.el('providerApiKey').value).toBe('');
+    expect(page.el('providersOut').textContent).toContain(error);
+    expect(page.el('providersOut').textContent).toContain(EDITOR_COPY.settingsRegistryUnavailable);
+    expect(calls(page.requests)).toEqual(['PUT /ai-providers/openrouter', 'GET /settings']);
+  });
+
+  it('does not let a confirmed operation from a replaced form consume its new key', async () => {
+    const confirmation = Promise.withResolvers<boolean>();
+    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER, DEEPSEEK] }), {
+      confirm: () => confirmation.promise,
+    });
+    const { el } = page;
+    await rowButton(providerRow(el, ROUTER.name), 'Edit').click();
+    el('providerApiKey').value = 'fixture-original-pending';
+    const removing = el('removeProviderKey').click();
+    await rowButton(providerRow(el, DEEPSEEK.name), 'Edit').click();
+    expect(el('providerApiKey').value).toBe('');
+    el('providerApiKey').value = 'fixture-after-confirmation-opened';
+    confirmation.resolve(true);
+    await removing;
+    expect(page.requests).toEqual([]);
+    expect(el('providerApiKey').value).toBe('fixture-after-confirmation-opened');
+    expect(el('providerForm').hidden).toBe(false);
+  });
+
+  it('clears confirmed removal at handoff and leaves a later form intact on completion', async () => {
+    const response = Promise.withResolvers<Response>();
+    const started = Promise.withResolvers<void>();
+    const state = settingsResponse({ aiProviders: [LOCAL, ROUTER, DEEPSEEK] });
+    const page = await apiPage(state, {
+      route: (request) => {
+        if (request.method !== 'PUT') return undefined;
+        started.resolve();
+        return response.promise;
+      },
+    });
+    const { el } = page;
+    await rowButton(providerRow(el, ROUTER.name), 'Edit').click();
+    el('providerApiKey').value = 'fixture-discard-on-remove';
+    const removing = el('removeProviderKey').click();
+    await started.promise;
+    expect(el('providerApiKey').value).toBe('');
+    await rowButton(providerRow(el, DEEPSEEK.name), 'Edit').click();
+    el('providerApiKey').value = 'fixture-after-remove-handoff';
+    response.resolve(Response.json(state));
+    await removing;
+    expect(page.requests[0]).toEqual({ method: 'PUT', url: '/ai-providers/openrouter', body: { apiKey: null } });
+    expect(el('providerApiKey').value).toBe('fixture-after-remove-handoff');
+    expect(el('providerForm').hidden).toBe(false);
+  });
+
+  it('does not place an older form Test result into a different form', async () => {
+    const models = Promise.withResolvers<string[]>();
+    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER, DEEPSEEK] }), {
+      listModels: () => models.promise,
+    });
+    const { el } = page;
+    await rowButton(providerRow(el, ROUTER.name), 'Edit').click();
+    el('providerApiKey').value = 'fixture-test-original';
+    const testing = el('testProviderForm').click();
+    await rowButton(providerRow(el, DEEPSEEK.name), 'Edit').click();
+    el('providerApiKey').value = 'fixture-test-next-form';
+    models.resolve(['model']);
+    await testing;
+    expect(el('providerFormOut').textContent).toBe('');
+    expect(el('providerApiKey').value).toBe('fixture-test-next-form');
+    expect(page.listModels.mock.calls).toEqual([[ROUTER.baseUrl, 'fixture-test-original']]);
+  });
+
+  it('explains discarding an edited provider only when fresh settings prove it was removed', async () => {
+    const state = settingsResponse({ aiProviders: [LOCAL, ROUTER, DEEPSEEK] });
+    const page = await apiPage(state, {
+      route: (request) => request.method === 'GET' && request.url === '/settings'
+        ? Response.json({ ...state, aiProviders: [LOCAL, DEEPSEEK] }) : undefined,
+    });
+    await rowButton(providerRow(page.el, ROUTER.name), 'Edit').click();
+    page.el('providerApiKey').value = 'fixture-removed-provider';
+    await rowButton(providerRow(page.el, DEEPSEEK.name), 'Set default').click();
+    expect(page.el('providerForm').hidden).toBe(true);
+    expect(page.el('providerApiKey').value).toBe('');
+    expect(page.el('providersOut').textContent).toContain(EDITOR_COPY.settingsProviderRemoved);
+    expect(page.requests.every((r) => !r.body || !Object.hasOwn(r.body, 'apiKey'))).toBe(true);
+  });
+
   it('renders names and URLs as text only, with the default badge, kind and key state', async () => {
     const hostile = '<img src=x onerror=alert(1)>';
     const { el } = await apiPage(settingsResponse({
@@ -1637,10 +2953,15 @@ describe('settings.html against the real settings and provider routes', () => {
     const queue = createEncodeQueue({ store: media, storageDir: dir, lock: createWorkLock() });
     const unavailable = async (): Promise<never> => { throw new Error('Not part of this settings test'); };
     const app = buildServer({
+      trustProxy: TEST_TRUST,
       storageDir: dir, baseUrl: 'https://images.example', imgHost: 'images.example', siteDir: join(dir, 'site'),
       users, sessions, secrets, settings, media, encodeQueue: queue,
       posts: memoryPostStore(), pages: memoryPageStore(),
-      builder: { build: unavailable, hasRelease: () => false, quiesce: async () => {} }, backupDir: join(dir, 'backup'),
+      builder: {
+        build: unavailable, hasRelease: () => false, quiesce: async () => {},
+        initialize: async () => {},
+        status: async () => ({ live: null, running: null, last: null, record: 'missing' }),
+      }, backupDir: join(dir, 'backup'),
       dbBackup: { dir, runNow: unavailable, running: () => false, sweepTempFiles: () => [], list: () => [], listImageArchives: () => [], listRouteArchives: () => [], state: () => ({}), quiesce: async () => {} },
       dbCheck: unavailable,
     });
@@ -1680,6 +3001,57 @@ describe('settings.html against the real settings and provider routes', () => {
     };
     return { ...page, app, cookies, settings, secrets, fetcher, questions, refill, createProvider };
   }
+
+  it.each(['default', 'ai'] as const)('stores the pending Edit key only in A’s slot after unrelated %s work', async (action) => {
+    const page = await realPage();
+    const { el, app, cookies, secrets, settings, ctx } = page;
+    const a = await page.createProvider('fixture-a-original');
+    const createdB = await app.inject({
+      url: '/ai-providers', method: 'POST', cookies,
+      payload: { name: 'Provider B', kind: 'custom', baseUrl: 'https://b.example/v1', apiKey: 'fixture-b-unchanged' },
+    });
+    expect(createdB.statusCode).toBe(201);
+    const b = createdB.json<SettingsResponse>().aiProviders.find((p) => p.name === 'Provider B')!;
+    await page.refill();
+    await rowButton(providerRow(el, 'Router'), 'Edit').click();
+    el('providerName').value = 'Provider A edited';
+    el('providerBaseUrl').value = 'https://a-new.example/v1';
+    el('providerApiKey').value = 'fixture-a-replacement';
+    if (action === 'default') await rowButton(providerRow(el, b.name), 'Set default').click();
+    else await el('saveAi').click();
+    await callPage(ctx, 'ensureModels');
+    expect(el('providerApiKey').value).toBe('fixture-a-replacement');
+    expect(el('providerName').value).toBe('Provider A edited');
+    expect(el('providerBaseUrl').value).toBe('https://a-new.example/v1');
+    expect(el('providerKeyMoveWarning').hidden).toBe(true);
+    page.questions.length = 0;
+    await el('providerForm').fire('submit');
+    expect(page.questions).toEqual([]);
+    expect(await secrets.get('ai_provider_key:' + a.id)).toBe('fixture-a-replacement');
+    expect(await secrets.get('ai_provider_key:' + b.id)).toBe('fixture-b-unchanged');
+    expect(settings.get().aiProviders.find((p) => p.id === a.id)).toMatchObject({
+      name: 'Provider A edited', baseUrl: 'https://a-new.example/v1',
+    });
+    expect(el('providerApiKey').value).toBe('');
+    expect(pageText(el)).not.toContain('fixture-');
+    const writesWithReplacement = page.fetcher.mock.calls.filter(([, init]) =>
+      typeof init?.body === 'string' && init.body.includes('fixture-a-replacement'));
+    expect(writesWithReplacement).toHaveLength(1);
+    expect(writesWithReplacement[0]![0]).toBe('/ai-providers/' + a.id);
+    expect(page.fetcher.mock.calls.some(([, init]) =>
+      new Headers(init?.headers).get('authorization') === 'Bearer fixture-a-replacement')).toBe(false);
+    const response = await app.inject({ url: '/settings', cookies });
+    expect(response.body).not.toContain('fixture-');
+    expect(response.json<SettingsResponse>().aiProviders.find((p) => p.id === a.id)?.hasApiKey).toBe(true);
+    // Exercise the actual bilingual admin-copy projection, not a second test dictionary.
+    const copyResponse = await app.inject({ url: '/admin/editor-image-copy.js' });
+    vm.runInContext(copyResponse.body, ctx);
+    const delivered = ctx.EditorCopy as Record<'de' | 'en', Record<string, string>>;
+    for (const locale of ['de', 'en'] as const) {
+      expect(delivered[locale].settingsRegistryUnavailable).toBe(ui[locale]['editor.chrome.settingsRegistryUnavailable']);
+      expect(delivered[locale].settingsProviderRemoved).toBe(ui[locale]['editor.chrome.settingsProviderRemoved']);
+    }
+  });
 
   it('a provider added with a key and assigned to review is what /ai-config hands out, and only to review', async () => {
     const { el, ctx, fetcher, app, cookies, settings, secrets } = await realPage();
@@ -1981,5 +3353,18 @@ describe('settings.html Compare quality', () => {
     await el('previewActual').fire('change');
     expect(el('previewResult').classList.contains('is-actual')).toBe(false);
     expect(el('previewOriginal').style.width).toBe('');
+  });
+});
+
+describe('import language summary', () => {
+  it('separates disabled-language skips from published skips, rejection, and failures', () => {
+    const { ctx, el } = loadPage('public/import.html', {});
+    const render = vm.runInContext('renderSummary', ctx) as (summary: unknown) => void;
+    render({ imported: 1, updated: 2, skippedPublished: 3, skippedLocale: 4, rejected: 5, failed: 6, warnings: [] });
+    expect(el('counts').textContent).toContain('Skipped (published): 3');
+    expect(el('counts').textContent).toContain('Skipped (disabled language): 4');
+    expect(el('counts').textContent).toContain('Rejected: 5');
+    expect(el('counts').textContent).toContain('Failed: 6');
+    expect(el('importRejected').textContent).toContain('missing primary-language story');
   });
 });

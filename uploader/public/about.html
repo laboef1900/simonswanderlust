@@ -17,6 +17,9 @@
       </div>
     </header>
     <main>
+      <p id="preparationNotice" class="muted" role="status" hidden></p>
+      <a id="languageSettingsLink" href="/admin/settings.html#language" data-language-copy="Back" hidden></a>
+      <div id="galleryMetadataWarnings" class="notice-warn" hidden></div>
       <div class="lang-switch-bar about-tabs" role="tablist" aria-label="Page language">
         <button type="button" class="tab-btn active" role="tab" id="tabbtn-de" aria-selected="true" aria-controls="tab-de" data-tab="de">Deutsch <span class="lang-code" aria-hidden="true">DE</span></button>
         <button type="button" class="tab-btn" role="tab" id="tabbtn-en" aria-selected="false" tabindex="-1" aria-controls="tab-en" data-tab="en">English <span class="lang-code" aria-hidden="true">EN</span></button>
@@ -61,20 +64,28 @@
     </main>
 
     <script src="/admin/editor-image-copy.js"></script>
+    <script src="/admin/build-reporting.js"></script>
     <script src="/admin/auth.js"></script>
+    <script src="/admin/language.js"></script>
     <script src="/admin/admin-confirm.js"></script>
     <script src="/admin/draft-guard.js"></script>
     <script src="/admin/vendor/easymde.min.js"></script>
     <script src="/admin/tabs.js"></script>
     <script src="/admin/image-markdown.js"></script>
-    <script>
+    <script src="/admin/gallery-metadata-warnings.js"></script>
+    <script type="module">
+      import './gallery-fence.js';
       'use strict';
       const $ = (id) => document.getElementById(id);
       const KEY = 'about';
+      SiteLanguage.localize(document);
       const deImages = {}, enImages = {};
       // updatedAt of the page as loaded/last saved in THIS tab. Echoed back on
       // every save so the server can 409 when another tab saved meanwhile (#141).
       let loadedUpdatedAt = null;
+      let language = null;
+      const prepareLocale = new URLSearchParams(location.search).get('prepareLocale');
+      let editableLocales = [];
 
       // EasyMDE's built-in autosave stays disabled — DraftGuard below stashes the
       // full form (both locales) instead.
@@ -89,7 +100,7 @@
 
       // ---- draft guard: dirty tracking, beforeunload warning, local autosave ----
       const guard = DraftGuard.createDraftGuard({
-        storageKey: 'swl:draft:about',
+        storageKey: 'swl:draft:about' + (prepareLocale ? ':' + prepareLocale : ''),
         collect: () => ({ de: localeObj('de'), en: localeObj('en') }),
       });
       const mainEl = document.querySelector('main');
@@ -98,8 +109,17 @@
       deMDE.codemirror.on('change', () => guard.markDirty());
       enMDE.codemirror.on('change', () => guard.markDirty());
 
-      Tabs.wire(document.querySelector('[role="tablist"]'), {
+      const tabsApi = Tabs.wire(document.querySelector('[role="tablist"]'), {
         onChange: (tab) => { (tab === 'en' ? enMDE : deMDE).codemirror.refresh(); },
+      });
+      const galleryMetadataWarnings = GalleryMetadataWarnings.create({
+        root: $('galleryMetadataWarnings'),
+        editors: { de: deMDE.codemirror, en: enMDE.codemirror },
+        activate: (locale) => {
+          tabsApi.select(locale);
+          (locale === 'de' ? deMDE : enMDE).codemirror.refresh();
+        },
+        onUnauthed: () => guard.redirectToLogin(),
       });
 
       function showErr(msg) { const el = $('actionError'); el.textContent = msg; el.hidden = !msg; }
@@ -142,15 +162,20 @@
       }
 
       $('saveBtn').addEventListener('click', async () => {
+        if (!language) return;
         const ok = await AdminConfirm.ask({
-          title: 'Publish the About page?',
-          body: 'The About page is saved, then the public journal rebuilds. This can take several minutes. Live pages stay unchanged until the rebuild finishes.',
-          confirmLabel: 'Publish',
+          title: prepareLocale ? SiteLanguage.text('PrepTitle') : 'Publish the About page?',
+          body: prepareLocale
+            ? SiteLanguage.text('PrepConfirm', { language: SiteLanguage.names[prepareLocale] })
+            : 'The About page is saved, then the public journal rebuilds. This can take several minutes. Live pages stay unchanged until the rebuild finishes.',
+          confirmLabel: prepareLocale ? SiteLanguage.text('PrepSave') : 'Publish',
         });
         if (!ok) return;
         showErr(''); setStatus('Publishing…');
         const snap = guard.snapshot();
-        const payload = { updatedAt: loadedUpdatedAt || undefined, de: localeObj('de'), en: localeObj('en') };
+        const payload = { updatedAt: loadedUpdatedAt,
+          ...Object.fromEntries(editableLocales.map((locale) => [locale, localeObj(locale)])),
+          ...(prepareLocale ? { prepareLocale } : {}) };
         const btn = $('saveBtn');
         btn.disabled = true;
         try {
@@ -170,15 +195,17 @@
             if (reload) { await loadPage(); guard.markClean(guard.snapshot()); showErr(''); }
             return;
           }
-          if (!res.ok) { showErr(body.error || ('Save failed: ' + res.status)); setStatus(''); return; }
-          if (body.build && !body.build.ok) { showErr('Build error: ' + (body.build.error || 'unknown')); setStatus(''); return; }
-          const release = (body.build && body.build.release) ? ' (release ' + body.build.release + ')' : '';
+          if (!res.ok) { showErr(res.status >= 500 ? BuildReporting.text('unknown') : (body.error || res.status)); setStatus(''); return; }
+          if (!body.saved?.updatedAt) { showErr(BuildReporting.text('unknown')); setStatus(''); return; }
+          // The page write succeeded even when its subsequent rebuild failed.
+          galleryMetadataWarnings.saved(body.galleryWarnings, payload);
           guard.markClean(snap);
           if (body.saved && body.saved.updatedAt) loadedUpdatedAt = body.saved.updatedAt;
           loadRevisions().catch(() => {});
-          setStatus('Saved & rebuilt. Live: ' + location.origin + '/uber-mich/ · ' + location.origin + '/en/about-me/' + release);
+          if (prepareLocale) setStatus(SiteLanguage.text('PrepSaved'));
+          else BuildReporting.renderOutcome($('actionStatus'), 'page', body);
         } catch (e) {
-          showErr('Save failed: ' + e);
+          showErr(BuildReporting.text('unknown'));
           setStatus('');
         } finally {
           btn.disabled = false;
@@ -199,7 +226,7 @@
           li.className = 'revision-row';
           const label = document.createElement('span');
           const when = new Date(rev.savedAt).toLocaleString();
-          label.textContent = when + ' — ' + (rev.titleDe || '(untitled)');
+          label.textContent = when + ' — ' + (rev.title || '(untitled)');
           const btn = document.createElement('button');
           btn.type = 'button';
           btn.className = 'btn-secondary';
@@ -221,7 +248,7 @@
         if (res.status === 401) { guard.redirectToLogin(); return; }
         if (!res.ok) { showErr('Could not load revision: ' + res.status); return; }
         const rev = await res.json();
-        fill('de', rev.snapshot.de); fill('en', rev.snapshot.en);
+        for (const locale of editableLocales) fill(locale, rev.snapshot[locale]);
         enMDE.codemirror.refresh();
         guard.markDirty();
         setStatus('Restored the revision from ' + new Date(rev.savedAt).toLocaleString()
@@ -245,6 +272,7 @@
         $(loc + 'Title').value = data.title || '';
         (loc === 'de' ? deMDE : enMDE).value(data.bodyMarkdown || '');
         if (data.images) Object.assign(loc === 'de' ? deImages : enImages, data.images);
+        void galleryMetadataWarnings.reopen(loc);
       }
 
       (async () => {
@@ -253,9 +281,24 @@
         Auth.renderHeader(s);
         if (!s.isAdmin) { showErr('You are signed in as an author; only admins can edit the About page.'); $('saveBtn').disabled = true; }
         try {
+          language = await SiteLanguage.get();
+          if (prepareLocale && (!['de', 'en'].includes(prepareLocale) || language.locales.includes(prepareLocale))) {
+            throw new Error(SiteLanguage.text('PrepInvalid'));
+          }
+          editableLocales = prepareLocale ? [prepareLocale] : language.locales;
+          SiteLanguage.tabs(document.querySelector('[role="tablist"]'), language, tabsApi, prepareLocale);
+          if (prepareLocale) {
+            $('preparationNotice').hidden = false;
+            $('preparationNotice').textContent = SiteLanguage.text('PrepNotice', { language: SiteLanguage.names[prepareLocale] });
+            $('languageSettingsLink').hidden = false;
+            $('saveBtn').textContent = SiteLanguage.text('PrepSave');
+            $('saveBtn').className = '';
+          }
           await loadPage();
         } catch (e) {
           setStatus('Could not load: ' + e);
+          $('saveBtn').disabled = true;
+          return;
         }
         // Offer to restore locally stashed changes; filling above fired CodeMirror
         // change events, so settle the guard's dirty state here either way.
@@ -267,7 +310,7 @@
             confirmLabel: 'Restore',
           });
           if (restore) {
-            fill('de', stash.payload.de); fill('en', stash.payload.en);
+            for (const locale of editableLocales) fill(locale, stash.payload[locale]);
             enMDE.codemirror.refresh();
             guard.markDirty();
             setStatus('Restored unsaved changes — remember to Save.');

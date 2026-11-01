@@ -7,9 +7,21 @@ import { pgUserStore, verifyPassword, UserExistsError, UsernamePolicyError } fro
 import { pgSessionStore } from '../src/sessions.js';
 import { pgPostStore, PostError, REVISION_CAP } from '../src/posts.js';
 import { lockPostPair } from '../src/post-pair-lock.js';
+import * as bodyContent from '../src/body-content.js';
 
 const url = process.env.TEST_DATABASE_URL;
 const maybe = url ? describe : describe.skip;
+
+beforeAll(async () => {
+  if (!url) return;
+  const pool = createPool(url);
+  try {
+    await ensureSchema(pool);
+    // Sibling language suites may leave this shared scratch DB in any mode.
+    await pool.query(`UPDATE site_language SET primary_locale='de', enabled_locales=ARRAY['de','en'],
+      locked_at=(SELECT min(published_at) FROM posts), updated_at=clock_timestamp() WHERE id=true`);
+  } finally { await pool.end(); }
+});
 
 maybe('postgres stores (integration)', () => {
   let pool: DbPool;
@@ -363,10 +375,18 @@ maybe('pgPostStore (integration)', () => {
       en: { locale: 'en' as const, slug: 'en-slug', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 10, height: 10, alt: 'a' }, bodyMarkdown: '## b', images: {} },
     };
     const created = await store.upsertDraft(base);
-    expect((await store.list()).find((p) => p.translationKey === created.translationKey)?.hasEnBody).toBe(true);
-    await store.publish(created.translationKey, await publishTokens(store, created.translationKey));
-    await store.unpublish(created.translationKey);
-    expect((await store.get(created.translationKey))?.status).toBe('draft');
+    expect((await store.list()).find((p) => p.translationKey === created.translationKey)?.secondaryStatus).toBe('started');
+    const published = await store.publish(created.translationKey, await publishTokens(store, created.translationKey));
+    const unpublished = await store.unpublish(created.translationKey);
+    expect(unpublished.previousUpdatedAt).toEqual(published.updatedAt);
+    expect(unpublished.updatedAt.getTime()).toBeGreaterThan(published.updatedAt.getTime());
+    expect(await store.get(created.translationKey)).toMatchObject({ status: 'draft', updatedAt: unpublished.updatedAt });
+    await expect(store.upsertDraft({ ...created, de: { ...created.de, slug: 'renamed-after-unpublish' } }, unpublished.updatedAt))
+      .rejects.toMatchObject({ code: 'slug_locked' });
+    const saved = await store.upsertDraft({ ...created, de: { ...created.de, title: 'After unpublish' } }, unpublished.updatedAt);
+    expect(saved.de.title).toBe('After unpublish');
+    expect(saved.updatedAt.getTime()).toBeGreaterThan(unpublished.updatedAt.getTime());
+    await expect(store.upsertDraft(created, unpublished.updatedAt)).rejects.toMatchObject({ code: 'conflict' });
     await store.remove(created.translationKey);
     const { rows } = await pool.query<{ n: number }>(
       `SELECT count(*)::int AS n FROM posts WHERE translation_key=$1`, [created.translationKey],
@@ -561,7 +581,7 @@ maybe('pgPostStore (integration)', () => {
     // The second DE-first draft now saves — the 23505 backstop no longer fires on ''.
     const b = await store.upsertDraft(deFirst('second'));
     expect(b.translationKey).not.toBe(a.translationKey);
-    expect((await store.list()).map((p) => p.slugEn)).toEqual(['', '']);
+    expect((await store.list()).map((p) => p.slugs.en)).toEqual(['', '']);
     // A real slug is still unique, both at the pre-check and at the index.
     await store.upsertDraft({ ...a, en: { ...a.en, slug: 'taken' } });
     await expect(store.upsertDraft({ ...b, en: { ...b.en, slug: 'taken' } })).rejects.toMatchObject({ code: 'duplicate_slug' });
@@ -594,6 +614,68 @@ maybe('pgPostStore revisions + optimistic concurrency (integration)', () => {
   });
   afterAll(async () => { await pool.end(); });
 
+  it('returns transient warnings for all issue probes while retaining both locale rows and conflict/write failures', async () => {
+    const store = pgPostStore(pool);
+    const input = base(`metadata-${randomUUID()}`);
+    const fields = [String.raw`caption="The \"Old\" Bridge"`, 'caption="Rom | Tag 2"', 'capton="Tippfehler"', 'alt = "Blick"', "alt='Blick'", 'caption-override="broken'];
+    const src = 'https://i/metadata';
+    const lines = fields.map((field, index) => `${src}-${index} | 3000x2000 | alt="😀" | ${field}  `);
+    const body = ['~~~gallery extra', ...lines, '~~~'].join('\r\n');
+    input.de.bodyMarkdown = body;
+    input.en.bodyMarkdown = body;
+    input.en.images = Object.fromEntries(fields.map((_, index) => [`${src}-${index}`, { width: 8, height: 6, caption: 'Keep' }]));
+    const saved = await store.upsertDraft(input);
+    try {
+      expect(saved.de.bodyMarkdown).toBe(body);
+      expect(saved.en.bodyMarkdown).toBe(body);
+      expect(saved.de.images).toEqual({});
+      expect(saved.en.images).toEqual(input.en.images);
+      expect(saved.galleryWarnings).toHaveLength(fields.length * 2);
+      expect(saved.galleryWarnings[0]).toEqual({
+        code: 'invalid_gallery_metadata', locale: 'de', line: 2,
+        column: lines[0]!.indexOf('caption=') + 1, field: 'caption', reason: 'malformed_field',
+      });
+      expect(saved.galleryWarnings[fields.length]?.locale).toBe('en');
+      expect(await store.get(saved.translationKey)).not.toHaveProperty('galleryWarnings');
+      const again = await store.upsertDraft(saved, saved.updatedAt);
+      expect(again.galleryWarnings).toEqual(saved.galleryWarnings);
+      const before = await store.get(saved.translationKey);
+      await expect(store.upsertDraft(saved, new Date(0))).rejects.toMatchObject({ code: 'conflict' });
+      await expect(pgPostStore(pool, { isWritable: () => false }).upsertDraft(saved)).rejects.toMatchObject({ code: 'storage_read_only' });
+      // PostgreSQL rejects NUL in text after the first locale write.
+      await expect(store.upsertDraft({ ...again, de: { ...again.de, title: 'Must roll back' }, en: { ...again.en, title: '\u0000' } })).rejects.toBeDefined();
+      expect(await store.get(saved.translationKey)).toEqual(before);
+      const [revision] = await store.listRevisions(saved.translationKey);
+      expect((await store.getRevision(saved.translationKey, revision!.id))!.snapshot).not.toHaveProperty('galleryWarnings');
+    } finally { await store.remove(saved.translationKey); }
+  });
+
+  it('normalizes direct-import galleries and refuses a later locale analysis failure without writes', async () => {
+    const store = pgPostStore(pool);
+    const input = base(`gallery-${randomUUID()}`);
+    const src = 'https://i/gallery';
+    input.de.bodyMarkdown = `> ~~~gallery extra\n> ${src} | 30x20 | alt="Blick"\n> ~~~`;
+    input.en.bodyMarkdown = `<pre><code class="language-gallery">${src} | 30x20 | alt="View"\n</code></pre>`;
+    const saved = await store.upsertDraft(input);
+    expect(saved.de.bodyMarkdown).toBe(`> ~~~gallery extra\n> ${src}\n> ~~~`);
+    expect(saved.en.bodyMarkdown).toBe(`<pre><code class="language-gallery">${src}\n</code></pre>`);
+    expect(saved.de.images[src]).toEqual({ width: 30, height: 20, alt: 'Blick' });
+    expect(saved.en.images[src]).toEqual({ width: 30, height: 20, alt: 'View' });
+    const edit = { ...saved, de: { ...saved.de, bodyMarkdown: input.de.bodyMarkdown }, en: { ...saved.en, bodyMarkdown: 'EN analysis failure' } };
+    const normalize = bodyContent.normalizeGalleryFences;
+    const analysis = vi.spyOn(bodyContent, 'normalizeGalleryFences').mockImplementation((body, images) => {
+      if (body === edit.en.bodyMarkdown) return Promise.reject(new Error('source mapping unavailable'));
+      return normalize(body, images);
+    });
+    try {
+      await expect(store.upsertDraft(edit, saved.updatedAt)).rejects.toThrow('source mapping unavailable');
+      const { galleryWarnings, ...stored } = saved;
+      expect(galleryWarnings).toEqual([]);
+      expect(await store.get(saved.translationKey)).toEqual(stored);
+      expect(await store.listRevisions(saved.translationKey)).toEqual([]);
+    } finally { analysis.mockRestore(); }
+  });
+
   it('snapshots the pre-save pair on overwrite; echoing get().updatedAt never false-conflicts', async () => {
     const store = pgPostStore(pool);
     const created = await store.upsertDraft(base('rev'));
@@ -609,7 +691,7 @@ maybe('pgPostStore revisions + optimistic concurrency (integration)', () => {
 
     const revs = await store.listRevisions(tk);
     expect(revs).toHaveLength(1);
-    expect(revs[0]).toMatchObject({ titleDe: 'T', status: 'draft' });
+    expect(revs[0]).toMatchObject({ title: 'T', status: 'draft' });
     expect(revs[0]!.savedAt).toBeInstanceOf(Date);
     const rev = await store.getRevision(tk, revs[0]!.id);
     expect(rev?.snapshot.de.title).toBe('T');
@@ -688,8 +770,7 @@ maybe('pgPostStore revisions + optimistic concurrency (integration)', () => {
     expect(summary).toMatchObject({
       heroSrc: 'https://i/hero', heroWidth: 1600,
       date: '2024-10-03', country: 'Rumänien', region: 'europe',
-      // has_en_body is now computed in SQL, since body_markdown left the SELECT.
-      hasEnBody: false,
+      title: 'T', slugs: { de: 'sum-de', en: 'sum-en' }, secondaryStatus: 'empty',
     });
     await pool.end();
   });
@@ -737,8 +818,8 @@ maybe('pgPostStore revisions + optimistic concurrency (integration)', () => {
     }
     const revs = await store.listRevisions(tk);
     expect(revs).toHaveLength(REVISION_CAP);
-    expect(revs[0]!.titleDe).toBe(`v${REVISION_CAP + 5}`);
-    expect(revs.some((r) => r.titleDe === 'v5')).toBe(false); // oldest pruned
+    expect(revs[0]!.title).toBe(`v${REVISION_CAP + 5}`);
+    expect(revs.some((r) => r.title === 'v5')).toBe(false); // oldest pruned
     const count = await pool.query(`SELECT count(*)::int AS n FROM post_revisions WHERE translation_key=$1`, [tk]);
     expect(count.rows[0].n).toBe(REVISION_CAP);
   });

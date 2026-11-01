@@ -1,5 +1,6 @@
 ---
-import { locales, useTranslations, type Locale } from '../i18n/ui';
+import { useTranslations, type Locale } from '../i18n/ui';
+import { siteLanguage } from '../lib/site-language';
 import { homePath } from '../lib/paths';
 
 interface Props {
@@ -10,7 +11,8 @@ interface Props {
 const { locale, alternates } = Astro.props;
 const t = useTranslations(locale);
 const other: Locale = locale === 'de' ? 'en' : 'de';
-const otherHref = alternates ? alternates[other] : homePath(other);
+const { locales } = siteLanguage();
+const otherHref = locales.includes(other) ? (alternates?.[other] ?? homePath(other)) : undefined;
 
 // @ai-note The switcher used to expose nothing to assistive tech: the current
 // locale was a bare <span> with no `aria-current`, the outgoing link's whole
@@ -40,7 +42,7 @@ const target = 'inline-flex min-h-[44px] min-w-[44px] items-center justify-cente
 const inactive = 'text-ink/70 transition-[color] hover:text-brand-red';
 ---
 
-<div class="flex items-center text-xs font-semibold tracking-wide uppercase">
+{locales.length > 1 && <div class="flex items-center text-xs font-semibold tracking-wide uppercase">
   {
     locales.map((code, i) => (
       <>
@@ -62,4 +64,4 @@ const inactive = 'text-ink/70 transition-[color] hover:text-brand-red';
       </>
     ))
   }
-</div>
+</div>}

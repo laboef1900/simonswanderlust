@@ -35,8 +35,11 @@ window.Desk = (function () {
     return release;
   }
 
-  function englishBodyLabel(hasEnBody) {
-    return hasEnBody ? 'English body started' : 'English body not started';
+  function secondaryBodyLabel(status, lang) {
+    const secondary = lang.locales.find((locale) => locale !== lang.primary);
+    if (!secondary || status === 'none' || status === 'omitted') return '';
+    return SiteLanguage.text(status === 'started' ? 'BodyStarted' : status === 'empty' ? 'BodyEmpty' : 'BodyUnknown',
+      { language: SiteLanguage.names[secondary] });
   }
 
   function formatUpdatedAt(value, locales) {
@@ -76,7 +79,7 @@ window.Desk = (function () {
     releaseState,
     releaseFromResponse,
     formatUpdatedAt,
-    englishBodyLabel,
+    secondaryBodyLabel,
     resilientLoader,
     byUpdated,
   };

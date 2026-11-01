@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import type { DbPool } from './db.js';
-import type { Locale } from './posts.js';
+import type { Locale, PostStore } from './posts.js';
 import { cleanBody, cleanName, CommentError, type CommentStatus } from './comments.js';
+import { DEFAULT_LANGUAGE, type LanguageStore } from './language.js';
 
 /**
  * Admin-side comment moderation (spec 2026-09-14-comments-design.md, phase 3,
@@ -9,9 +10,9 @@ import { cleanBody, cleanName, CommentError, type CommentStatus } from './commen
  * the admin shape carries the email and `isAuthor`, and must never be handed to
  * anything that renders public output.
  *
- * Author replies are FLAT siblings: they copy the parent's
- * (translation_key, locale) and carry no parent pointer (threading is out of
- * scope). They are inserted `approved` with `is_author = true` — they never
+ * Author replies are FLAT siblings: they copy the parent's translation_key,
+ * default to the current primary locale, and carry no parent pointer (threading
+ * is out of scope). They are inserted `approved` with `is_author = true` — they never
  * pass through the pending queue.
  * @ai-warning Every route using this store must be `requireAdmin`; `name`,
  * `email` and `body` are untrusted reader text — paint them with textContent.
@@ -28,8 +29,19 @@ export interface AdminComment {
   createdAt: Date;
 }
 
+/** Admin-only visibility metadata; retain every moderation row, including hidden locales. */
+export async function withPublicLocaleMetadata(
+  rows: AdminComment[], posts: Pick<PostStore, 'getPublishedLocales'>,
+): Promise<(AdminComment & { publicLocale: boolean })[]> {
+  const locales = new Map<string, Locale[]>();
+  await Promise.all([...new Set(rows.map((row) => row.translationKey))].map(async (key) => {
+    locales.set(key, await posts.getPublishedLocales(key));
+  }));
+  return rows.map((row) => ({ ...row, publicLocale: locales.get(row.translationKey)!.includes(row.locale) }));
+}
+
 export interface CommentAdminStore {
-  list(status: CommentStatus): Promise<AdminComment[]>;
+  list(status: CommentStatus, offset?: number): Promise<{ comments: AdminComment[]; hasMore: boolean }>;
   /** false when the id is unknown. */
   setStatus(id: string, status: CommentStatus): Promise<boolean>;
   remove(id: string): Promise<boolean>;
@@ -38,7 +50,16 @@ export interface CommentAdminStore {
 }
 
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-export const LIST_LIMIT = 500;
+export const MODERATION_PAGE_SIZE = 50;
+
+export function isModerationOffset(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value)
+    && value >= 0 && value <= Number.MAX_SAFE_INTEGER - MODERATION_PAGE_SIZE;
+}
+
+function assertOffset(offset: number): void {
+  if (!isModerationOffset(offset)) throw new CommentError('invalid pagination');
+}
 
 export function isCommentStatus(v: unknown): v is CommentStatus {
   return v === 'pending' || v === 'approved';
@@ -46,13 +67,23 @@ export function isCommentStatus(v: unknown): v is CommentStatus {
 
 export { CommentError };
 
-export function memoryCommentAdminStore(seed: AdminComment[] = []): CommentAdminStore & { all(): AdminComment[]; add(c: AdminComment): void } {
+export function memoryCommentAdminStore(seed: AdminComment[] = [], language?: Pick<LanguageStore, 'get'>): CommentAdminStore & { all(): AdminComment[]; add(c: AdminComment): void } {
   const rows: AdminComment[] = seed.map((r) => ({ ...r }));
   return {
-    async list(status) {
-      return rows.filter((r) => r.status === status)
-        .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
-        .slice(0, LIST_LIMIT).map((r) => ({ ...r }));
+    async list(status, offset = 0) {
+      assertOffset(offset);
+      const page = rows.filter((r) => r.status === status)
+        .sort((a, b) => {
+          const time = a.createdAt.getTime() - b.createdAt.getTime();
+          const aId = a.id.toLowerCase();
+          const bId = b.id.toLowerCase();
+          return time || (aId < bId ? -1 : aId > bId ? 1 : 0);
+        })
+        .slice(offset, offset + MODERATION_PAGE_SIZE + 1);
+      return {
+        comments: page.slice(0, MODERATION_PAGE_SIZE).map((r) => ({ ...r })),
+        hasMore: page.length > MODERATION_PAGE_SIZE,
+      };
     },
     async setStatus(id, status) {
       const r = rows.find((x) => x.id === id);
@@ -72,7 +103,8 @@ export function memoryCommentAdminStore(seed: AdminComment[] = []): CommentAdmin
       const p = rows.find((x) => x.id === parentId);
       if (!p) return null;
       const reply: AdminComment = {
-        id: randomUUID(), translationKey: p.translationKey, locale: p.locale, name, email: null,
+        id: randomUUID(), translationKey: p.translationKey,
+        locale: (language ? await language.get() : DEFAULT_LANGUAGE).primary, name, email: null,
         body, status: 'approved', isAuthor: true, createdAt: new Date(),
       };
       rows.push(reply);
@@ -109,13 +141,14 @@ export function pgCommentAdminStore(pool: DbPool): CommentAdminStore {
     return ready;
   };
   return {
-    async list(status) {
+    async list(status, offset = 0) {
+      assertOffset(offset);
       await init();
       const { rows } = await pool.query<Row>(
-        `SELECT ${COLS} FROM comments WHERE status = $1 ORDER BY created_at ASC, id ASC LIMIT ${LIST_LIMIT}`,
-        [status],
+        `SELECT ${COLS} FROM comments WHERE status = $1 ORDER BY created_at ASC, id ASC LIMIT ${MODERATION_PAGE_SIZE + 1} OFFSET $2`,
+        [status, offset],
       );
-      return rows.map(toAdmin);
+      return { comments: rows.slice(0, MODERATION_PAGE_SIZE).map(toAdmin), hasMore: rows.length > MODERATION_PAGE_SIZE };
     },
     async setStatus(id, status) {
       if (!UUID_RE.test(id) || !isCommentStatus(status)) return false;
@@ -137,7 +170,8 @@ export function pgCommentAdminStore(pool: DbPool): CommentAdminStore {
       // status and is_author are literals: a reply is never pending.
       const { rows } = await pool.query<Row>(
         `INSERT INTO comments (id, translation_key, locale, name, email, body, status, is_author)
-         SELECT $1, translation_key, locale, $2, NULL, $3, 'approved', true FROM comments WHERE id = $4
+         SELECT $1, translation_key, (SELECT primary_locale FROM site_language WHERE id = true),
+           $2, NULL, $3, 'approved', true FROM comments WHERE id = $4
          RETURNING ${COLS}`,
         [randomUUID(), name, body, parentId],
       );

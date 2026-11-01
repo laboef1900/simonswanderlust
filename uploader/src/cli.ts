@@ -4,7 +4,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { SESSION_COOKIE } from './authn.js';
 import { normalizeProcessOptions, processImage, type ProcessOptions } from './pipeline.js';
 import { contentHashKey, storeVariants, type StorageOptions, type StoredImage } from './storage.js';
-import { BACKUP_FILE_RE, BackupError, dumpDatabase, readDump, resolveBackupDir, validateIdentityAssets, IDENTITY_DUMP_VERSION, type Dump } from './backup.js';
+import { BACKUP_FILE_RE, BackupError, dumpDatabase, dumpLanguage, readDump, resolveBackupDir, validateIdentityAssets, IDENTITY_DUMP_VERSION, type Dump } from './backup.js';
 import { passwordPolicyViolation, type UserStore } from './users.js';
 import type { SessionStore } from './sessions.js';
 import { createSettingsStore, defaultSettings } from './settings.js';
@@ -14,6 +14,9 @@ import { verifyRouteArchive, routeRecoverySummary } from './gpx-backup.js';
 import { createPool, type DbPool } from './db.js';
 import { prepareNativeRestore, restoreWithOnboarding } from './onboarding-restore.js';
 import { publishRestoreFence } from './onboarding-fence.js';
+import { readLanguage, type LanguageConfig } from './language.js';
+import { buildFailureMessage, type BuildFailureCode } from './build-state.js';
+import { configuredOriginRoles, validateCanonicalRoles, type OriginRoles } from './canonical-origin.js';
 
 /** Reusable: process an in-memory image and store its variants.
  * Keys are content-hash versioned like POST /upload, so a re-upload mints a
@@ -54,7 +57,7 @@ function describeDatabase(databaseUrl: string): string {
   }
 }
 
-const RESTORE_TABLES = ['users', 'posts', 'pages', 'media', 'media_folders', 'comments', 'post_routes', 'site_identity', 'site_identity_assets'] as const;
+const RESTORE_TABLES = ['users', 'posts', 'pages', 'media', 'media_folders', 'comments', 'post_routes', 'site_identity', 'site_identity_assets', 'site_language'] as const;
 type RowCounts = Record<(typeof RESTORE_TABLES)[number], number>;
 
 /** `users 3, posts 12, …` — the same shape for the dump and for the live rows,
@@ -63,11 +66,22 @@ function formatCounts(c: RowCounts): string {
   return RESTORE_TABLES.map((t) => `${t} ${c[t]}`).join(', ');
 }
 
-/** Parse `restore [--yes] <file>`; the flag may appear on either side of the path. */
-export function parseRestoreArgs(args: string[]): { yes: boolean; file: string | undefined } {
+/** Restore flags may appear on either side of the path. */
+export function parseRestoreArgs(args: string[]): { yes: boolean; acceptLanguageChange: boolean; file: string | undefined } {
   const yes = args.includes('--yes');
-  const rest = args.filter((a) => a !== '--yes');
-  return { yes, file: rest[0] };
+  const acceptLanguageChange = args.includes('--accept-language-change');
+  const rest = args.filter((a) => a !== '--yes' && a !== '--accept-language-change');
+  return { yes, acceptLanguageChange, file: rest[0] };
+}
+
+export function requiresLanguageAcceptance(live: LanguageConfig & { lockedAt: Date | null }, restored: LanguageConfig): boolean {
+  return live.lockedAt !== null && (live.primary !== restored.primary
+    || live.locales.length !== restored.locales.length
+    || live.locales.some(locale => !restored.locales.includes(locale)));
+}
+
+function describeLanguage(language: LanguageConfig): string {
+  return `${language.locales.map(locale => locale.toUpperCase()).join('+')}, ${language.primary.toUpperCase()} primary`;
 }
 
 /**
@@ -76,13 +90,13 @@ export function parseRestoreArgs(args: string[]): { yes: boolean; file: string |
  * rows transactionally. The owner stops the app first and restarts it afterward.
  */
 async function restoreMain(args: string[]): Promise<void> {
-  const { yes, file } = parseRestoreArgs(args);
+  const { yes, acceptLanguageChange, file } = parseRestoreArgs(args);
   if (!file) {
     console.error(
       'usage: docker compose stop app\n' +
-      '       docker compose run --rm --no-deps --entrypoint node app --import tsx src/cli.ts restore [--yes] /data/backup/db/db-YYYYMMDD-HHmmss.json.gz\n' +
-      '       (bare dev: stop the app, then node --import tsx src/cli.ts restore [--yes] <file>)\n' +
-      '       --yes skips confirmation, never exclusive ownership or the verified pre-restore backup.',
+      '       docker compose run --rm --no-deps --entrypoint node app --import tsx src/cli.ts restore [--yes] [--accept-language-change] /data/backup/db/db-YYYYMMDD-HHmmss.json.gz\n' +
+      '       (bare dev: stop the app, then node --import tsx src/cli.ts restore [--yes] [--accept-language-change] <file>)\n' +
+      '       --yes skips confirmation, never exclusive ownership, language-change acceptance or the verified pre-restore backup.',
     );
     process.exit(1);
   }
@@ -96,8 +110,11 @@ async function restoreMain(args: string[]): Promise<void> {
     process.exit(1);
   }
   let dump: Dump;
+  let originRoles: OriginRoles;
   try {
     dump = readDump(file);
+    originRoles = configuredOriginRoles();
+    if (dump.version >= IDENTITY_DUMP_VERSION) validateCanonicalRoles(dump.tables.site_identity![0]!.canonical_origin, originRoles);
     await validateIdentityAssets(dump);
     await verifyRouteArchive(file, dump.routeArchive, dump.tables.post_routes ?? []);
   } catch (e) {
@@ -113,6 +130,7 @@ async function restoreMain(args: string[]): Promise<void> {
     post_routes: dump.tables.post_routes?.length ?? 0,
     site_identity: dump.version < IDENTITY_DUMP_VERSION ? 1 : dump.tables.site_identity!.length,
     site_identity_assets: dump.tables.site_identity_assets?.length ?? 0,
+    site_language: 1,
   };
   const { createPool } = await import('./db.js');
   let owner: StorageOwner | undefined;
@@ -133,6 +151,11 @@ async function restoreMain(args: string[]): Promise<void> {
     for (const t of RESTORE_TABLES) {
       live[t] = Number((await pool.query(`SELECT count(*) AS n FROM ${t}`)).rows[0].n);
     }
+    const liveLanguage = await readLanguage(pool);
+    if (liveLanguage.lockedAt === null) {
+      liveLanguage.lockedAt = (await pool.query<{ published_at: Date | null }>('SELECT min(published_at) AS published_at FROM posts')).rows[0]?.published_at ?? null;
+    }
+    const restoredLanguage = dumpLanguage(dump);
     console.log(`target database: ${describeDatabase(databaseUrl)}`);
     console.log(`dump:            ${file} (v${dump.version}, created ${dump.createdAt}) — ${formatCounts(dumpCounts)}`);
     console.log(`about to REPLACE the live rows: ${formatCounts(live)} — and invalidate every session.`);
@@ -143,6 +166,12 @@ async function restoreMain(args: string[]): Promise<void> {
     console.log(dump.version < IDENTITY_DUMP_VERSION
       ? 'identity: will restore the legacy brand (dump predates identity), keep the live canonical origin if set, and remove identity assets.'
       : 'identity: will replace the complete stored identity and assets, including retained locale values.');
+    console.log(`language: live ${describeLanguage(liveLanguage)} (${liveLanguage.lockedAt ? 'locked' : 'unlocked'}); dump ${describeLanguage(restoredLanguage)}.`);
+    if (requiresLanguageAcceptance(liveLanguage, restoredLanguage) && !acceptLanguageChange) {
+      console.error('refusing a language-mode change on a locked install: pass --accept-language-change in addition to yes/--yes. nothing was changed.');
+      process.exitCode = 1;
+      return;
+    }
     const recovery = routeRecoverySummary(dump.routeArchive);
     console.log(`Private routes: ${dumpCounts.post_routes}; originals: ${recovery.status} ` +
       `(present ${recovery.present}, missing ${recovery.missing}, corrupt ${recovery.corrupt}, unreadable ${recovery.unreadable}, oversized ${recovery.oversized}).`);
@@ -175,14 +204,14 @@ async function restoreMain(args: string[]): Promise<void> {
     }
     console.log(`pre-restore recovery set verified: ${preDump}`);
     const counts = await restoreWithOnboarding(pool, file, {
-      storageDir: process.env.STORAGE_DIR ?? '/data/images', routeFiles, assertOwner,
+      storageDir: process.env.STORAGE_DIR ?? '/data/images', routeFiles, assertOwner, originRoles,
     });
     console.log(`restored ${counts.users} users, ${counts.posts} posts, ${counts.pages} pages, ${counts.media} media rows, ${counts.comments} comments, and ${counts.routes} private routes (all sessions invalidated).`);
     console.log(counts.appSecrets === null ? 'app_secrets preserved.' : `restored ${counts.appSecrets} encrypted app_secrets rows.`);
     console.log(dump.version < IDENTITY_DUMP_VERSION
       ? 'identity: restored legacy brand (dump predates identity). Review Settings → Site identity'
       : 'identity: restored stored identity and assets. Public output updates at the next rebuild.');
-    console.log(`to undo: restore --yes ${preDump}`);
+    console.log(`to undo: restore --yes --accept-language-change ${preDump}`);
     console.log('Restart the app with the same data/settings configuration, then rebuild through /admin/settings.html → \"Rebuild site now\".');
   } catch (e) {
     // Only admission is guaranteed not to have written anything. Later restore
@@ -361,13 +390,19 @@ export async function triggerRebuild(
     // /rebuild answers 200 with `{ ok: false, error }` for a FAILED build — a
     // status check alone would report a schema error as success.
     if (status !== 200) throw new Error(`the app answered ${status}: ${body.slice(0, 300)}`);
-    let outcome: { ok?: boolean; release?: string; error?: string };
+    let outcome: { ok?: boolean; release?: string; code?: unknown };
     try {
       outcome = JSON.parse(body) as typeof outcome;
     } catch {
       throw new Error(`the app answered 200 with a non-JSON body: ${body.slice(0, 300)}`);
     }
-    if (!outcome.ok) throw new Error(outcome.error ?? 'the build failed without a message');
+    if (!outcome.ok) {
+      const code: BuildFailureCode = outcome.code === 'build_timeout' || outcome.code === 'build_failed'
+        || outcome.code === 'build_unavailable' || outcome.code === 'no_space'
+        || outcome.code === 'release_write_failed' || outcome.code === 'build_stopped'
+        ? outcome.code : 'internal';
+      throw new Error(`rebuild failed (${code}): ${buildFailureMessage(code)} — details: docker compose logs app`);
+    }
     return outcome.release ?? '(unnamed release)';
   } finally {
     await sessions.destroy(token);
@@ -422,7 +457,7 @@ async function rebuildMain(): Promise<void> {
         ? `nothing is listening on 127.0.0.1:${port}. A rebuild runs INSIDE the app process, which holds ` +
           'the build/encode lock, so the app has to be up. Start it (`docker compose up -d app`); if there ' +
           'is no release at all yet, boot builds one by itself.'
-        : `rebuild failed: ${msg}`,
+        : msg,
     );
     process.exitCode = 1;
   } finally {
@@ -459,7 +494,7 @@ async function main(): Promise<void> {
   }
   const opts: StorageOptions = {
     storageDir: process.env.STORAGE_DIR ?? './data/images',
-    baseUrl: process.env.PUBLIC_BASE_URL ?? 'https://img.simonswanderlust.com',
+    baseUrl: process.env.PUBLIC_BASE_URL ?? 'http://localhost:3000',
   };
   const settingsPath = process.env.SETTINGS_PATH ?? join(dirname(opts.storageDir), 'settings.json');
   const current = createSettingsStore({ path: settingsPath, defaults: defaultSettings() }).get();

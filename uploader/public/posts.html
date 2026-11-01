@@ -9,7 +9,7 @@
   <body class="posts-page">
     <header class="cms-page-meta">
       <h1>Posts</h1>
-      <p class="lede">Manage DE/EN post pairs — create drafts, edit content, and publish to the live blog.</p>
+      <p class="lede" data-language-copy="PostIntro"></p>
       <div class="cms-page-actions">
         <button id="exportAll" type="button" class="btn-secondary">Export MDX to server backup</button>
         <a id="newPost" href="/admin/editor.html" class="btn-new">New post</a>
@@ -33,7 +33,7 @@
                 <option value="draft">Draft</option>
                 <option value="published">Published</option>
                 <option value="unpublished">Unpublished changes</option>
-                <option value="missing-en">EN missing</option>
+                <option id="missingSecondaryOption" value="missing-secondary" data-language-copy="MissingTranslation"></option>
               </select>
             </label>
             <label class="filter-field">
@@ -41,7 +41,7 @@
               <select id="fSort">
                 <option value="updated">Updated</option>
                 <option value="date">Trip date</option>
-                <option value="title">Title (DE)</option>
+                <option value="title">Title</option>
               </select>
             </label>
           </div>
@@ -95,7 +95,7 @@
                 </label>
               </th>
               <th class="col-thumb" scope="col" role="columnheader">Hero</th>
-              <th class="col-title" scope="col" role="columnheader">Title (DE)</th>
+              <th class="col-title" scope="col" role="columnheader">Title</th>
               <th class="col-status" scope="col" role="columnheader">Status</th>
               <th id="languagesHeading" class="col-languages" scope="col" role="columnheader">Languages</th>
               <th class="col-updated" scope="col" role="columnheader">Updated</th>
@@ -109,8 +109,10 @@
     </main>
 
     <script src="/admin/editor-image-copy.js"></script>
+    <script src="/admin/build-reporting.js"></script>
     <script src="/admin/gpx-copy.js"></script>
     <script src="/admin/auth.js"></script>
+    <script src="/admin/language.js"></script>
     <script src="/admin/admin-confirm.js"></script>
     <script src="/admin/posts-filter.js"></script>
     <script>
@@ -122,6 +124,7 @@
       let filtersInitialized = false;
       let openMoreActions = null;
       const copy = EditorCopy.en;
+      SiteLanguage.localize(document);
       $('languagesHeading').textContent = copy.postsLanguages;
 
       // Status views: toggle buttons over the SAME state as the #fStatus select
@@ -136,7 +139,7 @@
         { status: 'draft', label: copy.postsDrafts },
         { status: 'published', label: copy.postsPublished },
         { status: 'unpublished', label: copy.postsChanges },
-        { status: 'missing-en', label: copy.postsMissingEn },
+        { status: 'missing-secondary', label: SiteLanguage.text('MissingTranslation') },
       ];
       $('statusViews').setAttribute('aria-label', copy.postsStatusFilters);
       const statusViewButtons = STATUS_VIEWS.map((view) => {
@@ -157,7 +160,7 @@
           render(true);
         });
         $('statusViews').appendChild(button);
-        return { view, button, count };
+        return { view, button, count, label };
       });
 
       function syncStatusViews() {
@@ -168,14 +171,13 @@
         }
       }
 
-      function describeBuild(build) {
-        if (!build) return '';
-        return build.ok ? ' Site rebuilt.' : ' Rebuild failed: ' + build.error;
+      function describeOutcome(action, body, values) {
+        return BuildReporting.describeOutcome(action, body, values);
       }
 
       // Draft slugs may still be empty — only render "(de / en)" when set.
       function slugSuffix(p) {
-        const slugs = [p.slugDe, p.slugEn].filter(Boolean).join(' / ');
+        const slugs = SiteLanguage.config().locales.map((locale) => p.slugs[locale]).filter(Boolean).join(' / ');
         return slugs ? ' (' + slugs + ')' : '';
       }
 
@@ -239,7 +241,7 @@
       // and re-enables it in `finally`: a dropped connection used to reject the
       // await, leaving "Deleting…" on screen and the buttons dead until reload.
       async function unpublishPost(p, btn) {
-        const title = p.titleDe || '(untitled)';
+        const title = p.title || '(untitled)';
         const ok = await AdminConfirm.ask({
           title: 'Unpublish this trip?',
           body: '"' + title + '"' + slugSuffix(p) + ' will leave the live site on the next build and revert to a draft.',
@@ -253,19 +255,21 @@
           const res = await fetch('/posts/' + encodeURIComponent(p.translationKey) + '/unpublish', { method: 'POST' });
           if (res.status === 401) { location.href = '/login'; return; }
           const body = await res.json().catch(() => ({}));
-          if (!res.ok) { $('out').textContent = 'Unpublish failed: ' + (body.error || res.status); return; }
-          const msg = 'Unpublished "' + title + '".' + describeBuild(body.build);
+          if (!res.ok) { $('out').textContent = res.status >= 500 ? BuildReporting.text('unknown') : (body.error || res.status); return; }
+          if (body.unpublished !== true) { $('out').textContent = BuildReporting.text('unknown'); return; }
+          const msg = describeOutcome('unpublish', body, { title });
           $('out').textContent = msg;
           await load(msg);
+          if (body.build?.ok === false) BuildReporting.recovery($('out'), body.build.code);
         } catch (e) {
-          $('out').textContent = 'Unpublish failed: ' + e;
+          $('out').textContent = BuildReporting.text('unknown');
         } finally {
           btn.disabled = false;
         }
       }
 
       async function deletePost(p, btn) {
-        const title = p.titleDe || '(untitled)';
+        const title = p.title || '(untitled)';
         const warning = p.status === 'published'
           ? '\n\nThis post is PUBLISHED — it will be removed from the live site on the next build.'
           : '';
@@ -282,14 +286,16 @@
           const res = await fetch('/posts/' + encodeURIComponent(p.translationKey), { method: 'DELETE' });
           if (res.status === 401) { location.href = '/login'; return; }
           const body = await res.json().catch(() => ({}));
-          if (!res.ok) { $('out').textContent = 'Delete failed: ' + (body.error || res.status); return; }
-          const msg = 'Deleted "' + title + '".' + describeBuild(body.build) + (body.cleanupPending ? ' ' + GpxCopy.en.cleanupPending : '');
+          if (!res.ok) { $('out').textContent = res.status >= 500 ? BuildReporting.text('unknown') : (body.error || res.status); return; }
+          if (body.deleted !== true) { $('out').textContent = BuildReporting.text('unknown'); return; }
+          const msg = describeOutcome('delete', body, { title }) + (body.cleanupPending ? ' ' + GpxCopy.en.cleanupPending : '');
           $('out').textContent = msg;
           // Pass the outcome so load() does not clobber it with "N post(s) loaded."
           // — a failed rebuild (body.build.ok === false) must stay visible to the admin.
           await load(msg);
+          if (body.build?.ok === false) BuildReporting.recovery($('out'), body.build.code);
         } catch (e) {
-          $('out').textContent = 'Delete failed: ' + e;
+          $('out').textContent = BuildReporting.text('unknown');
         } finally {
           btn.disabled = false;
         }
@@ -299,7 +305,7 @@
 
       function postTitle(key) {
         const post = allPosts.find((p) => p.translationKey === key);
-        return post && post.titleDe ? post.titleDe : '(untitled)';
+        return post && post.title ? post.title : '(untitled)';
       }
 
       function refreshBulkBar() {
@@ -363,12 +369,12 @@
       };
       function summarizeBulk(action, body) {
         const failures = (body.results || []).filter((r) => !r.ok);
-        let msg = action + ': ' + body.succeeded + ' succeeded, ' + body.failed + ' failed.' + describeBuild(body.build);
+        let msg = describeOutcome('bulk', body, { action: BuildReporting.text('action.' + action), n: body.succeeded, m: body.failed });
         for (const f of failures) {
           const p = allPosts.find((x) => x.translationKey === f.key);
           const errorKey = Object.hasOwn(gpxPublishErrors, f.code) ? gpxPublishErrors[f.code]
             : (typeof f.code === 'string' && f.code.startsWith('gpx_') ? 'failed' : null);
-          msg += '\n  · ' + ((p && p.titleDe) || f.key) + ' — ' + (errorKey ? GpxCopy.en[errorKey] : f.error);
+          msg += '\n  · ' + ((p && p.title) || f.key) + ' — ' + (errorKey ? GpxCopy.en[errorKey] : SiteLanguage.error(f));
         }
         return msg;
       }
@@ -377,6 +383,7 @@
         // Snapshot before the async confirmation: filter or checkbox changes
         // while the dialog is open must never alter the confirmed request.
         const keys = Object.freeze([...selected]);
+        const baseLanguageUpdatedAt = SiteLanguage.config().updatedAt;
         if (keys.length === 0) return;
         if (!(await confirmBulk(action, keys))) return;
         const buttons = [$('bulkPublish'), $('bulkUnpublish'), $('bulkDelete')];
@@ -386,11 +393,12 @@
           const res = await fetch('/posts/bulk', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ action, keys }),
+            body: JSON.stringify({ action, keys, ...(action === 'publish' ? { baseLanguageUpdatedAt } : {}) }),
           });
           if (res.status === 401) { location.href = '/login'; return; }
           const body = await res.json().catch(() => ({}));
-          if (!res.ok) { $('out').textContent = 'Bulk ' + action + ' failed: ' + (body.error || res.status); return; }
+          if (!res.ok) { $('out').textContent = res.status >= 500 ? BuildReporting.text('unknown') : (body.error || res.status); return; }
+          if (!Number.isInteger(body.succeeded) || !Number.isInteger(body.failed)) { $('out').textContent = BuildReporting.text('unknown'); return; }
           const msg = summarizeBulk(action, body) + (body.cleanupPending ? ' ' + GpxCopy.en.cleanupPending : '');
           // Keep failed stories selected so the visible failure report is also
           // immediately actionable: the author can fix them and retry without
@@ -405,8 +413,9 @@
           // load() re-renders and hides the bar; pass the summary so it survives
           // the reload (partial failures must stay on screen).
           await load(msg);
+          if (body.build?.ok === false) BuildReporting.recovery($('out'), body.build.code);
         } catch (e) {
-          $('out').textContent = 'Bulk ' + action + ' failed: ' + e;
+          $('out').textContent = BuildReporting.text('unknown');
         } finally {
           buttons.forEach((b) => { b.disabled = false; });
         }
@@ -452,10 +461,10 @@
           span.textContent = text;
           return span;
         });
-        if (p.hasEnBody === false) {
+        if (p.secondaryStatus === 'empty' && SiteLanguage.config().locales.length > 1) {
           const hint = document.createElement('span');
           hint.className = 'post-locale-state';
-          hint.textContent = copy.postsMissingEn;
+          hint.textContent = SiteLanguage.text('BodyEmpty', { language: SiteLanguage.names[SiteLanguage.config().locales[1]] });
           items.push(hint);
         }
         if (!items.length) return null;
@@ -484,10 +493,6 @@
         return badge;
       }
 
-      // @ai-warning The list payload carries hasEnBody and nothing about the DE
-      // body, so DE is labelled as the primary locale only — never "complete".
-      // EN is present/missing only on a strict boolean; an absent field is
-      // "unknown", not "present" (an older or partial summary must not look done).
       function languagesCell(p) {
         const td = document.createElement('td');
         td.className = 'col-languages';
@@ -495,10 +500,12 @@
         td.setAttribute('data-label', copy.postsLanguages);
         const wrap = document.createElement('div');
         wrap.className = 'post-languages';
-        wrap.appendChild(languageBadge('DE', copy.postsGermanLocale, ''));
-        if (p.hasEnBody === true) wrap.appendChild(languageBadge('EN', copy.postsEnglishPresent, ''));
-        else if (p.hasEnBody === false) wrap.appendChild(languageBadge('EN', copy.postsEnglishMissing, 'missing'));
-        else wrap.appendChild(languageBadge('EN', copy.postsEnglishUnknown, 'unknown'));
+        const lang = SiteLanguage.config();
+        for (const locale of lang.locales) {
+          const primary = locale === lang.primary;
+          const key = primary ? 'PrimaryLabel' : ({ omitted: 'OmittedLabel', empty: 'BodyEmpty', started: 'BodyStarted' }[p.secondaryStatus] || 'BodyUnknown');
+          wrap.appendChild(languageBadge(locale.toUpperCase(), SiteLanguage.text(key, { language: SiteLanguage.names[locale] }), !primary && p.secondaryStatus === 'empty' ? 'missing' : ''));
+        }
         td.appendChild(wrap);
         return td;
       }
@@ -576,7 +583,7 @@
             const cb = document.createElement('input');
             cb.type = 'checkbox';
             cb.checked = selected.has(p.translationKey);
-            cb.setAttribute('aria-label', 'Select ' + (p.titleDe || 'untitled post'));
+            cb.setAttribute('aria-label', 'Select ' + (p.title || 'untitled post'));
             cb.addEventListener('change', () => {
               if (cb.checked) selected.add(p.translationKey); else selected.delete(p.translationKey);
               syncSelectAll();
@@ -596,8 +603,8 @@
           const titleLink = document.createElement('a');
           titleLink.href = editorHref(p.translationKey);
           titleLink.className = 'post-title-link';
-          titleLink.setAttribute('aria-label', 'Edit ' + (p.titleDe || 'untitled post'));
-          titleLink.textContent = p.titleDe || '(untitled)';
+          titleLink.setAttribute('aria-label', 'Edit ' + (p.title || 'untitled post'));
+          titleLink.textContent = p.title || '(untitled)';
           tdTitle.appendChild(titleLink);
           const meta = tripMeta(p);
           if (meta) tdTitle.appendChild(meta);
@@ -642,7 +649,7 @@
           editLink.href = editorHref(p.translationKey);
           editLink.textContent = 'Edit';
           editLink.className = 'action-link';
-          editLink.setAttribute('aria-label', 'Edit ' + (p.titleDe || 'untitled post'));
+          editLink.setAttribute('aria-label', 'Edit ' + (p.title || 'untitled post'));
           actions.appendChild(editLink);
 
           // Unpublish and Delete are admin-only, so an author's row offers Edit
@@ -652,7 +659,7 @@
             more.className = 'post-more';
             const summary = document.createElement('summary');
             summary.textContent = 'More actions';
-            summary.setAttribute('aria-label', 'More actions for ' + (p.titleDe || 'untitled post'));
+            summary.setAttribute('aria-label', 'More actions for ' + (p.title || 'untitled post'));
             more.appendChild(summary);
             const moreActions = document.createElement('div');
             moreActions.className = 'post-more-actions';
@@ -750,6 +757,15 @@
           $('out').textContent = (statusMsg != null ? statusMsg + '\n' : '') + 'Could not load posts: ' + why;
         };
         try {
+          const lang = await SiteLanguage.get(true);
+          const secondary = lang.locales.find((locale) => locale !== lang.primary);
+          const missingOption = $('missingSecondaryOption');
+          missingOption.hidden = !secondary;
+          missingOption.disabled = !secondary;
+          missingOption.textContent = secondary ? SiteLanguage.text('BodyEmpty', { language: SiteLanguage.names[secondary] }) : SiteLanguage.text('MissingTranslation');
+          const missingView = statusViewButtons.find(({ view }) => view.status === 'missing-secondary');
+          missingView.button.hidden = !secondary;
+          missingView.label.textContent = missingOption.textContent;
           const res = await fetch('/posts');
           if (res.status === 401) { location.href = '/login'; return; }
           if (!res.ok) { loadFailed(res.status); return; }
@@ -771,6 +787,7 @@
           setFilterControls(PostsFilter.fromSearch(location.search, countryOptions));
           filtersInitialized = true;
         }
+        if (SiteLanguage.config().locales.length === 1 && $('fStatus').value === 'missing-secondary') $('fStatus').value = '';
         $('loadMsg').hidden = true;
         $('filters').hidden = false;
         $('statusViews').hidden = false;

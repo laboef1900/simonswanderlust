@@ -22,11 +22,17 @@
       </div>
       <p id="out" class="page-status" role="status"></p>
       <ul id="list" class="comment-list"></ul>
+      <nav id="pagination" class="comment-actions">
+        <button id="previousPage" type="button" class="btn-secondary" disabled></button>
+        <span id="pageIndicator" tabindex="-1" role="status"></span>
+        <button id="nextPage" type="button" class="btn-secondary" disabled></button>
+      </nav>
     </main>
 
     <script src="/admin/editor-image-copy.js"></script>
     <script src="/admin/auth.js"></script>
     <script src="/admin/admin-confirm.js"></script>
+    <script src="/admin/language.js"></script>
     <script>
       // @ai-warning Reader text (name, email, body, post key) is UNTRUSTED and
       // is painted exclusively with createElement + textContent — never
@@ -38,6 +44,47 @@
         if (cls) n.className = cls;
         return n;
       };
+      const copy = EditorCopy[document.documentElement.lang === 'de' ? 'de' : 'en'];
+      const text = (key, values = {}) => copy[key].replace(/\{(\w+)\}/g, (_, name) => String(values[name]));
+      $('previousPage').textContent = copy.commentsPrevious;
+      $('nextPage').textContent = copy.commentsNext;
+      $('pagination').setAttribute('aria-label', copy.commentsPagination);
+
+      // Page-lifetime only: changing views must not discard another reply.
+      const replyDrafts = new Map();
+      const pendingReplies = new Set();
+      const renderedRows = new Map();
+      let viewRequest = 0;
+      let filterRevision = 0;
+      let loadedView = null;
+      let offset = 0;
+      let hasMore = false;
+      let refreshFocus = null;
+
+      function focusedReplyControl() {
+        for (const [id, { controls, ta }] of renderedRows) {
+          const index = controls.indexOf(document.activeElement);
+          if (index !== -1) return {
+            id, index,
+            selection: document.activeElement === ta
+              ? [ta.selectionStart, ta.selectionEnd, ta.selectionDirection] : null,
+          };
+        }
+        return null;
+      }
+
+      function restoreReplyFocus(focus) {
+        if (!focus) return;
+        const control = renderedRows.get(focus.id)?.controls[focus.index];
+        if (!control) { $('statusFilter').focus({ preventScroll: true }); return; }
+        control.focus({ preventScroll: true });
+        if (focus.selection) control.setSelectionRange(...focus.selection);
+      }
+
+      // A real focus move cancels restoration, even if the user later blurs it.
+      // Removing the rows does not emit focusin, so overlapping loads keep the
+      // latest caret until the owning response restores it.
+      document.addEventListener('focusin', () => { refreshFocus = null; });
 
       async function api(method, url, body) {
         const res = await fetch(url, {
@@ -52,12 +99,18 @@
       }
 
       async function setStatus(c, status) {
-        await api('POST', '/moderation/comments/' + encodeURIComponent(c.id) + '/status', { status });
+        return await api('POST', '/moderation/comments/' + encodeURIComponent(c.id) + '/status', { status }) !== null;
+      }
+
+      async function deleteComment(c) {
+        const result = await api('DELETE', '/moderation/comments/' + encodeURIComponent(c.id));
+        if (result !== null) replyDrafts.delete(c.id);
+        return result !== null;
       }
 
       async function confirmThen(opts, fn) {
         const ok = await AdminConfirm.ask(opts);
-        if (ok) await fn();
+        return ok ? await fn() : false;
       }
 
       function row(c) {
@@ -67,33 +120,46 @@
         if (c.isAuthor) head.appendChild(el('span', ' (author)'));
         head.appendChild(el('span', ' · ' + c.translationKey + ' / ' + c.locale + ' · ' + new Date(c.createdAt).toLocaleString(), 'muted'));
         li.appendChild(head);
+        if (c.publicLocale === false) {
+          li.appendChild(el('p', SiteLanguage.text('CommentHidden', { language: SiteLanguage.names[c.locale] }), 'muted'));
+        }
         if (c.email) li.appendChild(el('p', c.email, 'muted'));
         for (const para of String(c.body).split(/\n{2,}/)) li.appendChild(el('p', para, 'comment__body'));
 
         const actions = el('div', undefined, 'comment-actions');
+        const controls = [];
         const act = (label, fn, variant) => {
           const b = el('button', label);
           b.type = 'button';
           if (variant) b.className = variant;
           b.addEventListener('click', async () => {
+            const view = filterRevision;
+            const request = viewRequest;
+            const focus = focusedReplyControl();
             b.disabled = true;
-            try { await fn(); await load(); } catch (e) { $('out').textContent = 'Failed: ' + e.message; }
+            try {
+              const changed = await fn();
+              if (changed && view === filterRevision) await load(focus, '', true);
+            } catch (e) {
+              if (request === viewRequest) $('out').textContent = 'Failed: ' + e.message;
+            }
             finally { b.disabled = false; }
           });
           actions.appendChild(b);
+          controls.push(b);
         };
         if (c.status === 'pending') act('Approve', () => setStatus(c, 'approved'));
         else act('Unapprove', () => setStatus(c, 'pending'), 'btn-secondary');
         act('Spam', () => confirmThen({
           title: 'Mark as spam?',
-          body: 'This comment by "' + c.name + '" is permanently deleted. This cannot be undone.',
+          body: text(c.status === 'approved' ? 'commentsDeleteApprovedBody' : 'commentsDeleteBody', { name: c.name }),
           confirmLabel: 'Delete as spam', danger: true,
-        }, () => api('DELETE', '/moderation/comments/' + encodeURIComponent(c.id))), 'btn-remove');
+        }, () => deleteComment(c)), 'btn-remove');
         act('Delete', () => confirmThen({
           title: 'Delete this comment?',
-          body: 'This comment by "' + c.name + '" is permanently deleted' + (c.status === 'approved' ? ' and disappears from the site on the next rebuild' : '') + '. This cannot be undone.',
+          body: text(c.status === 'approved' ? 'commentsDeleteApprovedBody' : 'commentsDeleteBody', { name: c.name }),
           confirmLabel: 'Delete', danger: true,
-        }, () => api('DELETE', '/moderation/comments/' + encodeURIComponent(c.id))), 'btn-remove');
+        }, () => deleteComment(c)), 'btn-remove');
         li.appendChild(actions);
 
         const form = el('form', undefined, 'comment-reply');
@@ -102,42 +168,132 @@
         ta.rows = 2;
         ta.setAttribute('aria-label', 'Reply as author');
         ta.placeholder = 'Reply as the author…';
+        ta.value = replyDrafts.get(c.id) || '';
+        ta.addEventListener('input', () => {
+          if (ta.value) replyDrafts.set(c.id, ta.value);
+          else replyDrafts.delete(c.id);
+        });
         const send = el('button', 'Reply as author', 'btn-secondary');
         send.type = 'submit';
+        send.disabled = pendingReplies.has(c.id);
         form.append(ta, send);
+        controls.push(ta, send);
+        renderedRows.set(c.id, { controls, ta, send });
         form.addEventListener('submit', async (e) => {
           e.preventDefault();
-          if (!ta.value.trim()) return;
+          if (pendingReplies.has(c.id) || !ta.value.trim()) return;
+          const body = ta.value;
+          replyDrafts.set(c.id, body);
+          const focus = focusedReplyControl();
+          const view = filterRevision;
+          let focusRequest = viewRequest;
+          let refreshing = false;
+          let ownsPendingReply = true;
+          pendingReplies.add(c.id);
           send.disabled = true;
+          // This handler may outlive its refresh; release only its own admission.
+          function releasePendingReply() {
+            if (!ownsPendingReply) return;
+            ownsPendingReply = false;
+            pendingReplies.delete(c.id);
+            send.disabled = false;
+            const current = renderedRows.get(c.id);
+            if (current) current.send.disabled = false;
+          }
           try {
-            await api('POST', '/moderation/comments/' + encodeURIComponent(c.id) + '/reply', { body: ta.value });
-            $('out').textContent = 'Reply published.';
-            await load();
-          } catch (err) { $('out').textContent = 'Reply failed: ' + err.message; }
-          finally { send.disabled = false; }
+            const result = await api('POST', '/moderation/comments/' + encodeURIComponent(c.id) + '/reply', { body });
+            if (result === null) return;
+            releasePendingReply();
+            // Keep anything written while the request was pending, even if a
+            // different action has already replaced this row's textarea.
+            if (replyDrafts.get(c.id) === body) {
+              replyDrafts.delete(c.id);
+              const current = renderedRows.get(c.id);
+              if (current) current.ta.value = '';
+            }
+            if (view === filterRevision) {
+              focusRequest = viewRequest + 1;
+              refreshing = true;
+              await load(focus, 'Reply published.', true);
+            }
+          } catch (err) {
+            if (focusRequest === viewRequest) $('out').textContent = 'Reply failed: ' + err.message;
+          }
+          finally {
+            releasePendingReply();
+            if (!refreshing && focusRequest === viewRequest && document.activeElement === document.body) restoreReplyFocus(focus);
+          }
         });
         li.appendChild(form);
         return li;
       }
 
-      async function load() {
+      async function load(fallbackFocus = null, message = '', resetPage = false) {
+        const request = ++viewRequest;
         const status = $('statusFilter').value;
-        let data;
-        try { data = await api('GET', '/moderation/comments?status=' + encodeURIComponent(status)); }
-        catch (e) { $('out').textContent = 'Could not load comments: ' + e.message; return; }
-        if (!data) return;
+        if (loadedView && status !== loadedView.status) offset = 0;
+        if (resetPage) offset = 0;
+        const view = { status, offset };
+        // Mutation resets stay in the same navigation revision: overlapping
+        // successful writes must each refresh. User navigation retires them.
+        if (!loadedView || status !== loadedView.status || (!resetPage && offset !== loadedView.offset)) {
+          filterRevision++;
+          refreshFocus = null;
+        }
+        loadedView = view;
+        const isCurrent = () => request === viewRequest
+          && view.status === $('statusFilter').value && view.offset === offset;
+        hasMore = false;
+        $('previousPage').disabled = true;
+        $('nextPage').disabled = true;
+        $('pageIndicator').textContent = text('commentsPage', { page: offset / 50 + 1 });
         const ul = $('list');
+        // Capture the latest draft/caret before removing obsolete actions.
+        // Draft text itself lives in replyDrafts, not in the cleared rows.
+        refreshFocus = focusedReplyControl()
+          || (document.activeElement === document.body
+            ? ul.getAttribute('aria-busy') === 'true' ? refreshFocus : fallbackFocus
+            : null);
+        renderedRows.clear();
         ul.replaceChildren();
-        for (const c of data.comments) ul.appendChild(row(c));
-        if (!data.comments.length) $('out').textContent = 'No ' + status + ' comments.';
+        ul.setAttribute('aria-busy', 'true');
+        $('out').textContent = 'Loading ' + status + ' comments…';
+        try {
+          const data = await api('GET', '/moderation/comments?status=' + encodeURIComponent(status) + '&offset=' + view.offset);
+          if (!isCurrent() || !data) return;
+          for (const c of data.comments) ul.appendChild(row(c));
+          hasMore = data.hasMore === true;
+          $('previousPage').disabled = view.offset === 0;
+          $('nextPage').disabled = !hasMore;
+          $('out').textContent = data.comments.length ? message
+            : view.offset > 0 ? copy.commentsEmptyPage : 'No ' + status + ' comments.';
+          if (document.activeElement === document.body) restoreReplyFocus(refreshFocus);
+        } catch (e) {
+          if (!isCurrent()) return;
+          $('out').textContent = e.message === 'invalid pagination'
+            ? copy.commentsPaginationError : 'Could not load comments: ' + e.message;
+          if (refreshFocus && document.activeElement === document.body) $('statusFilter').focus({ preventScroll: true });
+        } finally {
+          if (isCurrent()) {
+            ul.setAttribute('aria-busy', 'false');
+            refreshFocus = null;
+          }
+        }
       }
 
-      // A new view starts with a clean status line: the previous view's "No
-      // pending comments." must not sit above a populated approved list.
       $('statusFilter').addEventListener('change', () => {
-        $('out').textContent = '';
-        load();
+        offset = 0;
+        return load();
       });
+      function navigatePage(delta) {
+        if ($('list').getAttribute('aria-busy') === 'true'
+          || (delta > 0 ? $('nextPage').disabled || !hasMore : $('previousPage').disabled || offset === 0)) return;
+        offset += delta;
+        $('pageIndicator').focus({ preventScroll: true });
+        return load();
+      }
+      $('previousPage').addEventListener('click', () => navigatePage(-50));
+      $('nextPage').addEventListener('click', () => navigatePage(50));
 
       (async () => {
         const s = await Auth.ensureAuthed({ admin: true });
