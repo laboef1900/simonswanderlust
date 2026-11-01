@@ -14,7 +14,7 @@ observation.
 | Item | Requirement | Record in the run log |
 |---|---|---|
 | iPhone | Current stable iOS major (27 at writing), Safari. Any model whose controls can reach the §4 widths; a notch/Dynamic-Island model preferred for the safe-area probe. | Model, `Settings → General → About → iOS Version` (full build), Safari build from `about:` is not shown on iOS: record the iOS build. |
-| Android phone | Owner-approved OS version, current stable Chrome. | Model, `Settings → About phone → Build number`, Chrome `chrome://version` (full version string). |
+| Android phone | **Waived until 2027-05-01 (spec §13.1, E1).** When available: owner-approved OS version, current stable Chrome. | Model, `Settings → About phone → Build number`, Chrome `chrome://version` (full version string). |
 | Bluetooth keyboard | Any; must pair with both phones. | Make/model. |
 | USB cables + the Mac | Safari Web Inspector (iPhone: `Settings → Safari → Advanced → Web Inspector` on; Mac Safari `Develop` menu). Android: `chrome://inspect#devices` in desktop Chrome with USB debugging on. | — |
 | Disposable instance behind **trusted TLS** | Spec §8 option 1 (staging hostname) or option 2 (LAN proxy + a CA both phones trust). Plain HTTP is ruled out (spec §15). | Hostname, the environment option used, the app build (`git rev-parse HEAD` of the checkout or the image tag). |
@@ -46,15 +46,17 @@ cd ../site && npm ci && cd ../uploader
 # 3. Runtime (loopback only; the proxy is the sole ingress)
 RUN=$(mktemp -d)
 DATABASE_URL='postgres://…/audit300_<date>' \
-PUBLIC_BASE_URL='https://<test-hostname>' \
+PUBLIC_BASE_URL='https://<test-image-hostname>' IMG_HOST='<test-image-hostname>' \
 STORAGE_DIR="$RUN/images" SETTINGS_PATH="$RUN/settings.json" \
 SITE_DIR="$RUN/site" BACKUP_DIR="$RUN/backup" SITE_APP_DIR="$(pwd)/../site" \
 PORT=14300 HOST=127.0.0.1 TRUSTED_PROXY=loopback \
 node --import tsx src/main.ts
 ```
 
-- `PUBLIC_BASE_URL` **must** be the exact origin the phones type, or variants and the public
-  story will not load (`main.ts:124-129`). Do not set `IMG_HOST` separately.
+- A public test instance needs **two names**: the app serves the blog on the image host only
+  for loopback (`server.ts` `imgHostServesBlog`), so with one public name the blog would 404.
+  Set `PUBLIC_BASE_URL`/`IMG_HOST` to the image name and open the blog/admin on the other name;
+  both are proxied to the same port. The owner's names are in §1a.
 - `TRUSTED_PROXY=loopback` means the TLS proxy must run on the same host and forward to
   `127.0.0.1:14300` with `X-Forwarded-Proto: https`, replacing any client-supplied forwarded
   headers. (Option 1 via the compose stack uses `docker-gateway` instead; do not edit
@@ -65,12 +67,12 @@ node --import tsx src/main.ts
 - Create the accounts (from the Mac, through the proxy):
 
   ```bash
-  curl -sS https://<test-hostname>/setup -H 'content-type: application/json' \
+  curl -sS https://<test-blog-hostname>/setup -H 'content-type: application/json' \
     -d '{"username":"audit-admin","password":"<generated>"}'
   # then, signed in as audit-admin (cookie jar):
-  curl -sS -b jar -c jar https://<test-hostname>/login -H 'content-type: application/json' \
+  curl -sS -b jar -c jar https://<test-blog-hostname>/login -H 'content-type: application/json' \
     -d '{"username":"audit-admin","password":"<generated>"}'
-  curl -sS -b jar https://<test-hostname>/users -H 'content-type: application/json' \
+  curl -sS -b jar https://<test-blog-hostname>/users -H 'content-type: application/json' \
     -d '{"username":"audit-author","password":"<generated>","isAdmin":false}'
   ```
 
@@ -78,6 +80,44 @@ node --import tsx src/main.ts
   Storage/Application → Cookies). Record it.
 - At the end: stop the proxy and the app, `dropdb audit300_<date>`, `rm -rf "$RUN"`, remove any
   temporary CA from both phones.
+
+## 1a. Disposable instance on the owner's server (decided 2026-11-01)
+
+Blog/admin `https://new.simonswanderlust.com`, images `https://img.new.simonswanderlust.com`,
+both with certificates the iPhone trusts, both proxied by the server's existing reverse proxy to
+a **separate** loopback port. Production's project, `uploader/data`, `pgdata`, port 3000 and
+`.env` are never touched. Images are built on the Mac and copied over, not built on the server.
+
+```bash
+# On the Mac, from a checkout of the build under test (dev after #500/#501, or #490's head for G3):
+SHA=$(git rev-parse --short HEAD)
+docker build --platform linux/<amd64|arm64 = the server's arch> -t ghcr.io/laboef1900/wanderlust-studio:g5-$SHA .
+docker save ghcr.io/laboef1900/wanderlust-studio:g5-$SHA | ssh <server> docker load
+scp docker-compose.yml <server>:/srv/swl-g5/docker-compose.yml   # a NEW directory
+
+# On the server:
+cd /srv/swl-g5 && mkdir -p uploader/data && sudo chown -R 1000:1000 uploader/data
+sed -i 's/127.0.0.1:3000:3000/127.0.0.1:14300:3000/' docker-compose.yml   # never production's port
+cat > .env <<EOF
+POSTGRES_PASSWORD=$(openssl rand -hex 32)
+PUBLIC_BASE_URL=https://img.new.simonswanderlust.com
+IMG_HOST=img.new.simonswanderlust.com
+IMAGE_TAG=g5-<sha>
+EOF
+chmod 600 .env
+docker compose -p swl-g5 config --quiet && docker compose -p swl-g5 up -d
+curl -fsS http://127.0.0.1:14300/health
+```
+
+Proxy: add `new.simonswanderlust.com` and `img.new.simonswanderlust.com` → `127.0.0.1:14300`
+with the same headers as production (Host preserved, `X-Forwarded-Proto`/`X-Forwarded-For`
+overwritten, 25 MB bodies, read timeout above 900 s). Leave Settings → Site identity → Public
+domain **unset**, so the instance is `noindex` with `Disallow: /`. Then continue with the account
+creation above, using `https://new.simonswanderlust.com`.
+
+Teardown after the runs: `docker compose -p swl-g5 down -v` **inside `/srv/swl-g5` only** (the
+`-p swl-g5` project owns that test volume), `rm -rf /srv/swl-g5`, remove both proxy routes and
+DNS names. Never run `down -v` in production's directory.
 
 ## 2. Fixtures
 

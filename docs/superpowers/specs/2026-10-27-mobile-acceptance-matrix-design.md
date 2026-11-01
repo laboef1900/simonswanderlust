@@ -413,6 +413,27 @@ The owner answered **Approve proposed matrix**, **Documented manual audit**, and
 - **D5 Exceptions — none granted.** No pre-emptive device, measurement, accessibility or security
   waiver follows from the approval. Later gaps require the scoped record in §7.
 
+### 13.1 Owner decisions, 2026-11-01 (interview with the maintainer)
+
+- **Exception E1 — Android waived (scoped §7 record).** *Waived rule:* D1's Android Chrome
+  column for #300–#302 (and TalkBack in #310's G3). *Reason:* no Android device is available.
+  *Risk:* Android-only defects (Chrome's file chooser and camera handoff, TalkBack, Gboard
+  viewport resizing, font-scale behaviour) stay unobserved. *Compensating controls:* the iOS
+  Safari matrix runs in full; Chromium emulation at 390/320 px with touch, 200 % text and a
+  throttled network was recorded in #500/#501; every fix is platform-neutral client code with
+  regression tests. *Approver:* the owner (laboef1900), 2026-11-01. *Review / expiry:*
+  **2027-05-01**, or earlier as soon as an Android device is available — then the Android rows
+  are run and this exception is closed.
+- **Devices:** current-stable iPhone (Safari) and a Bluetooth keyboard; the owner runs the
+  script personally.
+- **Trusted-TLS instance:** a disposable instance behind the owner's server proxy at
+  `https://new.simonswanderlust.com` (blog/admin) and `https://img.new.simonswanderlust.com`
+  (images; the app serves the blog on the image host only for loopback, so two names are
+  required). It uses its own Compose project, data directory, database and loopback port,
+  never production's; setup in the run sheet §"Disposable instance on the server".
+- **Build under test:** `dev` with #500 and #501 merged ahead of the run (owner, 2026-11-01);
+  #301/#302 stay open until this run passes.
+
 ## 14. Mapping to #300's acceptance
 
 | #300 acceptance item | Where it is satisfied |

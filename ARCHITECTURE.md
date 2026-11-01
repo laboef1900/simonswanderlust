@@ -899,11 +899,76 @@ is bind-mounted from `./uploader/data`; `pgdata`, the live database, is a named 
 same host). The in-app backups therefore protect against application-level mistakes (bad edit,
 botched restore, accidental delete), **not** against disk failure or host loss.
 
-> **Offsite backup is required for real DR:** run a host-level backup (e.g. a restic / borg /
-> rsync cron job) of `./uploader/data`. That one directory contains the DB dumps, the image
-> archives, private GPX originals/archives, image originals, and settings.json. Encrypted AI credentials additionally require
-> **separate offsite master-key escrow**; `/data` and a DB dump cannot recover a lost master key.
-> The manual download buttons on the settings page are an escape hatch, not a strategy.
+### Recovery inventory
+
+Resolve the **actual configured locations** before capture: `STORAGE_DIR`, its private
+routes sibling, `SETTINGS_PATH`, `BACKUP_DIR`, `SITE_DIR` and deployment overrides. The
+default bind `./uploader/data` is not sufficient when material lives elsewhere.
+
+| Material | Recovery requirement |
+|---|---|
+| Current `db-*.json.gz` (v14) | Content, accounts/password hashes, comments, media metadata, encrypted `app_secrets`, private `post_routes`, site identity and its logo/favicon assets, language mode, navigation and journeys; validate the selected dump. Gzip is not encryption. |
+| Private GPX originals | Keep each retained dump's manifest-referenced `routes-*.tar`, including its declared degraded-source states; include retained private route storage in a host copy. Public simplified tracks and image tars are not substitutes. Originals may retain removed locations/times after detachment or public trimming. |
+| Image originals and variants | Capture the configured image storage and/or every archive needed for the selected recovery point. Replay a complete chain oldest-first into an empty isolated directory. Originals may contain EXIF/GPS; deletion from the media library does not erase old archives or offsite copies. |
+| `settings.json` and any `settings.json.pre-ai-registry` | Operator copy, outside logical dumps. Capture the current settings coherently with the dump; the migration copy is not necessarily current pre-upgrade settings. Provider registry URLs/assignments must match the encrypted credential generation. |
+| Bootstrap/deployment configuration | Restricted encrypted copy of required database/bootstrap values, origin/path overrides, Compose configuration and immutable image identity. Exclude master-key values from this data repository, even if they occur in `.env`; place them in separate escrow. Preserve custom basemap/configuration overrides. |
+| AI master keys | Independently recoverable **separate escrow** of every still-needed `ENCRYPTION_KEY` generation, plus private access/recovery instructions and a non-secret association to recovery generations. Ciphertext cannot recover a lost key. |
+| Offsite repository credentials/decryption keys | Independent escrow and recovery access: the only repository key must not be inside the repository it unlocks. |
+| Static releases, generated public tracks, baked map assets | Rebuildable from restored sources/settings/media using the pinned supported app image; optional release copies speed recovery but do not replace source material. Standard map assets ship in the image. |
+| MDX exports and backup `state.json` | Optional host-copy material. MDX is not a full account/comment/route/secret restore. State records scheduling/cutoffs, not proof an archive completed; missing/invalid cutoff state invokes existing conservative archive recovery. |
+| Sessions and temporary work | Reauthenticate and let existing boot recovery reconstruct disposable work. Unsaved browser edits, excluded revisions/job history and pending GPX imports are not promised recovery material. |
+
+### Coherent encrypted offsite generations
+
+The owner approved **14 completed daily offsite generations** and operator-managed
+settings/bootstrap coverage on 2026-10-28. This is an **operator retention policy**, not an
+implemented app pruner, a capacity guarantee or the local `backupRetention` setting.
+The existing encrypted backup system's tool, non-secret destination identifier and independent
+escrow/recovery method are still missing. No vendor, executable syntax, account, cost or
+successful offsite status is implied here.
+
+1. Confirm an approved encrypted repository in a separate failure domain, encryption in
+   transit and at rest, restricted access, and independent escrow. Privately record the
+   configured source locations, pinned image and non-secret generation/key associations.
+2. Establish a complete **operational write freeze before capture**: block new author,
+   admin and public mutations and scheduled/storage writers; drain admitted operations and
+   resolve partial failures, particularly provider URL/key changes. Keep only the designated
+   existing backup control available. This is an operator maintenance window, not an app
+   transaction. If the freeze cannot be maintained, do not declare a coherent generation.
+3. Under that freeze, create the app recovery set and inspect success/degraded status.
+   Validate the dump and referenced GPX archive; capture matching settings/migration copy,
+   bootstrap material, image storage or complete required chain, and key-generation association.
+   Use the stopped-app ownership procedure below for filesystem capture where needed.
+   Never pair a pre-change credential dump with post-change provider settings: this could
+   send an old key to a different destination. Refuse incomplete coverage.
+4. Copy the frozen set with the owner's documented encrypted backup tool. Do not resume
+   writers while that tool is still reading live files; a privately staged coherent copy
+   may be transferred after the freeze ends. Treat all originals as private data, not web
+   assets. Do not advance the success marker on partial/failed transfer, or delete earlier
+   valid generations or live data to make room.
+5. Keep 14 **completed daily** generations and the last-known-restorable generation when
+   newer attempts fail. Preserve older image archives still needed by any retained chain
+   and every retained dump's GPX companion. Measure capacity/cost before enabling pruning
+   in the chosen tool; the app's image-archive nonpruning remains unchanged.
+6. Prove recovery using **only offsite material and independent escrow**, following #295's
+   isolated topology: distinct bind paths/project/database, non-3000 loopback port, blocked
+   ingress including the empty-database setup window. Follow the offline CLI procedure
+   below, check dump/route integrity and counts, image rescan, rendered stories/galleries/
+   comments, settings fidelity and encrypted credential recovery without paid/provider calls
+   or key logging. Original-host files must not silently fill gaps. Retain redacted evidence.
+
+**Key loss:** content and photos remain recoverable; old AI credential envelopes do not.
+Keep local AI workflows available. Restore provider settings, configure a valid replacement
+master key through private bootstrap configuration and re-enter/reissue each remote credential
+in admin Settings; revoke obsolete credentials as appropriate. A new master key cannot
+decrypt old envelopes. Do not move ciphertext between provider assignments; keep old escrow
+keys for generations whose credentials must still be recoverable.
+
+**Containment and acceptance:** failed or ambiguous restores leave the isolated target
+stopped, with input/undo/staged sets retained for diagnosis. Never touch production, disable
+ownership fencing or erase recovery history to make a drill pass. #295's independent restore
+drill and #296's additional offsite-only drill remain required, not waived by this inventory.
+See the [approved #296 spec](docs/superpowers/specs/2026-10-27-issue-296-offsite-recovery-inventory.md).
 
 The [isolated restore rehearsal runbook and dated evidence](docs/2026-10-29-restore-rehearsal.md)
 cover a disposable fresh target, not a production restore or upgrade qualification. A different
@@ -1538,13 +1603,16 @@ separate owner action, not part of the dependency PR.
 
 ## Configuration (environment)
 
+Operators install and configure through the [installation guide](docs/install.md); this table
+is the reference behind it.
+
 | Var | Used by | Purpose |
 | :-- | :-- | :-- |
 | `DATABASE_URL` | app | Postgres connection (content + auth) |
 | `ENCRYPTION_KEY` | app | Optional 64-hex master key for encrypted AI credentials; unset permits local workflows, malformed values refuse boot; escrow separately |
 | `TRUSTED_PROXY` | app / compose literal | Unset or `loopback`: loopback peers only. Compose sets `docker-gateway`: also trust the single discovered IPv4 default gateway, at hop zero only. Empty/unknown values or failed gateway discovery refuse boot. Not an `.env` setting; changing bridge/proxy topology requires a new trust spec. |
-| `PUBLIC_BASE_URL` | app | Public base for image URLs (e.g. `https://img.simonswanderlust.com`); not the allowed blog-comment origin. Its image authority is excluded from the temporary comment-origin fallback except in single-origin loopback development. |
-| `IMG_HOST` | app | Hostname routed to the image-variant static handler (defaults to the host of `PUBLIC_BASE_URL`); also excluded from the comment-origin fallback, with the same loopback exception. |
+| `PUBLIC_BASE_URL` | app | Public base for image URLs (e.g. `https://img.example.com`); required by Compose (`:?`, no owner default), optional for a bare `node` run (falls back to `http://localhost:3000`); not the allowed blog-comment origin. Its image authority is excluded from the temporary comment-origin fallback except in single-origin loopback development. |
+| `IMG_HOST` | app | Hostname routed to the image-variant static handler (the app defaults it to the host of `PUBLIC_BASE_URL`; Compose requires it explicitly); also excluded from the comment-origin fallback, with the same loopback exception. |
 | `SITE_APP_DIR` | app | Path to the Astro project the builder spawns (`/app/site`) |
 | `SITE_DIR` | app | Release root for the built blog (`/data/site`) — `current` is served from here |
 | `SITE_IDENTITY_JSON` | build child only | **Internal**, set for every spawn by `build.ts`; not operator-configurable, overrides inherited values |
