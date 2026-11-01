@@ -7,6 +7,7 @@ import { countLabel } from '../../i18n/count';
 import { aboutPath } from '../../lib/paths';
 import { byLocale, tripStats } from '../../lib/trips';
 import { identity } from '../../lib/build-identity';
+import { localeAlternates } from '../../lib/seo';
 
 interface Props {
   locale: Locale;
@@ -29,7 +30,7 @@ const description = entry?.data.description || t('about.title');
   title={t('about.title')}
   description={description}
   locale={locale}
-  alternates={{ de: aboutPath('de'), en: aboutPath('en') }}
+  alternates={localeAlternates(aboutPath)}
 >
   <section class="mx-auto max-w-6xl px-5 py-14">
     <div class="grid gap-12 lg:grid-cols-[1fr_2.2fr] lg:items-start">

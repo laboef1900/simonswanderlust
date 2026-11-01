@@ -15,6 +15,7 @@ import {
   tripStats,
   type Trip,
 } from './trips';
+import type { SiteLanguage } from './site-language';
 
 function fake(id: string, date: string, translationKey: string): Trip {
   return { id, data: { date: new Date(date), translationKey } } as unknown as Trip;
@@ -137,6 +138,25 @@ describe('trips helpers', () => {
   it('finds the translation pair via translationKey', () => {
     expect(translationOf(rhodesDe, all)?.id).toBe('en/sun-and-adventure-on-rhodes');
     expect(translationOf(buchDe, all)).toBeUndefined();
+  });
+
+  it.each<SiteLanguage>([
+    { primary: 'de', locales: ['de', 'en'] }, { primary: 'en', locales: ['en', 'de'] },
+    { primary: 'de', locales: ['de'] }, { primary: 'en', locales: ['en'] },
+  ])('routes only enabled stories in $primary / $locales', (language) => {
+    for (const trip of [rhodesDe, rhodesEn]) {
+      const locale = localeOf(trip);
+      if (language.locales.includes(locale)) {
+        const prefix = locale === language.primary ? '' : `/${locale}`;
+        expect(pathOf(trip, language)).toBe(`${prefix}/${slugOf(trip)}/`);
+      } else {
+        expect(() => pathOf(trip, language)).toThrow('Locale is not enabled');
+        expect(byLocale(all, locale, language)).toEqual([]);
+        expect(liveRegions(all, locale, 'europe', language)).toEqual([]);
+      }
+    }
+    const primary = language.primary === 'de' ? rhodesDe : rhodesEn;
+    expect(translationOf(primary, all, language)).toBe(language.locales.length === 2 ? (language.primary === 'de' ? rhodesEn : rhodesDe) : undefined);
   });
 });
 

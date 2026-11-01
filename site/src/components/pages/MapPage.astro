@@ -6,6 +6,7 @@ import { countLabel } from '../../i18n/count';
 import { byLocale, pathOf, statsLine, tripStats } from '../../lib/trips';
 import { tripPins } from '../../lib/map-data';
 import { mapPath } from '../../lib/paths';
+import { localeAlternates } from '../../lib/seo';
 
 interface Props {
   locale: Locale;
@@ -23,7 +24,7 @@ const stats = statsLine(tripStats(trips), t);
   title={t('map.title')}
   description={t('map.intro')}
   locale={locale}
-  alternates={{ de: mapPath('de'), en: mapPath('en') }}
+  alternates={localeAlternates(mapPath)}
 >
   <section class="mx-auto max-w-6xl px-5 py-10">
     <div class="flex flex-wrap items-end justify-between gap-4 border-b border-navy/10 pb-6">

@@ -7,23 +7,35 @@ import rehypeParse from 'rehype-parse';
 import { visit } from 'unist-util-visit';
 import { ABOUT_BODY_SIZES } from './body-images.js';
 
-const db = vi.hoisted(() => ({ rows: [] as Record<string, unknown>[], statements: [] as string[], released: false }));
-vi.mock('pg', () => ({
-  default: {
-    Pool: class {
-      async connect() {
-        return {
-          async query(sql: string): Promise<{ rows: Record<string, unknown>[] }> {
-            db.statements.push(sql);
-            return { rows: sql.startsWith('SELECT ') ? db.rows : [] };
-          },
-          release(): void { db.released = true; },
-        };
-      }
-      async end(): Promise<void> {}
-    },
-  },
+const BILINGUAL = { primary_locale: 'de', enabled_locales: ['de', 'en'] };
+const db = vi.hoisted(() => ({
+  language: { primary_locale: 'de', enabled_locales: ['de', 'en'] },
+  rows: null as Record<string, unknown>[] | null,
+  sql: [] as string[],
+  released: false,
 }));
+vi.mock('pg', () => ({ default: { Pool: class {
+  async connect() {
+    return {
+      async query(sql: string): Promise<{ rows: Record<string, unknown>[] }> {
+        db.sql.push(sql);
+        if (sql.includes('FROM site_language')) return { rows: [db.language] };
+        if (sql.includes('FROM pages')) return { rows: db.rows ?? ['de', 'en'].map((locale) => ({
+          key: 'about', locale, title: locale, body_markdown: `${locale} private draft if inactive`, images: {},
+        })) };
+        return { rows: [] };
+      },
+      release(): void { db.released = true; },
+    };
+  }
+  async end(): Promise<void> {}
+} } }));
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  db.sql = []; db.rows = null; db.released = false;
+  db.language = { ...BILINGUAL };
+});
 
 describe('rowToPageEntry', () => {
   it('maps a page row to a content entry input', () => {
@@ -59,9 +71,37 @@ describe('rowToPageEntry', () => {
   });
 });
 
-describe('page prose metadata', () => {
-  afterEach(() => { vi.unstubAllEnvs(); db.rows = []; db.statements = []; db.released = false; });
+describe('enabled About projection', () => {
+  it.each(['de', 'en'] as const)('does not parse or render retained inactive About content in %s-only mode', async (locale) => {
+    vi.stubEnv('DATABASE_URL', 'postgres://mocked/never-dialed');
+    vi.stubEnv('SITE_LANGUAGE_JSON', JSON.stringify({ primary: locale, locales: [locale] }));
+    vi.stubEnv('SITE_DATABASE_SNAPSHOT', '00000003-0000000A-1');
+    db.language = { primary_locale: locale, enabled_locales: [locale] };
+    const set = vi.fn();
+    const parseData = vi.fn(async ({ data }: { data: Record<string, unknown> }) => data);
+    const renderMarkdown = vi.fn(async (body: string) => ({ html: `<p>${body}</p>` }));
+    await postgresPagesLoader().load({
+      store: { clear: vi.fn(), set }, parseData, renderMarkdown, logger: { info: vi.fn() },
+    } as unknown as Parameters<Loader['load']>[0]);
+    expect(parseData).toHaveBeenCalledOnce();
+    expect(parseData.mock.calls[0]![0].data.title).toBe(locale);
+    expect(renderMarkdown).toHaveBeenCalledExactlyOnceWith(`${locale} private draft if inactive`);
+    expect(set.mock.calls[0]![0].id).toBe(`about/${locale}`);
+    expect(db.sql[1]).toBe("SET TRANSACTION SNAPSHOT '00000003-0000000A-1'");
+  });
+  it('refuses a standalone mode/content race before reading private page fields', async () => {
+    vi.stubEnv('DATABASE_URL', 'postgres://mocked/never-dialed');
+    vi.stubEnv('SITE_LANGUAGE_JSON', '{"primary":"de","locales":["de","en"]}');
+    db.language = { primary_locale: 'de', enabled_locales: ['de'] };
+    await expect(postgresPagesLoader().load({
+      store: { clear: vi.fn() },
+    } as unknown as Parameters<Loader['load']>[0])).rejects.toThrow('Site language changed');
+    expect(db.sql.some((sql) => sql.includes('FROM pages'))).toBe(false);
+    expect(db.sql.at(-1)).toBe('ROLLBACK');
+  });
+});
 
+describe('page prose metadata', () => {
   it.each([
     {
       body: '![Portrait](https://img.example/portrait)\nIch bin **Simon** und reise seit 2015.',
@@ -75,6 +115,7 @@ describe('page prose metadata', () => {
   ])('retains prose beside a responsive image: $expected', async ({ body, expected }) => {
     vi.stubEnv('DATABASE_URL', 'postgres://mocked/never-dialed');
     vi.stubEnv('PUBLIC_BASE_URL', 'https://img.example');
+    vi.stubEnv('SITE_LANGUAGE_JSON', '{"primary":"de","locales":["de","en"]}');
     db.rows = [{
       key: 'about', locale: 'de', title: 'About',
       body_markdown: body,
@@ -93,8 +134,9 @@ describe('page prose metadata', () => {
     };
     await postgresPagesLoader().load(ctx as unknown as Parameters<Loader['load']>[0]);
     expect(entries.get('about/de')?.data.description).toBe(expected);
-    expect(db.statements).toEqual([
+    expect(db.sql).toEqual([
       'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY',
+      'SELECT primary_locale, enabled_locales FROM site_language WHERE id = true',
       'SELECT key, locale, title, body_markdown, images FROM pages',
       'COMMIT',
     ]);
@@ -103,11 +145,10 @@ describe('page prose metadata', () => {
 });
 
 describe('postgresPagesLoader load()', () => {
-  afterEach(() => { vi.unstubAllEnvs(); db.rows = []; db.statements = []; db.released = false; });
-
   it('builds localized decorative gallery names for both About locales before any script runs', async () => {
     vi.stubEnv('DATABASE_URL', 'postgres://mocked/never-dialed');
     vi.stubEnv('PUBLIC_BASE_URL', 'https://img');
+    vi.stubEnv('SITE_LANGUAGE_JSON', '{"primary":"de","locales":["de","en"]}');
     const src = 'http://localhost:3000/pages/about/photo';
     db.rows = ['de', 'en'].map((locale) => ({
       key: 'about', locale, title: 'About',

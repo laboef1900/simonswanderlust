@@ -14,14 +14,9 @@ type Renderer = Awaited<ReturnType<ReturnType<typeof satteri>['createRenderer']>
 type MarkdownOptions = Parameters<ReturnType<typeof satteri>['createRenderer']>[0];
 
 /**
- * The `markdown` options `astro build` runs with, exported so the draft
- * preview and a parity test can both read the SAME values.
- *
- * @ai-warning These MUST stay identical to the `markdown` block in
- * `astro.config.mjs` — the build reads the config, this module feeds the
- * uploader's draft preview, and a silent divergence means previews and the
- * live site disagree about what a gallery is. `render-markdown.test.ts`
- * asserts the two agree; do not "fix" a failure there by editing only one side.
+ * Shared Markdown options for Astro builds and the uploader's draft preview.
+ * `astro.config.mjs` imports this object directly; keep it independent of
+ * database-backed build configuration so standalone previews remain usable.
  *
  * `excludeLangs` is what makes the ```gallery fence survive: without it Shiki
  * falls the unknown language back to plaintext and emits
