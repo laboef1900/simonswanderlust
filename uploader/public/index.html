@@ -3,18 +3,23 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Desk · Simon's Wanderlust</title>
+    <title>Desk</title>
     <link rel="stylesheet" href="/admin/admin.css" />
+    <link rel="stylesheet" href="/admin/onboarding.css" />
   </head>
   <body>
     <header class="cms-page-meta">
       <h1>Desk</h1>
       <p class="lede">What to write, what still needs publishing, and whether photos are still encoding.</p>
+      <div id="onboardingOpener" class="cms-page-actions" hidden></div>
     </header>
 
     <main>
       <p id="deskStatus" class="muted" role="status"></p>
-      <p id="deskError" class="err" role="alert" hidden></p>
+      <div id="deskError" class="err" role="alert" hidden></div>
+      <p id="publicationNotice" role="status"></p>
+      <button id="publicationRefresh" class="btn-secondary" type="button"></button>
+      <section id="onboardingChecklist" hidden></section>
 
       <section aria-labelledby="deskNextHeading">
         <h2 id="deskNextHeading" class="desk-heading">Most recently edited draft</h2>
@@ -22,8 +27,12 @@
       </section>
 
       <section class="desk-list-block" aria-labelledby="deskUnpubHeading">
-        <h2 id="deskUnpubHeading" class="desk-heading">Unpublished changes</h2>
+        <h2 id="deskUnpubHeading" class="desk-heading"></h2>
         <div id="deskUnpub" aria-live="polite"></div>
+      </section>
+      <section id="deskAttentionSection" class="desk-list-block" hidden>
+        <h2 id="deskAttentionHeading" class="desk-heading"></h2>
+        <div id="deskAttention" aria-live="polite"></div>
       </section>
 
       <section class="desk-meta" aria-labelledby="deskMetaHeading">
@@ -31,17 +40,38 @@
         <ul class="desk-meta-list">
           <li id="deskQueue" aria-live="polite"></li>
           <li id="deskRelease" aria-live="polite"></li>
+          <li id="deskBuild" role="status" hidden></li>
+          <li id="deskPublicationSummary" role="status" hidden></li>
+          <li id="deskRebuildLink" hidden>
+            <button class="btn-primary" type="button" id="deskRebuild"></button>
+            <p id="deskRebuildOutcome" role="status"></p>
+          </li>
         </ul>
       </section>
     </main>
 
     <script src="/admin/editor-image-copy.js"></script>
+    <script src="/admin/build-reporting.js"></script>
+    <script src="/admin/publication-state.js"></script>
+    <script src="/admin/publication-refresh.js"></script>
     <script src="/admin/auth.js"></script>
+    <script src="/admin/language.js"></script>
     <script src="/admin/posts-filter.js"></script>
     <script src="/admin/desk.js"></script>
+    <script src="/admin/admin-confirm.js"></script>
+    <script src="/admin/onboarding.js"></script>
     <script>
       const $ = (id) => document.getElementById(id);
       let redirecting = false;
+      let authenticatedContext = null;
+      let isAdmin = false;
+      const copy = EditorCopy[document.documentElement.lang === 'de' ? 'de' : 'en'];
+      let observedPosts = [];
+      let observedBuild = null;
+      $('deskUnpubHeading').textContent = PublicationState.text('heading');
+      $('deskAttentionHeading').textContent = PublicationState.text('attention');
+      $('publicationRefresh').textContent = PublicationState.text('refresh');
+      $('deskRebuild').textContent = PublicationState.text('rebuild');
 
       function say(msg) { $('deskStatus').textContent = msg; }
 
@@ -91,7 +121,7 @@
       function tripLink(post, label) {
         const a = el('a', 'desk-title');
         a.href = editorHref(post.translationKey);
-        a.textContent = label || post.titleDe || '(German title not set)';
+        a.textContent = label || post.title || SiteLanguage.text('Untitled');
         return a;
       }
 
@@ -117,7 +147,7 @@
         if (!post) {
           const empty = el('div', 'desk-empty');
           const p = el('p');
-          p.textContent = 'No draft pairs are saved. A new trip starts as a German and English pair.';
+          p.textContent = copy.deskNoDrafts;
           const cta = el('a', 'btn-new');
           cta.href = '/admin/editor.html';
           cta.textContent = 'New trip';
@@ -134,12 +164,15 @@
         const bits = [
           post.country,
           post.region,
-          Desk.englishBodyLabel(post.hasEnBody),
+          Desk.secondaryBodyLabel(post.secondaryStatus, SiteLanguage.config()),
         ].filter(Boolean);
         const edited = Desk.formatUpdatedAt(post.updatedAt);
         if (edited) bits.push('Last edited ' + edited);
         meta.textContent = bits.join(' · ');
         body.appendChild(meta);
+        const publication = el('p', 'muted');
+        publication.textContent = PublicationState.label(post.publication, isAdmin);
+        body.appendChild(publication);
         const open = el('a', 'action-link');
         open.href = editorHref(post.translationKey);
         open.textContent = 'Continue editing';
@@ -148,12 +181,11 @@
         root.appendChild(card);
       }
 
-      function renderUnpub(posts) {
-        const root = $('deskUnpub');
+      function renderUnpub(posts, root = $('deskUnpub'), attention = false) {
         root.textContent = '';
         if (!posts.length) {
           const p = el('p', 'muted');
-          p.textContent = 'Published trips have no saved changes waiting for the next publish.';
+          p.textContent = PublicationState.text(attention ? 'attentionEmpty' : 'empty');
           root.appendChild(p);
           return;
         }
@@ -161,6 +193,15 @@
         posts.forEach((post) => {
           const li = el('li');
           li.appendChild(tripLink(post));
+          const publication = el('p', 'muted');
+          publication.textContent = PublicationState.label(post.publication, isAdmin);
+          li.appendChild(publication);
+          const qualifier = isAdmin ? PublicationState.qualifiers(post.publication, observedBuild) : '';
+          if (qualifier) {
+            const detail = el('p', 'muted');
+            detail.textContent = qualifier;
+            li.appendChild(detail);
+          }
           const go = el('a', 'action-link');
           go.href = editorHref(post.translationKey);
           go.textContent = 'Review changes';
@@ -170,20 +211,33 @@
         root.appendChild(ul);
       }
 
-      function renderPostsLoading() {
-        setMessage($('deskNext'), 'Loading drafts…');
-        setMessage($('deskUnpub'), 'Loading unpublished changes…');
-      }
-
-      function renderPostsUnavailable() {
-        if (redirecting) return;
-        showUnavailable($('deskNext'), 'Drafts are unavailable right now.', 'Retry drafts', loadPosts);
-        showUnavailable(
-          $('deskUnpub'),
-          'Unpublished changes are unavailable right now.',
-          'Retry unpublished changes',
-          loadPosts,
-        );
+      function renderObservedPosts() {
+        const focused = document.activeElement;
+        const roots = [$('deskNext'), $('deskUnpub'), ...(isAdmin ? [$('deskAttention')] : [])];
+        const focusRoot = roots.find((root) => root.contains(focused));
+        const identity = focusRoot && focused.tagName === 'A'
+          ? { href: focused.href, className: focused.className } : null;
+        const unavailable = observedPosts.some((post) => PublicationState.publicationState(post.publication) === 'unavailable');
+        const next = Desk.nextDraft(observedPosts);
+        const newer = Desk.unpublished(observedPosts);
+        const attention = Desk.attention(observedPosts);
+        if (!next && unavailable) setMessage($('deskNext'), PublicationState.text('unavailable'));
+        else renderNext(next);
+        if (!newer.length && unavailable) setMessage($('deskUnpub'), PublicationState.text('unavailable'));
+        else renderUnpub(newer);
+        if (isAdmin) {
+          if (!attention.length && unavailable) setMessage($('deskAttention'), PublicationState.text('unavailable'));
+          else renderUnpub(attention, $('deskAttention'), true);
+        }
+        $('publicationNotice').textContent = unavailable ? PublicationState.text('unavailable') : '';
+        if (identity) {
+          const links = [focusRoot, ...roots.filter((root) => root !== focusRoot)]
+            .flatMap((root) => Array.from(root.querySelectorAll('a')));
+          const nextFocus = links.find((link) => link.href === identity.href && link.className === identity.className)
+            || links.find((link) => link.href === identity.href);
+          // Keep an unchanged section steady; reveal cross-section or missing-link fallbacks.
+          (nextFocus || $('publicationRefresh')).focus({ preventScroll: !!nextFocus && focusRoot.contains(nextFocus) });
+        }
       }
 
       function renderQueue(count) {
@@ -212,26 +266,73 @@
           a.textContent = 'View live site';
           root.appendChild(a);
         } else {
-          root.textContent = 'No live release yet — publish a trip or rebuild from Settings.';
+          root.textContent = authenticatedContext.isAdmin ? copy.deskNoReleaseAdmin : copy.deskNoReleaseAuthor;
         }
       }
 
-      const loadPosts = Desk.resilientLoader(
-        async () => {
-          const posts = await responseJson(await fetch('/posts'), true);
-          if (!Array.isArray(posts)) throw new Error('unavailable');
-          return posts;
+      const publicationRefresh = PublicationRefresh.create({
+        async read(signal, publish) {
+          const observed = { posts: null, summary: null, status: null };
+          const report = () => { if (observed.posts) publish({ ...observed }); };
+          const optional = (url, field) => PublicationRefresh.json(url, signal).catch((error) => {
+            if (error.status === 401) throw error;
+            return null;
+          }).then((value) => { observed[field] = value; report(); });
+          await Promise.all([
+            PublicationRefresh.json('/posts', signal).then((posts) => {
+              if (!Array.isArray(posts)) throw new Error('invalid_posts');
+              observed.posts = posts; report();
+            }),
+            isAdmin ? optional('/publication/summary', 'summary') : null,
+            isAdmin ? optional('/rebuild/status', 'status') : null,
+          ]);
+          return observed;
         },
-        {
-          loading: renderPostsLoading,
-          ready(posts) {
-            if (redirecting) return;
-            renderNext(Desk.nextDraft(posts));
-            renderUnpub(Desk.unpublished(posts));
-          },
-          unavailable: renderPostsUnavailable,
+        apply({ posts, summary, status }) {
+          observedPosts = posts;
+          observedBuild = status;
+          renderObservedPosts();
+          if (isAdmin) {
+            $('deskPublicationSummary').textContent = PublicationState.summary(summary);
+            if (status) BuildReporting.renderStatus($('deskBuild'), status);
+            else $('deskBuild').textContent = BuildReporting.text('unavailable');
+          }
         },
-      );
+        unavailable() {
+          // Keep the last story links; none is a mutation control or fresh liveness claim.
+          document.querySelectorAll('#deskNext .muted, #deskUnpub .muted, #deskAttention .muted')
+            .forEach((node) => { node.textContent = PublicationState.text('unavailable'); });
+          $('publicationNotice').textContent = PublicationState.text('stale');
+          if (isAdmin) {
+            $('deskPublicationSummary').textContent = PublicationState.text('summaryUnavailable');
+            $('deskBuild').textContent = BuildReporting.text('unavailable');
+          }
+        },
+        unauthorized: redirectToLogin,
+      });
+      $('publicationRefresh').addEventListener('click', () => publicationRefresh.refresh());
+      $('deskRebuild').addEventListener('click', async () => {
+        if (!isAdmin || $('deskRebuild').disabled) return;
+        if (!await AdminConfirm.ask({
+          title: PublicationState.text('rebuildConfirm'),
+          body: PublicationState.text('rebuildScope'),
+          confirmLabel: PublicationState.text('rebuild'),
+        })) return;
+        $('deskRebuild').disabled = true;
+        publicationRefresh.beginAction();
+        try {
+          const response = await fetch('/rebuild', { method: 'POST' });
+          if (response.status === 401) { redirectToLogin(); return; }
+          const result = await response.json();
+          if (response.ok && typeof result.ok === 'boolean') BuildReporting.renderOutcome($('deskRebuildOutcome'), 'rebuild', result);
+          else $('deskRebuildOutcome').textContent = BuildReporting.text('unknown');
+        } catch {
+          $('deskRebuildOutcome').textContent = BuildReporting.text('unknown');
+        } finally {
+          $('deskRebuild').disabled = false;
+          publicationRefresh.endAction();
+        }
+      });
 
       const loadQueue = Desk.resilientLoader(
         async () => {
@@ -276,20 +377,50 @@
         },
       );
 
+      function loadPosts() { return publicationRefresh.refresh(); }
+
       async function loadDesk() {
         $('deskError').hidden = true;
         $('deskError').textContent = '';
         say('Loading desk…');
+        publicationRefresh.start();
         await Promise.all([loadPosts(), loadQueue(), loadRelease()]);
         if (!redirecting) say('');
       }
 
-      (async () => {
-        const s = await Auth.ensureAuthed();
-        if (!s) return;
-        Auth.renderHeader(s);
-        await loadDesk();
-      })();
+      const openDesk = Desk.resilientLoader(async () => {
+        const context = await Auth.ensureAuthed();
+        if (context) await SiteLanguage.get();
+        return context;
+      }, {
+        loading() { $('deskError').hidden = true; },
+        async ready(context) {
+          if (!context) return;
+          authenticatedContext = context;
+          isAdmin = context.isAdmin === true;
+          Auth.renderHeader(context);
+          $('deskBuild').hidden = !isAdmin;
+          $('deskAttentionSection').hidden = !isAdmin;
+          $('deskPublicationSummary').hidden = !isAdmin;
+          $('deskRebuildLink').hidden = !isAdmin;
+          Onboarding.init({
+            root: $('onboardingChecklist'),
+            openerRoot: $('onboardingOpener'),
+            isAdmin: context.isAdmin,
+            focusTarget: document.querySelector('.cms-page-title'),
+          });
+          // Story labels need the language mode (#284) before the first paint.
+          SiteLanguage.get().then(() => loadDesk(), (error) => {
+            $('deskError').hidden = false;
+            $('deskError').textContent = error.message;
+          });
+        },
+        unavailable() {
+          $('deskError').hidden = false;
+          showUnavailable($('deskError'), copy.authContextUnavailable, copy.authContextRetry, openDesk);
+        },
+      });
+      openDesk();
     </script>
   </body>
 </html>

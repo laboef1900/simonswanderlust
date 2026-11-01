@@ -56,6 +56,7 @@ export class EditorElement {
   readOnly = false;
   target = '';
   rel = '';
+  returnValue = '';
   selectionStart = 0;
   selectionEnd = 0;
 
@@ -119,10 +120,22 @@ export class EditorElement {
   toggleAttribute(name: string, on: boolean) { if (on) this.setAttribute(name, ''); else this.removeAttribute(name); }
 
   appendChild(child: EditorElement) { child.remove(); child.parentElement = this; this.childNodes.push(child); return child; }
+  prepend(child: EditorElement) { child.remove(); child.parentElement = this; this.childNodes.unshift(child); }
   append(...children: (EditorElement | string)[]) {
     for (const child of children) {
       if (typeof child !== 'string') this.appendChild(child);
       else { const text = new EditorElement('#TEXT', this.state); text.textContent = child; this.appendChild(text); }
+    }
+  }
+  after(...children: EditorElement[]) {
+    const parent = this.parentElement;
+    if (!parent) return;
+    let anchor: EditorElement = this;
+    for (const child of children) {
+      if (child === anchor) continue;
+      child.remove(); child.parentElement = parent;
+      parent.childNodes.splice(parent.childNodes.indexOf(anchor) + 1, 0, child);
+      anchor = child;
     }
   }
   replaceChildren(...children: EditorElement[]) {
@@ -140,6 +153,10 @@ export class EditorElement {
   contains(target: EditorElement | null): boolean { return target === this || this.childNodes.some((child) => child.contains(target)); }
   matches(selector: string): boolean {
     return selector.split(',').some((part) => {
+      const child = part.lastIndexOf('>');
+      if (child !== -1) {
+        return this.matches(part.slice(child + 1)) && (this.parentElement?.matches(part.slice(0, child)) ?? false);
+      }
       let rest = part.trim();
       const negatives = [...rest.matchAll(/:not\(([^)]+)\)/g)];
       if (negatives.some((match) => this.matches(match[1]!))) return false;
@@ -244,12 +261,16 @@ export function editorDocument(markup: string) {
   const created: EditorElement[] = [];
   return {
     document: {
+      hidden: false,
+      documentElement: { lang: root.querySelector('html')?.getAttribute('lang') || 'en' },
       get activeElement() { return state.activeElement; },
       get body() { return root.querySelector('body'); },
       getElementById: (id: string) => root.querySelector('#' + id),
       querySelector: (selector: string) => root.querySelector(selector),
       querySelectorAll: (selector: string) => root.querySelectorAll(selector),
       addEventListener: root.addEventListener.bind(root),
+      removeEventListener: root.removeEventListener.bind(root),
+      dispatchEvent: root.dispatchEvent.bind(root),
       createElement: (tag: string) => { const element = new EditorElement(tag.toUpperCase(), state); created.push(element); return element; },
       createTextNode: (text: string) => { const element = new EditorElement('#TEXT', state); element.textContent = text; return element; },
     },

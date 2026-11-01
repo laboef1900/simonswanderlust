@@ -4,8 +4,14 @@
 **/.astro
 **/.build-tmp
 uploader/data
+# Private qualification fixtures, credentials and browser profiles are not image inputs.
+**/.local
+**/.issue-runtime
 map-assets
-docs
+docs/*
+!docs/third-party-inventory.json
+!docs/third-party-evidence.json
+!docs/third-party-image-evidence.json
 *.md
 # Bootstrap secrets (DATABASE_URL / POSTGRES_PASSWORD). `COPY uploader/ .` and
 # `COPY site/ .` run from this root context, so uploader/.dockerignore is inert
@@ -13,3 +19,8 @@ docs
 **/.env
 **/.env.*
 !**/.env.example
+# Never import a host-built native addon into a different architecture image.
+uploader/native
+.issue-runtime
+**/public/legal
+source-release.json

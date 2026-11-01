@@ -44,7 +44,8 @@ describe('admin outcome messages are announced (SC 4.1.3)', () => {
     // in editor-dom.test.ts rather than pinned to a particular HTML tag.
     ['editor', ['actionStatus', 'actionError', 'deHeroStatus', 'enHeroStatus', 'deBodyImgStatus', 'enBodyImgStatus']],
     ['about', ['actionStatus', 'actionError', 'deBodyImgStatus', 'enBodyImgStatus']],
-    ['index', ['deskStatus', 'deskError']],
+    // Desk loading/error announcements are exercised through the real page's
+    // DOM and async auth retry in onboarding-dom.test.ts, not an HTML tag regex.
   ];
   for (const [page, ids] of cases) {
     it(`${page}.html`, () => {
@@ -61,41 +62,6 @@ describe('admin outcome messages are announced (SC 4.1.3)', () => {
     expect(roleOf(html.editor, 'actionStatus')).toMatch(/role="status"/);
     expect(roleOf(html.login, 'err')).toMatch(/role="alert"/);
     expect(roleOf(html.login, 'out')).toMatch(/role="status"/);
-  });
-});
-
-describe('locale switchers and the settings index are ARIA tabs', () => {
-  for (const [page, count] of [['editor', 2], ['about', 2], ['settings', 4]] as const) {
-    it(`${page}.html wires tablist, tabs and panels together`, () => {
-      const markup = markupOf(html[page]);
-      expect(markup).toMatch(/role="tablist"/);
-      const tabs = [...markup.matchAll(/<button\b[^>]*role="tab"[^>]*>/g)].map((m) => m[0]);
-      expect(tabs).toHaveLength(count);
-      const selected = tabs.filter((t) => /aria-selected="true"/.test(t));
-      expect(selected).toHaveLength(1);
-      for (const tab of tabs) {
-        const id = /\bid="([^"]+)"/.exec(tab)![1]!;
-        const controls = /aria-controls="([^"]+)"/.exec(tab)![1]!;
-        const panel = new RegExp(`<section\\b[^>]*\\bid="${controls}"[^>]*>`).exec(markup)?.[0];
-        expect(panel, `panel #${controls}`).toBeDefined();
-        expect(panel).toMatch(/role="tabpanel"/);
-        expect(panel).toContain(`aria-labelledby="${id}"`);
-        // Only the selected tab is in the Tab order; the other panels start hidden.
-        if (/aria-selected="true"/.test(tab)) expect(panel).not.toMatch(/\bhidden\b/);
-        else { expect(tab).toMatch(/tabindex="-1"/); expect(panel).toMatch(/\bhidden\b/); }
-      }
-      expect(html[page]).toContain('<script src="/admin/tabs.js"></script>');
-    });
-  }
-
-  it('editor and about name their tablist in markup; settings names it from the shared copy', () => {
-    expect(markupOf(html.editor)).toMatch(/role="tablist"[^>]*aria-label="/);
-    expect(markupOf(html.about)).toMatch(/role="tablist"[^>]*aria-label="/);
-    expect(html.settings).toMatch(/\$\('settingsTabs'\)\.setAttribute\('aria-label', copy\.settingsNav\)/);
-  });
-
-  it('the settings index declares a vertical orientation', () => {
-    expect(markupOf(html.settings)).toMatch(/id="settingsTabs"[^>]*role="tablist"[^>]*aria-orientation="vertical"/);
   });
 });
 

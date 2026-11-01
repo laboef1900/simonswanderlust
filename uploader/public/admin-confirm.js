@@ -5,16 +5,19 @@
 window.AdminConfirm = (function () {
   function liveUrls(slugs) {
     const origin = (typeof location !== 'undefined' && location.origin) ? location.origin : '';
-    const de = slugs && slugs.de ? origin + '/' + slugs.de + '/' : '';
-    const en = slugs && slugs.en ? origin + '/en/' + slugs.en + '/' : '';
-    return { de, en };
+    const lang = SiteLanguage.config();
+    return Object.fromEntries(['de', 'en'].map((locale) => {
+      const path = SiteLanguage.publicPath(lang, locale, 'story', slugs && slugs[locale]);
+      return [locale, path ? origin + path : ''];
+    }));
   }
 
   function urlsPlain(slugs) {
     const u = liveUrls(slugs);
     const lines = [];
-    if (u.de) lines.push('DE  ' + u.de);
-    if (u.en) lines.push('EN  ' + u.en);
+    for (const locale of SiteLanguage.config().locales) {
+      if (u[locale]) lines.push(locale.toUpperCase() + '  ' + u[locale]);
+    }
     return lines.join('\n');
   }
 
@@ -75,6 +78,14 @@ window.AdminConfirm = (function () {
       typedInput.id = 'adminConfirmTyped';
       typedInput.type = 'text';
       typedInput.autocomplete = 'off';
+      typedInput.addEventListener('keydown', function (event) {
+        if (event.key !== 'Enter' || event.isComposing) return;
+        // The form's first submit button is Cancel; never use its implicit submit.
+        event.preventDefault();
+        if (typedInput.value !== typed) return;
+        dlg.returnValue = 'ok';
+        dlg.close();
+      });
       extra.appendChild(lab);
       extra.appendChild(typedInput);
     }
@@ -86,6 +97,9 @@ window.AdminConfirm = (function () {
         resolve(true);
       }
       dlg.addEventListener('close', onClose);
+      // Escape and close() without a result preserve returnValue in Firefox
+      // and Safari. Each ask must start cancelled, never reuse a prior consent.
+      dlg.returnValue = '';
       dlg.showModal();
       if (typedInput) typedInput.focus();
       else dlg.querySelector('#adminConfirmOk').focus();

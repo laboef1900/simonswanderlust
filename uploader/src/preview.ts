@@ -9,12 +9,15 @@
 // including the sanitize-then-inject <picture> XSS defense. Their deps
 // (@astrojs/markdown-satteri, unified, rehype-*) resolve from site/node_modules,
 // so typecheck/tests here need `npm ci` in site/ too (CI does this).
+import { setImmediate } from 'node:timers/promises';
 import { renderMarkdown } from '../../site/src/lib/render-markdown.js';
-import { transformBodyImages, type GalleryMetadata } from '../../site/src/lib/body-images.js';
+import { PREVIEW_BODY_SIZES, transformBodyImages, type GalleryMetadata } from '../../site/src/lib/body-images.js';
 import { SHIKI_CSS } from '../../site/src/lib/shiki-classes.js';
 import { focusPosition, sourceFormats, srcset, fallbackSrc } from '../../site/src/lib/images.js';
 import { coordsLabel, dateLabel } from '../../site/src/lib/format.js';
 import type { HeroImage, Locale, PostPair } from './posts.js';
+import type { StoredPagePair } from './pages.js';
+import { ui } from '../../site/src/i18n/ui.js';
 
 // @ai-warning: several fields escaped here (hero.alt, keyFacts labels/values,
 // coordinate/date strings) are typed as string but come from untyped jsonb
@@ -186,7 +189,11 @@ export async function renderPreviewHtml(
 ): Promise<string> {
   const post = pair[locale];
   const shared = pair.shared;
-  const body = transformBodyImages(await renderMarkdown(post.bodyMarkdown), post.images, imageOrigin, galleryMetadata);
+  const body = await transformBodyImages(await renderMarkdown(post.bodyMarkdown), post.images, imageOrigin, {
+    locale,
+    inlineSizes: PREVIEW_BODY_SIZES,
+    schedule: () => setImmediate(),
+  }, galleryMetadata);
 
   const parsedDate = shared.date ? new Date(shared.date) : undefined;
   const metaParts = [
@@ -196,7 +203,7 @@ export async function renderPreviewHtml(
   // {lat:0,lng:0} is the incomplete-draft placeholder (see draftWithDefaults
   // in posts.ts) — don't render a bogus "0.0000° N" line for it.
   const hasCoords = shared.coordinates && (shared.coordinates.lat !== 0 || shared.coordinates.lng !== 0);
-  const banner = pair.status === 'draft' ? 'Draft preview — not published' : 'Preview — published post';
+  const banner = ui[locale]['editor.chrome.publicationPreview'];
   const title = post.title.trim() === '' ? '(untitled)' : post.title;
 
   return `<!doctype html>
@@ -205,11 +212,11 @@ export async function renderPreviewHtml(
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<title>${escapeHtml(title)} · Preview</title>
+<title>${escapeHtml(title)} · ${escapeHtml(banner)}</title>
 <style>${STYLE}</style>
 </head>
 <body>
-<div class="banner">${escapeHtml(banner)} · ${locale.toUpperCase()}</div>
+<div class="banner">${escapeHtml(banner)} · ${locale.toUpperCase()}<br>${escapeHtml(ui[locale]['editor.chrome.publicationPreviewMedia'])}</div>
 ${heroHtml(post.titleImage ?? post.heroImage)}
 <main>
   <p class="meta">${escapeHtml(metaParts.join(' · '))}</p>
@@ -224,4 +231,18 @@ ${body}
 </body>
 </html>
 `;
+}
+
+/** Page preview uses the same sanitized body and local gallery overlay as story preview. */
+export async function renderPagePreviewHtml(pair: StoredPagePair, locale: Locale, imageOrigin: string, metadata?: GalleryMetadata): Promise<string> {
+  const row = pair[locale];
+  const body = await transformBodyImages(await renderMarkdown(row.bodyMarkdown), row.images, imageOrigin, {
+    locale,
+    inlineSizes: PREVIEW_BODY_SIZES,
+    schedule: () => setImmediate(),
+  }, metadata);
+  return `<!doctype html><html lang="${locale}"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex">
+<title>${escapeHtml(row.title)} · ${escapeHtml(ui[locale]['pages.preview'])}</title><style>${STYLE}</style></head>
+<body><div class="banner">${escapeHtml(ui[locale]['pages.preview'])}</div><main><h1>${escapeHtml(row.title)}</h1><article>${body}</article></main></body></html>`;
 }

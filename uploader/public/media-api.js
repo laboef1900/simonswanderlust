@@ -145,6 +145,100 @@ window.MediaApi = (function () {
     };
   }
 
+  // All public metadata writers use this leaf-level contract, including AI.
+  function mediaLeaves(patch) {
+    var leaves = [];
+    Object.keys(patch).forEach(function (field) {
+      if (field === 'alt' || field === 'caption') {
+        Object.keys(patch[field]).forEach(function (locale) { leaves.push([field, locale]); });
+      } else leaves.push([field]);
+    });
+    return leaves;
+  }
+  function leafValue(item, leaf) {
+    return leaf.length === 2 ? (item[leaf[0]] || {})[leaf[1]] || '' : item[leaf[0]] || (leaf[0] === 'tags' ? [] : '');
+  }
+  function putLeaf(item, leaf, value) {
+    if (leaf.length === 2) (item[leaf[0]] = item[leaf[0]] || {})[leaf[1]] = value;
+    else item[leaf[0]] = value;
+  }
+  function expectations(patch, item, empty) {
+    var expect = {};
+    mediaLeaves(patch).forEach(function (leaf) {
+      putLeaf(expect, leaf, empty ? (leaf[0] === 'tags' ? [] : '') : leafValue(item, leaf));
+    });
+    return window.MediaConditional.canonicalizePatch(expect);
+  }
+  function changedFields(values, base) {
+    var canonical = window.MediaConditional.canonicalizePatch(values);
+    var previous = expectations(canonical, base);
+    var patch = {};
+    mediaLeaves(canonical).forEach(function (leaf) {
+      if (JSON.stringify(leafValue(canonical, leaf)) !== JSON.stringify(leafValue(previous, leaf))) {
+        putLeaf(patch, leaf, leafValue(canonical, leaf));
+      }
+    });
+    return patch;
+  }
+  function assertItem(item, key) {
+    var invalid = function () { throw Object.assign(new Error('invalid_media_response'), { unknown: true }); };
+    if (!item || typeof item !== 'object' || Array.isArray(item) || item.key !== key) invalid();
+    var values = {};
+    ['title', 'alt', 'caption', 'tags', 'folder'].forEach(function (field) {
+      if (!Object.prototype.hasOwnProperty.call(item, field)) invalid();
+      values[field] = item[field];
+    });
+    ['alt', 'caption'].forEach(function (field) {
+      if (!values[field] || !Object.prototype.hasOwnProperty.call(values[field], 'de')
+        || !Object.prototype.hasOwnProperty.call(values[field], 'en')) invalid();
+    });
+    try { window.MediaConditional.canonicalizePatch(values); } catch (_) { invalid(); }
+    return item;
+  }
+  function compareFields(patch, expect, current, key) {
+    var stored = expectations(patch, assertItem(current, key));
+    return mediaLeaves(patch).map(function (leaf) {
+      var intended = leafValue(patch, leaf);
+      var expected = leafValue(expect, leaf);
+      var value = leafValue(stored, leaf);
+      return { field: leaf.join('.'), intended: intended, expected: expected, stored: value,
+        outcome: JSON.stringify(value) === JSON.stringify(intended) ? 'achieved'
+          : JSON.stringify(value) === JSON.stringify(expected) ? 'expected' : 'other' };
+    });
+  }
+  async function savePatch(client, key, patch, expect) {
+    var conditional = window.MediaConditional.canonicalizeConditional({
+      conditional: { version: 1, patch: patch, expect: expect },
+    });
+    try {
+      var saved = await client.patch(key, conditional.patch, conditional.expect);
+      if (!saved || saved.conditionalVersion !== 1) {
+        throw Object.assign(new Error('media_conditional_unsupported'), { unsupported: true });
+      }
+      var acknowledged = compareFields(conditional.patch, conditional.expect, saved, key);
+      if (acknowledged.some(function (field) { return field.outcome !== 'achieved'; })) {
+        throw Object.assign(new Error('invalid_media_response'), { unknown: true });
+      }
+      return saved;
+    } catch (error) {
+      if (error.unsupported) throw error;
+      if (error.status === 409 && error.current) {
+        try { error.fields = compareFields(conditional.patch, conditional.expect, error.current, key); }
+        catch (invalidCurrent) { error.current = null; error.probeError = invalidCurrent; }
+      } else if (isUnknown(error)) {
+        error.unknown = true;
+        error.current = null;
+        error.fields = undefined;
+        try {
+          var current = await client.get(key);
+          error.fields = compareFields(conditional.patch, conditional.expect, current, key);
+          error.current = current;
+        } catch (probeError) { error.probeError = probeError; }
+      }
+      throw error;
+    }
+  }
+
   // ---- transport ----------------------------------------------------------
 
   function makeClient(opts) {
@@ -152,19 +246,36 @@ window.MediaApi = (function () {
     var fetchImpl = (opts && opts.fetch) || window.fetch.bind(window);
     var XHR = (opts && opts.XMLHttpRequest) || window.XMLHttpRequest;
 
-    async function request(method, url, body) {
-      var init = { method: method };
+    async function request(method, url, body, bounded) {
+      if (method !== 'GET' && url !== '/media/lookup' && opts && opts.canWrite && !opts.canWrite()) {
+        throw Object.assign(new Error('session_ended'), { status: 401 });
+      }
+      var controller = bounded ? new AbortController() : null;
+      var timer;
+      var init = { method: method, cache: 'no-store' };
+      if (controller) init.signal = controller.signal;
       if (body !== undefined) {
         init.headers = { 'content-type': 'application/json' };
         init.body = JSON.stringify(body);
       }
-      var res = await fetchImpl(url, init);
-      if (res.status === 401) { onUnauthed(); throw Object.assign(new Error('unauthorized'), { status: 401 }); }
-      var parsed = await res.json().catch(function () { return {}; });
-      // The status rides along so a caller can tell "no such row" (404) from a
-      // failure without parsing a server message.
-      if (!res.ok) throw Object.assign(new Error(parsed.error || ('HTTP ' + res.status)), { status: res.status });
-      return parsed;
+      var work = async function () {
+        var res = await fetchImpl(url, init);
+        if (res.status === 401) { onUnauthed(); throw Object.assign(new Error('unauthorized'), { status: 401 }); }
+        var parsed;
+        try { parsed = await res.json(); } catch (e) {
+          throw Object.assign(new Error('invalid_response'), { status: res.status, unknown: res.ok || res.status >= 500 });
+        }
+        if (!res.ok) throw Object.assign(new Error(parsed.error || ('HTTP ' + res.status)), {
+          status: res.status, code: parsed.code, current: parsed.current, unknown: res.status >= 500,
+        });
+        return parsed;
+      };
+      try {
+        if (!bounded) return await work();
+        return await Promise.race([work(), new Promise(function (_, reject) {
+          timer = setTimeout(function () { controller.abort(); reject(new Error('read_timeout')); }, 15000);
+        })]);
+      } finally { clearTimeout(timer); }
     }
 
     /**
@@ -180,34 +291,65 @@ window.MediaApi = (function () {
         });
         fd.append('file', file, file.name);
         var xhr = new XHR();
+        var timer;
+        var settled = false;
+        function finish(error, body) {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          if (error) reject(error); else resolve(body);
+        }
+        function watchdog() {
+          clearTimeout(timer);
+          timer = setTimeout(function () {
+            finish(Object.assign(new Error('upload_stalled'), { unknown: true }));
+            xhr.abort();
+          }, 120000);
+        }
         xhr.open('POST', '/upload');
-        if (xhr.upload && h.onProgress) {
+        if (xhr.upload) {
           xhr.upload.onprogress = function (e) {
-            if (e.lengthComputable) h.onProgress(e.loaded / e.total);
+            watchdog();
+            if (e.lengthComputable && h.onProgress) h.onProgress(e.loaded / e.total);
           };
+          xhr.upload.onload = watchdog;
         }
         xhr.onload = function () {
-          if (xhr.status === 401) { onUnauthed(); reject(new Error('unauthorized')); return; }
-          var body = {};
-          try { body = JSON.parse(xhr.responseText); } catch (e) { /* non-JSON error body */ }
-          if (xhr.status >= 200 && xhr.status < 300) resolve(body);
-          else reject(new Error(body.error || ('HTTP ' + xhr.status)));
+          if (xhr.status === 401) {
+            onUnauthed();
+            finish(Object.assign(new Error('unauthorized'), { status: 401 }));
+            return;
+          }
+          var body;
+          try { body = JSON.parse(xhr.responseText); } catch (e) { /* Classified below. */ }
+          if (xhr.status >= 200 && xhr.status < 300 && body) finish(null, body);
+          else finish(Object.assign(new Error(body && body.error || 'upload_unknown'), {
+            status: xhr.status, code: body && body.code,
+            unknown: xhr.status < 400 || xhr.status >= 500 || xhr.status === 429,
+          }));
         };
-        xhr.onerror = function () { reject(new Error('network error')); };
-        xhr.onabort = function () { reject(new Error('cancelled')); };
-        xhr.send(fd);
+        xhr.onerror = function () { finish(Object.assign(new Error('network_error'), { unknown: true })); };
+        xhr.onabort = function () { finish(Object.assign(new Error('upload_aborted'), { unknown: true })); };
+        watchdog();
+        try { xhr.send(fd); } catch (e) { finish(Object.assign(e, { unknown: true })); }
       });
     }
 
     return {
       list: function (state) { return request('GET', '/media' + listQuery(state)); },
-      get: function (key) { return request('GET', '/media/items/' + key); },
-      patch: function (key, fields) { return request('PATCH', '/media/items/' + key, fields); },
+      get: function (key) { return request('GET', '/media/items/' + key, undefined, true); },
+      patch: function (key, patch, expect) {
+        var conditional = window.MediaConditional.canonicalizeConditional({ conditional: { version: 1, patch: patch, expect: expect } });
+        return request('PATCH', '/media/items/' + key, { conditional: conditional });
+      },
       remove: function (key) { return request('DELETE', '/media/items/' + key); },
       move: function (keys, folder) { return request('POST', '/media/move', { keys: keys, folder: folder }); },
+      lookup: function (keys) { return request('POST', '/media/lookup', { keys: keys }, true); },
+      me: function () { return request('GET', '/auth/me', undefined, true); },
+      receipt: function (id) { return request('GET', '/upload/receipts/' + encodeURIComponent(id), undefined, true); },
       retry: function (keys) { return request('POST', '/media/retry', { keys: keys }); },
       rescan: function () { return request('POST', '/media/rescan'); },
-      folders: function () { return request('GET', '/media/folders'); },
+      folders: function () { return request('GET', '/media/folders', undefined, true); },
       createFolder: function (path) { return request('POST', '/media/folders', { path: path }); },
       renameFolder: function (from, to) { return request('PATCH', '/media/folders', { from: from, to: to }); },
       deleteFolder: function (path) { return request('DELETE', '/media/folders', { path: path }); },
@@ -218,84 +360,179 @@ window.MediaApi = (function () {
 
   // ---- upload queue -------------------------------------------------------
 
-  /**
-   * Bounded-concurrency upload queue with per-file state.
-   *
-   * Failed UPLOADS are tracked separately from failed ENCODES: one laptop sleep
-   * or one 503 in a 100-file batch must not leave the author guessing which
-   * files landed, hence `retryFailed()`. The tab must stay open for the
-   * uploads (bandwidth), but not for encoding, which continues server-side.
-   */
+  function isUnknown(error) {
+    return !!error.unknown || !error.status || error.status >= 500 || error.status === 429;
+  }
+
+  /** One immutable file identity, never persisted. Only server retry generations
+   * authorize retransmission after an uncertain request. */
+  function createUploadAttempt(client, file, fields, ownerId, options) {
+    var o = options || {};
+    var frozen = Object.freeze(Object.assign({}, fields));
+    var uploadId = (o.randomUUID || function () { return window.crypto.randomUUID(); })();
+    var item = { uploadId: uploadId, ownerUserId: ownerId, state: 'queued', progress: 0, result: null, error: null };
+    var retryGeneration = 0;
+    var unresolved = false;
+    var busy = false;
+    function changed() { if (o.onChange) o.onChange(view()); }
+    function view() { return Object.assign({}, item); }
+    function ownerMatches() { return !!ownerId && (!o.canAdopt || o.canAdopt(ownerId)); }
+    function accept(body, probe) {
+      if (!body || body.ownerUserId !== ownerId || body.uploadId !== uploadId || !ownerMatches()) return false;
+      if (body.state === 'accepted') {
+        var result = probe ? body.result : body;
+        if (!result || typeof result.key !== 'string' || typeof result.src !== 'string'
+          || !Number.isFinite(result.width) || result.width <= 0 || !Number.isFinite(result.height) || result.height <= 0) return false;
+        item.result = result;
+        item.state = 'done'; item.progress = 1; unresolved = false;
+        return true;
+      }
+      if (body.state === 'retryable' && Number.isSafeInteger(body.retryGeneration) && body.retryGeneration > retryGeneration) {
+        retryGeneration = body.retryGeneration;
+        item.state = 'retryable'; unresolved = false;
+        return true;
+      }
+      if (body.state === 'gone') { item.state = 'gone'; unresolved = false; return true; }
+      if (body.state === 'pending') {
+        item.reason = body.reason;
+        item.originalRetained = body.originalRetained === true;
+      }
+      return false;
+    }
+    async function probe() {
+      item.state = 'checking'; changed();
+      try {
+        if (!accept(await client.receipt(uploadId), true)) item.state = 'unknown';
+      } catch (error) {
+        item.state = 'unknown';
+        if (error.status === 401 || error.code === 'owner_changed') {
+          if (o.onPause) o.onPause();
+        }
+      }
+      changed();
+    }
+    return {
+      snapshot: view,
+      send: async function () {
+        if (busy || !ownerMatches() || ['queued', 'failed', 'needs-auth', 'retryable'].indexOf(item.state) === -1 || unresolved) return;
+        busy = true; item.state = 'uploading'; item.error = null; item.progress = 0; changed();
+        try {
+          var body = await client.uploadOne(file, Object.assign({}, frozen, {
+            uploadId: uploadId, expectedOwnerId: ownerId, retryGeneration: retryGeneration,
+          }), { onProgress: function (p) { item.progress = p; changed(); } });
+          if (!accept(body, false)) {
+            unresolved = true;
+            await probe();
+          }
+        } catch (error) {
+          item.error = error.message;
+          if (error.status === 401 || error.code === 'owner_changed') {
+            item.state = unresolved ? 'unknown' : 'needs-auth';
+            if (o.onPause) o.onPause();
+          } else if (isUnknown(error) || error.code === 'upload_generation_changed') {
+            unresolved = true; await probe();
+          } else {
+            item.state = unresolved ? 'unknown' : 'failed';
+          }
+        } finally { busy = false; changed(); }
+      },
+      check: async function () {
+        if (busy || !ownerMatches() || item.state !== 'unknown') return;
+        busy = true;
+        try { await probe(); } finally { busy = false; changed(); }
+      },
+    };
+  }
+
+  /** Queue pause is independent of in-flight work: a 401 never cancels another
+   * file's evidence. Resume is explicit and limited to the captured owner. */
   function createUploadQueue(client, opts) {
     var o = opts || {};
     var concurrency = o.concurrency || UPLOAD_CONCURRENCY;
     var onChange = o.onChange || function () {};
-    var items = [];   // { id, file, fields, state, progress, error, result }
+    var items = [];
     var running = 0;
     var nextId = 1;
-
-    // @ai-warning: `let`, not `var`. `var` is function-scoped, so with
-    // concurrency > 1 every iteration of this loop would share ONE binding and
-    // the first upload's callbacks would write their state onto the second
-    // item — silently mislabelling which files landed.
-    function start(item) {
-      running++;
-      item.state = 'uploading';
-      item.progress = 0;
-      onChange(snapshot());
-      client.uploadOne(item.file, item.fields, {
-        onProgress: function (p) { item.progress = p; onChange(snapshot()); },
-      }).then(function (body) {
-        item.state = 'done';
-        item.progress = 1;
-        item.result = body;
-      }, function (err) {
-        item.state = 'failed';
-        item.error = err && err.message ? err.message : String(err);
-      }).then(function () {
-        running--;
-        onChange(snapshot());
-        pump();
-      });
-    }
-
+    var paused = false;
+    var currentOwner = null;
+    var owner = null;
+    function notify() { onChange(snapshot()); }
+    function pause() { paused = true; notify(); }
     function pump() {
-      while (running < concurrency) {
-        var next = items.find(function (i) { return i.state === 'queued'; });
+      while (!paused && running < concurrency) {
+        var next = items.find(function (i) { return i.waiting; });
         if (!next) break;
         start(next);
       }
-      onChange(snapshot());
+      notify();
     }
-
+    function start(item) {
+      item.waiting = false;
+      running++;
+      item.attempt.send().finally(function () { running--; pump(); });
+    }
     function snapshot() {
+      var rows = items.map(function (i) { return Object.assign({ id: i.id, name: i.name }, i.attempt.snapshot()); });
       return {
-        items: items.map(function (i) {
-          return { id: i.id, name: i.file && i.file.name, state: i.state, progress: i.progress, error: i.error, result: i.result };
-        }),
-        total: items.length,
-        done: items.filter(function (i) { return i.state === 'done'; }).length,
-        failed: items.filter(function (i) { return i.state === 'failed'; }).length,
+        items: rows, total: rows.length, paused: paused, ownerUserId: owner, currentOwnerId: currentOwner,
+        done: rows.filter(function (i) { return i.state === 'done'; }).length,
+        failed: rows.filter(function (i) { return i.state === 'failed' || i.state === 'retryable'; }).length,
+        waiting: rows.filter(function (i) { return ['done', 'gone'].indexOf(i.state) === -1; }).length,
         active: running,
+        unsettled: rows.some(function (i) { return ['queued', 'uploading', 'needs-auth', 'unknown', 'checking', 'retryable'].indexOf(i.state) !== -1; }),
       };
     }
-
     return {
-      add: function (files, fields) {
-        Array.prototype.forEach.call(files, function (file) {
-          items.push({ id: nextId++, file: file, fields: fields || {}, state: 'queued', progress: 0, error: null, result: null });
+      initialize: function (id) { if (!owner) { owner = id; currentOwner = id; } },
+      pause: pause,
+      observeOwner: function (id) { currentOwner = id; if (id !== owner) pause(); },
+      resume: async function () {
+        var me;
+        try { me = await client.me(); } catch (_) { pause(); return false; }
+        currentOwner = me.userId;
+        if (!owner && items.length === 0) owner = currentOwner;
+        if (!owner || currentOwner !== owner) { pause(); return false; }
+        paused = false;
+        items.forEach(function (i) {
+          var s = i.attempt.snapshot().state;
+          if (s === 'queued' || s === 'needs-auth') i.waiting = true;
         });
         pump();
+        return me;
+      },
+      add: function (files, fields) {
+        if (!owner) return;
+        Array.prototype.forEach.call(files, function (file) {
+          var item = { id: nextId++, name: file.name, waiting: true };
+          item.attempt = createUploadAttempt(client, file, fields || {}, owner, {
+            randomUUID: o.randomUUID, onChange: notify, onPause: pause,
+            canAdopt: function (id) { return id === currentOwner && !paused; },
+          });
+          items.push(item);
+        });
+        pump();
+      },
+      check: async function (id) {
+        var item = items.find(function (i) { return i.id === id; });
+        if (item && !paused) await item.attempt.check();
       },
       retryFailed: function () {
+        if (paused) return;
         items.forEach(function (i) {
-          if (i.state === 'failed') { i.state = 'queued'; i.error = null; i.progress = 0; }
+          if (['failed', 'retryable'].indexOf(i.attempt.snapshot().state) !== -1) i.waiting = true;
         });
         pump();
       },
+      stopWaiting: function () {
+        // Unknown/in-flight evidence and landed records are never discarded.
+        items = items.filter(function (i) {
+          return ['queued', 'needs-auth', 'failed', 'retryable'].indexOf(i.attempt.snapshot().state) === -1;
+        });
+        notify();
+      },
       clearFinished: function () {
-        items = items.filter(function (i) { return i.state !== 'done'; });
-        onChange(snapshot());
+        items = items.filter(function (i) { return i.attempt.snapshot().state !== 'done'; });
+        notify();
       },
       snapshot: snapshot,
     };
@@ -314,6 +551,13 @@ window.MediaApi = (function () {
     debounce: debounce,
     makeSequence: makeSequence,
     makeClient: makeClient,
+    expectations: expectations,
+    changedFields: changedFields,
+    compareFields: compareFields,
+    assertItem: assertItem,
+    savePatch: savePatch,
+    isUnknown: isUnknown,
+    createUploadAttempt: createUploadAttempt,
     createUploadQueue: createUploadQueue,
   };
 })();

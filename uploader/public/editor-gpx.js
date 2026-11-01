@@ -56,6 +56,7 @@
     let routeLoaded = !host.getPost().tk;
     let routeTk = null;
     let routeEpoch = 0;
+    let routeRefreshFailed = false;
     let candidate = null;
     let candidateWorker = null;
     let candidateTimer = null;
@@ -113,15 +114,16 @@
     function errorKey(e) {
       if (e?.code === 'track_public_limit') return 'publicLimit';
       if (e?.code === 'track_empty_after_rounding') return 'publicEmpty';
-      const table = { gpx_conflict: 'conflict', gpx_outcome_unknown: 'unknown', gpx_import_unavailable: 'previewExpired', gpx_busy: 'busy', gpx_quota: 'quota', gpx_timeout: 'timeout', gpx_too_large: 'fileTooLarge', gpx_invalid_xml: 'invalidFile', gpx_invalid_points: 'invalidFile', gpx_invalid_encoding: 'invalidFile', gpx_invalid_request: 'invalidFile', gpx_limit: 'limitExceeded', gpx_invalid_geometry: 'invalidFile', gpx_invalid_selection: 'invalidFile', gpx_empty_selection: 'allTrimmed', gpx_empty: 'invalidEmpty', gpx_unavailable: 'unavailable', gpx_worker_failed: 'workerFailed', gpx_forbidden_origin: 'failed', gpx_aborted: 'failed', gpx_original_unavailable: 'unavailable', gpx_route_not_found: 'missingRoute', gpx_post_not_found: 'missingPost', gpx_invalid_source: 'invalidFile', gpx_replace_unconfirmed: 'replaceUnconfirmed', gpx_detach_unconfirmed: 'failed', gpx_cleanup_pending: 'cleanupPending', storage_read_only: 'storageReadOnly' };
+      const table = { gpx_save_unresolved: 'saveUnresolved', gpx_conflict: 'conflict', gpx_outcome_unknown: 'unknown', gpx_import_unavailable: 'previewExpired', gpx_busy: 'busy', gpx_quota: 'quota', gpx_timeout: 'timeout', gpx_too_large: 'fileTooLarge', gpx_invalid_xml: 'invalidFile', gpx_invalid_points: 'invalidFile', gpx_invalid_encoding: 'invalidFile', gpx_invalid_request: 'invalidFile', gpx_limit: 'limitExceeded', gpx_invalid_geometry: 'invalidFile', gpx_invalid_selection: 'invalidFile', gpx_empty_selection: 'allTrimmed', gpx_empty: 'invalidEmpty', gpx_unavailable: 'unavailable', gpx_worker_failed: 'workerFailed', gpx_forbidden_origin: 'failed', gpx_aborted: 'failed', gpx_original_unavailable: 'unavailable', gpx_route_not_found: 'missingRoute', gpx_post_not_found: 'missingPost', gpx_invalid_source: 'invalidFile', gpx_replace_unconfirmed: 'replaceUnconfirmed', gpx_detach_unconfirmed: 'failed', gpx_cleanup_pending: 'cleanupPending', storage_read_only: 'storageReadOnly' };
       return table[e && e.code] || 'failed';
     }
     function setBusy(value) {
       busy = value;
       dialog.querySelectorAll('button,input,select').forEach((el) => { el.disabled = el === $('gpxClose') ? mutationPending : value; });
-      ['gpxImportOpen', 'gpxReimport', 'gpxDetach'].forEach((id) => { $(id).disabled = value || outcomeUnknown; });
-      $('gpxDetach').disabled = value || outcomeUnknown || !routeLoaded;
-      $('gpxDownload').disabled = value;
+      $('gpxImportOpen').disabled = value || outcomeUnknown;
+      ['gpxReimport', 'gpxDetach', 'gpxDownload'].forEach((id) => { $(id).disabled = value || outcomeUnknown || !routeLoaded; });
+      $('gpxReplaceScope').hidden = route.version === null;
+      $('gpxReplaceConfirmLabel').hidden = route.version === null;
       attach.textContent = msg(host.getPost().tk ? 'attach' : 'newPostSaveFirst');
       attach.disabled = value || outcomeUnknown || !routeLoaded || !candidate || !preview || !preview.geometry.segments.length || !renderStats().valid || (route.version !== null && !$('gpxReplaceConfirm').checked);
       syncTrimControls();
@@ -271,8 +273,6 @@
       await Promise.all([geometry(), publicTrack()]);
       if (expectedEpoch !== epoch) return;
       $('gpxCounts').textContent = msg('counts').replace('{points}', String(data.counts.points)).replace('{segments}', String(data.counts.segments)).replace('{waypoints}', String(data.counts.waypoints));
-      $('gpxReplaceScope').hidden = route.version === null;
-      $('gpxReplaceConfirmLabel').hidden = route.version === null;
       $('gpxReplaceConfirm').checked = false;
       $('gpxStart').value = '0'; $('gpxEnd').value = '0'; $('gpxStartDistance').value = '0'; $('gpxEndDistance').value = '0';
       const segmentList = $('gpxSegments');
@@ -334,17 +334,31 @@
       const tk = host.getPost().tk;
       const current = ++routeEpoch;
       routeLoaded = false;
+      routeRefreshFailed = false;
+      renderRoute();
       setBusy(busy);
       if (!tk) {
         route = { version: null, geometry: null, originalAvailable: false };
-        routeTk = null; routeLoaded = true; renderRoute(); setBusy(busy); return;
+        routeTk = null; routeLoaded = true; renderRoute(); setBusy(busy); return true;
       }
       try {
         const loaded = await request('/posts/' + encodeURIComponent(tk) + '/route', { method: 'GET' });
-        if (current !== routeEpoch || tk !== host.getPost().tk) return;
+        if (current !== routeEpoch || tk !== host.getPost().tk) return false;
         if (!loaded || !(loaded.version === null || (typeof loaded.version === 'string' && loaded.version))) throw new Error('invalid route state');
-        route = loaded; routeTk = tk; routeLoaded = true; renderRoute(); setBusy(busy);
-      } catch (e) { if (current === routeEpoch && !e.handled) fail(errorKey(e)); }
+        if (loaded.version !== route.version) $('gpxReplaceConfirm').checked = false;
+        route = loaded; routeTk = tk; routeLoaded = true;
+        // A read reconciles only route state, never an uncertain write or preview.
+        if (errorCode === 'routeRefreshFailed' || errorCode === 'routeNotReviewed') clearError();
+        renderRoute(); setBusy(busy);
+        return true;
+      } catch (e) {
+        if (current === routeEpoch && tk === host.getPost().tk) {
+          routeRefreshFailed = true;
+          renderRoute(); setBusy(busy);
+          if (!e.handled && !outcomeUnknown) fail('routeRefreshFailed');
+        }
+        return false;
+      }
     }
     function publishVersion() {
       if (!routeLoaded || routeTk !== host.getPost().tk || outcomeUnknown || mutationPending || preview) {
@@ -354,13 +368,16 @@
       return route.version;
     }
     function renderRoute() {
-      $('gpxRouteStatus').textContent = route.geometry ? msg('statusAttached') : msg(route.version === null ? 'statusNone' : 'statusDetached');
+      $('gpxRouteStatus').textContent = !routeLoaded
+        ? msg(routeRefreshFailed ? 'statusUnavailable' : 'statusLoading')
+        : route.geometry ? msg('statusAttached') : msg(route.version === null ? 'statusNone' : 'statusDetached');
       $('gpxReimport').hidden = !route.originalAvailable;
       $('gpxDownload').hidden = !route.originalAvailable;
       $('gpxDetach').hidden = !route.geometry || outcomeUnknown;
       $('gpxImportOpen').hidden = false;
     }
     function openDialog(button) {
+      if (outcomeUnknown) return;
       clearError();
       setBusy(false);
       opener = button;
@@ -379,6 +396,7 @@
       if (opener && opener.isConnected) opener.focus();
     }
     async function importOriginal(button) {
+      if (!routeLoaded || outcomeUnknown) return;
       openDialog(button);
       teardownPreview();
       const myEpoch = ++epoch;
@@ -397,26 +415,35 @@
       const computed = renderStats(); if (!computed.valid) { fail('allTrimmed'); return; }
       if (!candidate || !routeLoaded) { fail('candidateUnavailable'); return; }
       if (route.version !== null && !$('gpxReplaceConfirm').checked) { fail('replaceUnconfirmed'); $('gpxReplaceConfirm').focus(); return; }
-      const existing = !!host.getPost().tk;
+      // Keep the scope promised at the click even if an earlier queued Save
+      // creates the pair before this action runs.
+      const saveBeforeAttach = !host.getPost().tk;
       mutationPending = true;
       setBusy(true); clearError(); say('loading');
       let savedNewPost = false;
+      host.beginAction();
       try {
-        if (!existing) {
-          if (!await host.saveDraft() || !host.getPost().tk) {
-            fail('saveFailedNotAttached', true, host.saveError?.() || '');
-            return;
+        await host.runWrite(async (saveDraft) => {
+          if (!routeLoaded || outcomeUnknown) return;
+          // Our queued create can bind the new draft to its key before this runs.
+          // Its reviewed null route still uses the server's baseVersion check.
+          if (routeTk !== host.getPost().tk && !(saveBeforeAttach && routeTk === null && route.version === null)) return;
+          if (saveBeforeAttach) {
+            if (!await saveDraft() || !host.getPost().tk) {
+              fail('saveFailedNotAttached', true, host.saveError?.() || '');
+              return;
+            }
+            savedNewPost = true;
           }
-          savedNewPost = true;
-        }
-        const tokens = host.getPost();
-        const body = { importId: preview.importId, baseVersion: route.version, baseUpdatedAt: tokens.baseUpdatedAt, selection, confirmReplace: true };
-        const result = await request(postUrl(''), { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }, true);
-        host.setBaseUpdatedAt(result.updatedAt);
-        route = result; routeTk = host.getPost().tk; routeLoaded = true; renderRoute();
-        preview = null; mutationPending = false;
-        closeDialog();
-        if (result.cleanupPending) fail('cleanupPending'); else say('attachSuccess');
+          const tokens = host.getPost();
+          const body = { importId: preview.importId, baseVersion: route.version, baseUpdatedAt: tokens.baseUpdatedAt, selection, confirmReplace: true };
+          const result = await request(postUrl(''), { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }, true);
+          host.setBaseUpdatedAt(result.updatedAt);
+          route = result; routeTk = host.getPost().tk; routeLoaded = true; renderRoute();
+          preview = null; mutationPending = false;
+          closeDialog();
+          if (result.cleanupPending) fail('cleanupPending'); else say('attachSuccess');
+        });
       } catch (e) {
         if (e.code === 'gpx_outcome_unknown') {
           outcomeUnknown = true;
@@ -426,18 +453,24 @@
           teardownPreview();
           fail(savedNewPost ? 'attachFailureSaved' : 'previewExpired', true, savedNewPost ? msg('previewExpired') : '');
         } else fail(savedNewPost ? 'attachFailureSaved' : errorKey(e));
-      } finally { mutationPending = false; setBusy(false); }
+      } finally { mutationPending = false; setBusy(false); host.endAction(); }
     }
     async function detachRoute() {
-      if (busy || outcomeUnknown || !route.geometry) return;
+      if (busy || outcomeUnknown || !routeLoaded || routeTk !== host.getPost().tk || !route.geometry) return;
       const ok = await host.confirm({ title: msg('detachTitle'), body: msg('detachBody'), confirmLabel: msg('detachLabel'), danger: true });
       if (!ok) return;
       mutationPending = true; setBusy(true); clearError();
       let detached = false;
+      host.beginAction();
       try {
-        const tokens = host.getPost();
-        const result = await request(postUrl(''), { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ baseVersion: route.version, baseUpdatedAt: tokens.baseUpdatedAt, confirmDetach: true }) }, true);
-        host.setBaseUpdatedAt(result.updatedAt); route = result; renderRoute();
+        const result = await host.runWrite(async () => {
+          if (!routeLoaded || routeTk !== host.getPost().tk || outcomeUnknown) return;
+          const tokens = host.getPost();
+          const result = await request(postUrl(''), { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ baseVersion: route.version, baseUpdatedAt: tokens.baseUpdatedAt, confirmDetach: true }) }, true);
+          host.setBaseUpdatedAt(result.updatedAt); route = result; renderRoute();
+          return result;
+        });
+        if (!result) return;
         detached = true;
         if (result.cleanupPending) fail('cleanupPending'); else say('detachSuccess');
       } catch (e) {
@@ -446,6 +479,7 @@
       }
       finally {
         mutationPending = false; setBusy(false);
+        host.endAction();
         if (detached && !errorCode) $($('gpxReimport').hidden ? 'gpxImportOpen' : 'gpxReimport').focus();
       }
     }

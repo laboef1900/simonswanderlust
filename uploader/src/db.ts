@@ -1,11 +1,12 @@
 import pg from 'pg';
+import { DEFAULT_NAVIGATION } from '../../site/src/lib/navigation.js';
 
 const { Pool } = pg;
 export type DbPool = pg.Pool;
 /** A checked-out connection (`pool.connect()`), for multi-statement transactions. */
 export type DbClient = pg.PoolClient;
 
-const ABOUT_SEED = {
+export const ABOUT_SEED = {
   de: {
     title: 'Über mich',
     body: 'Hier teile ich meine Leidenschaft fürs Reisen — Geschichten und Erinnerungen von den belebten Straßen Europas bis zu den geheimnisvollen Pfaden Südamerikas. Der vollständige Über-mich-Text wird in Phase 2 von der bestehenden Seite migriert.',
@@ -72,6 +73,24 @@ export const POST_SNAPSHOT_SQL = `jsonb_build_object(
   'featured', featured
 )`;
 
+/** Narrow operational migration, also safe before an offline content restore. */
+export async function ensureOnboardingSchema(db: Pick<DbClient, 'query'>): Promise<void> {
+  await db.query(`CREATE TABLE IF NOT EXISTS onboarding_state (
+    singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+    schema_version smallint NOT NULL DEFAULT 1 CHECK (schema_version = 1),
+    state text NOT NULL CHECK (state IN ('eligible', 'retired')),
+    reason text NOT NULL,
+    evaluated_at timestamptz NOT NULL,
+    dismissed_at timestamptz,
+    retired_at timestamptz,
+    CHECK (
+      (state = 'eligible' AND reason = 'fresh' AND retired_at IS NULL)
+      OR (state = 'retired' AND reason IN ('existing-schema','existing-accounts','existing-content',
+        'existing-data','restored-content','finished') AND retired_at IS NOT NULL AND dismissed_at IS NULL)
+    )
+  )`);
+}
+
 export async function ensureSchema(pool: DbPool): Promise<void> {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
@@ -83,6 +102,30 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
     );
   `);
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS users_username_lower_idx ON users (lower(username));`);
+  // Operational, account-lifetime identities. Never included in content dumps.
+  // Account deletion atomically invalidates receipts through the FK; restore
+  // explicitly clears them while all filesystem writers are stopped.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS upload_receipts (
+      user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      upload_id uuid NOT NULL,
+      media_key text NOT NULL,
+      sha256 text NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+      identity jsonb NOT NULL,
+      frozen jsonb NOT NULL,
+      state text NOT NULL CHECK (state IN ('pending','accepted','retryable','gone')),
+      incarnation uuid NOT NULL,
+      claim uuid NOT NULL,
+      generation integer NOT NULL DEFAULT 0 CHECK (generation >= 0),
+      reason text CHECK (reason IN ('queue_full','recovery_required')),
+      original_retained boolean NOT NULL DEFAULT false,
+      result jsonb,
+      PRIMARY KEY (user_id, upload_id)
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS upload_receipts_pending_idx
+    ON upload_receipts (user_id, upload_id) WHERE state = 'pending'`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS upload_receipts_media_idx ON upload_receipts (media_key)`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS sessions (
       id         text PRIMARY KEY,
@@ -104,6 +147,7 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
       images jsonb NOT NULL DEFAULT '{}', status text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','published')),
       featured boolean NOT NULL DEFAULT false,
       comments_enabled boolean NOT NULL DEFAULT true,
+      last_save_id uuid, last_save_by uuid,
       created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now())
   `);
   // @ai-note Partial: '' means "no slug yet" (a DE-first draft without an EN
@@ -194,15 +238,28 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
       title         text NOT NULL DEFAULT '',
       body_markdown text NOT NULL DEFAULT '',
       images        jsonb NOT NULL DEFAULT '{}',
+      slug          text NOT NULL DEFAULT '',
+      status        text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','published')),
+      published_at  timestamptz,
       updated_at    timestamptz NOT NULL DEFAULT now(),
+      last_save_id   uuid,
+      last_save_by   uuid,
       PRIMARY KEY (key, locale)
     )
   `);
+  await pool.query(`ALTER TABLE pages ADD COLUMN IF NOT EXISTS slug text NOT NULL DEFAULT ''`);
+  await pool.query(`ALTER TABLE pages ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','published'))`);
+  await pool.query(`ALTER TABLE pages ADD COLUMN IF NOT EXISTS published_at timestamptz`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS pages_locale_slug_idx ON pages(locale,slug) WHERE slug <> ''`);
+  await pool.query(`UPDATE pages SET status='published', published_at=COALESCE(published_at,updated_at) WHERE key='about' AND status='draft'`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS site_nav (
+    id smallint PRIMARY KEY CHECK(id=1), config jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now())`);
+  await pool.query(`INSERT INTO site_nav(id,config) VALUES(1,$1) ON CONFLICT DO NOTHING`, [JSON.stringify(DEFAULT_NAVIGATION)]);
   // Seed the About page with the previous hardcoded placeholder so the page
   // never goes blank; the author then edits it in /admin/about.html.
   await pool.query(
-    `INSERT INTO pages (key, locale, title, body_markdown) VALUES
-       ('about','de',$1,$2), ('about','en',$3,$4)
+    `INSERT INTO pages (key, locale, title, body_markdown, status, published_at) VALUES
+       ('about','de',$1,$2,'published',now()), ('about','en',$3,$4,'published',now())
      ON CONFLICT (key, locale) DO NOTHING`,
     [ABOUT_SEED.de.title, ABOUT_SEED.de.body, ABOUT_SEED.en.title, ABOUT_SEED.en.body],
   );
@@ -210,8 +267,7 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
   // whole-pair {de, en} snapshots taken just before a save overwrites the
   // stored page, capped at REVISION_CAP per key by pgPageStore.save, and
   // likewise excluded from the scheduled dumps (backup.ts keeps its fixed table
-  // list). Pages are never deleted, so no orphan sweep is needed. Additive,
-  // idempotent migration.
+  // list). Deletion and restore remove orphan histories; boot repairs older orphans.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS page_revisions (
       id       uuid PRIMARY KEY,
@@ -221,6 +277,7 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
     )
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS page_revisions_key_saved_idx ON page_revisions (key, saved_at DESC)`);
+  await pool.query(`DELETE FROM page_revisions r WHERE NOT EXISTS(SELECT 1 FROM pages p WHERE p.key=r.key)`);
 
   // @ai-note The media library (issue #64). A `media` row is metadata ABOUT a
   // file under STORAGE_DIR — the filesystem stays the source of truth for a
@@ -311,6 +368,30 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS site_identity (
+      id boolean PRIMARY KEY DEFAULT true CHECK (id),
+      revision integer NOT NULL DEFAULT 1 CHECK (revision >= 1),
+      seed_source text NOT NULL CHECK (seed_source IN ('neutral','legacy','restored-legacy')),
+      saved_at timestamptz,
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      site_name text NOT NULL DEFAULT '' CHECK (char_length(site_name) <= 80),
+      author_name text NOT NULL DEFAULT '' CHECK (char_length(author_name) <= 80),
+      canonical_origin text CHECK (canonical_origin IS NULL OR char_length(canonical_origin) <= 300),
+      localized jsonb NOT NULL DEFAULT '{}',
+      social_links jsonb NOT NULL DEFAULT '[]'
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS site_identity_assets (
+      role text PRIMARY KEY CHECK (role IN ('logo','favicon-32','favicon-192','apple-touch-180')),
+      sha256 text NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+      width integer NOT NULL CHECK (width BETWEEN 1 AND 1024),
+      height integer NOT NULL CHECK (height BETWEEN 1 AND 1024),
+      bytes bytea NOT NULL CHECK (octet_length(bytes) <= 262144),
+      created_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
 
   // --- column migrations -----------------------------------------------------
   // @ai-note Schema evolution convention (issue #32): `CREATE TABLE IF NOT
@@ -357,8 +438,12 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
   // one transaction so a crash between DROP and CREATE cannot leave the slug
   // backstop missing. Idempotent: a partial index is left alone. Nothing to
   // reconcile — the old index already guaranteed at most one '' row per locale.
+  // @ai-warning Scope catalog reads to this schema: pg_indexes spans every schema
+  // in the database, and a same-named index elsewhere would decide this
+  // migration (or vanish mid-query when its schema is dropped concurrently).
   const slugIdx = await pool.query<{ indexdef: string }>(
-    `SELECT indexdef FROM pg_indexes WHERE tablename = 'posts' AND indexname = 'posts_locale_slug_idx'`,
+    `SELECT indexdef FROM pg_indexes
+      WHERE schemaname = current_schema() AND tablename = 'posts' AND indexname = 'posts_locale_slug_idx'`,
   );
   if (slugIdx.rows[0] && !/\bWHERE\b/i.test(slugIdx.rows[0].indexdef)) {
     await pool.query(
@@ -488,4 +573,70 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
       ALTER TABLE posts ADD CONSTRAINT posts_region_check CHECK (region IN (${REGION_SQL_LIST}));
     END $$;
   `);
+
+  // Journey CHECKs are write-once; later changes require named constraint migrations.
+  // No FK to posts: pair deletion and boot repair scrub every retained reference.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS journeys (
+      id uuid PRIMARY KEY,
+      status text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','published')),
+      published_snapshot jsonb,
+      published_at timestamptz,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      CONSTRAINT journeys_published_has_snapshot CHECK (status = 'draft' OR published_snapshot IS NOT NULL)
+    );
+    CREATE TABLE IF NOT EXISTS journey_locales (
+      journey_id uuid NOT NULL REFERENCES journeys(id) ON DELETE CASCADE,
+      locale text NOT NULL CHECK (locale IN ('de','en')),
+      slug text NOT NULL DEFAULT '' CHECK (char_length(slug) <= 100),
+      title text NOT NULL DEFAULT '' CHECK (char_length(title) <= 200),
+      intro text NOT NULL DEFAULT '' CHECK (char_length(intro) <= 2000),
+      hero_image jsonb,
+      omitted boolean NOT NULL DEFAULT false,
+      published_at timestamptz,
+      CONSTRAINT journey_locales_omitted_unpublished CHECK (NOT omitted OR published_at IS NULL),
+      PRIMARY KEY (journey_id, locale)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS journey_locales_slug_idx ON journey_locales (locale, slug) WHERE slug <> '';
+    CREATE TABLE IF NOT EXISTS journey_members (
+      journey_id uuid NOT NULL REFERENCES journeys(id) ON DELETE CASCADE,
+      translation_key text NOT NULL,
+      position integer NOT NULL CHECK (position >= 0),
+      PRIMARY KEY (journey_id, translation_key),
+      UNIQUE (journey_id, position)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS journey_members_tk_idx ON journey_members (translation_key);
+  `);
+
+  // Language metadata is content identity: never replace this singleton on boot.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS site_language (
+      id boolean PRIMARY KEY DEFAULT true CHECK (id),
+      primary_locale text NOT NULL CHECK (primary_locale IN ('de','en')),
+      enabled_locales text[] NOT NULL CHECK (
+        cardinality(enabled_locales) BETWEEN 1 AND 2
+        AND enabled_locales <@ ARRAY['de','en']::text[]
+        AND (cardinality(enabled_locales) = 1 OR enabled_locales[1] <> enabled_locales[2])
+        AND array_position(enabled_locales, NULL) IS NULL),
+      locked_at timestamptz,
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      CHECK (primary_locale = ANY(enabled_locales))
+    )
+  `);
+  await pool.query(`INSERT INTO site_language (primary_locale, enabled_locales, locked_at)
+    VALUES ('de', ARRAY['de','en'], (SELECT min(published_at) FROM posts)) ON CONFLICT DO NOTHING`);
+  await pool.query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS omitted boolean NOT NULL DEFAULT false`);
+  await pool.query(`DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='posts'::regclass AND conname='posts_omitted_unpublished') THEN
+      ALTER TABLE posts ADD CONSTRAINT posts_omitted_unpublished
+        CHECK (NOT omitted OR (status='draft' AND published_snapshot IS NULL AND published_at IS NULL));
+    END IF;
+  END $$`);
+  // Operational write evidence is deliberately excluded from snapshots and dumps.
+  await pool.query('ALTER TABLE posts ADD COLUMN IF NOT EXISTS last_save_id uuid');
+  await pool.query('ALTER TABLE posts ADD COLUMN IF NOT EXISTS last_save_by uuid');
+  await pool.query('ALTER TABLE pages ADD COLUMN IF NOT EXISTS last_save_id uuid');
+  await pool.query('ALTER TABLE pages ADD COLUMN IF NOT EXISTS last_save_by uuid');
+  await ensureOnboardingSchema(pool);
 }

@@ -71,8 +71,8 @@ interface BodyRef { src: string; kind: 'body' | 'gallery'; alt: string | undefin
  *  • an inline `![alt](src)` carries its alt in the Markdown label, and its
  *    `images` entry holds only width/height.
  *
- * Both readers are the existing ones — `rewriteFences` (the scanner that
- * decides what a gallery is) and `markdownImages` (the CommonMark subset
+ * Both readers use shared source analysis — `rewriteFences` identifies rendered
+ * gallery nodes, and `markdownImages` reads the CommonMark subset
  * Turndown can produce, issue #125, read only OUTSIDE gallery fences so a
  * gallery-local caption that reads like an image is not audited as a photo)
  * — rather than a third parser of the same grammar.
@@ -81,7 +81,7 @@ interface BodyRef { src: string; kind: 'body' | 'gallery'; alt: string | undefin
  * and it is also what the renderer resolves — `body-images.ts` skips a gallery
  * line with no entry. A duplicate reference is reported once.
  */
-function bodyRefs(l: PostLocale, gallery: ReadonlyMap<string, { alt: string }> | undefined): BodyRef[] {
+async function bodyRefs(l: PostLocale, gallery: ReadonlyMap<string, { alt: string }> | undefined): Promise<BodyRef[]> {
   const out: BodyRef[] = [];
   const seen = new Set<string>();
   const add = (src: string, kind: 'body' | 'gallery', alt: string | undefined): void => {
@@ -89,31 +89,31 @@ function bodyRefs(l: PostLocale, gallery: ReadonlyMap<string, { alt: string }> |
     seen.add(src);
     out.push({ src, kind, alt });
   };
-  rewriteFences(l.bodyMarkdown, (line) => {
+  await rewriteFences(l.bodyMarkdown, (line) => {
     const src = (line.split('|')[0] ?? '').trim();
     const live = gallery?.get(src);
     add(src, 'gallery', live ? live.alt : l.images[src]?.alt);
     return line;
   });
-  for (const img of markdownImages(l.bodyMarkdown)) add(img.url, 'body', unescapeAltText(img.alt));
+  for (const img of await markdownImages(l.bodyMarkdown)) add(img.url, 'body', unescapeAltText(img.alt));
   return out;
 }
 
 /**
- * Takes the stored pair, returns the undescribed photos of both locales
- * in a stable, author-visible order — DE before EN, each locale's hero first,
- * then its gallery photos, then its inline body photos. No store, no I/O.
+ * Takes the stored pair, returns the undescribed photos of the requested locales
+ * in their display order, each locale's hero first, then its gallery photos,
+ * then its inline body photos. No store, no I/O.
  *
  * @param galleryMetadata the library's current gallery descriptions
  *   (`loadGalleryMetadata`). Every server caller passes it: without it the
  *   audit judges the copy stored on the post, which the rendered page no
  *   longer shows for a library photo.
  */
-export function auditAltText(pair: Pick<PostPair, 'de' | 'en'>, galleryMetadata?: LocaleGalleryMetadata): AltAudit {
+export async function auditAltText(pair: Pick<PostPair, 'de' | 'en'>, galleryMetadata?: LocaleGalleryMetadata, locales: readonly Locale[] = ['de', 'en']): Promise<AltAudit> {
   const images: UndescribedImage[] = [];
-  for (const locale of ['de', 'en'] as const) {
+  for (const locale of locales) {
     const l = pair[locale];
-    if (!l) continue;
+    if (!l || l.omitted) continue;
     const title = l.title;
     // A locale nobody has written yet contributes nothing: the write-DE-first
     // workflow leaves EN as a blank title, a blank body and the placeholder
@@ -124,7 +124,7 @@ export function auditAltText(pair: Pick<PostPair, 'de' | 'en'>, galleryMetadata?
       const reason = issueFor(l.heroImage.alt, title);
       if (reason) images.push({ locale, kind: 'hero', src: heroSrc, reason });
     }
-    for (const ref of bodyRefs(l, galleryMetadata?.[locale])) {
+    for (const ref of await bodyRefs(l, galleryMetadata?.[locale])) {
       const reason = issueFor(ref.alt, title);
       if (reason) images.push({ locale, kind: ref.kind, src: ref.src, reason });
     }

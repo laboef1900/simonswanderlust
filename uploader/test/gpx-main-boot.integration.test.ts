@@ -15,7 +15,8 @@ import { pgUserStore } from '../src/users.js';
 import { lockPostPair } from '../src/post-pair-lock.js';
 import { pgGpxStore } from '../src/gpx-store.js';
 import { safePairHash } from '../src/gpx-files.js';
-import { acquireStorageOwner, APP_SESSION_PREFIX, STORAGE_OWNER_LOCK_KEY } from '../src/storage-owner.js';
+import { APP_SESSION_PREFIX, STORAGE_OWNER_LOCK_KEY } from '../src/storage-owner.js';
+import { acquireDataOwner } from '../src/data-owner.js';
 import type { ImportPreview, RouteMutation } from '../src/gpx-service.js';
 
 const url = process.env.TEST_DATABASE_URL;
@@ -120,12 +121,14 @@ maybe('private GPX production composition and lease-loss containment', () => {
       if (app.child.exitCode !== null || app.child.signalCode !== null) throw new Error(`Production boot exited: ${app.log()}`);
       if (!app.log().includes(`app listening on :${port}`)) return false;
       const response = await fetch(`${base}/health`, { signal: AbortSignal.timeout(2_000) });
+      await response.arrayBuffer();
       return response.status === 200;
     }, app.log);
     const login = await fetch(`${base}/login`, { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: JSON.stringify({ username: 'gpx-author', password }) });
     expect(login.status).toBe(200);
     cookie = (login.headers.get('set-cookie') ?? '').split(';')[0]!;
     expect(cookie).toMatch(/^sid=.+/);
+    await login.arrayBuffer();
   }, 30_000);
 
   afterAll(async () => {
@@ -143,6 +146,10 @@ maybe('private GPX production composition and lease-loss containment', () => {
 
   it('serves real private imports, refuses rival owners, and stays static-only after losing its lease with a save draining', async () => {
     const tk = pair.translationKey;
+    const contextResponse = await fetch(`${base}/auth/me`, { headers: { cookie } });
+    expect(contextResponse.status).toBe(200);
+    const context = await contextResponse.json() as { userId: string };
+    await pool.query('UPDATE posts SET last_save_id=$1,last_save_by=$2 WHERE translation_key=$3', [randomUUID(), context.userId, tk]);
     const multipart = new FormData(); multipart.set('file', new Blob([xml], { type: 'application/gpx+xml' }), 'synthetic.gpx');
     const imported = await fetch(`${base}/gpx/imports`, { method: 'POST', headers: { cookie, origin: base }, body: multipart });
     expect(imported.status).toBe(201); expect(imported.headers.get('cache-control')).toBe('no-store');
@@ -159,6 +166,7 @@ maybe('private GPX production composition and lease-loss containment', () => {
     });
     expect(attached.status).toBe(200);
     const saved = await attached.json() as RouteMutation;
+    expect((await (await fetch(`${base}/posts/${tk}`, { headers: { cookie } })).json()) as object).toMatchObject({ lastSaveId: null, ownerUserId: context.userId });
     const privateRead = await fetch(`${base}/posts/${tk}/route`, { headers: { cookie } });
     expect(privateRead.status).toBe(200); expect(privateRead.headers.get('cache-control')).toBe('no-store');
     expect(await privateRead.json()).toMatchObject({ version: saved.version, geometry: preview.geometry, originalAvailable: true });
@@ -169,6 +177,7 @@ maybe('private GPX production composition and lease-loss containment', () => {
     for (const suffix of ['', '/original']) {
       const anonymous = await fetch(`${base}/posts/${tk}/route${suffix}`);
       expect(anonymous.status).toBe(401); expect(anonymous.headers.get('cache-control')).toBe('no-store');
+      expect(await anonymous.text()).not.toContain('PRIVATE_BOOT_SOURCE');
     }
     const record = (await pgGpxStore(pool).get(tk))!;
     const privateFile = `originals/${safePairHash(tk)}/${record.source.sourceId}.gpx`;
@@ -211,7 +220,8 @@ maybe('private GPX production composition and lease-loss containment', () => {
       pendingSave = fetch(`${base}/posts/${tk}`, {
         method: 'PUT', headers: { cookie, origin: base, 'content-type': 'application/json' },
         signal: AbortSignal.timeout(45_000),
-        body: JSON.stringify({ ...before, de: { ...before.de, title: 'MUST ROLL BACK AFTER LEASE LOSS' } }),
+        body: JSON.stringify({ ...before, saveId: randomUUID(), expectedOwnerId: context.userId,
+          de: { ...before.de, title: 'MUST ROLL BACK AFTER LEASE LOSS' } }),
       });
       void pendingSave.catch(() => {});
       await until(async () => {
@@ -222,8 +232,9 @@ maybe('private GPX production composition and lease-loss containment', () => {
       expect(killed.rows).toEqual([{ terminated: true }]);
       await until(async () => {
         const response = await fetch(`${base}/health`);
+        const health: unknown = await response.json();
         if (response.status !== 503) return false;
-        expect(await response.json()).toMatchObject({ storageWritable: false, release: true });
+        expect(health).toMatchObject({ storageWritable: false, release: true });
         return true;
       }, app.log);
       const restoreWhileDraining = launch('cli.ts', ['restore', '--yes', restoreInput]);
@@ -249,10 +260,9 @@ maybe('private GPX production composition and lease-loss containment', () => {
     expect(await pgPostStore(pool).get(tk)).toEqual(before);
     expect(await pgGpxStore(pool).get(tk)).toEqual(record);
     expect(await pgPostStore(pool).listRevisions(tk)).toEqual([]);
-    // Ownership can be acquired after drain, but the old HTTP process never
-    // resumes writes, even after the replacement owner deliberately releases it.
-    const replacement = await acquireStorageOwner(databaseUrl, { role: 'restore' });
-    try { await replacement.assertNoAppSessions(); } finally { await replacement.close(); }
+    // PG admission is drained, but the live process still owns its filesystem
+    // descriptor. A replacement must not take over merely because PG disconnected.
+    await expect(acquireDataOwner(databaseUrl, { role: 'restore', storageDir: join(root, 'images') })).rejects.toMatchObject({ code: 'storage_read_only' });
     for (const path of ['/gpx/imports', '/login', `/posts/${tk}`, '/rebuild']) {
       const response = await fetch(base + path, { method: path === `/posts/${tk}` ? 'PUT' : 'POST', headers: { cookie } });
       expect(response.status, path).toBe(503);
@@ -266,9 +276,16 @@ maybe('private GPX production composition and lease-loss containment', () => {
       expect(blog.status).toBe(200); expect(await blog.text()).toContain('STATIC_BOOT_RELEASE');
       const admin = await fetch(`${base}/admin/editor.html`, { headers });
       expect(admin.status).toBe(200); expect(admin.headers.get('content-type')).toContain('text/html');
+      // Finish the static stream we opened before asking Fastify to drain HTTP.
+      // fetch() resolving proves headers arrived, not that the response finished.
+      await admin.arrayBuffer();
     }
     expect(app.child.exitCode).toBeNull(); expect(app.child.signalCode).toBeNull();
     expect(app.log()).not.toContain('PRIVATE_BOOT_SOURCE');
     expect(app.log()).not.toContain('12.345678');
+    app.child.kill('SIGTERM');
+    expect((await exitedWithin(app)).code).toBe(0);
+    const replacement = await acquireDataOwner(databaseUrl, { role: 'restore', storageDir: join(root, 'images') });
+    try { await replacement.assertNoAppSessions(); } finally { await replacement.close(); }
   }, 90_000);
 });

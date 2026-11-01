@@ -1,0 +1,287 @@
+import { createHash, randomUUID } from 'node:crypto';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { gzipSync } from 'node:zlib';
+import pg from 'pg';
+import sharp from 'sharp';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { ensureSchema, type DbPool } from '../src/db.js';
+import { dumpDatabase, readDump, restoreDatabase, IDENTITY_DUMP_VERSION, type Connectable, type Dump } from '../src/backup.js';
+import { identityFromRow, pgSiteIdentityStore, seedSiteIdentity, type IdentityRow } from '../src/site-identity.js';
+import { normalizeIdentityUpload } from '../src/site-identity-assets.js';
+import { LEGACY_IDENTITY } from '../src/site-identity-legacy.js';
+import { neutralIdentity } from '../../site/src/lib/site-identity.js';
+import { identityDumpRow } from './site-identity-fixture.js';
+import { readLanguage, type LanguageConfig } from '../src/language.js';
+import { LEGACY_REDIRECTS, legacyRedirect } from '../src/redirects.js';
+
+const url = process.env.TEST_DATABASE_URL;
+const maybe = url ? describe : describe.skip;
+maybe('identity recovery with isolated PostgreSQL state', () => {
+  const schema = `identity_backup_${randomUUID().replaceAll('-', '')}`;
+  let owner: DbPool;
+  let pool: DbPool;
+  let dir: string;
+  beforeAll(async () => {
+    owner = new pg.Pool({ connectionString: url });
+    await owner.query(`CREATE SCHEMA ${schema}`);
+    pool = new pg.Pool({ connectionString: url, options: `-c search_path=${schema}` });
+    await ensureSchema(pool);
+  });
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'identity-backup-pg-'));
+    await pool.query('DELETE FROM site_identity_assets');
+    await pool.query('DELETE FROM site_identity');
+    await seedSiteIdentity(pool);
+    await pool.query("UPDATE pages SET title='Live sentinel'");
+  });
+  afterEach(async () => {
+    await pool.query('DROP TRIGGER IF EXISTS reject_identity_commit ON site_identity');
+    await rm(dir, { recursive: true, force: true });
+  });
+  afterAll(async () => {
+    await pool?.end();
+    if (owner) { await owner.query(`DROP SCHEMA ${schema} CASCADE`); await owner.end(); }
+  });
+  async function stored() {
+    return (await pool.query<IdentityRow>('SELECT * FROM site_identity')).rows[0]!;
+  }
+  async function content() {
+    return {
+      identity: (await pool.query('SELECT * FROM site_identity')).rows,
+      assets: (await pool.query('SELECT * FROM site_identity_assets ORDER BY role')).rows,
+      pages: (await pool.query('SELECT key, locale, title, body_markdown, images FROM pages ORDER BY key, locale')).rows,
+      users: (await pool.query('SELECT * FROM users ORDER BY id')).rows,
+      posts: (await pool.query('SELECT * FROM posts ORDER BY id')).rows,
+    };
+  }
+  async function save(dump: Dump) {
+    const file = join(dir, 'db-20261027-120000.json.gz');
+    await writeFile(file, gzipSync(JSON.stringify(dump))); return file;
+  }
+  async function addLogo() {
+    const bytes = await sharp({ create: { width: 64, height: 32, channels: 4, background: '#123456' } }).png().toBuffer();
+    await pool.query('INSERT INTO site_identity_assets (role,sha256,width,height,bytes) VALUES ($1,$2,$3,$4,$5)',
+      ['logo', createHash('sha256').update(bytes).digest('hex'), 64, 32, bytes]);
+  }
+  async function addNormalizedAssets() {
+    const store = await pgSiteIdentityStore(pool);
+    const source = await sharp({ create: { width: 360, height: 180, channels: 4, background: '#12345680' } })
+      .withMetadata().webp().toBuffer();
+    const logo = await normalizeIdentityUpload(source, 'logo');
+    const favicon = await normalizeIdentityUpload(source, 'favicon');
+    await store.replaceAssets(store.get().revision, 'logo', logo);
+    await store.replaceAssets(store.get().revision, 'favicon', favicon);
+    return [...logo, ...favicon];
+  }
+
+  it.each<LanguageConfig>([
+    { primary: 'de', locales: ['de', 'en'] }, { primary: 'en', locales: ['en', 'de'] },
+    { primary: 'de', locales: ['de'] }, { primary: 'en', locales: ['en'] },
+  ])('restores redirect language eligibility independently of identity for $primary / $locales', async mode => {
+    const original = await readLanguage(pool);
+    try {
+      await pool.query('UPDATE site_language SET primary_locale=$1, enabled_locales=$2, locked_at=NULL', [mode.primary, mode.locales]);
+      const dump = readDump(join(dir, await dumpDatabase(pool, dir)));
+      for (const canonicalOrigin of ['https://first.example', 'https://second.example', null]) {
+        dump.tables.site_identity![0]!.canonical_origin = canonicalOrigin;
+        dump.tables.site_identity![0]!.site_name = 'Restored identity';
+        await pool.query("UPDATE site_language SET primary_locale='en', enabled_locales=ARRAY['en'], locked_at=NULL");
+        await restoreDatabase(pool, await save(dump), { originRoles: { baseUrl: 'https://cdn.example', imgHost: 'images.example' } });
+        const restored = await readLanguage(pool);
+        expect(restored).toMatchObject(mode);
+        expect(identityFromRow(await stored()).canonicalOrigin).toBe(canonicalOrigin);
+        for (const [from, target] of LEGACY_REDIRECTS) {
+          const eligible = mode.primary === 'de' && (!from.startsWith('/en/') || mode.locales.includes('en'));
+          expect(legacyRedirect(from, restored)).toBe(eligible ? target : undefined);
+        }
+      }
+    } finally {
+      await pool.query('UPDATE site_language SET primary_locale=$1, enabled_locales=$2, locked_at=$3, updated_at=$4',
+        [original.primary, original.locales, original.lockedAt, original.updatedAt]);
+    }
+  });
+  it.each([
+    { baseUrl: 'https://incoming.example', imgHost: 'images.example' },
+    { baseUrl: 'https://cdn.example', imgHost: 'INCOMING.example:443' },
+    { baseUrl: 'https://cdn.example', imgHost: 'images.example/path' },
+  ])('refuses incoming canonical against actual image roles before changing destination %j', async originRoles => {
+    const dump = readDump(join(dir, await dumpDatabase(pool, dir)));
+    dump.tables.site_identity![0]!.canonical_origin = 'https://incoming.example';
+    const before = await content();
+    await expect(restoreDatabase(pool, await save(dump), { originRoles })).rejects.toThrow(/Invalid identity field/);
+    expect(await content()).toEqual(before);
+  });
+  it('refuses a pre-identity restore when the retained destination canonical now names the image host', async () => {
+    await pool.query("UPDATE site_identity SET canonical_origin='https://images.example'");
+    const before = await content();
+    const legacy: Dump = { version: 10, createdAt: new Date().toISOString(), tables: { users: [], posts: [], post_routes: [] } };
+    await expect(restoreDatabase(pool, await save(legacy), {
+      originRoles: { baseUrl: 'https://cdn.example', imgHost: 'IMAGES.example:443' },
+    })).rejects.toThrow(/Invalid identity field/);
+    expect(await content()).toEqual(before);
+  });
+  it('seeds default assets without later seeding erasing a saved custom group', async () => {
+    const seeded = await pgSiteIdentityStore(pool);
+    expect(seeded.getAssetState()).toEqual({ logo: false, favicon: false });
+    expect(seeded.get()).toMatchObject({ revision: 1, savedAt: null, seedSource: 'neutral' });
+    await addNormalizedAssets();
+    const before = await content();
+    await seedSiteIdentity(pool);
+    expect(await content()).toEqual(before);
+    expect((await pgSiteIdentityStore(pool)).getAssetState()).toEqual({ logo: true, favicon: true });
+  });
+
+  it('round-trips full retained DE/EN maps, metadata and normalized logo/favicon bytes, replacing destination-only values', async () => {
+    const localized = { tagline: { de: 'Deutsch', en: 'Retained English' }, aboutRole: { en: 'Writer' },
+      aboutGear: { de: 'Notebook' }, studioDescriptor: { en: 'Private studio descriptor' } };
+    await pool.query(`UPDATE site_identity SET revision=9, seed_source='legacy', saved_at=now(),
+      site_name='Other journal', author_name='Ada', canonical_origin='https://journal.example',
+      localized=$1::jsonb, social_links=$2::jsonb`, [JSON.stringify(localized), JSON.stringify([{ label: 'Profile', url: 'https://social.example/ada' }])]);
+    const normalized = await addNormalizedAssets();
+    const before = await content();
+    const file = join(dir, await dumpDatabase(pool, dir));
+    const dump = readDump(file);
+    expect(dump.tables.site_identity_assets).toHaveLength(4);
+    for (const asset of normalized) {
+      expect(dump.tables.site_identity_assets!.find((row) => row.role === asset.role)).toMatchObject({
+        role: asset.role, sha256: asset.sha256, width: asset.width, height: asset.height,
+        bytes: asset.bytes.toString('base64'),
+      });
+    }
+    await pool.query("UPDATE site_identity SET site_name='Destination', localized='{\"tagline\":{\"de\":\"Overwrite\"}}', canonical_origin=NULL");
+    await pool.query('DELETE FROM site_identity_assets');
+    await pool.query("UPDATE pages SET title='Destination page'");
+    await restoreDatabase(pool, file);
+    expect(await content()).toEqual(before);
+    expect(identityFromRow(await stored()).tagline).toEqual(localized.tagline);
+    expect((await pgSiteIdentityStore(pool)).getAssetState()).toEqual({ logo: true, favicon: true });
+  });
+
+  it.each([1, 10])('restores v%i as legacy, clears assets, keeps the live canonical and leaves saved_at unset', async (version) => {
+    await pool.query("UPDATE site_identity SET site_name='Live', canonical_origin='https://destination.example', saved_at=now(), revision=7");
+    await addNormalizedAssets();
+    const legacy: Dump = { version, createdAt: new Date().toISOString(), tables: { users: [], posts: [],
+      ...(version >= 10 ? { post_routes: [] } : {}) } };
+    await restoreDatabase(pool, await save(legacy));
+    const row = await stored();
+    expect(identityFromRow(row)).toEqual({ ...LEGACY_IDENTITY, canonicalOrigin: 'https://destination.example' });
+    expect(row).toMatchObject({ seed_source: 'restored-legacy', saved_at: null, revision: 1 });
+    expect((await pool.query('SELECT * FROM site_identity_assets')).rows).toEqual([]);
+    expect((await pgSiteIdentityStore(pool)).getAssetState()).toEqual({ logo: false, favicon: false });
+  });
+
+  it('uses the legacy canonical when the destination has none, and keeps identity in the undo dump', async () => {
+    const undo = join(dir, await dumpDatabase(pool, dir));
+    const legacy: Dump = { version: IDENTITY_DUMP_VERSION - 1, createdAt: new Date().toISOString(),
+      tables: { users: [], posts: [], post_routes: [] } };
+    await restoreDatabase(pool, await save(legacy));
+    expect(identityFromRow(await stored())).toEqual(LEGACY_IDENTITY);
+    await restoreDatabase(pool, undo);
+    expect(identityFromRow(await stored())).toEqual(neutralIdentity());
+  });
+
+  it.each([
+    null, [], { tagline: { de: 'valid', en: 12 } }, { tagline: { de: 'valid', en: 'x'.repeat(161) } },
+    { tagline: { fr: 'unknown' } }, { aboutGear: { en: 'x'.repeat(201) } },
+  ].map((localized) => [localized]))('refuses corrupt retained locale data before changing any live table: %j', async (localized) => {
+    await addLogo(); const before = await content();
+    const dump = readDump(join(dir, await dumpDatabase(pool, dir)));
+    dump.tables.site_identity![0]!.localized = localized;
+    await expect(restoreDatabase(pool, await save(dump))).rejects.toThrow(/Invalid identity field/);
+    expect(await content()).toEqual(before);
+  });
+
+  it('refuses a correctly rehashed broken PNG before destructive SQL', async () => {
+    await addLogo(); const before = await content();
+    const dump = readDump(join(dir, await dumpDatabase(pool, dir)));
+    const asset = dump.tables.site_identity_assets![0]!;
+    const broken = Buffer.from(asset.bytes as string, 'base64').subarray(0, 40);
+    asset.bytes = broken.toString('base64'); asset.sha256 = createHash('sha256').update(broken).digest('hex');
+    await expect(restoreDatabase(pool, await save(dump))).rejects.toThrow(/assets.png/);
+    expect(await content()).toEqual(before);
+  });
+
+  it.each(['metadata', 'wrong dimensions', 'incomplete favicon', 'duplicate role', 'invalid base64'] as const)(
+    'rejects malicious normalized-asset dumps (%s) without changing any live rows', async (attack) => {
+      await addNormalizedAssets();
+      const before = await content();
+      const dump = readDump(join(dir, await dumpDatabase(pool, dir)));
+      const assets = dump.tables.site_identity_assets!;
+      const logo = assets.find((asset) => asset.role === 'logo')!;
+      if (attack === 'metadata') {
+        const bytes = await sharp(Buffer.from(logo.bytes as string, 'base64')).withMetadata().png().toBuffer();
+        logo.bytes = bytes.toString('base64');
+        logo.sha256 = createHash('sha256').update(bytes).digest('hex');
+      } else if (attack === 'wrong dimensions') {
+        logo.width = Number(logo.width) - 1;
+      } else if (attack === 'incomplete favicon') {
+        dump.tables.site_identity_assets = assets.filter((asset) => asset.role !== 'favicon-192');
+      } else if (attack === 'duplicate role') {
+        assets.push({ ...logo });
+      } else {
+        logo.bytes = 'not-base64';
+      }
+      dump.tables.site_identity![0]!.site_name = 'Must never replace live identity';
+      dump.tables.pages = [];
+      await expect(restoreDatabase(pool, await save(dump))).rejects.toThrow(/assets\./);
+      expect(await content()).toEqual(before);
+    },
+  );
+
+  it('restores a current-format no-assets dump to the defaults, not destination assets', async () => {
+    const empty = join(dir, await dumpDatabase(pool, dir));
+    await addNormalizedAssets();
+    expect((await pgSiteIdentityStore(pool)).getAssetState()).toEqual({ logo: true, favicon: true });
+    await restoreDatabase(pool, empty);
+    const restored = await pgSiteIdentityStore(pool);
+    expect(restored.getAssetState()).toEqual({ logo: false, favicon: false });
+    expect(restored.get()).toMatchObject({ revision: 1, savedAt: null, seedSource: 'neutral' });
+    expect(restored.get().identity).toEqual(neutralIdentity());
+  });
+
+  it('rolls identity, assets and content back together on a transaction failure', async () => {
+    const dump = readDump(join(dir, await dumpDatabase(pool, dir)));
+    dump.tables.site_identity = [identityDumpRow({ ...neutralIdentity(), siteName: 'Incoming' })];
+    dump.tables.pages = [];
+    await addLogo(); const before = await content();
+    await pool.query(`CREATE OR REPLACE FUNCTION reject_identity_commit() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN RAISE EXCEPTION 'synthetic identity commit refusal'; END $$`);
+    await pool.query(`CREATE CONSTRAINT TRIGGER reject_identity_commit AFTER INSERT ON site_identity
+      DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reject_identity_commit()`);
+    await expect(restoreDatabase(pool, await save(dump))).rejects.toThrow();
+    expect(await content()).toEqual(before);
+  });
+
+  it('captures identity and assets from the same repeatable-read view as content', async () => {
+    await pool.query("UPDATE site_identity SET site_name='Before'");
+    await addLogo(); const before = await content();
+    let changed = false;
+    const db: Connectable = {
+      query: (sql, params) => pool.query(sql, params),
+      async connect() {
+        const client = await pool.connect();
+        return {
+          release: () => client.release(),
+          async query(sql, params) {
+            const result = await client.query(sql, params);
+            if (!changed && sql.includes('FROM site_identity ORDER')) {
+              changed = true;
+              await pool.query("UPDATE site_identity SET site_name='After'");
+              await pool.query('DELETE FROM site_identity_assets');
+              await pool.query("UPDATE pages SET title='After capture'");
+            }
+            return result;
+          },
+        };
+      },
+    };
+    const dump = readDump(join(dir, await dumpDatabase(db, dir)));
+    expect(changed).toBe(true);
+    expect(dump.tables.site_identity![0]!.site_name).toBe('Before');
+    expect(dump.tables.site_identity_assets).toHaveLength(1);
+    expect(dump.tables.pages!.map((page) => page.title)).toEqual(before.pages.map((page) => page.title));
+    expect((await stored()).site_name).toBe('After');
+  });
+});

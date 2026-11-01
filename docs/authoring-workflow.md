@@ -5,10 +5,40 @@ How to write a new travel post, add its photos, and get it live. Three stages:
 
 **Post content lives in Postgres** — not in git or baked into the Docker image. The in-admin
 editor (Phase B) is the authoring interface: you write DE and EN content directly in the browser
-and hit **Publish** to trigger a rebuild. Photos are kept out of git and Postgres: they go to
+and hit **Publish** to trigger a rebuild. Story photos are kept out of git and Postgres: they go to
 the self-hosted **image uploader**, which stores optimized variants on the server and serves them
 from `https://img.simonswanderlust.com`. A post only ever references image **URLs** — and you
 can upload images inline from the editor without visiting a separate page.
+
+---
+
+## Site name, logo and favicon (admin only)
+
+Open **Settings → Site identity** to edit the public name, author, localized text and social
+links. The About page's body remains separate content. Save stores identity without
+rebuilding; the public site changes at the next **Publish** or **Rebuild site now**.
+
+Logo and favicon have their own upload/remove actions, separate from the text Save:
+
+- Choose one PNG, JPEG or **static WebP**, at most **2 MiB** and **4096 × 4096 pixels**.
+  SVG and animated images are not accepted. A logo must be at least 32 pixels tall;
+  a favicon source must be at least 180 × 180 pixels.
+- Upload saves the selected file after normalization to metadata-free PNG. A logo is fitted
+  inside 960 × 240 without enlargement. A favicon generates the 32px and 192px icons plus
+  a 180px Apple icon on the site's light canvas background.
+- The saved/custom indicator describes the saved settings, not the currently published site.
+  Selecting a filename alone does not save it, and neither upload nor removal rebuilds.
+- Uploading/removing an asset preserves unsaved text edits. Both use the same revision:
+  if another save wins first, resolve the conflict with the explicit reload action rather
+  than silently overwriting the newer identity. Reload discards unsaved changes.
+- Confirm removal to return to the text site name or bundled favicon on the **next build**.
+  Keep the source image if you may want to upload it again; originals are not retained.
+
+**Rebuild site now uses saved values**, not unsaved form text or merely selected files.
+These small identity images live in Postgres and travel with database backups, unlike story
+photos in the image library. After a database restore, restart the app and rebuild to publish
+the recovered identity. A supported pre-identity backup restores the legacy text identity
+and default assets; it does not preserve destination-only custom logos/favicons.
 
 ---
 
@@ -43,6 +73,18 @@ two different posts, or a slug equals another post's slug in the *other* languag
 are filed by slug, without a language) — is **rejected** with a warning naming the owner, and
 nothing is written. Resolve the slug in the editor and run the import again.
 
+**Untranslated stories:** The current importer requires a published DE/EN pair. A published
+German or English post without a Polylang translation group is counted individually as
+**Rejected**, with its unchanged slug and language in the warning list; a group missing its
+other published language is rejected too. Neither creates a draft nor downloads photos, even
+with **Replace existing drafts with the export** selected. An export containing only these
+refusals still completes as an import job with a rejection summary and zero planned work —
+it does not mean those stories were migrated. The five post counters sum to distinct Polylang
+groups plus individual untranslated published DE/EN items, not the number of XML rows in pairs.
+The warning list is capped, but the rejected count remains exact. Unknown/missing languages,
+non-post items and unpublished posts remain excluded; an export with no reportable items
+still fails as empty. No translation or replacement slug is generated.
+
 ---
 
 ## Stage 1 — Upload the photos (do this first)
@@ -71,9 +113,9 @@ text by hand.
 > Key naming: use `trips/<slug>/<name>` (lowercase `a–z 0–9 / _ -`). The `<slug>` should match
 > the post slug (below). Upload before publishing, or the URLs 404.
 
-> The uploader accepts **one photo per request** (a second file in the same upload is rejected —
-> bulk upload is a Phase 2 feature), and published variants keep only camera make/model, lens,
-> capture date and exposure settings — never location, even if the original photo had it.
+> The uploader accepts **one photo per request**; Media batches send separate identified
+> requests. Published variants keep only camera make/model, lens, capture date and exposure
+> settings — never location, even if the original photo had it.
 
 ---
 
@@ -100,6 +142,92 @@ Unpublish. The save indicator distinguishes **Not saved yet**, **Unsaved changes
 **Saving…** and **Saved to server**. Publish readiness is separate. A failed save
 leaves edits unsaved; edits typed while a save is running still need another save.
 Browser recovery copies do not mean the draft has been saved to the server.
+
+**When a save response is lost:** keep the tab open. The story editor and every page editor
+(About, Contact, Privacy and Legal) make one bounded read to check whether that exact account's
+save landed; **Check again** performs another read, never a replay. A confirmed save advances
+only its captured snapshot: text typed while waiting stays dirty. If another writer changed
+the stored version, compare the local form, attempted snapshots and stored content. You can
+open the latest version/revisions in another tab, keep editing locally, load the stored
+version, or explicitly use your copy against that stored base and then save. Loading or
+rebasing preserves a separate complete recovery record first; if browser storage cannot
+preserve it, replacement is refused with a browser-storage warning. The latest inputs remain
+in the open tab but have not gained a new recovery copy; free storage or copy the text before
+leaving. A restored copy keeps its original base, not the token of the newly loaded page.
+A missing or corrupt base requires explicit comparison/rebase.
+Missing or unavailable receipt evidence stays Unknown; it does not prove the request failed.
+
+**A different account in another tab:** the form keeps its original owner and pauses.
+Sign in in a second tab, then explicitly resume as that same account. Signing in/focusing
+alone does not send writes. A story/page editor 401 may return to login after stashing; restore
+the original account's copy afterwards. Browser recovery copies are scoped to account,
+resource and independent tab context; logout and expiry always keep them.
+
+Ordinary page editing and inactive-language preparation have separate recovery scopes.
+Return to the same editing mode to restore its copy; saving in one mode cannot clean the
+other mode's unsent text.
+
+Old unscoped copies have no trustworthy owner and are not shown or adopted by any account,
+including admins. Browser-profile access can still expose local copies on a shared device.
+Writes from one editor tab run in order. Repeated **Save draft** clicks or
+**Cmd/Ctrl+S** requests each keep the form as it was when requested; a second
+save waits for the first response and uses its updated version. This also applies
+when saving during **Building…**: the save waits for Publish to finish, then
+stores a draft without changing the published snapshot. New posts are created
+once; subsequent queued saves update that same bilingual pair. Preview's save,
+Unpublish and GPX attachment/detachment share the same ordering.
+
+Typing after the last requested save stays on screen as **Unsaved changes**, even
+when earlier requests succeed. A rejected save does not prevent a later corrected
+save. A genuine edit from another tab still produces the conflict dialog:
+**Reload** replaces your editing base and cancels already queued older requests.
+If that reload fails, saving remains blocked until the page loads successfully;
+keep or recover your local draft rather than assuming it reached the server.
+If a GPX preview is open while Reload reconciles a newly attached or replaced route,
+its trimming selections remain intact. The replacement warning becomes available
+for the current route; a changed route version requires fresh replacement confirmation.
+If your session expires during a save, the editor keeps a browser recovery copy
+and returns you to sign-in. Those edits remain unsaved; signing in is not a save.
+
+**Offline is information, not a queue.** The banner warns that Save, Preview and Publish
+will not reach the server when the browser reports offline. Editing and local stashing
+continue. A connection indicator is not server evidence: request results remain authoritative.
+Coming online or focusing the tab never sends a write. There is no offline saving, service
+worker, background sync or automatic replay.
+
+**Media details and AI saves:** each changed field carries the canonical value originally
+read. A changed field refuses the entire patch; unrelated fields do not conflict. Compare
+the current stored values before choosing **Use mine** or **Use stored**. Fill-empty AI
+expects empty fields; overwrite expects the last-read values. After a lost response the
+app reads the item once and compares each field (intended value, previous value, or a
+different value). Mixed results stay visible; neither a check nor AI automatically retries.
+An incompatible server response cannot mark the form saved.
+
+**Local recovery privacy and limits**
+
+- Save server drafts before upgrading. Unknown-owner legacy records remain unchanged and
+  are never previewed, downloaded, imported or attributed by the app, even for admins.
+  The original author/device custodian may privately back up the browser profile, inspect
+  and export the exact legacy record using browser tools, and manually copy their own text
+  into an authenticated editor. Only dispose of individually identified records after
+  backup/export; upgrading, logout and session expiry never delete them.
+- Browser recovery contains plain-text form content, image URLs/dimensions and non-secret
+  owner/resource/base/attempt/context/record/generation metadata with attempted snapshots.
+  It contains no passwords, session tokens, AI keys, executable actions or file queue.
+- Clearing site data, cleanup tools, profile resets and browser storage eviction (including
+  WebKit's inactivity policy) can remove copies without warning. Private windows discard
+  storage on close and may refuse it. localStorage has only a few MB per origin; quota
+  failure can stop stash updates. Keep a separate trusted backup for irreplaceable work.
+- Copies are not encrypted, synced between devices or backed up by the server. Device loss
+  or theft can lose or expose them. Account-scoped recovery prevents app disclosure, not
+  direct access by someone sharing the browser profile. Logout always keeps drafts; use
+  separate trusted profiles.
+- Selected photos exist only in the open page. Closing, reloading, crashing or discarding a
+  background tab loses unfinished transfers and their in-memory IDs. Select files again
+  explicitly; reselection is a new upload and has no receipt-level deduplication promise
+  across year/encoding-profile changes. Completed uploads are retained on the server.
+- A local stash is never proof of a server save. Only an acknowledgement or successful
+  server check establishes what is stored.
 
 Alt-text warnings start as a compact, collapsed **Alt-text review** disclosure
 above the story, within the writing column. Expand it to see photos grouped by
@@ -146,6 +274,21 @@ can still be running when the upload returns: wait until the photo is ready befo
    German tab, so enter the English country name (e.g. "Greece", not "Griechenland") here too.
    The slug and shared fields (date, countryCode, region, coordinates) carry over automatically.
 5. Click **Save draft** — both locale rows are written to Postgres. The post is not yet live.
+
+**Slug length (#353, rollout-gated):** the existing lowercase ASCII slug grammar is limited
+to **251 bytes**, so `<slug>.mdx` fits a 255-byte filename. Only newly auto-derived slugs
+are truncated after normalization (with a cut-off trailing hyphen removed). Typed, pasted,
+loaded, restored, stashed and published slugs are never shortened. An unset locale may stay
+empty in a draft; publishing needs both slugs. Excessive saved/imported inputs are refused
+with the locale field and length rather than renamed. MDX export checks both locales before
+writing either file; database backups preserve legacy records that cannot be exported.
+
+**Before activating the cap on an existing installation**, run the owner-authorized
+read-only working/snapshot inventory described in
+`docs/superpowers/specs/2026-10-27-slug-length-bound-design.md`. Any over-bound result,
+including an imported draft, blocks rollout until an explicit owner decision. Do not shorten
+a live WordPress URL, unpublish a record, or rewrite a backup as a workaround. Implementation
+does not establish that the owner corpus has passed this gate.
 
 ### Fill coordinates from the country
 
@@ -213,6 +356,31 @@ Gallery descriptions are the exception: alt text and captions for photos in the 
 library use the current library values on the next rebuild, without republishing each
 article. This does not publish any draft text or change gallery order.
 
+**Revisions → Restore into editor** loads a saved snapshot into the form, not into the
+database. If you have unsaved edits, a confirmation names the revision and its time,
+and warns that it replaces content and metadata in **both German and English**, plus
+shared story details. **Cancel** leaves your fields, text selections and local recovery
+draft intact. A clean form loads the revision without that extra prompt; edits made
+while the revision is loading still trigger confirmation.
+
+After loading, the form is marked **Unsaved changes**. Review both languages before
+choosing **Save draft**; only a separate **Publish** changes the live story. Published
+posts retain their current, locked slugs even when the revision used older ones.
+Restoring a revision does not reset conflict protection: a local recovery draft based
+on an older saved version still cannot overwrite a newer writer, and a recovery draft
+without a known base version remains blocked from saving.
+
+**More actions → Unpublish** returns both languages to draft and rebuilds the site.
+The previous release remains visible until that rebuild succeeds; if it fails, the
+old live pages remain until a successful rebuild. After your own successful unpublish,
+you can edit and **Save draft** in the same tab without reloading, provided nobody
+else saved since the version you loaded. The editor adopts the unpublish's new
+concurrency token only when its transaction-captured predecessor matches the
+editor's current token. Unpublish still removes the story when your form is stale,
+but a save made elsewhere before unpublish or while its rebuild is running still
+produces the normal conflict dialog on your next save rather than overwriting it.
+Choose **Cancel** there to keep your unsaved edits on screen for copying.
+
 ### Import and trim a private GPX route
 
 Open **Story details → GPX route → Import GPX** and choose a local `.gpx` file
@@ -236,6 +404,14 @@ or other fields. For a new post, **Save draft and attach route** first saves the
 if attachment fails afterwards, keep the saved draft and retry the preview. A conflict
 requires reloading current state. An unknown network outcome blocks further changes
 until reload rather than risking a second replacement.
+
+When another tab attaches, replaces or detaches a route, **Save draft** can report a
+conflict. Its **Reload** choice reloads both the story fields and route state; review
+the refreshed attachment status before choosing **Publish** again. **Cancel** keeps
+your unsaved text on screen and does not reload the route. While route state is loading
+or unavailable, Attach, Detach and Publish cannot change it. If **Route state unavailable**
+appears, reload the page explicitly and review the route after it loads successfully.
+Detachment still retains the private original; it is not the same as never attaching a route.
 
 If the first draft save fails, its reason appears inside the GPX dialog; the preview
 remains available for retry and nothing is attached. Closing to correct the form
@@ -293,8 +469,10 @@ name the affected stories. Important details:
   validation (or a half-created pair with only one locale row) is listed by name in the status
   box with its reason; everything else goes through. Failed stories remain selected for retry;
   successfully processed stories are deselected.
-- **Bulk delete asks you to type `DELETE`.** There is no undo — revisions are per-save snapshots
-  of a post, so deleting the post takes them with it.
+- **Bulk delete asks you to type `DELETE`.** Type the exact token and press Enter, or click
+  **Delete**. Enter with a mismatched token keeps the confirmation open; Escape or Cancel
+  dismisses it without deleting. There is no undo — revisions are per-save snapshots of a
+  post, so deleting the post takes them with it.
 
 ### Export / backup
 
@@ -343,6 +521,25 @@ get back are final, but the responsive AVIF/WebP variants take a few seconds per
 thumbnail appears once it is done. You can close the tab: uploading needs the tab open,
 encoding does not.
 
+**Unknown transfer is not a failed transfer.** Media, hero, body, About and title-image
+uploads keep a client-generated ID and check its server receipt once after an ambiguous
+response. **Check again** is read-only. Only an explicit retry authorized by definite
+failure or a new server retry generation can send bytes again. A retained original waiting
+for queue capacity recovers on the server; **Rescan** is the explicit admin recovery action
+after a disk/database error. An accepted transfer may still be encoding or later fail encoding.
+
+If a Media batch loses its session, it pauses in place: sign in in a second tab and use
+the explicit same-account resume action. Completed records remain visible, and unresolved
+files cannot move to another account. The tab warns before leaving with pending work.
+Files and their queue are never saved to browser storage; closing or reloading loses them.
+Reselecting a file is a **new upload**, with no cross-year or changed-profile deduplication
+promise. Do not reselect merely because an earlier response is Unknown.
+
+Folder creation and bulk moves also keep ambiguous outcomes visible. A folder check reads
+the authoritative tree; a move check reports each selected photo's stored folder or deletion,
+independent of the visible page and filters. Explicit **Create again** is idempotent;
+**Move again** is last-writer-wins. Neither read proves an earlier request cannot finish later.
+
 Two consequences worth knowing:
 
 - **Publish refuses while a post's photos are still processing**, with a message naming them.
@@ -355,6 +552,8 @@ Folders are **virtual**: moving a photo never changes its URL, so reorganising t
 never break a published post. Renaming a folder moves its whole subtree (`Iceland` moves
 `Iceland/South` but not `Iceland 2024`), and a folder must be empty before it can be deleted.
 Folder rename and delete, and deleting a photo, are admin-only.
+The folder list identifies exactly one current folder to assistive technology as well as
+visually, including **All photos**. Rename and Delete apply to that current folder.
 
 Select photos by clicking, shift-clicking or ctrl/cmd-clicking; the grid is fully keyboard
 operable (arrows move, `Space` toggles, `Shift`+arrow extends, `Ctrl/Cmd`+`A` selects all).
@@ -386,6 +585,33 @@ before saving: they can appear in every article gallery using that photo.
 The title labels the photo in the library/editor; it does not replace alt text.
 Hero/title-image and ordinary inline-image descriptions remain article-specific.
 
+**Story impact** in the photo detail panel distinguishes published snapshots (next successful
+rebuild), drafts (Preview now, live after successful Publish), and separately changed saved
+draft uses. It counts distinct stories, not repeated photos, and shows DE/EN gallery,
+following-caption, hero/title and inline occurrences. After **Save details**, its effect
+counts use only the fields that actually changed in that write. A submitted unchanged
+English field does not make English affected; a title/tag-only save says **Descriptions
+unchanged**. Hidden captions and local caption overrides do not follow library captions.
+Empty library descriptions remain empty rather than falling back to older post text.
+
+An all-zero newer-draft row can record a removed use. It does not increase the published
+reach. About and other pages are not story reach, even if their references still prevent
+deleting the photo. Global library descriptions do not publish draft prose, reorder photos,
+change dimensions, or replace post-local hero/title/inline text.
+
+Admins also see per-photo pending description fields compared with the currently served
+release. The aggregate photo/story counts remain beside the existing **Rebuild site now**
+action on Desk/Settings, separate from the last build outcome. Unknown/unavailable is not
+zero. A no-op or reverted description is not pending; a successful rebuild clears only the
+values its loader captured. A later edit stays pending, and a failed pre-promotion build
+clears nothing. There is no per-photo Publish or automatic rebuild.
+
+The selected photo's observations refresh every 30 seconds while visible, and on return
+or focus, with a 10-second read deadline. **Refresh** is read-only; it preserves unsaved
+fields and the values against which Save compares. Failed observations show unavailable/
+stale without claiming that an acknowledged save failed. Counts describe the last read,
+not a promise that another author has not changed the story since.
+
 > Photo GPS is stored for you but is **never published** — image variants carry an EXIF
 > allow-list with no location at all, and the API hides coordinates from non-admin accounts.
 
@@ -403,6 +629,10 @@ library. Search is scoped to the current folder; changing folders returns to pag
 without dropping gallery selections or their order. Only ready photos are offered.
 On a phone, expand **Folders** above the photos; it collapses after a folder is chosen.
 Create, rename, and delete folders on the Media page, not in the picker.
+The picker's **Previous** and **Next** controls retain keyboard focus while a page loads,
+so Enter can continue through pages without tabbing back. Unavailable directions stay
+focusable and are announced as disabled; repeated activation while loading or at a page
+boundary does not request another page.
 
 ### Galleries
 
@@ -440,6 +670,20 @@ Two cases it will refuse rather than guess: a gallery whose closing ` ``` ` is m
 would run to the end of the post), and a cursor inside a code block that is likewise unclosed. It
 tells you which; close the fence and try again.
 
+Visual gallery editing now asks the signed-in server to analyze the exact unsaved
+manuscript. If analysis is unavailable, your Markdown and undo history remain
+untouched; use the localized retry action or continue editing raw Markdown. If the
+manuscript changes while the picker is open, reopen it against the current text
+instead of applying an old selection.
+
+Existing tilde fences, longer fences, indentation, list/blockquote galleries and
+raw HTML `pre > code.language-gallery` galleries keep their placement and wrappers
+when saved, exported or edited. These are the same forms the article renderer
+already recognizes. Literal gallery examples inside other code blocks remain
+examples. An extra opener argument such as `gallery slider` does **not** select a
+layout: use the `#layout:` line below.
+
+
 Everything below is what that button writes, and is still the format to hand-edit.
 
 Several photos in one grid go in a fenced block with the language `gallery`, one image URL per
@@ -452,12 +696,23 @@ https://img.simonswanderlust.com/trips/rhodes-2021/b-9f8e7d6c | 2000x3000 | alt=
 ```
 ````
 
-The `| WIDTHxHEIGHT | alt="…" | caption="…"` metadata is **lifted into the post's images map on
-save**, and the line is rewritten to the bare URL — so you type it once, and re-saving does not
-duplicate it. Only dimensions are required; alt and caption are optional (a photo with no
-caption just gets no `<figcaption>`). Characters that would break the format — `|`, `"`, `<`,
-`>`, `&` and newlines — are escaped automatically on export (`&#124;`, `&quot;`, …) and decoded
-on save, so you can write them literally.
+Valid `| WIDTHxHEIGHT | alt="…" | caption="…"` metadata is **lifted into the post's images map
+on save**, and the line becomes a bare URL. Dimensions are required unless already recorded;
+alt and caption are optional. The picker and export escape values automatically. When editing
+Markdown by hand, use `&quot;` for a quote and `&#124;` for a pipe inside a double-quoted value,
+for example `caption="He said &quot;hello&quot; &#124; sunset"`. Backslash-escaped quotes (`\"`)
+and literal `|` inside a value are **not** supported syntax.
+
+If any field is malformed or unknown, the **whole photo line is saved unchanged**, and none
+of its metadata is applied. A persistent warning names the language and source location;
+select it to find the current problem, repair the syntax and save again. Other valid lines
+still normalize. The warning returns when reopening the draft. The affected gallery remains
+editable as Markdown, but visual picker/inline-alt updates cannot overwrite its invalid line.
+Export preserves that line rather than guessing a repair.
+
+This is a successful save, **not** a new publication block. Malformed captions can remain
+missing on the published page, including immediately after an About-page save/rebuild.
+Existing Media descriptions and previously stored metadata retain their usual precedence.
 
 Two things silently drop a photo from the grid, both deliberate:
 
@@ -533,6 +788,19 @@ Galleries work in **page** bodies (the About page) on the same terms. Clicking a
 lightbox, in all three modes. The draft preview renders galleries but **not** the lightbox — it is
 a separate island that only runs on the built site.
 
+The About page's search and social descriptions come from its rendered prose paragraphs,
+before responsive images are inserted, not the raw Markdown. Prose remains eligible when an
+image shares its paragraph: a single newline after a leading image is enough, and readable
+text on both sides of an inline image is preserved. You can begin either language with an image, gallery or fenced code:
+their URLs, alt text, captions and fence directives do not become the description. Inline
+emphasis and links contribute their visible text; entities are decoded and line breaks become
+spaces. Descriptions stop at a whole-word boundary within 150 characters. An empty or
+media-only body uses the localized “Über mich” / “About me” fallback. Use **About → Publish**
+to save both languages and rebuild the public pages; changing this metadata does not remove
+the images, captions, code or formatting from the page itself.
+The loader derives these descriptions from the same snapshot-backed page rows used for
+the rendered content; the identity-configured structured-data author is independent.
+
 ### Comments
 
 Reader comments are stored in Postgres and served at request time — they are **never** baked
@@ -547,18 +815,89 @@ into the static site, so none of the switches below need a Publish or a rebuild.
    close a trip, but only an admin can open the site to comments.
 3. **Moderation** — a reader's comment lands in `/admin/comments.html` as **pending** and is not
    public until an admin clicks **Approve**. Author replies are auto-approved and marked as such.
-4. **No rebuild** — closing or opening comments (either switch) takes effect on the next request.
-   It does not require **Publish** and never triggers a site build.
+   Their localized **Autor / Author** badge follows the reply's stored author flag, independent
+   of the number of approved comments elsewhere on the site. This does not change the current
+   limit of the oldest 500 approved comments returned for one story.
+   Both moderation views show the oldest comments first, **50 per page**. Use **Previous**
+   and **Next** to reach every comment, including those beyond the old 500-row queue.
+   The page indicator identifies the current page; a filter change or successful Approve,
+   Unapprove, Delete, Spam or Reply returns to page one. Cancelling a confirmation leaves
+   the current page untouched. Other moderators can shift the pages while you browse:
+   restart at page one to see the new state. If the last page becomes empty, Previous
+   remains available.
+   Switching **Show** or refreshing after moderation immediately removes the old rows and
+   actions while the selected view loads. Only the newest request can update the list,
+   loading indicator or error message; a delayed response from an earlier view cannot
+   replace it. A failed refresh leaves no stale rows or usable stale paging controls.
+   Switch views to try loading again. Unsent replies stay attached to their comment for
+   this page session, including after a failed refresh, paging or a filter change;
+   navigating away or reloading the page discards them.
+   A successful reply clears only its submitted draft, not newer text written meanwhile.
+   Concurrent actions in the same filter each refresh after success, even when another
+   action has already refreshed the list. A real filter or page change retires those
+   old-view completions; paging focuses the page indicator, without discarding drafts.
+   If those refreshes overlap, the newest one retains the last focused reply and its
+   selection. Moving focus elsewhere cancels restoration, including when you then
+   blur that control; a delayed response does not pull focus back.
+4. **No rebuild** — closing or opening comments (either switch), approval, unapproval and
+   deletion take effect on the next public request. A confirmed Delete or Spam is permanent.
+   None requires **Publish** or triggers a site build.
 5. **Deleting a post deletes its comments** — the thread is removed in the same transaction as the
    post and its revisions; there is no undo.
 
 ---
+
+## Editable pages
+
+Admins open **Pages** (`/admin/pages.html`) to edit About, Contact, Privacy or Legal.
+The existing About editor is reused; old `/admin/about.html` bookmarks still select
+About. Its public paths stay fixed and it cannot be unpublished/deleted. Privacy
+and Legal are empty author-owned documents, not generated legal advice; their
+editor notice leaves the wording and applicable legal obligations with the owner.
+
+Other kinds start as drafts. Choose each enabled locale's slug before first Publish;
+after that locale has been public the slug stays locked, including after unpublish.
+Draft save does not rebuild. Live save and Publish show their scope, commit the
+page, and rebuild once. Unlike stories, pages have no separate published snapshot:
+**saving a live page is publication**. Preview shows the saved selected locale
+through the sanitized page renderer; save unsaved edits before using it.
+
+Ordinary editing shows only enabled languages. To prepare a new secondary language,
+use **Settings → Language → Prepare translations**, then select a page. Save title,
+slug and body in stages in that inactive-locale editor; these fields do not become
+public merely by saving. Return to Language settings and activate only after all
+published page blockers are complete. A revision loads into the editor for review;
+saving it still checks slug locks, completeness, image safety and the loaded token.
+If someone saved elsewhere, reload only after explicitly choosing to discard your
+unsaved fields.
+
+Delete names both locale paths/titles, the revisions being removed, navigation
+references and a best-effort count of links in bodies. Those body links are not
+rewritten, photos are retained, and the deleted slug may be reused. Cancel is safe.
+Unpublish removes public eligibility while keeping the page, revisions and slug lock.
+If a rebuild fails after any committed action, the error explicitly says the data
+was saved and the previous release is still serving: repair the failure and use
+**Rebuild site now**, rather than repeatedly resubmitting the obsolete page.
+
+**Delivery boundary:** #288 supplies this CMS/storage lifecycle and preview.
+Generic public Contact/Privacy/Legal routes and configurable navigation are #289;
+do not interpret a successful #288 rebuild as proof that those routes exist yet.
+DB backups, not posts-only MDX exports, preserve pages and navigation.
 
 ## Stage 3 — How the rebuild works
 
 The **Publish** button in the editor triggers a rebuild automatically and waits for it to finish
 before confirming — you don't need to run anything manually under normal authoring conditions.
 This section explains what happens under the hood and how to trigger a rebuild manually if needed.
+
+If the response says a change was saved/published/deleted in the CMS but the rebuild failed,
+that mutation is already committed. Editor and About retain its acknowledged save token;
+you may continue editing without reloading or resubmitting the completed action. The live
+site can still be serving an earlier release. Admin Desk and Settings show the last build
+attempt separately from that observed live release, including interrupted, missing or
+unavailable records. Fix the named failure, inspect `docker compose logs app` for generator
+details, then explicitly choose **Rebuild site now**. Restart alone is not proof of recovery,
+and an interrupted attempt is not evidence that nothing was saved.
 
 The blog is a **static site**, but there's no separate build server or web server anymore: the
 same `app` container that runs the admin/CMS also builds and serves the blog. Content lives in

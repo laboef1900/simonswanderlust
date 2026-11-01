@@ -10,6 +10,16 @@ Use the existing EasyMDE/CodeMirror 5 editor, gallery fence grammar, per-locale
 images metadata and caption-only AI configuration. No new editor framework,
 server endpoint, content schema, external service, publishing or deployment.
 
+**Amended 2026-10-28 (#354):** the owner-approved
+[gallery grammar contract](2026-10-27-gallery-grammar-agreement-design.md) replaces
+the local scanner with authenticated, nonpersisting server analysis. Complete
+rendered galleries include nested/tilde/info-argument/raw HTML forms, not only
+top-level backticks. Visual tools await exact-snapshot analysis, preserve wrappers
+and container prefixes, and offer localized retry without changing Markdown on
+failure. Raw editing stays available. The older no-endpoint scope above remains
+historical; the new bridge was explicitly approved separately.
+
+
 ## Interaction
 
 Complete top-level gallery fences display as inline photo previews in each locale's

@@ -1,15 +1,24 @@
+import { formatsFor, variantWidths } from '../src/variants.js';
+import { injectAuthoring } from './authoring-request.js';
+import { createUploadService } from '../src/upload-service.js';
+import { memoryUploadReceiptStore } from '../src/upload-receipts.js';
+import { idleBuildState } from './build-fixture.js';
+import { buildFailureMessage, type BuildTrigger } from '../src/build-state.js';
+import { TEST_TRUST, GATEWAY_TRUST } from './trusted-proxy-fixture.js';
 import { publishBody, publishTokens } from './publish-tokens.js';
 import { describe, expect, it, beforeEach, vi } from 'vitest';
-import { mkdtemp, mkdir, readdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readdir, rm, writeFile, symlink, rename } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
+import { setImmediate as nextTurn } from 'node:timers/promises';
 import type { BackupState, DbBackup } from '../src/backup.js';
 import sharp from 'sharp';
 import FormData from 'form-data';
 import { buildServer, type ServerConfig } from '../src/server.js';
 import { rehostImage } from '../src/wp-images.js';
-import { rehostKey, ImportTooLargeError, ImportInsufficientSpaceError, type ImportDeps, type ImportProgress, type ImportSummary, type PreparedImport } from '../src/wp-import.js';
+import { contentHashKey } from '../src/storage.js';
+import { prepareImport, rehostKey, ImportTooLargeError, ImportInsufficientSpaceError, type ImportDeps, type ImportProgress, type ImportSummary, type PreparedImport } from '../src/wp-import.js';
 import { createImportRunner, memoryImportJobStore, type ImportRunner } from '../src/import-jobs.js';
 import { defaultSettings, validate } from '../src/settings.js';
 import type { Settings, SettingsStore } from '../src/settings.js';
@@ -18,13 +27,25 @@ import { randomUUID } from 'node:crypto';
 import { memorySessionStore, type SessionStore } from '../src/sessions.js';
 import { memoryPostStore, type PostStore } from '../src/posts.js';
 import { memoryPageStore, type PageStore } from '../src/pages.js';
+import { memoryLanguageStore } from '../src/language.js';
+import { memoryNavigationStore } from '../src/navigation.js';
+import { DEFAULT_NAVIGATION } from '../../site/src/lib/navigation.js';
 import { memoryMediaStore, type MediaStore } from '../src/media-store.js';
-import { BacklogFullError, createEncodeQueue, type EncodeQueue } from '../src/encode-queue.js';
+import type { MediaImpact } from '../src/media-impact.js';
+import { createEncodeQueue, type EncodeQueue } from '../src/encode-queue.js';
 import { createWorkLock, type WorkLock } from '../src/work-lock.js';
 import { fixedWindowLimiter, accountLockoutLimiter } from '../src/rate-limit.js';
 import type { SiteBuilder, BuildOutcome } from '../src/build.js';
 import { memorySecretsStore, SecretsError } from '../src/secrets.js';
 import type { AiProvider, AiProviderKind } from '../src/ai-providers.js';
+import { memoryOnboardingStore, type OnboardingProgress, type OnboardingState } from '../src/onboarding.js';
+import type { ReleaseManifestV1 } from '../../site/src/lib/publication-manifest.js';
+import { memorySiteIdentityStore } from '../src/site-identity.js';
+import { normalizeIdentityUpload } from '../src/site-identity-assets.js';
+import * as disk from '../src/disk.js';
+import * as bodyRenderer from '../../site/src/lib/render-markdown.js';
+import * as gallerySource from '../../site/src/lib/gallery-source.js';
+import * as altAudit from '../src/alt-audit.js';
 
 let dir: string;
 beforeEach(async () => {
@@ -42,12 +63,13 @@ function fakeStore(init: Settings = SETTINGS): SettingsStore {
   return { get: () => ({ ...cur }), update: (p) => { cur = validate({ ...cur, ...p }); return { ...cur }; } };
 }
 
-function stubBuilder(outcome: BuildOutcome = { ok: true, release: 'r1' }) {
-  const calls: number[] = [];
+function stubBuilder(outcome: BuildOutcome = { ok: true, attemptId: 'r1', release: 'r1' }) {
+  const calls: BuildTrigger[] = [];
   return {
     calls,
     builder: {
-      build: async () => { calls.push(1); return outcome; },
+      ...idleBuildState,
+      build: async (trigger: BuildTrigger) => { calls.push(trigger); return outcome; },
       hasRelease: () => true,
       quiesce: async () => {},
     } satisfies SiteBuilder,
@@ -74,14 +96,14 @@ function stubBackup(dir = '/tmp/none', running = false) {
  * the real encoder is covered in encode-queue.test.ts, and a 19s-per-frame
  * pipeline has no place in the route suite.
  */
-function stubQueue(opts: { full?: boolean } = {}) {
+function stubQueue() {
   const enqueued: string[] = [];
   const queue: EncodeQueue = {
-    enqueue: (key) => {
-      if (opts.full) throw new BacklogFullError();
-      enqueued.push(key);
-    },
+    withAdmission: (_key, operation) => operation(),
+    enqueue: (key) => { enqueued.push(key); },
     isActive: (key) => enqueued.includes(key),
+    availableCapacity: () => 100,
+    onCapacity: () => () => {},
     recover: async () => 0,
     drain: async () => {},
     quiesce: async () => {},
@@ -98,16 +120,21 @@ interface Built {
 function build(extra: Partial<ServerConfig> = {}): Built {
   const users = (extra.users as UserStore) ?? memoryUserStore();
   const sessions = (extra.sessions as SessionStore) ?? memorySessionStore();
-  const posts = (extra.posts as PostStore) ?? memoryPostStore();
+  const posts = (extra.posts as PostStore) ?? memoryPostStore(extra.language ? { language: extra.language } : undefined);
   const media = (extra.media as MediaStore) ?? memoryMediaStore({ baseUrl: 'https://img.simonswanderlust.com' });
   const q = stubQueue();
   const encodeQueue = (extra.encodeQueue as EncodeQueue) ?? q.queue;
   const importJobs = (extra.importJobs as ImportRunner) ?? createImportRunner({ store: memoryImportJobStore(), log: () => {} });
-  const pages = (extra.pages as PageStore) ?? memoryPageStore();
+  const pages = (extra.pages as PageStore) ?? memoryPageStore(extra.language ?? posts.language);
+  const settings = extra.settings ?? fakeStore();
+  const uploads = createUploadService({ receipts: memoryUploadReceiptStore(), media, queue: encodeQueue,
+    storageDir: dir, baseUrl: 'https://img.simonswanderlust.com', settings,
+    isWritable: () => extra.isWritable?.() !== false });
   const built = buildServer({
+    trustProxy: TEST_TRUST,
     storageDir: dir, baseUrl: 'https://img.simonswanderlust.com',
-    users, sessions, settings: fakeStore(), secrets: memorySecretsStore(),
-    posts, media, encodeQueue, importJobs, pages,
+    users, sessions, settings, secrets: memorySecretsStore(),
+    posts, media, encodeQueue, importJobs, pages, uploads,
     imgHost: 'img.simonswanderlust.com', siteDir: join(dir, 'site'),
     builder: (extra.builder as SiteBuilder) ?? stubBuilder().builder,
     backupDir: dir + '/backup',
@@ -118,12 +145,92 @@ function build(extra: Partial<ServerConfig> = {}): Built {
   return { app: built, users, sessions, posts, pages, media, enqueued: q.enqueued, importJobs };
 }
 
+/** Route-only ready fixture: readiness requires the complete nonempty variant set. */
+async function markReady(media: MediaStore, key: string) {
+  const item = await media.get(key);
+  if (!item) throw new Error('missing upload fixture');
+  for (const width of variantWidths(item.width)) for (const format of formatsFor(item.format)) {
+    await writeFile(join(dir, `${key}-${width}.${format}`), 'fixture-variant');
+  }
+  await media.setStatus(key, 'ready');
+}
+
 // Seed a user and return a Cookie header value for an authenticated session.
 async function authed(b: Built, opts: { isAdmin?: boolean; username?: string } = {}) {
   const u = await b.users.create({ username: opts.username ?? 'simon', password: 'password123456', isAdmin: opts.isAdmin ?? true });
   const token = await b.sessions.create(u.id, 60_000);
   return { user: u, cookie: { sid: token } };
 }
+
+describe('Postgres navigation API boundary', () => {
+  it('requires admin, validates URLs, detects stale tokens and builds once after a valid save', async () => {
+    const language = memoryLanguageStore();
+    const navigation = memoryNavigationStore(language);
+    const s = stubBuilder();
+    const b = build({ language, navigation, builder: s.builder });
+    try {
+      const admin = await authed(b);
+      const author = await authed(b, { isAdmin: false, username: 'author' });
+      for (const method of ['GET', 'PUT'] as const) {
+        expect((await b.app.inject({ method, url: '/settings/navigation' })).statusCode).toBe(401);
+        expect((await b.app.inject({ method, url: '/settings/navigation', cookies: author.cookie })).statusCode).toBe(403);
+      }
+      const loaded = await b.app.inject({ url: '/settings/navigation', cookies: admin.cookie });
+      expect(loaded.headers['cache-control']).toBe('no-store');
+      expect(loaded.json().config).toEqual(DEFAULT_NAVIGATION);
+      const updatedAt = loaded.json().updatedAt;
+      for (const href of ['javascript:alert(1)', 'data:text/html,x', '//evil.test']) {
+        const bad = await b.app.inject({ method: 'PUT', url: '/settings/navigation', cookies: admin.cookie,
+          payload: { updatedAt, config: { ...DEFAULT_NAVIGATION, header: [{ kind: 'external', href: { de: href }, label: { de: 'Link' } }] } } });
+        expect(bad.statusCode).toBe(400);
+      }
+      expect(s.calls).toHaveLength(0);
+      const payload = { updatedAt, config: { ...DEFAULT_NAVIGATION, legal: [{ kind: 'page', target: 'privacy' }] } };
+      const saved = await b.app.inject({ method: 'PUT', url: '/settings/navigation', cookies: admin.cookie, payload });
+      expect(saved.statusCode).toBe(200);
+      expect(saved.json().saved.config.legal).toEqual(payload.config.legal);
+      expect(saved.json().saved.updatedAt).not.toBe(updatedAt);
+      expect(s.calls).toHaveLength(1);
+      expect((await b.app.inject({ method: 'PUT', url: '/settings/navigation', cookies: admin.cookie, payload })).statusCode).toBe(409);
+      expect(s.calls).toHaveLength(1);
+    } finally { await b.app.close(); }
+  });
+  it('acknowledges committed navigation with a sanitized failed-build report', async () => {
+    const language = memoryLanguageStore();
+    const navigation = memoryNavigationStore(language);
+    const builder = stubBuilder({ ok: false, attemptId: '1793300000000-1-1234', liveRelease: '1793290000000-1-1234', code: 'build_failed', error: 'private infrastructure detail' }).builder;
+    const b = build({ language, navigation, builder });
+    try {
+      const { cookie } = await authed(b);
+      const updatedAt = (await navigation.get()).updatedAt.toISOString();
+      const saved = await b.app.inject({ method: 'PUT', url: '/settings/navigation', cookies: cookie,
+        payload: { updatedAt, config: { ...DEFAULT_NAVIGATION, footer: [] } } });
+      expect(saved.statusCode).toBe(200);
+      expect(saved.json()).toMatchObject({ saved: { config: { footer: [] } },
+        build: { ok: false, attemptId: '1793300000000-1-1234', liveRelease: '1793290000000-1-1234', code: 'build_failed' } });
+      expect(saved.json()).not.toHaveProperty('persisted');
+      expect(saved.body).not.toContain('private infrastructure detail');
+      expect((await navigation.get()).updatedAt.toISOString()).toBe(saved.json().saved.updatedAt);
+      expect((await navigation.get()).config.footer).toEqual([]);
+    } finally { await b.app.close(); }
+  });
+  it('keeps committed navigation and leaks nothing when the builder throws', async () => {
+    const language = memoryLanguageStore();
+    const navigation = memoryNavigationStore(language);
+    const builder = stubBuilder().builder;
+    builder.build = async () => { throw new Error('private infrastructure detail'); };
+    const b = build({ language, navigation, builder });
+    try {
+      const { cookie } = await authed(b);
+      const updatedAt = (await navigation.get()).updatedAt.toISOString();
+      const saved = await b.app.inject({ method: 'PUT', url: '/settings/navigation', cookies: cookie,
+        payload: { updatedAt, config: { ...DEFAULT_NAVIGATION, footer: [] } } });
+      expect(saved.statusCode).toBe(500);
+      expect(saved.body).not.toContain('infrastructure');
+      expect((await navigation.get()).config.footer).toEqual([]);
+    } finally { await b.app.close(); }
+  });
+});
 
 async function jpeg(): Promise<Buffer> {
   return sharp({ create: { width: 1000, height: 800, channels: 3, background: '#444' } }).jpeg().toBuffer();
@@ -155,18 +262,170 @@ async function upload(
   if (fields.folder !== undefined) form.append('folder', fields.folder);
   if (fields.title !== undefined) form.append('title', fields.title);
   form.append('file', img ?? (await jpeg()), { filename: fields.filename ?? 't.jpg', contentType: 'image/jpeg' });
-  return b.app.inject({
-    method: 'POST', url: '/upload',
-    headers: { ...form.getHeaders() }, cookies: cookie, payload: form,
-  });
+  return injectAuthoring(b.app, { method: 'POST', url: '/upload', headers: { ...form.getHeaders() }, cookies: cookie, payload: form, });
 }
+
+describe('POST /gallery/analyze', () => {
+  const url = '/gallery/analyze';
+
+  it('requires a live session and does not cache an authentication refusal', async () => {
+    const b = build();
+    const { cookie } = await authed(b, { isAdmin: false });
+    await b.sessions.destroy(cookie.sid);
+    try {
+      for (const cookies of [undefined, cookie]) {
+        const res = await b.app.inject({ method: 'POST', url, cookies, payload: { bodyMarkdown: '' } });
+        expect(res.statusCode).toBe(401);
+        expect(res.headers['cache-control']).toBe('no-store');
+      }
+    } finally { await b.app.close(); }
+  });
+
+  it('lets an author analyze unsaved nested and raw HTML galleries with exact snapshot ranges', async () => {
+    const b = build();
+    const { cookie } = await authed(b, { isAdmin: false });
+    const bodyMarkdown = [
+      '🧭 Unsaved story',
+      '',
+      '> ~~~gallery extra',
+      '> https://images.example/photo | alt="A view"',
+      '> ~~~',
+      '',
+      '<pre><code class="language-gallery">https://images.example/raw | alt="A &amp; B"</code></pre>',
+      '',
+      '````text',
+      '```gallery',
+      'https://images.example/example',
+      '```',
+      '````',
+    ].join('\r\n');
+    try {
+      const expected = await gallerySource.analyzeGallerySource(bodyMarkdown);
+      const res = await b.app.inject({ method: 'POST', url, cookies: cookie, payload: { bodyMarkdown } });
+      expect(res.statusCode).toBe(200);
+      expect(res.headers['cache-control']).toBe('no-store');
+      expect(res.json()).toEqual(expected);
+      expect(res.json().bodyMarkdown).toBe(bodyMarkdown);
+      const galleries = expected.blocks.filter((block) => block.isGallery);
+      expect(galleries).toHaveLength(2);
+      expect(galleries.map((block) => block.kind)).toEqual(['fence', 'html']);
+      expect(bodyMarkdown.slice(galleries[0]!.start, galleries[0]!.end)).toContain('~~~gallery extra');
+      expect(galleries[1]!.content).toContain('alt="A & B"');
+      expect(expected.blocks.some((block) => !block.isGallery && block.content.includes('/example'))).toBe(true);
+    } finally { await b.app.close(); }
+  });
+
+  it('accepts an empty string without inventing a gallery', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    try {
+      const res = await b.app.inject({ method: 'POST', url, cookies: cookie, payload: { bodyMarkdown: '' } });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ bodyMarkdown: '', blocks: [] });
+    } finally { await b.app.close(); }
+  });
+
+  it.each([null, [], {}, { bodyMarkdown: null }, { bodyMarkdown: 7 }, { bodyMarkdown: [] }])(
+    'rejects an invalid JSON shape without coercion: %j', async (payload) => {
+      const b = build();
+      const { cookie } = await authed(b);
+      try {
+        const res = await b.app.inject({
+          method: 'POST', url, cookies: cookie,
+          headers: { 'content-type': 'application/json' }, payload: JSON.stringify(payload),
+        });
+        expect(res.statusCode).toBe(400);
+        expect(res.headers['cache-control']).toBe('no-store');
+        expect(res.json()).toEqual({ error: 'bodyMarkdown must be a string' });
+      } finally { await b.app.close(); }
+    },
+  );
+
+  it('keeps malformed JSON at 400 and the existing post JSON byte ceiling at 413', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    try {
+      const malformed = await b.app.inject({
+        method: 'POST', url, cookies: cookie,
+        headers: { 'content-type': 'application/json' }, payload: '{"bodyMarkdown":',
+      });
+      expect(malformed.statusCode).toBe(400);
+      expect(malformed.headers['cache-control']).toBe('no-store');
+      // Less than 1 MiB of UTF-16 characters, more than 1 MiB of JSON bytes.
+      const payload = { bodyMarkdown: 'é'.repeat(524_288) };
+      const res = await b.app.inject({ method: 'POST', url, cookies: cookie, payload });
+      const post = await b.app.inject({ method: 'POST', url: '/posts', cookies: cookie, payload });
+      expect(res.statusCode).toBe(413);
+      expect(post.statusCode).toBe(413);
+      expect(res.headers['cache-control']).toBe('no-store');
+    } finally { await b.app.close(); }
+  });
+
+  it('analyzes supplied source without content-store access, publication, network or source logging', async () => {
+    const settings = fakeStore();
+    const secrets = memorySecretsStore();
+    const { builder, calls } = stubBuilder();
+    const b = build({ settings, secrets, builder });
+    const { cookie } = await authed(b, { isAdmin: false });
+    const unused = [
+      vi.spyOn(b.posts, 'get'), vi.spyOn(b.posts, 'list'),
+      vi.spyOn(b.posts, 'upsertDraft'), vi.spyOn(b.posts, 'publish'),
+      vi.spyOn(b.posts, 'listRevisions'), vi.spyOn(b.pages, 'get'),
+      vi.spyOn(b.pages, 'save'), vi.spyOn(b.media, 'get'),
+      vi.spyOn(settings, 'get'), vi.spyOn(settings, 'update'),
+    ];
+    const fetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network forbidden'));
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const before = await readdir(dir);
+      const res = await b.app.inject({
+        method: 'POST', url, cookies: cookie,
+        payload: { bodyMarkdown: '~~~gallery\nhttps://private.example/unsaved | alt="Private source"\n~~~' },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().blocks.filter((block: { isGallery: boolean }) => block.isGallery)).toHaveLength(1);
+      for (const spy of [...unused, fetch, log, warn, error]) expect(spy).not.toHaveBeenCalled();
+      expect(calls).toEqual([]);
+      expect(b.enqueued).toEqual([]);
+      expect(await readdir(dir)).toEqual(before);
+    } finally {
+      for (const spy of [...unused, fetch, log, warn, error]) spy.mockRestore();
+      await b.app.close();
+    }
+  });
+
+  it('sanitizes parser failures without leaking source into the error log', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const source = 'PRIVATE UNSAVED SOURCE';
+    const analyze = vi.spyOn(gallerySource, 'analyzeGallerySource')
+      .mockRejectedValueOnce(new Error(`parser diagnostic: ${source}`));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await b.app.inject({ method: 'POST', url, cookies: cookie, payload: { bodyMarkdown: source } });
+      expect(res.statusCode).toBe(500);
+      expect(res.headers['cache-control']).toBe('no-store');
+      expect(res.json()).toEqual({ error: 'internal server error' });
+      expect(error).toHaveBeenCalledTimes(1);
+      expect(error.mock.calls.flat().map(String).join(' ')).not.toContain(source);
+      expect(error.mock.calls[0]![1]).toBeInstanceOf(Error);
+      expect((error.mock.calls[0]![1] as Error).message).toBe('Gallery source analysis failed');
+    } finally {
+      analyze.mockRestore();
+      error.mockRestore();
+      await b.app.close();
+    }
+  });
+});
 
 describe('POST /upload', () => {
   it('401 without auth', async () => {
     const form = new FormData();
     form.append('key', 'trips/t/hero');
     form.append('file', await jpeg(), { filename: 't.jpg', contentType: 'image/jpeg' });
-    const res = await build().app.inject({ method: 'POST', url: '/upload', headers: form.getHeaders(), payload: form });
+    const res = await injectAuthoring(build().app, { method: 'POST', url: '/upload', headers: form.getHeaders(), payload: form });
     expect(res.statusCode).toBe(401);
   });
 
@@ -176,10 +435,7 @@ describe('POST /upload', () => {
     const form = new FormData();
     form.append('key', 'trips/t/hero');
     form.append('file', Buffer.from('not an image'), { filename: 't.txt', contentType: 'text/plain' });
-    const res = await b.app.inject({
-      method: 'POST', url: '/upload',
-      headers: { ...form.getHeaders() }, cookies: cookie, payload: form,
-    });
+    const res = await injectAuthoring(b.app, { method: 'POST', url: '/upload', headers: { ...form.getHeaders() }, cookies: cookie, payload: form, });
     expect(res.statusCode).toBe(400);
   });
 
@@ -190,10 +446,7 @@ describe('POST /upload', () => {
     form.append('key', 'trips/bucharest-2024/hero');
     form.append('alt', 'Old town');
     form.append('file', await jpeg(), { filename: 't.jpg', contentType: 'image/jpeg' });
-    const res = await b.app.inject({
-      method: 'POST', url: '/upload',
-      headers: { ...form.getHeaders() }, cookies: cookie, payload: form,
-    });
+    const res = await injectAuthoring(b.app, { method: 'POST', url: '/upload', headers: { ...form.getHeaders() }, cookies: cookie, payload: form, });
     expect(res.statusCode).toBe(200);
     const body = res.json();
     // The key is content-hash versioned server-side (issue #26).
@@ -247,7 +500,7 @@ describe('POST /upload', () => {
     const img = await jpeg();
     const first = await upload(b, cookie, { key: 'trips/dup/hero' }, img);
     const key = first.json().key as string;
-    await b.media.setStatus(key, 'ready');
+    await markReady(b.media, key);
     // Still in the root: the drop target applies.
     const filled = await upload(b, cookie, { key: 'trips/dup/hero', folder: 'Iceland/South' }, img);
     expect(filled.json()).toMatchObject({ duplicate: true, folder: 'Iceland/South' });
@@ -256,23 +509,45 @@ describe('POST /upload', () => {
     const kept = await upload(b, cookie, { key: 'trips/dup/hero', folder: 'Norway' }, img);
     expect(kept.json()).toMatchObject({ duplicate: true, folder: 'Iceland/South' });
     expect((await b.media.get(key))?.folder).toBe('Iceland/South');
-    // Same while the first upload is still encoding.
+    // Same while the first upload is still encoding — and the queued job is not
+    // queued a second time (#348's re-enqueue covers only an absent key).
     await b.media.setStatus(key, 'processing');
     const busy = await upload(b, cookie, { key: 'trips/dup/hero', folder: 'Norway' }, img);
     expect(busy.json()).toMatchObject({ duplicate: true, status: 'processing', folder: 'Iceland/South' });
+    expect(b.enqueued).toEqual([key]);
   });
 
-  it('a duplicate reports the folder that was PERSISTED, not the one a failed best-effort patch asked for', async () => {
+  it.each([
+    { status: 'failed' as const, storedFolder: 'Iceland/South', dropFolder: '', expected: 'Iceland/South' },
+    { status: 'missing' as const, storedFolder: 'Iceland/South', dropFolder: 'Norway', expected: 'Iceland/South' },
+    { status: 'failed' as const, storedFolder: '', dropFolder: 'Norway', expected: 'Norway' },
+  ])('re-uploading a $status photo keeps its curated folder or fills the root', async ({ status, storedFolder, dropFolder, expected }) => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const img = await jpeg();
+    const first = await upload(b, cookie, { key: 'trips/recover/hero', folder: storedFolder }, img);
+    const key = first.json().key as string;
+    await b.media.setStatus(key, status);
+    const recovered = await upload(b, cookie, { key: 'trips/recover/hero', folder: dropFolder }, img);
+    expect(recovered.statusCode).toBe(200);
+    expect(recovered.json()).toMatchObject({ key, status: 'processing', folder: expected });
+    expect((await b.media.get(key))?.folder).toBe(expected);
+  });
+
+  it('a failed duplicate metadata transaction never claims acceptance or the requested folder', async () => {
     const media = memoryMediaStore({ baseUrl: 'https://img.simonswanderlust.com' });
     const failing: MediaStore = { ...media, patch: async () => { throw new Error('db down'); } };
     const b = build({ media: failing });
     const { cookie } = await authed(b);
     const img = await jpeg();
     const key = (await upload(b, cookie, { key: 'trips/dup/hero' }, img)).json().key as string;
-    await media.setStatus(key, 'ready');
-    const res = await upload(b, cookie, { key: 'trips/dup/hero', folder: 'Iceland/South' }, img);
-    expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ duplicate: true, folder: '' });
+    await markReady(media, key);
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await upload(b, cookie, { key: 'trips/dup/hero', folder: 'Iceland/South' }, img);
+      expect(res.statusCode).toBe(500);
+      expect((await media.get(key))?.folder).toBe('');
+    } finally { log.mockRestore(); }
   });
 
   it('serves stored variants with a long immutable cache header', async () => {
@@ -298,7 +573,9 @@ describe('POST /upload', () => {
     expect(existsSync(join(dir, `${key}-orig.jpg`))).toBe(true);
     const img = { host: 'img.simonswanderlust.com' };
     // The lossy variant is public...
-    expect((await b.app.inject({ method: 'GET', url: `/${key}-640.webp`, headers: img })).statusCode).toBe(200);
+    const variant = await b.app.inject({ method: 'GET', url: `/${key}-640.webp`, headers: img });
+    expect(variant.statusCode).toBe(200);
+    expect(variant.headers['access-control-allow-origin']).toBe('*');
     // ...but the full-resolution original is not downloadable.
     expect((await b.app.inject({ method: 'GET', url: `/${key}-orig.jpg`, headers: img })).statusCode).toBe(404);
     // ...and neither is a crash-leftover temp of it (#118: storage.ts writes
@@ -307,6 +584,18 @@ describe('POST /upload', () => {
     await writeFile(join(dir, `${key}-1280.webp.part-0a1b2c3d`), 'half a variant');
     expect((await b.app.inject({ method: 'GET', url: `/${key}-orig.jpg.part-0a1b2c3d`, headers: img })).statusCode).toBe(404);
     expect((await b.app.inject({ method: 'GET', url: `/${key}-1280.webp.part-0a1b2c3d`, headers: img })).statusCode).toBe(404);
+    for (const suffix of ['-orig.jpg', '-orig.jpg.part-0a1b2c3d', '-1280.webp.part-0a1b2c3d']) {
+      const privateBytes = readFileSync(join(dir, `${key}${suffix}`));
+      for (const prefix of ['//', '/./', '/x/../', '/x/%2e%2e/']) {
+        const url = `${prefix}${key}${suffix}`;
+        const denied = await b.app.inject({ method: 'GET', url, headers: img });
+        // Static 10 rejects ambiguous path syntax with 403 before allowedPath;
+        // canonical private files still 404 above. Either refusal protects the
+        // boundary, but a redirect, success or server error must never pass.
+        expect([403, 404], url).toContain(denied.statusCode);
+        expect(denied.rawPayload.includes(privateBytes), url).toBe(false);
+      }
+    }
   });
 
   it('returns immediately with status "processing" and enqueues the encode', async () => {
@@ -375,11 +664,211 @@ describe('POST /upload', () => {
     expect(res.json().key).toMatch(/^library\/\d{4}\/l1002345-[0-9a-f]{8}$/);
   });
 
-  it('429s when the encode backlog is full', async () => {
-    const b = build({ encodeQueue: stubQueue({ full: true }).queue });
+  /**
+   * #348: a REAL encode queue at its backlog limit — its one slot encoding and
+   * its one backlog slot taken by two fillers, both parked behind a held
+   * exclusive lock (a "build") — so the next enqueue is a genuine
+   * BacklogFullError. `release()` lets the queue drain with real sharp encodes.
+   * `wrap` decorates the store the ROUTES see; the queue writes the inner one.
+   */
+  async function buildFullQueue(wrap: (m: MediaStore) => MediaStore = (m) => m) {
+    const inner = memoryMediaStore({ baseUrl: 'https://img.simonswanderlust.com' });
+    const lock = createWorkLock();
+    const gate = Promise.withResolvers<void>();
+    const held = lock.runExclusive(() => gate.promise);
+    const queue = createEncodeQueue({ store: inner, storageDir: dir, lock, concurrency: 1, maxBacklog: 1, log: () => {} });
+    const b = build({ media: wrap(inner), encodeQueue: queue });
     const { cookie } = await authed(b);
-    const res = await upload(b, cookie, { key: 'trips/full/hero' });
+    for (const background of ['#a11', '#1a1']) {
+      const filler = await sharp({ create: { width: 64, height: 48, channels: 3, background } }).jpeg().toBuffer();
+      expect((await upload(b, cookie, { key: 'trips/filler/photo' }, filler)).statusCode).toBe(200);
+    }
+    expect(queue.stats()).toEqual({ pending: 1, running: 1 });
+    const img = await jpeg();
+    const key = contentHashKey('trips/full/hero', img, SETTINGS);
+    const release = async () => { gate.resolve(); await held; await queue.idle(); };
+    const retry = () => b.app.inject({ method: 'POST', url: '/media/retry', cookies: cookie, payload: { keys: [key] } });
+    return { ...b, media: inner, queue, cookie, img, key, release, retry };
+  }
+
+  it('a 429 from a full backlog leaves a recoverable failed row, and a re-send after the drain encodes to ready', async () => {
+    const b = await buildFullQueue();
+    const form = { key: 'trips/full/hero', folder: 'Iceland', title: 'Glacier' };
+    const res = await upload(b, b.cookie, form, b.img);
     expect(res.statusCode).toBe(429);
+    // Not `processing` with nothing queued: retryable, deletable, and the
+    // original plus the request's metadata are kept for the recovery.
+    expect(await b.media.get(b.key)).toMatchObject({ status: 'failed', error: 'queue_full', folder: 'Iceland', title: 'Glacier' });
+    expect(b.queue.isActive(b.key)).toBe(false);
+    expect(existsSync(join(dir, `${b.key}-orig.jpg`))).toBe(true);
+
+    // Still full: the client's retry (same form) is refused again — never a false success.
+    expect((await upload(b, b.cookie, form, b.img)).statusCode).toBe(429);
+    expect(await b.media.get(b.key)).toMatchObject({ status: 'failed', error: 'queue_full' });
+
+    await b.release();
+    const again = await upload(b, b.cookie, form, b.img);
+    expect(again.statusCode).toBe(200);
+    expect(again.json()).toMatchObject({ key: b.key, status: 'processing' });
+    expect(again.json().duplicate).toBe(true);
+    expect(b.queue.isActive(b.key)).toBe(true);
+    await b.queue.idle();
+    expect(await b.media.get(b.key)).toMatchObject({ status: 'ready', error: null, folder: 'Iceland', title: 'Glacier' });
+    expect(existsSync(join(dir, `${b.key}-640.webp`))).toBe(true);
+  });
+
+  it.each([
+    ['failed', 'encode_failed'],
+    ['missing', null],
+  ] as const)('a 429 re-send of a %s row restores its status and error; the re-send after the drain encodes it', async (status, error) => {
+    const b = await buildFullQueue();
+    expect((await upload(b, b.cookie, { key: 'trips/full/hero' }, b.img)).statusCode).toBe(429);
+    await b.media.setStatus(b.key, status, error ?? undefined);
+    const curated = {
+      folder: 'Iceland/South', title: 'Glacier',
+      alt: { de: 'Gletscher', en: 'Glacier' },
+      caption: { de: 'Am Morgen', en: 'At dawn' }, tags: ['ice'],
+    };
+    await b.media.patch(b.key, curated);
+    const form = { key: 'trips/full/hero', folder: 'Norway' };
+
+    expect((await upload(b, b.cookie, form, b.img)).statusCode).toBe(429);
+    expect(await b.media.get(b.key)).toMatchObject({ ...curated, status, error });
+    expect(b.queue.isActive(b.key)).toBe(false);
+
+    await b.release();
+    const again = await upload(b, b.cookie, form, b.img);
+    expect(again.statusCode).toBe(200);
+    expect(again.json().duplicate).toBeUndefined();
+    expect(again.json()).toMatchObject({ key: b.key, status: 'processing', folder: curated.folder });
+    await b.queue.idle();
+    expect(await b.media.get(b.key)).toMatchObject({ ...curated, status: 'ready', error: null });
+  });
+
+  it('a stranded processing row the queue does not hold is settled on a refused re-send and enqueued on a later one', async () => {
+    const b = await buildFullQueue();
+    expect((await upload(b, b.cookie, { key: 'trips/full/hero' }, b.img)).statusCode).toBe(429);
+    // The state a pre-#348 429 (or a crash) left behind: `processing`, nothing
+    // queued — here without even the original on disk.
+    const strand = async () => {
+      await b.media.setStatus(b.key, 'processing');
+      await rm(join(dir, `${b.key}-orig.jpg`));
+    };
+    await strand();
+
+    // Still full: an honest 429 that leaves no unqueued `processing` row; the
+    // original is back, so the failed row is recoverable.
+    expect((await upload(b, b.cookie, { key: 'trips/full/hero' }, b.img)).statusCode).toBe(429);
+    expect(await b.media.get(b.key)).toMatchObject({ status: 'failed', error: 'queue_full' });
+    expect(b.queue.isActive(b.key)).toBe(false);
+    expect(existsSync(join(dir, `${b.key}-orig.jpg`))).toBe(true);
+
+    await b.release();
+    await strand();
+    const again = await upload(b, b.cookie, { key: 'trips/full/hero' }, b.img);
+    expect(again.statusCode).toBe(200);
+    expect(again.json()).toMatchObject({ key: b.key, status: 'processing', duplicate: true });
+    expect(b.queue.isActive(b.key)).toBe(true);
+    await b.queue.idle();
+    expect(await b.media.get(b.key)).toMatchObject({ status: 'ready', error: null });
+    expect(existsSync(join(dir, `${b.key}-orig.jpg`))).toBe(true);
+  });
+
+  it('POST /media/retry recovers a queue_full row once the backlog drains, and keeps it failed while full', async () => {
+    const b = await buildFullQueue();
+    expect((await upload(b, b.cookie, { key: 'trips/full/hero' }, b.img)).statusCode).toBe(429);
+    const full = await b.retry();
+    expect(full.statusCode).toBe(429);
+    expect(full.json()).toMatchObject({ queued: 0 });
+    expect(await b.media.get(b.key)).toMatchObject({ status: 'failed', error: 'queue_full' });
+
+    await b.release();
+    const res = await b.retry();
+    expect(res.json()).toEqual({ ok: true, queued: 1 });
+    await b.queue.idle();
+    expect(await b.media.get(b.key)).toMatchObject({ status: 'ready', error: null });
+  });
+
+  it.each(['upload', 'retry'] as const)('a pending refusal rollback excludes same-key %s admission until the row is settled', async (entry) => {
+    const reached = Promise.withResolvers<void>();
+    const landing = Promise.withResolvers<void>();
+    const b = await buildFullQueue((m) => ({
+      ...m,
+      setStatusIfProcessing: async (...args) => {
+        reached.resolve();
+        await landing.promise;
+        return m.setStatusIfProcessing(...args);
+      },
+    }));
+    const a = upload(b, b.cookie, { key: 'trips/full/hero', folder: 'Iceland/South', alt: 'Curated' }, b.img);
+    await reached.promise;
+    await b.release();
+    // Hold the second encode: checking only after ready missed the original race.
+    const encodeGate = Promise.withResolvers<void>();
+    // Occupy the queue's next job via its store read without replacing the encoder.
+    const get = b.media.get;
+    const encoding = Promise.withResolvers<void>();
+    b.media.get = async (key) => {
+      const row = await get(key);
+      if (key === b.key && b.queue.isActive(key)) {
+        encoding.resolve();
+        await encodeGate.promise;
+      }
+      return row;
+    };
+    const admission = Promise.withResolvers<void>();
+    const withAdmission = b.queue.withAdmission;
+    b.queue.withAdmission = (key, operation) => {
+      admission.resolve();
+      return withAdmission(key, operation);
+    };
+    const second = entry === 'upload'
+      ? upload(b, b.cookie, { key: 'trips/full/hero', folder: 'Norway', alt: 'Replacement' }, b.img)
+      : b.retry();
+    await admission.promise;
+    expect(b.queue.isActive(b.key)).toBe(false);
+    expect(await get(b.key)).toMatchObject({ status: 'processing' });
+    landing.resolve();
+    expect((await a).statusCode).toBe(429);
+    expect((await second).statusCode).toBe(200);
+    await encoding.promise;
+    expect(b.queue.isActive(b.key)).toBe(true);
+    expect(await get(b.key)).toMatchObject({
+      status: 'processing', error: null, folder: 'Iceland/South',
+      alt: { de: 'Curated', en: 'Curated' },
+    });
+    // This is the exact persisted state a crash must recover.
+    expect((await b.media.list({ status: 'processing' })).items.map((item) => item.key)).toContain(b.key);
+    encodeGate.resolve();
+    await b.queue.idle();
+    expect(await get(b.key)).toMatchObject({ status: 'ready', error: null });
+  });
+
+  it('repeated queue-refused orphan uploads preserve curated metadata before and after admission', async () => {
+    const b = await buildFullQueue();
+    await upload(b, b.cookie, { key: 'trips/full/hero' }, b.img);
+    await b.media.setStatus(b.key, 'processing');
+    const curated = {
+      folder: 'Iceland/South', title: 'Glacier',
+      alt: { de: 'Gletscher', en: 'Glacier' },
+      caption: { de: 'Am Morgen', en: 'At dawn' }, tags: ['ice'],
+    };
+    await b.media.patch(b.key, curated);
+    const before = await b.media.get(b.key);
+    const form = { key: 'trips/full/hero', folder: 'Norway', title: 'Replacement', alt: 'Replacement' };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      expect((await upload(b, b.cookie, form, b.img)).statusCode).toBe(429);
+      expect(await b.media.get(b.key)).toMatchObject({ ...curated, status: 'failed', error: 'queue_full' });
+    }
+    await b.release();
+    const accepted = await upload(b, b.cookie, form, b.img);
+    expect(accepted.statusCode).toBe(200);
+    expect(accepted.json()).toMatchObject({ duplicate: true, folder: curated.folder, status: 'processing' });
+    await b.queue.idle();
+    expect(await b.media.get(b.key)).toMatchObject({
+      ...curated, status: 'ready', error: null,
+      encoding: before?.encoding, uploadedAt: before?.uploadedAt, uploadedBy: before?.uploadedBy,
+    });
   });
 
   it('records EXIF-free uploads without lat/lng and stores the supplied folder/title', async () => {
@@ -412,7 +901,6 @@ describe('POST /upload', () => {
     const { cookie } = await authed(b);
     const deep = await upload(b, cookie, { key: Array.from({ length: 12 }, () => 'a').join('/') });
     expect(deep.statusCode).toBe(400);
-    expect(deep.json().error).toMatch(/path segments/);
     expect(existsSync(join(dir, 'a'))).toBe(false);
     const long = await upload(b, cookie, { key: 'a'.repeat(300) });
     expect(long.statusCode).toBe(400);
@@ -431,10 +919,7 @@ describe('POST /upload', () => {
     form.append('alt', 'a');
     form.append('file', await jpeg(), { filename: 'a.jpg', contentType: 'image/jpeg' });
     form.append('file', await jpeg(), { filename: 'b.jpg', contentType: 'image/jpeg' });
-    const res = await b.app.inject({
-      method: 'POST', url: '/upload',
-      headers: { ...form.getHeaders() }, cookies: cookie, payload: form,
-    });
+    const res = await injectAuthoring(b.app, { method: 'POST', url: '/upload', headers: { ...form.getHeaders() }, cookies: cookie, payload: form, });
     // @fastify/multipart raises FST_FILES_LIMIT, typed 413 by createError, from
     // inside req.parts() — before the handler ever sees the second file. A
     // handler-level 400 is therefore unreachable by construction.
@@ -448,10 +933,7 @@ describe('POST /upload', () => {
     form.append('key', 'trips/x/photo');
     form.append('alt', 'Old town');
     form.append('file', await jpeg(), { filename: 't.jpg', contentType: 'image/jpeg' });
-    const res = await b.app.inject({
-      method: 'POST', url: '/upload',
-      headers: { ...form.getHeaders() }, cookies: cookie, payload: form,
-    });
+    const res = await injectAuthoring(b.app, { method: 'POST', url: '/upload', headers: { ...form.getHeaders() }, cookies: cookie, payload: form, });
     expect(res.statusCode).toBe(200);
     expect(res.json().src).toMatch(
       /^https:\/\/img\.simonswanderlust\.com\/trips\/x\/photo-[0-9a-f]{8}$/,
@@ -541,7 +1023,7 @@ describe('media library', () => {
     const b = buildEncoding();
     const { cookie } = await authed(b);
     const { src } = await put(b, cookie, 'trips/used/hero');
-    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: draftUsing(src) });
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: draftUsing(src) });
     expect(created.statusCode).toBe(200);
     const res = await b.app.inject({ method: 'GET', url: '/media', cookies: cookie });
     expect(res.json().items[0].usedIn).toEqual([
@@ -553,16 +1035,198 @@ describe('media library', () => {
     const b = buildEncoding();
     const author = await authed(b, { isAdmin: false, username: 'author' });
     const { storedKey } = await put(b, author.cookie, 'trips/edit/hero');
+    const before = (await b.app.inject({ method: 'GET', url: `/media/items/${storedKey}`, cookies: author.cookie })).json();
     const res = await b.app.inject({
       method: 'PATCH', url: `/media/items/${storedKey}`, cookies: author.cookie,
       headers: { 'content-type': 'application/json' },
-      payload: { title: 'Sonnenaufgang', alt: { de: 'DE alt', en: 'EN alt' }, caption: { de: 'Tag 3' }, tags: ['island', 'island', ' '] },
+      payload: { conditional: { version: 1,
+        patch: { title: 'Sonnenaufgang', alt: { de: 'DE alt', en: 'EN alt' }, caption: { de: 'Tag 3' }, tags: ['island', 'island', ' '] },
+        expect: { title: before.title, alt: before.alt, caption: { de: before.caption.de }, tags: before.tags },
+      } },
     });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({
       title: 'Sonnenaufgang', alt: { de: 'DE alt', en: 'EN alt' }, caption: { de: 'Tag 3' },
-      tags: ['island'],
+      tags: ['island'], conditionalVersion: 1, uploadedBy: null,
     });
+  });
+
+  it('GET and PATCH expose only the approved author impact keys and retain amended AC4 whole-item redaction', async () => {
+    const b = build();
+    const author = await authed(b, { isAdmin: false, username: 'impact-author' });
+    const admin = await authed(b);
+    const photo = await b.media.upsert({ key: 'impact', status: 'ready', width: 800, height: 600, origBytes: 1,
+      alt: { de: 'DE', en: 'EN' }, caption: { de: 'Before', en: 'Same' }, uploadedBy: 'private-user',
+      exif: { takenAt: new Date('2025-01-01T10:00:00Z'), camera: 'Leica', lens: 'Summilux', lat: 1, lng: 2 } });
+    for (let n = 0; n < 3; n++) {
+      const input = draftUsing(photo.src);
+      for (const locale of ['de', 'en'] as const) {
+        input[locale].slug += '-' + n;
+        input[locale].bodyMarkdown = `\`\`\`gallery\n${photo.src} | 800x600\n\`\`\``;
+      }
+      const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', cookies: author.cookie, payload: input });
+      expect(created.statusCode).toBe(200);
+      if (n < 2) await b.posts.publish(created.json().translationKey, await publishTokens(b.posts, created.json().translationKey));
+    }
+    const get = await b.app.inject({ method: 'GET', url: '/media/items/impact', cookies: author.cookie });
+    const patch = await b.app.inject({ method: 'PATCH', url: '/media/items/impact', cookies: author.cookie,
+      payload: { conditional: { version: 1, patch: { caption: { de: 'After', en: 'Same' } }, expect: { caption: { de: 'Before', en: 'Same' } } } } });
+    for (const response of [get, patch]) {
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['cache-control']).toBe('no-store');
+      const body = response.json();
+      expect(body).not.toHaveProperty('livePending');
+      expect(body.uploadedBy).toBeNull();
+      expect(body.exif).toEqual({ takenAt: '2025-01-01T10:00:00.000Z', camera: 'Leica', lens: 'Summilux', lat: null, lng: null });
+      const impact = body.impact as MediaImpact;
+      expect(Object.keys(impact).sort()).toEqual(['availability', 'drafts', 'newerDrafts', 'published']);
+      if (impact.availability !== 'available') throw new Error('expected impact');
+      expect(impact.published).toHaveLength(2); expect(impact.drafts).toHaveLength(1); expect(impact.newerDrafts).toEqual([]);
+      for (const story of [...impact.published, ...impact.drafts]) {
+        expect(Object.keys(story).sort()).toEqual(['locales', 'title', 'translationKey']);
+        expect(Object.keys(story.locales).sort()).toEqual(['de', 'en']);
+        for (const locale of ['de', 'en'] as const) {
+          expect(Object.keys(story.locales[locale]).sort()).toEqual(['gallery', 'galleryCaptionFollowsLibrary', 'heroTitle', 'inline']);
+          // draftUsing references this photo as DE hero, but a different EN hero.
+          expect(story.locales[locale]).toEqual({ gallery: 1, galleryCaptionFollowsLibrary: 1, heroTitle: locale === 'de', inline: 0 });
+        }
+      }
+    }
+    expect(patch.json().conditionalVersion).toBe(1);
+    expect(patch.json().changedDescriptions).toEqual({ de: { alt: false, caption: true }, en: { alt: false, caption: false } });
+    expect((await b.app.inject({ method: 'GET', url: '/media/items/impact', cookies: admin.cookie })).json().livePending).toBeNull();
+    expect((await b.app.inject({ method: 'GET', url: '/publication/summary', cookies: author.cookie })).statusCode).toBe(403);
+  });
+
+  it.each(['about', 'contact'])('keeps %s-only references in deletion guards but out of story impact', async (key) => {
+    const b = build(); const { cookie } = await authed(b);
+    const photo = await b.media.upsert({ key: 'about-only', status: 'ready', width: 800, height: 600, origBytes: 1,
+      uploadedBy: null, exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null } });
+    const about = await b.pages.get(key);
+    await b.pages.save({ ...about, de: { ...about.de, bodyMarkdown: `\`\`\`gallery\n${photo.src} | 800x600\n\`\`\`` } });
+    const response = await b.app.inject({ method: 'GET', url: '/media/items/about-only', cookies: cookie });
+    expect(response.json().impact).toEqual({ availability: 'available', published: [], drafts: [], newerDrafts: [] });
+    expect(response.json().usedIn).toMatchObject([{ kind: 'page', key }]);
+    expect((await b.app.inject({ method: 'DELETE', url: '/media/items/about-only', cookies: cookie })).statusCode).toBe(409);
+  });
+
+  it('preserves this write and its delta when optional enrichment fails or another writer lands', async () => {
+    const s = stubBuilder(); const b = build({ builder: s.builder }); const { cookie } = await authed(b);
+    await b.media.upsert({ key: 'impact', status: 'ready', width: 800, height: 600, origBytes: 1,
+      uploadedBy: null, exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null } });
+    b.posts.mediaImpactCorpus = async () => {
+      await b.media.patch('impact', { caption: { de: 'later writer', en: 'later EN' } });
+      throw new Error('optional classification failed');
+    };
+    const response = await b.app.inject({ method: 'PATCH', url: '/media/items/impact', cookies: cookie,
+      payload: { conditional: { version: 1, patch: { caption: { de: 'mine' } }, expect: { caption: { de: '' } } } } });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ conditionalVersion: 1, caption: { de: 'mine', en: '' },
+      changedDescriptions: { de: { alt: false, caption: true }, en: { alt: false, caption: false } },
+      impact: { availability: 'unavailable' }, livePending: null });
+    expect(Object.keys(response.json().impact)).toEqual(['availability']);
+    expect((await b.media.get('impact'))?.caption).toEqual({ de: 'later writer', en: 'later EN' });
+    expect(s.calls).toEqual([]);
+  });
+
+  it('refreshes same-release Media pending content, clears only captured descriptions, and never rebuilds on save', async () => {
+    const builder = stubBuilder({ ok: false, attemptId: 'failed', code: 'internal', error: buildFailureMessage('internal') });
+    const b = build({ builder: builder.builder }); const { cookie } = await authed(b);
+    const photo = await b.media.upsert({ key: 'pending', status: 'ready', width: 800, height: 600, origBytes: 1,
+      alt: { de: 'DE', en: 'EN' }, caption: { de: 'Before', en: 'English' }, uploadedBy: null,
+      exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null } });
+    const input = draftUsing(photo.src);
+    for (const locale of ['de', 'en'] as const) input[locale].bodyMarkdown =
+      `\`\`\`gallery\n${photo.src} | 800x600\n${photo.src} | 800x600 | caption-override=""\n\`\`\``;
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', cookies: cookie, payload: input });
+    const tk = created.json().translationKey as string;
+    await b.posts.publish(tk, await publishTokens(b.posts, tk));
+    const fact = (await b.posts.publicationFacts())[0]!;
+    async function promote(stamp: string, caption: string) {
+      const manifest: ReleaseManifestV1 = { schema: 1, stamp, posts: (['de', 'en'] as const).map((locale) => ({
+        translationKey: tk, locale, slug: input[locale].slug, digest: fact.rowDigest[locale]!,
+        gallery: [{ src: photo.src, alt: locale === 'de' ? 'DE' : 'EN', caption: locale === 'de' ? caption : 'English' },
+          { src: photo.src, alt: locale === 'de' ? 'DE' : 'EN', caption: null }],
+      })) };
+      await mkdir(join(dir, 'site', 'manifests'), { recursive: true });
+      await mkdir(join(dir, 'site', 'releases', stamp), { recursive: true });
+      await writeFile(join(dir, 'site', 'manifests', `${stamp}.json`), JSON.stringify(manifest));
+      await symlink(join('releases', stamp), join(dir, 'site', 'next'));
+      await rename(join(dir, 'site', 'next'), join(dir, 'site', 'current'));
+    }
+    const get = async () => (await b.app.inject({ method: 'GET', url: '/media/items/pending', cookies: cookie })).json();
+    const summary = async () => (await b.app.inject({ method: 'GET', url: '/publication/summary', cookies: cookie })).json();
+    const patch = async (before: string, after: string) => b.app.inject({ method: 'PATCH', url: '/media/items/pending', cookies: cookie,
+      payload: { conditional: { version: 1, patch: { caption: { de: after } }, expect: { caption: { de: before } } } } });
+    await promote('1793000000000-1-0001', 'Before');
+    expect((await get()).livePending.de.caption).toBe(false);
+    expect((await patch('Before', '')).json().livePending).toEqual({ de: { alt: false, caption: true }, en: { alt: false, caption: false } });
+    expect((await summary()).galleryDescriptions).toEqual({ photos: 1, stories: 1 });
+    expect((await patch('', '')).json().changedDescriptions.de.caption).toBe(false);
+    await patch('', 'Before');
+    expect((await summary()).galleryDescriptions).toEqual({ photos: 0, stories: 0 });
+    await patch('Before', 'Captured');
+    expect(builder.calls).toEqual([]);
+    expect((await b.app.inject({ method: 'POST', url: '/rebuild', cookies: cookie })).json().ok).toBe(false);
+    // A failed build leaves current unchanged; its optional status cannot clear content differences.
+    expect((await get()).livePending.de.caption).toBe(true);
+    await patch('Captured', 'After capture');
+    await promote('1793000000001-1-0002', 'Captured');
+    expect((await get()).livePending.de.caption).toBe(true);
+    await promote('1793000000002-1-0003', 'After capture');
+    expect((await get()).livePending.de.caption).toBe(false);
+    expect((await summary()).galleryDescriptions).toEqual({ photos: 0, stories: 0 });
+    expect(builder.calls).toEqual(['rebuild']);
+  });
+
+  it('conditional media writes reject malformed and legacy envelopes without changing metadata or folders', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const before = await b.media.upsert({
+      key: 'conditional', status: 'ready', width: 8, height: 6, origBytes: 1, uploadedBy: null,
+      exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null },
+    });
+    const valid = { version: 1, patch: { title: 'new' }, expect: { title: '' } };
+    for (const payload of [
+      {}, { title: 'legacy' }, { conditional: valid, title: 'legacy' },
+      { conditional: { ...valid, version: 2 } },
+      { conditional: { ...valid, extra: true } },
+      { conditional: { version: 1, patch: { title: 'new' } } },
+      { conditional: { ...valid, expect: {} } },
+      { conditional: { ...valid, expect: { title: '', folder: '' } } },
+      { conditional: { ...valid, patch: { alt: { de: 'new' } }, expect: { alt: { en: '' } } } },
+      { conditional: { ...valid, patch: { title: 7 } } },
+      { conditional: { ...valid, patch: { folder: 'New/Folder', status: 'ready' }, expect: { folder: '' } } },
+      { conditional: { version: 1, patch: {}, expect: {} } },
+    ]) {
+      const response = await b.app.inject({ method: 'PATCH', url: '/media/items/conditional', cookies: cookie, payload });
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toEqual({ error: 'invalid_media_conditional' });
+      expect(await b.media.get('conditional')).toEqual(before);
+      expect(await b.media.folders()).toEqual([]);
+    }
+  });
+
+  it('conditional media conflict redacts current for authors, preserves admin visibility and distinguishes missing', async () => {
+    const b = build();
+    await b.media.upsert({
+      key: 'conditional', title: 'stored', status: 'ready', width: 8, height: 6, origBytes: 1, uploadedBy: 'u1',
+      exif: { takenAt: null, camera: null, lens: null, lat: 1.5, lng: 2.5 },
+    });
+    const author = await authed(b, { isAdmin: false, username: 'author' });
+    const admin = await authed(b);
+    const payload = { conditional: { version: 1, patch: { title: 'mine', folder: 'New/Folder' }, expect: { title: 'old', folder: '' } } };
+    for (const [cookies, isAdmin] of [[author.cookie, false], [admin.cookie, true]] as const) {
+      const response = await b.app.inject({ method: 'PATCH', url: '/media/items/conditional', cookies, payload });
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({ error: 'media_changed', current: {
+        title: 'stored', folder: '', uploadedBy: isAdmin ? 'u1' : null,
+        exif: { lat: isAdmin ? 1.5 : null, lng: isAdmin ? 2.5 : null },
+      } });
+    }
+    expect(await b.media.folders()).toEqual([]);
+    expect((await b.app.inject({ method: 'PATCH', url: '/media/items/missing', cookies: author.cookie, payload })).statusCode).toBe(404);
+    expect((await b.app.inject({ method: 'PATCH', url: '/media/items/conditional', payload })).statusCode).toBe(401);
   });
 
   it('DELETE /media/items/* is admin-only: 401 unauthenticated, 403 for authors', async () => {
@@ -596,7 +1260,7 @@ describe('media library', () => {
     const b = buildEncoding();
     const { cookie } = await authed(b);
     const { src, storedKey } = await put(b, cookie, 'trips/keep/hero');
-    await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: draftUsing(src) });
+    await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: draftUsing(src) });
     const res = await b.app.inject({ method: 'DELETE', url: `/media/items/${storedKey}`, cookies: cookie });
     expect(res.statusCode).toBe(409);
     expect(res.json().usedIn).toHaveLength(1);
@@ -607,7 +1271,7 @@ describe('media library', () => {
     const b = buildEncoding();
     const { cookie } = await authed(b);
     const { src, storedKey } = await put(b, cookie, 'trips/stranded/hero');
-    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: draftUsing(src) });
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: draftUsing(src) });
     expect(created.statusCode).toBe(200);
     // Simulate the pg half-pair: a crash between upsertDraft's two locale
     // INSERTs leaves a key that usageRows() sees but get() cannot pair.
@@ -630,14 +1294,12 @@ describe('media library', () => {
     const b = buildEncoding();
     const { cookie } = await authed(b);
     const { src, storedKey } = await put(b, cookie, 'trips/live/hero');
-    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: draftUsing(src) });
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: draftUsing(src) });
     const tk = created.json().translationKey;
     await b.posts.publish(tk, await publishTokens(b.posts, tk));
     // The working copy now points at a different photo; the snapshot still has `src`.
-    const swapped = await b.app.inject({
-      method: 'PUT', url: `/posts/${tk}`, headers: { 'content-type': 'application/json' }, cookies: cookie,
-      payload: { ...draftUsing('https://i/replacement'), status: 'published' },
-    });
+    const swapped = await injectAuthoring(b.app, { method: 'PUT', url: `/posts/${tk}`, headers: { 'content-type': 'application/json' }, cookies: cookie,
+    payload: { ...draftUsing('https://i/replacement'), status: 'published' }, });
     expect(swapped.statusCode).toBe(200);
     expect((await b.posts.get(tk))?.de.heroImage.src).toBe('https://i/replacement');
 
@@ -753,7 +1415,7 @@ describe('media library', () => {
 describe('buildServer config', () => {
   it('boots with a relative storageDir (resolves it to absolute)', async () => {
     const rel = relative(process.cwd(), dir);
-    const srv = buildServer({ storageDir: rel, baseUrl: 'https://img.simonswanderlust.com', users: memoryUserStore(), sessions: memorySessionStore(), settings: fakeStore(), secrets: memorySecretsStore(), posts: memoryPostStore(), pages: memoryPageStore(), media: memoryMediaStore({ baseUrl: 'https://img.simonswanderlust.com' }), encodeQueue: stubQueue().queue, imgHost: 'img.simonswanderlust.com', siteDir: join(dir, 'site'), builder: stubBuilder().builder, backupDir: dir + '/backup', dbBackup: stubBackup().backup, dbCheck: async () => {} });
+    const srv = buildServer({ trustProxy: TEST_TRUST, storageDir: rel, baseUrl: 'https://img.simonswanderlust.com', users: memoryUserStore(), sessions: memorySessionStore(), settings: fakeStore(), secrets: memorySecretsStore(), posts: memoryPostStore(), pages: memoryPageStore(), media: memoryMediaStore({ baseUrl: 'https://img.simonswanderlust.com' }), encodeQueue: stubQueue().queue, imgHost: 'img.simonswanderlust.com', siteDir: join(dir, 'site'), builder: stubBuilder().builder, backupDir: dir + '/backup', dbBackup: stubBackup().backup, dbCheck: async () => {} });
     await expect(srv.ready()).resolves.toBeDefined();
     await srv.close();
   });
@@ -1034,7 +1696,7 @@ describe('AI provider routes', () => {
     expect(await secrets.has('ai_provider_key:lm-studio')).toBe(false);
     // Removing the (non-existent) key of a local provider is a no-op, not a store call.
     const remove = vi.spyOn(secrets, 'delete');
-    expect((await b.app.inject({ method: 'PUT', url: '/ai-providers/lm-studio', cookies: cookie, payload: { apiKey: null } })).statusCode).toBe(200);
+    expect((await injectAuthoring(b.app, { method: 'PUT', url: '/ai-providers/lm-studio', cookies: cookie, payload: { apiKey: null } })).statusCode).toBe(200);
     expect(remove).not.toHaveBeenCalled();
     await b.app.close();
   });
@@ -1098,7 +1760,7 @@ describe('AI provider routes', () => {
       update(partial) { if (fail) throw new Error('disk fixture'); return settings.update(partial); },
     } });
     const { cookie } = await authed(b);
-    const put = (payload: Record<string, unknown>) => b.app.inject({ method: 'PUT', url: '/ai-providers/remote', cookies: cookie, payload });
+    const put = (payload: Record<string, unknown>) => injectAuthoring(b.app, { method: 'PUT', url: '/ai-providers/remote', cookies: cookie, payload });
     const partial = await put({ apiKey: 'new-fixture', baseUrl: 'https://other.example/v1' });
     expect(partial.statusCode).toBe(500);
     expect(partial.json()).toEqual({
@@ -1197,7 +1859,7 @@ describe('AI credential boundaries', () => {
     expect(page.headers['cache-control']).toBe('no-store');
     for (const res of [
       await b.app.inject({ method: 'POST', url: '/settings', cookies: cookie, payload: { aiModel: 'changed' } }),
-      await b.app.inject({ method: 'PUT', url: '/ai-providers/remote', cookies: cookie, payload: { name: 'Renamed' } }),
+      await injectAuthoring(b.app, { method: 'PUT', url: '/ai-providers/remote', cookies: cookie, payload: { name: 'Renamed' } }),
       await b.app.inject({ method: 'POST', url: '/ai-providers', cookies: cookie, payload: { name: 'Second', kind: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', apiKey: 'fixture-second' } }),
     ]) {
       expect(res.statusCode).toBeLessThan(300);
@@ -1223,7 +1885,7 @@ describe('AI credential boundaries', () => {
       const page = await b.app.inject({ url: '/settings', cookies: cookie });
       expect(page.statusCode).toBe(503);
       expect(page.json().code).toBe('ai_secret_store_unavailable');
-      const save = await b.app.inject({ method: 'PUT', url: '/ai-providers/remote', cookies: cookie, payload: { apiKey: 'fixture', name: 'Changed' } });
+      const save = await injectAuthoring(b.app, { method: 'PUT', url: '/ai-providers/remote', cookies: cookie, payload: { apiKey: 'fixture', name: 'Changed' } });
       expect(save.statusCode).toBe(503);
       expect(save.body).not.toContain('DO-NOT-LEAK');
       expect(settings.get()).toEqual(before);
@@ -1316,7 +1978,7 @@ describe('AI credential boundaries', () => {
     secrets.set = async (key, value) => { entered.resolve(); await release.promise; await originalSet(key, value); };
     const b = build({ secrets, settings: fakeStore(registry([remote('vision', 'custom', 'https://vision.example/v1')], { captionProviderId: 'vision' })) });
     const { cookie } = await authed(b);
-    const saving = b.app.inject({ method: 'PUT', url: '/ai-providers/vision', cookies: cookie,
+    const saving = injectAuthoring(b.app, { method: 'PUT', url: '/ai-providers/vision', cookies: cookie,
       payload: { apiKey: 'fixture-new', baseUrl: 'https://vision2.example/v1' } }).then((r) => r);
     await entered.promise;
     let resolved = false;
@@ -1339,7 +2001,7 @@ describe('AI credential boundaries', () => {
     secrets.set = async (key, value) => { entered.resolve(); await release.promise; await originalSet(key, value); };
     const b = build({ secrets, settings: fakeStore(registry([remote('remote', 'deepseek', 'https://api.deepseek.com/v1')], { reviewProviderId: 'remote' })) });
     const { cookie } = await authed(b);
-    const saving = b.app.inject({ method: 'PUT', url: '/ai-providers/remote', cookies: cookie, payload: { apiKey: 'fixture' } }).then((r) => r);
+    const saving = injectAuthoring(b.app, { method: 'PUT', url: '/ai-providers/remote', cookies: cookie, payload: { apiKey: 'fixture' } }).then((r) => r);
     await entered.promise;
     const config = b.app.inject({ url: '/ai-config', cookies: cookie }).then((r) => r);
     const caption = await b.app.inject({ url: '/ai-config?purpose=caption', cookies: cookie });
@@ -1426,6 +2088,7 @@ describe('blog serving is DB-independent (#129)', () => {
     down.find = async () => { throw new Error('pg: connection to db:5432 refused'); };
     await mkdir(join(dir, 'site', 'current', 'de'), { recursive: true });
     await writeFile(join(dir, 'site', 'current', 'de', 'index.html'), '<h1>de</h1>');
+    await writeFile(join(dir, 'site', 'current', 'index.html'), '<!doctype html><html lang="de"><body>home</body></html>');
     const b = build({ sessions: down });
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
@@ -1443,10 +2106,11 @@ describe('blog serving is DB-independent (#129)', () => {
       expect(spy).not.toHaveBeenCalled();
       // The CMS on the same server is honestly down: the session cannot be
       // checked, so these fail (sanitized), rather than pretending "logged out".
-      for (const url of ['/auth/status', '/posts']) {
+      for (const url of ['/auth/status', '/auth/me', '/posts']) {
         const res = await b.app.inject({ method: 'GET', url, cookies: { sid: 'admin-cookie' } });
         expect(res.statusCode, url).toBe(500);
         expect(res.json()).toEqual({ error: 'internal server error' });
+        if (url === '/auth/me') expect(res.headers['cache-control']).toBe('no-store');
       }
       // Anonymous callers of the CMS surface never needed the store.
       expect((await b.app.inject({ method: 'GET', url: '/auth/status' })).json()).toMatchObject({ authenticated: false });
@@ -1458,6 +2122,37 @@ describe('blog serving is DB-independent (#129)', () => {
 });
 
 describe('auth endpoints', () => {
+  it.each([true, false])('GET /auth/me returns only the authenticated context, admin=%s', async (isAdmin) => {
+    const b = build();
+    const { user, cookie } = await authed(b, { isAdmin });
+    const res = await b.app.inject({ url: '/auth/me', cookies: cookie });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(res.headers['set-cookie']).toBeUndefined();
+    expect(res.json()).toEqual({ authenticated: true, userId: user.id, username: user.username, isAdmin, needsSetup: false });
+    // The public setup/login probe keeps its exact existing shape.
+    expect((await b.app.inject({ url: '/auth/status', cookies: cookie })).json()).toEqual({
+      authenticated: true, username: user.username, isAdmin, needsSetup: false,
+    });
+  });
+
+  it('GET /auth/me refuses anonymous, invalid and revoked sessions without setup information', async () => {
+    const b = build();
+    for (const cookies of [undefined, { sid: 'unknown-session' }]) {
+      const res = await b.app.inject({ url: '/auth/me', cookies });
+      expect(res.statusCode).toBe(401);
+      expect(res.json()).toEqual({ error: 'unauthorized' });
+      expect(res.headers['cache-control']).toBe('no-store');
+    }
+    expect((await b.app.inject({ url: '/auth/status' })).json()).toEqual({ authenticated: false, needsSetup: true });
+    const { cookie } = await authed(b);
+    await b.app.inject({ method: 'POST', url: '/logout', cookies: cookie });
+    const res = await b.app.inject({ url: '/auth/me', cookies: cookie });
+    expect(res.statusCode).toBe(401);
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect((await b.app.inject({ url: '/auth/status' })).json()).toEqual({ authenticated: false, needsSetup: false });
+  });
+
   it('GET /auth/status reports needsSetup on an empty store', async () => {
     const b = build();
     const res = await b.app.inject({ method: 'GET', url: '/auth/status' });
@@ -1508,7 +2203,7 @@ describe('auth endpoints', () => {
   });
 
   // Login attempts with a proxy-appended client address, so one test can play
-  // several sources (trustProxy: 1 keys on the RIGHTMOST X-Forwarded-For entry).
+  // several sources (an immediate trusted loopback peer preserves the RIGHTMOST entry).
   const loginFrom = (b: Built, ip: string, payload: Record<string, unknown>) => b.app.inject({
     method: 'POST', url: '/login',
     headers: { 'content-type': 'application/json', 'x-forwarded-for': ip },
@@ -1617,14 +2312,12 @@ describe('auth endpoints', () => {
   });
 
   it('per-IP limiter keys on the proxy-appended address, not a client-supplied X-Forwarded-For entry', async () => {
-    // trustProxy: 1 trusts only the socket hop (the reverse proxy), so req.ip is
-    // the RIGHTMOST X-Forwarded-For entry — the one the proxy appended. With
-    // `true` (#108) req.ip was the LEFTMOST, client-supplied entry, and rotating
-    // it opened a fresh bucket per request. This test fails on that regression.
-    const b = build({ loginLimiter: fixedWindowLimiter({ max: 1, windowMs: 60_000 }) });
+    // Even when the client supplies a leftmost entry, only the immediate
+    // allow-listed gateway is trusted; the rightmost client gets the bucket.
+    const b = build({ trustProxy: GATEWAY_TRUST, loginLimiter: fixedWindowLimiter({ max: 1, windowMs: 60_000 }) });
     await b.users.create({ username: 'simon', password: 'password123456', isAdmin: false });
     const login = (xff: string) => b.app.inject({
-      method: 'POST', url: '/login',
+      method: 'POST', url: '/login', remoteAddress: '172.18.0.1',
       headers: { 'content-type': 'application/json', 'x-forwarded-for': xff },
       payload: { username: 'simon', password: 'bad' },
     });
@@ -1633,6 +2326,51 @@ describe('auth endpoints', () => {
     expect((await login('10.0.0.2, 198.51.100.7')).statusCode).toBe(429);
     // A different proxy-appended client gets its own bucket.
     expect((await login('10.0.0.3, 203.0.113.9')).statusCode).toBe(401);
+  });
+
+  it('ignores rotating forwarded addresses from a co-tenant container', async () => {
+    const b = build({ trustProxy: GATEWAY_TRUST, loginLimiter: fixedWindowLimiter({ max: 1, windowMs: 60_000 }) });
+    const login = (xff: string) => b.app.inject({
+      method: 'POST', url: '/login', remoteAddress: '172.18.0.3',
+      headers: { 'x-forwarded-for': xff },
+      payload: { username: 'missing', password: 'wrongpassword' },
+    });
+    expect((await login('198.51.100.7')).statusCode).toBe(401);
+    expect((await login('203.0.113.9')).statusCode).toBe(429);
+  });
+
+  it('stops after one hop even when the rightmost forwarded address is itself trusted', async () => {
+    const b = build({ trustProxy: GATEWAY_TRUST, loginLimiter: fixedWindowLimiter({ max: 1, windowMs: 60_000 }) });
+    const first = await b.app.inject({
+      method: 'POST', url: '/login', remoteAddress: '172.18.0.1',
+      headers: { 'x-forwarded-for': '203.0.113.9, 172.18.0.1' },
+      payload: { username: 'missing', password: 'wrongpassword' },
+    });
+    expect(first.statusCode).toBe(401);
+    const direct = await b.app.inject({
+      method: 'POST', url: '/login', remoteAddress: '172.18.0.1',
+      payload: { username: 'missing', password: 'wrongpassword' },
+    });
+    expect(direct.statusCode).toBe(429);
+  });
+
+  it.each([
+    { peer: '172.18.0.1', proto: 'https', secure: true },
+    { peer: '172.18.0.1', proto: undefined, secure: false },
+    { peer: '172.18.0.3', proto: 'https', secure: false },
+  ])('sets Secure on setup and login only for a trusted HTTPS proxy ($peer, $proto)', async ({ peer, proto, secure }) => {
+    const b = build({ trustProxy: GATEWAY_TRUST });
+    const payload = { username: 'proxy-admin', password: 'password123456' };
+    for (const url of ['/setup', '/login']) {
+      const response = await b.app.inject({
+        method: 'POST', url, remoteAddress: peer,
+        headers: proto ? { 'x-forwarded-proto': proto } : {},
+        payload,
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['set-cookie']).toMatch(/sid=/);
+      expect(/;\s*Secure(?:;|$)/i.test(String(response.headers['set-cookie']))).toBe(secure);
+    }
   });
 
   it('locked account is refused before password verification (no scrypt for a locked account)', async () => {
@@ -1677,7 +2415,7 @@ describe('security headers', () => {
   // that is not one of the public static mounts gets them, so a new admin or
   // API route can no longer ship without them because a prefix list was not
   // updated. Before #130, /api/* was exactly that gap.
-  const ADMIN_URLS = ['/auth/status', '/api/cms/stats', '/api/categories', '/admin/', '/login', '/health', '/media', '/posts/no-such-post'];
+  const ADMIN_URLS = ['/auth/status', '/auth/me', '/api/cms/stats', '/api/categories', '/admin/', '/login', '/health', '/media', '/posts/no-such-post'];
   it.each(ADMIN_URLS)('%s carries nosniff + frame + referrer protection', async (url) => {
     const b = build();
     const { cookie } = await authed(b);
@@ -1690,6 +2428,7 @@ describe('security headers', () => {
   it('the public blog, its 404 page, legacy redirects and the image host get nosniff only', async () => {
     await mkdir(join(dir, 'site', 'current', 'de'), { recursive: true });
     await writeFile(join(dir, 'site', 'current', 'de', 'index.html'), '<h1>de</h1>');
+    await writeFile(join(dir, 'site', 'current', 'index.html'), '<!doctype html><html lang="de"><body>home</body></html>');
     await mkdir(join(dir, 'map'), { recursive: true });
     await writeFile(join(dir, 'map', 'tiles.pmtiles'), 'x');
     const b = build({ mapDir: join(dir, 'map') });
@@ -1742,12 +2481,114 @@ describe('user management', () => {
     expect((await b.app.inject({ method: 'DELETE', url: `/users/${bobId}`, cookies: cookie })).statusCode).toBe(200);
   });
 
-  it('rejects deleting yourself and the last admin', async () => {
+  it('rejects deleting yourself without changing accounts or sessions', async () => {
     const b = build();
     const me = await b.users.create({ username: 'admin', password: 'password123456', isAdmin: true });
-    const token = await b.sessions.create(me.id, 60_000);
-    const res = await b.app.inject({ method: 'DELETE', url: `/users/${me.id}`, cookies: { sid: token } });
-    expect(res.statusCode).toBe(409);
+    const tokens = await Promise.all([b.sessions.create(me.id, 60_000), b.sessions.create(me.id, 60_000)]);
+    const remove = vi.spyOn(b.users, 'remove');
+    const invalidate = vi.spyOn(b.sessions, 'destroyAllForUser');
+    try {
+      const res = await b.app.inject({ method: 'DELETE', url: `/users/${me.id}`, cookies: { sid: tokens[0]! } });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({ error: 'you cannot delete your own account' });
+      expect(remove).not.toHaveBeenCalled();
+      expect(invalidate).not.toHaveBeenCalled();
+      expect(await b.users.list()).toEqual([me]);
+      for (const token of tokens) expect((await b.sessions.find(token))?.userId).toBe(me.id);
+    } finally { await b.app.close(); }
+  });
+
+  it('authenticates and authorizes deletion before validating an id', async () => {
+    const b = build();
+    const { cookie } = await authed(b, { isAdmin: false, username: 'author' });
+    const remove = vi.spyOn(b.users, 'remove');
+    try {
+      expect((await b.app.inject({ method: 'DELETE', url: '/users/not-a-uuid' })).statusCode).toBe(401);
+      expect((await b.app.inject({ method: 'DELETE', url: '/users/not-a-uuid', cookies: cookie })).statusCode).toBe(403);
+      expect(remove).not.toHaveBeenCalled();
+    } finally { await b.app.close(); }
+  });
+
+  it('cross-deletion preserves the surviving admin and invalidates only the removed account', async () => {
+    const users = memoryUserStore();
+    const sessions = memorySessionStore();
+    const remove = users.remove;
+    let arrivals = 0;
+    const { promise: bothAuthenticated, resolve: release } = Promise.withResolvers<void>();
+    users.remove = async (id) => {
+      if (++arrivals === 2) release();
+      await bothAuthenticated;
+      return remove(id);
+    };
+    const invalidate = vi.spyOn(sessions, 'destroyAllForUser');
+    const b = build({ users, sessions });
+    const a = await authed(b, { username: 'admin-a' });
+    const c = await authed(b, { username: 'admin-b' });
+    const extraA = await sessions.create(a.user.id, 60_000);
+    const extraC = await sessions.create(c.user.id, 60_000);
+    try {
+      const results = await Promise.all([
+        b.app.inject({ method: 'DELETE', url: `/users/${c.user.id}`, cookies: a.cookie }),
+        b.app.inject({ method: 'DELETE', url: `/users/${a.user.id}`, cookies: c.cookie }),
+      ]);
+      expect(results.map((res) => res.statusCode).sort()).toEqual([200, 409]);
+      expect(results.find((res) => res.statusCode === 409)!.json()).toEqual({ error: 'cannot remove the last admin' });
+      const survivor = (await users.list())[0]!;
+      expect(await users.countAdmins()).toBe(1);
+      const deleted = survivor.id === a.user.id ? c : a;
+      expect(invalidate.mock.calls).toEqual([[deleted.user.id]]);
+      for (const [account, tokens] of [[a, [a.cookie.sid, extraA]], [c, [c.cookie.sid, extraC]]] as const) {
+        for (const token of tokens) {
+          expect((await sessions.find(token))?.userId ?? null).toBe(account.user.id === survivor.id ? survivor.id : null);
+        }
+      }
+      expect((await b.app.inject({ method: 'DELETE', url: `/users/${survivor.id}`, cookies: deleted.cookie })).statusCode).toBe(401);
+      expect((await b.app.inject({ method: 'GET', url: '/auth/status' })).json()).toEqual({ authenticated: false, needsSetup: false });
+      expect((await b.app.inject({ method: 'POST', url: '/setup', payload: { username: 'new', password: 'password123456' } })).statusCode).toBe(409);
+    } finally { release(); await b.app.close(); }
+  });
+
+  it('does not invalidate sessions for missing users or failed removals', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const target = await b.users.create({ username: 'target', password: 'password123456', isAdmin: false });
+    const token = await b.sessions.create(target.id, 60_000);
+    const invalidate = vi.spyOn(b.sessions, 'destroyAllForUser');
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      for (const id of ['not-a-uuid', randomUUID()]) {
+        const res = await b.app.inject({ method: 'DELETE', url: `/users/${id}`, cookies: cookie });
+        expect(res.statusCode).toBe(404);
+        expect(res.json()).toEqual({ error: 'user not found' });
+      }
+      vi.spyOn(b.users, 'remove').mockRejectedValueOnce(new Error('private transaction failure'));
+      const failed = await b.app.inject({ method: 'DELETE', url: `/users/${target.id}`, cookies: cookie });
+      expect(failed.statusCode).toBe(500);
+      expect(failed.json()).toEqual({ error: 'internal server error' });
+      expect(invalidate).not.toHaveBeenCalled();
+      expect(await b.users.findById(target.id)).toEqual(target);
+      expect((await b.sessions.find(token))?.userId).toBe(target.id);
+    } finally { log.mockRestore(); await b.app.close(); }
+  });
+
+  it('does not restore a deleted user when follow-up session invalidation fails', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const target = await b.users.create({ username: 'target', password: 'password123456', isAdmin: false });
+    const token = await b.sessions.create(target.id, 60_000);
+    vi.spyOn(b.sessions, 'destroyAllForUser').mockImplementation(async (id) => {
+      expect(await b.users.findById(id)).toBeNull();
+      throw new Error('private session-store failure');
+    });
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const failed = await b.app.inject({ method: 'DELETE', url: `/users/${target.id}`, cookies: cookie });
+      expect(failed.statusCode).toBe(500);
+      expect(failed.json()).toEqual({ error: 'internal server error' });
+      expect(await b.users.findById(target.id)).toBeNull();
+      expect((await b.sessions.find(token))?.userId).toBe(target.id);
+      expect((await b.app.inject({ method: 'GET', url: '/users', cookies: { sid: token } })).statusCode).toBe(401);
+    } finally { log.mockRestore(); await b.app.close(); }
   });
 
   it('POST /users 409 on duplicate username', async () => {
@@ -1756,6 +2597,156 @@ describe('user management', () => {
     await b.app.inject({ method: 'POST', url: '/users', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: { username: 'bob', password: 'password123456', isAdmin: false } });
     const dup = await b.app.inject({ method: 'POST', url: '/users', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: { username: 'BOB', password: 'password123456', isAdmin: false } });
     expect(dup.statusCode).toBe(409);
+  });
+});
+
+describe('auth rate-limit refusals with async onSend (#372)', () => {
+  const refusal = { error: 'too many attempts, please wait and try again' };
+
+  function buildWithAsyncSend(extra: Partial<ServerConfig> = {}) {
+    const b = build(extra);
+    // Install before readiness, without changing the production hook chain.
+    b.app.addHook('onSend', async (_req, _reply, payload) => { await Promise.resolve(); return payload; });
+    return b;
+  }
+
+  it.each(['password123456', 'wrong-password'])('refused login with %s neither verifies nor mutates sessions/account failures', async (password) => {
+    const accountLimiter = accountLockoutLimiter({ max: 3 });
+    const b = buildWithAsyncSend({
+      loginLimiter: fixedWindowLimiter({ max: 1, windowMs: 60_000 }),
+      accountLimiter,
+    });
+    try {
+      const { user, cookie } = await authed(b);
+      const hash = user.passwordHash;
+      const login = (password: string) => b.app.inject({
+        method: 'POST', url: '/login', payload: { username: user.username, password },
+      });
+      // A real admitted failure seeds the account counter and exhausts this IP.
+      expect((await login('wrong-password')).statusCode).toBe(401);
+      const lookup = vi.spyOn(b.users, 'findByUsername');
+      const createSession = vi.spyOn(b.sessions, 'create');
+      const failure = vi.spyOn(accountLimiter, 'recordFailure');
+      const success = vi.spyOn(accountLimiter, 'recordSuccess');
+
+      const denied = await login(password);
+      // Injection can finish before an incorrectly admitted async handler does.
+      // Let memory-store continuations finish before observing durable effects.
+      await nextTurn();
+      expect(denied.statusCode).toBe(429);
+      expect(denied.json()).toEqual(refusal);
+      expect(denied.headers['set-cookie']).toBeUndefined();
+      expect(lookup).not.toHaveBeenCalled(); // No stored hash read or scrypt either.
+      expect(createSession).not.toHaveBeenCalled();
+      expect(failure).not.toHaveBeenCalled();
+      expect(success).not.toHaveBeenCalled();
+      expect(await b.sessions.find(cookie.sid)).toMatchObject({ userId: user.id });
+      expect((await b.users.findById(user.id))?.passwordHash).toBe(hash);
+      // Observe the real limiter's state, not just method forwarding: neither
+      // an extra failure nor a successful-login reset may have happened.
+      accountLimiter.recordFailure(user.username);
+      expect(accountLimiter.isLocked(user.username)).toBe(false);
+      accountLimiter.recordFailure(user.username);
+      expect(accountLimiter.isLocked(user.username)).toBe(true);
+    } finally {
+      await b.app.close();
+    }
+  });
+
+  it.each(['password123456', 'wrong-password'])('refused password change with %s leaves hashes, sessions and account budget intact', async (currentPassword) => {
+    const passwordLimiter = accountLockoutLimiter({ max: 3 });
+    const b = buildWithAsyncSend({
+      loginLimiter: fixedWindowLimiter({ max: 2, windowMs: 60_000 }),
+      passwordLimiter,
+    });
+    try {
+      const { user, cookie } = await authed(b);
+      const otherToken = await b.sessions.create(user.id, 60_000);
+      const hash = user.passwordHash;
+      const change = (currentPassword: string, cookies?: Record<string, string>) => b.app.inject({
+        method: 'POST', url: '/users/me/password', ...(cookies ? { cookies } : {}),
+        payload: { currentPassword, newPassword: 'brand-new-password123' },
+      });
+      // The admitted path still requires both authentication and password proof.
+      expect((await change('password123456')).statusCode).toBe(401);
+      const wrong = await change('wrong-password', cookie);
+      expect(wrong.statusCode).toBe(400);
+      expect(wrong.json()).toEqual({ error: 'current password is incorrect' });
+      const findSession = vi.spyOn(b.sessions, 'find');
+      const createSession = vi.spyOn(b.sessions, 'create');
+      const destroySessions = vi.spyOn(b.sessions, 'destroyAllForUser');
+      const setPassword = vi.spyOn(b.users, 'setPassword');
+      const lookup = vi.spyOn(b.users, 'findById');
+      const failure = vi.spyOn(passwordLimiter, 'recordFailure');
+      const success = vi.spyOn(passwordLimiter, 'recordSuccess');
+
+      const denied = await change(currentPassword, cookie);
+      await nextTurn();
+      expect(denied.statusCode).toBe(429);
+      expect(denied.json()).toEqual(refusal);
+      expect(denied.headers['set-cookie']).toBeUndefined();
+      expect(findSession).not.toHaveBeenCalled(); // Stops the following requireAuth too.
+      expect(lookup).not.toHaveBeenCalled();
+      expect(setPassword).not.toHaveBeenCalled();
+      expect(createSession).not.toHaveBeenCalled();
+      expect(destroySessions).not.toHaveBeenCalled();
+      expect(failure).not.toHaveBeenCalled();
+      expect(success).not.toHaveBeenCalled();
+      expect((await b.users.findById(user.id))?.passwordHash).toBe(hash);
+      expect(await b.sessions.find(cookie.sid)).toMatchObject({ userId: user.id });
+      expect(await b.sessions.find(otherToken)).toMatchObject({ userId: user.id });
+      passwordLimiter.recordFailure(user.id);
+      expect(passwordLimiter.isLocked(user.id)).toBe(false);
+      passwordLimiter.recordFailure(user.id);
+      expect(passwordLimiter.isLocked(user.id)).toBe(true);
+    } finally {
+      await b.app.close();
+    }
+  });
+
+  it('refused setup creates no admin or session; after the window it succeeds only once', async () => {
+    let now = 0;
+    const b = buildWithAsyncSend({
+      loginLimiter: fixedWindowLimiter({ max: 2, windowMs: 60_000, now: () => now }),
+    });
+    try {
+      // Exhaust the SHARED bucket via login while leaving the user store empty.
+      for (let i = 0; i < 2; i++) {
+        expect((await b.app.inject({
+          method: 'POST', url: '/login', payload: { username: 'missing', password: 'wrong-password' },
+        })).statusCode).toBe(401);
+      }
+      const createUser = vi.spyOn(b.users, 'create');
+      const createSession = vi.spyOn(b.sessions, 'create');
+      const setup = () => b.app.inject({
+        method: 'POST', url: '/setup', payload: { username: 'first-admin', password: 'password123456' },
+      });
+      const denied = await setup();
+      await nextTurn();
+      expect(denied.statusCode).toBe(429);
+      expect(denied.json()).toEqual(refusal);
+      expect(denied.headers['set-cookie']).toBeUndefined();
+      expect(createUser).not.toHaveBeenCalled();
+      expect(createSession).not.toHaveBeenCalled();
+      expect(await b.users.count()).toBe(0);
+      expect(await b.users.findByUsername('first-admin')).toBeNull();
+
+      now = 60_000;
+      const allowed = await setup();
+      expect(allowed.statusCode).toBe(200);
+      expect(allowed.json()).toEqual({ username: 'first-admin', isAdmin: true });
+      const admin = await b.users.findByUsername('first-admin');
+      expect(admin).toMatchObject({ isAdmin: true });
+      const token = allowed.cookies.find((cookie) => cookie.name === 'sid')?.value;
+      expect(token).toBeDefined();
+      expect(await b.sessions.find(token ?? '')).toMatchObject({ userId: admin?.id });
+      expect((await setup()).statusCode).toBe(409);
+      expect(await b.users.count()).toBe(1);
+      expect(createUser).toHaveBeenCalledTimes(1);
+      expect(createSession).toHaveBeenCalledTimes(1);
+    } finally {
+      await b.app.close();
+    }
   });
 });
 
@@ -1852,11 +2843,11 @@ describe('POST /posts/bulk', () => {
   });
 
   const create = async (b: Built, cookie: { sid: string }, slug: string): Promise<string> => {
-    const res = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample(slug) });
+    const res = await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample(slug) });
     return res.json().translationKey;
   };
   const bulk = async (b: Built, cookie: { sid: string } | undefined, payload: Record<string, unknown>) =>
-    b.app.inject({ method: 'POST', url: '/posts/bulk', headers: { 'content-type': 'application/json' }, ...(cookie ? { cookies: cookie } : {}), payload });
+    b.app.inject({ method: 'POST', url: '/posts/bulk', headers: { 'content-type': 'application/json' }, ...(cookie ? { cookies: cookie } : {}), payload: { ...(payload.action === 'publish' ? { baseLanguageUpdatedAt: (await b.posts.language.get()).updatedAt.toISOString() } : {}), ...payload } });
 
   it('is admin-only: 401 anonymous, 403 for a non-admin author', async () => {
     const b = build();
@@ -1905,16 +2896,20 @@ describe('POST /posts/bulk', () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body).toMatchObject({ succeeded: 1, failed: 1 });
-    expect(body.results).toContainEqual({ key: good, ok: true });
-    expect(body.results).toContainEqual({ key: 'does-not-exist', ok: false, error: 'post not found' });
-    expect(s.calls.length).toBe(1); // the successful one still went live
+    expect(body.results).toContainEqual({ key: good, ok: true,
+      updatedAt: (await b.posts.get(good))!.updatedAt.toISOString(),
+      publication: { availability: 'available', status: 'published', requestedLocales: ['de', 'en'],
+        committedLocales: ['de', 'en'], draftDiffers: false, live: { de: 'not-live', en: 'not-live' } } });
+    expect(body.results).toContainEqual({ key: 'does-not-exist', ok: false, error: 'post not found',
+      publication: { availability: 'missing' } });
+    expect(s.calls.length).toBe(1); // one build was requested; only a manifest can prove inclusion
   });
 
   it('surfaces a validation failure per post without touching the others', async () => {
     const b = build(); const { cookie } = await authed(b);
     const ok = await create(b, cookie, 'a');
     const incomplete = sample('b'); incomplete.de.excerpt = '';
-    const bad = (await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: incomplete })).json().translationKey;
+    const bad = (await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: incomplete })).json().translationKey;
     const body = (await bulk(b, cookie, { action: 'publish', keys: [ok, bad] })).json();
     expect(body).toMatchObject({ succeeded: 1, failed: 1 });
     expect(body.results.find((r: { key: string }) => r.key === bad).error).toMatch(/excerpt required/);
@@ -1957,12 +2952,12 @@ describe('POST /posts/bulk', () => {
   });
 
   it('a failed rebuild is surfaced but the store changes still land', async () => {
-    const s = stubBuilder({ ok: false, error: 'a build is already running' });
+    const s = stubBuilder({ ok: false, attemptId: 'failed', code: 'internal', error: buildFailureMessage('internal') });
     const b = build({ builder: s.builder });
     const { cookie } = await authed(b);
     const tk = await create(b, cookie, 'a');
     const body = (await bulk(b, cookie, { action: 'publish', keys: [tk] })).json();
-    expect(body).toMatchObject({ succeeded: 1, build: { ok: false, error: 'a build is already running' } });
+    expect(body).toMatchObject({ succeeded: 1, build: { ok: false, code: 'internal', error: buildFailureMessage('internal') } });
     expect((await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).json().status).toBe('published');
   });
 });
@@ -1981,7 +2976,7 @@ describe('publish gate (encode status)', () => {
   });
 
   const create = async (b: Built, cookie: { sid: string }, payload: Record<string, unknown>) =>
-    (await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload })).json().translationKey;
+    (await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload })).json().translationKey;
 
   it.each(['processing', 'failed', 'missing', 'unknown'] as const)('blocks single and bulk publication of a %s title image', async (status) => {
     const b = build();
@@ -1996,7 +2991,7 @@ describe('publish gate (encode status)', () => {
       const single = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
       expect(single.statusCode).toBe(409);
       expect(single.json().notReady).toContain(key);
-      const bulk = await b.app.inject({ method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [tk] } });
+      const bulk = await b.app.inject({ method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [tk], baseLanguageUpdatedAt: (await b.posts.language.get()).updatedAt.toISOString() } });
       expect(bulk.json().results[0].ok).toBe(false);
       expect((await b.posts.get(tk))?.status).toBe('draft');
     } finally { await b.app.close(); }
@@ -2109,7 +3104,7 @@ describe('publish gate (encode status)', () => {
     const tk = await create(b, cookie, pairUsing(`${IMG}/trips/g/hero`));
     const res = await b.app.inject({
       method: 'POST', url: '/posts/bulk', headers: { 'content-type': 'application/json' }, cookies: cookie,
-      payload: { action: 'publish', keys: [tk] },
+      payload: { action: 'publish', keys: [tk], baseLanguageUpdatedAt: (await b.posts.language.get()).updatedAt.toISOString() },
     });
     expect(res.json()).toMatchObject({ succeeded: 0, failed: 1 });
     expect(res.json().results[0].error).toMatch(/still processing/);
@@ -2133,7 +3128,7 @@ describe('publish gate (encode status)', () => {
             const single = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
             expect(single.statusCode).toBe(409);
             expect(single.json().notReady).toEqual([key]);
-            const bulk = await b.app.inject({ method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [tk] } });
+            const bulk = await b.app.inject({ method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [tk], baseLanguageUpdatedAt: (await b.posts.language.get()).updatedAt.toISOString() } });
             expect(bulk.json()).toMatchObject({ succeeded: 0, failed: 1 });
             expect((await b.posts.get(tk))?.status).toBe('draft');
             expect((await b.posts.usageRows()).filter(row => row.translationKey === tk && row.source === 'published')).toEqual([]);
@@ -2157,7 +3152,7 @@ describe('publish gate (encode status)', () => {
       const tk = await create(b, cookie, { ...p, de: { ...p.de, bodyMarkdown } });
       const response = mode === 'single'
         ? await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) })
-        : await b.app.inject({ method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [tk] } });
+        : await b.app.inject({ method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [tk], baseLanguageUpdatedAt: (await b.posts.language.get()).updatedAt.toISOString() } });
       expect(response.statusCode).toBe(200);
       if (mode === 'bulk') expect(response.json()).toMatchObject({ succeeded: 1, failed: 0 });
       expect((await b.posts.get(tk))?.status).toBe('published');
@@ -2187,7 +3182,7 @@ describe('alt-text audit (advisory, never a gate)', () => {
     },
   };
   const create = async (b: Built, cookie: { sid: string }) =>
-    (await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: undescribedPair })).json().translationKey;
+    (await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: undescribedPair })).json().translationKey;
 
   it('publishes a post whose every photo is undescribed, and names them in the reply', async () => {
     const b = build();
@@ -2205,6 +3200,37 @@ describe('alt-text audit (advisory, never a gate)', () => {
       ],
     });
     expect((await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).json().status).toBe('published');
+  });
+
+  it('refuses a failed audit analysis before publishing or building, without changing the draft', async () => {
+    const { builder, calls } = stubBuilder();
+    const b = build({ builder });
+    const { cookie } = await authed(b);
+    const tk = await create(b, cookie);
+    const before = await b.posts.get(tk);
+    const revisions = await b.posts.listRevisions(tk);
+    const publish = vi.spyOn(b.posts, 'publish');
+    const audit = vi.spyOn(altAudit, 'auditAltText')
+      .mockRejectedValueOnce(new Error('gallery source mapping failed'));
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await b.app.inject({
+        method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie,
+        payload: await publishBody(b.posts, tk),
+      });
+      expect(res.statusCode).toBe(500);
+      expect(res.json()).toEqual({ error: 'internal server error' });
+      expect(audit).toHaveBeenCalledTimes(1);
+      expect(publish).not.toHaveBeenCalled();
+      expect(calls).toEqual([]);
+      expect(await b.posts.get(tk)).toEqual(before);
+      expect(await b.posts.listRevisions(tk)).toEqual(revisions);
+    } finally {
+      publish.mockRestore();
+      audit.mockRestore();
+      quiet.mockRestore();
+      await b.app.close();
+    }
   });
 
   it('serves the same audit before publishing, to any authed author', async () => {
@@ -2235,7 +3261,7 @@ describe('alt-text audit (advisory, never a gate)', () => {
       },
       en: { ...undescribedPair.en, heroImage: { ...undescribedPair.en.heroImage, alt: 'Old town at night' } },
     };
-    const tk = (await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: pair })).json().translationKey;
+    const tk = (await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: pair })).json().translationKey;
     const expected = { count: 1, images: [{ locale: 'de', kind: 'gallery', src: `${IMG}/trips/rhodos/g2`, reason: 'repeats-title' }] };
     const before = await b.app.inject({ method: 'GET', url: `/posts/${tk}/alt-audit`, cookies: cookie });
     expect(before.json()).toEqual(expected);
@@ -2257,13 +3283,13 @@ describe('alt-text audit (advisory, never a gate)', () => {
       de: { ...undescribedPair.de, heroImage: { ...undescribedPair.de.heroImage, alt: 'Fischerboote im Hafen von Lindos' }, bodyMarkdown: `![Ziegen auf der Küstenstraße](${IMG}/trips/rhodos/b1)` },
       en: { ...undescribedPair.en, heroImage: { ...undescribedPair.en.heroImage, alt: 'Fishing boats in Lindos harbour' } },
     };
-    const tk = (await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: described })).json().translationKey;
+    const tk = (await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: described })).json().translationKey;
     const res = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     expect(res.json().altAudit).toEqual({ count: 0, images: [] });
   });
 });
 
-describe('publish gate (foreign images, #91)', () => {
+describe('publish body gates (#91, #375)', () => {
   const IMG = 'https://img.simonswanderlust.com';
   const pairWithBody = (deBody: string, enBody = '## b') => ({
     translationKey: '', status: 'draft',
@@ -2272,7 +3298,145 @@ describe('publish gate (foreign images, #91)', () => {
     en: { locale: 'en', slug: 'fgn-en', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: `${IMG}/trips/g/hero`, width: 9, height: 9, alt: 'a' }, bodyMarkdown: enBody, images: {} },
   });
   const create = async (b: Built, cookie: { sid: string }, payload: Record<string, unknown>) =>
-    (await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload })).json().translationKey;
+    (await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload })).json().translationKey;
+
+  it.each(['single', 'bulk'] as const)('%s refuses rendered H1s in either locale before writes, exports or builds', async (mode) => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder });
+    const publish = vi.spyOn(b.posts, 'publish');
+    const render = vi.spyOn(bodyRenderer, 'renderMarkdown');
+    try {
+      const { cookie } = await authed(b);
+      for (const locale of ['de', 'en'] as const) {
+        for (const body of ['# Title', 'Intro\n=====', '> # Title', '- # Title', '<div><h1 class="legacy">Title</h1></div>']) {
+          const input = pairWithBody('## Body');
+          input[locale].bodyMarkdown = body;
+          const tk = await create(b, cookie, input);
+          publish.mockClear();
+          render.mockClear();
+          const response = await b.app.inject(mode === 'single'
+            ? { method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) }
+            : { method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [tk], baseLanguageUpdatedAt: (await b.posts.language.get()).updatedAt.toISOString() } });
+          const error = `${locale}: body must not contain an H1; the story hero provides the page H1`;
+          if (mode === 'single') {
+            expect(response.statusCode, body).toBe(400);
+            expect(response.json().error).toBe(error);
+          } else {
+            expect(response.statusCode).toBe(200);
+            expect(response.json()).toMatchObject({ succeeded: 0, failed: 1, results: [{ key: tk, ok: false, error }] });
+            expect(response.json().build).toBeUndefined();
+          }
+          expect(render).toHaveBeenCalledTimes(locale === 'de' ? 1 : 2);
+          expect(publish).not.toHaveBeenCalled();
+          expect(s.calls).toEqual([]);
+          expect((await b.posts.get(tk))?.status).toBe('draft');
+          expect((await b.posts.usageRows()).filter(row => row.source === 'published')).toEqual([]);
+          expect(existsSync(join(dir, 'backup'))).toBe(false);
+          await b.posts.remove(tk);
+        }
+      }
+    } finally {
+      render.mockRestore();
+      publish.mockRestore();
+      await b.app.close();
+    }
+  });
+
+  it.each(['single', 'bulk'] as const)('%s publishes literal H1 examples in either locale with one render per locale', async (mode) => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder });
+    const render = vi.spyOn(bodyRenderer, 'renderMarkdown');
+    try {
+      const { cookie } = await authed(b);
+      let published = 0;
+      for (const locale of ['de', 'en'] as const) {
+        for (const body of [
+          'Use `<h1>` for the page title.',
+          '    <h1>Indented example</h1>',
+          '````markdown\n# Example heading\n<h1>Example HTML</h1>\n````\n\n## Real section',
+          '&lt;h1&gt;Escaped title&lt;/h1&gt;',
+          '<script><h1>Removed by sanitation</h1></script>\n\nSafe body',
+        ]) {
+          const input = pairWithBody('## Body');
+          input[locale].bodyMarkdown = body;
+          const tk = await create(b, cookie, input);
+          render.mockClear();
+          const response = await b.app.inject(mode === 'single'
+            ? { method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) }
+            : { method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [tk], baseLanguageUpdatedAt: (await b.posts.language.get()).updatedAt.toISOString() } });
+          expect(response.statusCode, body).toBe(200);
+          if (mode === 'bulk') expect(response.json()).toMatchObject({ succeeded: 1, failed: 0 });
+          expect(render).toHaveBeenCalledTimes(2);
+          expect(s.calls).toHaveLength(++published);
+          expect((await b.posts.get(tk))?.status).toBe('published');
+          expect((await b.posts.usageRows()).find(row => row.source === 'published' && row.locale === locale)?.bodyMarkdown).toBe(body);
+          expect(existsSync(join(dir, 'backup', 'trips', locale, `fgn-${locale}.mdx`))).toBe(true);
+          await b.posts.remove(tk);
+        }
+      }
+    } finally {
+      render.mockRestore();
+      await b.app.close();
+    }
+  });
+
+  it('bulk publishes eligible pairs while leaving an H1 pair untouched, exporting and rebuilding only successes', async () => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder });
+    const publish = vi.spyOn(b.posts, 'publish');
+    try {
+      const { cookie } = await authed(b);
+      const bad = await create(b, cookie, pairWithBody('## Body', '> # Title'));
+      const goodPair = pairWithBody('Use `<h1>` for a title.');
+      goodPair.de.slug = 'good-de';
+      goodPair.en.slug = 'good-en';
+      const good = await create(b, cookie, goodPair);
+      const response = await b.app.inject({ method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [bad, good], baseLanguageUpdatedAt: (await b.posts.language.get()).updatedAt.toISOString() } });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        succeeded: 1, failed: 1,
+        results: [{ key: bad, ok: false, error: expect.stringMatching(/^en: body must not contain an H1/) }, { key: good, ok: true }],
+      });
+      expect(publish).toHaveBeenCalledTimes(1);
+      expect(publish.mock.calls[0]?.[0]).toBe(good);
+      expect((await b.posts.get(bad))?.status).toBe('draft');
+      expect((await b.posts.get(good))?.status).toBe('published');
+      expect(existsSync(join(dir, 'backup', 'trips', 'en', 'fgn-en.mdx'))).toBe(false);
+      expect(existsSync(join(dir, 'backup', 'trips', 'en', 'good-en.mdx'))).toBe(true);
+      expect(s.calls).toHaveLength(1);
+    } finally {
+      publish.mockRestore();
+      await b.app.close();
+    }
+  });
+
+  it.each(['single', 'bulk'] as const)('%s preserves renderer failures as internal errors, not validation refusals', async (mode) => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder });
+    const publish = vi.spyOn(b.posts, 'publish');
+    const render = vi.spyOn(bodyRenderer, 'renderMarkdown');
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { cookie } = await authed(b);
+      const tk = await create(b, cookie, pairWithBody('## Body'));
+      render.mockRejectedValueOnce(new Error('private renderer failure'));
+      const response = await b.app.inject(mode === 'single'
+        ? { method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) }
+        : { method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [tk], baseLanguageUpdatedAt: (await b.posts.language.get()).updatedAt.toISOString() } });
+      if (mode === 'single') expect(response.statusCode).toBe(500);
+      else expect(response.json()).toMatchObject({ succeeded: 0, failed: 1, results: [{ key: tk, ok: false, error: 'internal error' }] });
+      expect(response.body).not.toMatch(/private renderer failure|H1/);
+      expect(publish).not.toHaveBeenCalled();
+      expect(s.calls).toEqual([]);
+      expect(existsSync(join(dir, 'backup'))).toBe(false);
+      expect((await b.posts.get(tk))?.status).toBe('draft');
+    } finally {
+      render.mockRestore();
+      publish.mockRestore();
+      log.mockRestore();
+      await b.app.close();
+    }
+  });
 
   it('409s with the count and examples while a body still hot-links another host, and publishes nothing', async () => {
     const s = stubBuilder();
@@ -2302,7 +3466,7 @@ describe('publish gate (foreign images, #91)', () => {
     const tk = await create(b, cookie, pairWithBody('![p](https://old.example/a.jpg)'));
     const res = await b.app.inject({
       method: 'POST', url: '/posts/bulk', headers: { 'content-type': 'application/json' }, cookies: cookie,
-      payload: { action: 'publish', keys: [tk] },
+      payload: { action: 'publish', keys: [tk], baseLanguageUpdatedAt: (await b.posts.language.get()).updatedAt.toISOString() },
     });
     expect(res.json()).toMatchObject({ succeeded: 0, failed: 1 });
   });
@@ -2316,6 +3480,240 @@ describe('posts editor', () => {
     en: { locale: 'en', slug: 'en-s', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
   });
 
+  async function installManifest(posts: PostStore, stamp: string) {
+    const entries: ReleaseManifestV1['posts'] = [];
+    for (const fact of await posts.publicationFacts()) {
+      const pair = (await posts.get(fact.translationKey))!;
+      for (const locale of fact.committedLocales) entries.push({
+        translationKey: fact.translationKey, locale, slug: pair[locale].slug,
+        digest: fact.rowDigest[locale]!, gallery: [],
+      });
+    }
+    const root = join(dir, 'site');
+    await mkdir(join(root, 'manifests'), { recursive: true });
+    await mkdir(join(root, 'releases', stamp), { recursive: true });
+    await writeFile(join(root, 'manifests', `${stamp}.json`), JSON.stringify({ schema: 1, stamp, posts: entries }));
+    await symlink(join('releases', stamp), join(root, 'next'));
+    await rename(join(root, 'next'), join(root, 'current'));
+  }
+
+  it('observes failed publish, matching rebuild, failed republish, failed unpublish and deletion against the actual current manifest', async () => {
+    const failed = stubBuilder({ ok: false, attemptId: 'failed', code: 'internal', error: buildFailureMessage('internal') });
+    const b = build({ builder: failed.builder });
+    const { cookie } = await authed(b);
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', cookies: cookie, payload: sample() });
+    const tk = created.json().translationKey;
+    const first = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
+    expect(first.statusCode).toBe(200);
+    expect(first.json()).toMatchObject({ published: true, build: { ok: false },
+      publication: { status: 'published', live: { de: 'not-live', en: 'not-live' }, draftDiffers: false } });
+    await installManifest(b.posts, '1793000000000-1-0001');
+    let read = await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie });
+    expect(read.headers['cache-control']).toBe('no-store');
+    expect(read.json().publication.live).toEqual({ de: 'live', en: 'live' });
+    const unchanged = await injectAuthoring(b.app, { method: 'PUT', url: `/posts/${tk}`, cookies: cookie, payload: sample() });
+    expect(unchanged.json().publication.draftDiffers).toBe(false);
+    await injectAuthoring(b.app, { method: 'PUT', url: `/posts/${tk}`, cookies: cookie,
+      payload: { ...sample(), de: { ...sample().de, bodyMarkdown: 'Changed saved body' } } });
+    const second = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
+    expect(second.json().publication).toMatchObject({ status: 'published', draftDiffers: false,
+      live: { de: 'older-version-live', en: 'live' } });
+    const unpublished = await b.app.inject({ method: 'POST', url: `/posts/${tk}/unpublish`, cookies: cookie });
+    expect(unpublished.json().publication.status).toBe('draft');
+    expect(unpublished.json().publication.live.de).toBe('older-version-live');
+    const summary = await b.app.inject({ method: 'GET', url: '/publication/summary', cookies: cookie });
+    expect(summary.json()).toMatchObject({ availability: 'available', release: 'known', posts: { unpublishedStillLive: 1 } });
+    const deleted = await b.app.inject({ method: 'DELETE', url: `/posts/${tk}`, cookies: cookie });
+    expect(deleted.json().publication).toEqual({ availability: 'missing' });
+    expect((await b.app.inject({ method: 'GET', url: '/publication/summary', cookies: cookie })).json().posts.deletedStillLive).toBe(1);
+    read = await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie });
+    expect(read.statusCode).toBe(404);
+  });
+
+  it('returns a concurrent unpublish observation without borrowing its token or changing the publish acknowledgement', async () => {
+    const posts = memoryPostStore();
+    let tk = '';
+    let ownToken = '';
+    let laterToken = '';
+    const b = build({ posts, builder: {
+      ...idleBuildState, hasRelease: () => false, quiesce: async () => {},
+      build: async () => {
+        ownToken = (await posts.get(tk))!.updatedAt.toISOString();
+        laterToken = (await posts.unpublish(tk)).updatedAt.toISOString();
+        return { ok: false, attemptId: 'failed', code: 'internal', error: buildFailureMessage('internal') };
+      },
+    } });
+    const { cookie } = await authed(b);
+    tk = (await injectAuthoring(b.app, { method: 'POST', url: '/posts', cookies: cookie, payload: sample() })).json().translationKey;
+    const response = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(posts, tk) });
+    expect(response.json()).toMatchObject({ published: true, updatedAt: ownToken,
+      publication: { status: 'draft', live: { de: 'not-live', en: 'not-live' } } });
+    expect(response.json().updatedAt).not.toBe(laterToken);
+  });
+
+  it.each(['save', 'publish', 'unpublish', 'bulk-publish', 'bulk-unpublish', 'bulk-delete'] as const)(
+    'keeps a committed %s successful with its action token when optional projection fails', async (action) => {
+      const b = build(); const { cookie } = await authed(b);
+      const tk = (await injectAuthoring(b.app, { method: 'POST', url: '/posts', cookies: cookie, payload: sample() })).json().translationKey;
+      if (action.includes('unpublish')) await b.posts.publish(tk, await publishTokens(b.posts, tk));
+      const original = (await b.posts.get(tk))!.updatedAt.toISOString();
+      vi.spyOn(b.posts, 'publicationFacts').mockRejectedValue(new Error('projection DB read failed'));
+      const response = action === 'save'
+        ? await injectAuthoring(b.app, { method: 'PUT', url: `/posts/${tk}`, cookies: cookie,
+            payload: { ...sample(), de: { ...sample().de, title: 'Acknowledged change' } } })
+        : action.startsWith('bulk-')
+          ? await b.app.inject({ method: 'POST', url: '/posts/bulk', cookies: cookie, payload: {
+              action: action.slice(5), keys: [tk], baseLanguageUpdatedAt: (await b.posts.language.get()).updatedAt.toISOString() } })
+          : await b.app.inject({ method: 'POST', url: `/posts/${tk}/${action}`, cookies: cookie,
+              ...(action === 'publish' ? { payload: await publishBody(b.posts, tk) } : {}) });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['cache-control']).toBe('no-store');
+      const acknowledged = action.startsWith('bulk-') ? response.json().results[0] : response.json();
+      expect(acknowledged.publication).toEqual({ availability: 'unavailable' });
+      if (action === 'bulk-delete') {
+        expect(acknowledged.ok).toBe(true);
+        expect(await b.posts.get(tk)).toBeNull();
+      } else {
+        expect(acknowledged.updatedAt).not.toBe(original);
+        expect(acknowledged.updatedAt).toBe((await b.posts.get(tk))!.updatedAt.toISOString());
+      }
+    });
+
+  it('gives authors only enumerated post facts and refuses site-wide summary access', async () => {
+    const b = build(); const { cookie } = await authed(b, { isAdmin: false });
+    const saved = await injectAuthoring(b.app, { method: 'POST', url: '/posts', cookies: cookie, payload: sample() });
+    const tk = saved.json().translationKey;
+    await b.posts.publish(tk, await publishTokens(b.posts, tk));
+    await installManifest(b.posts, '1793000000000-1-0001');
+    const response = await b.app.inject({ method: 'GET', url: '/posts', cookies: cookie });
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(response.json()[0].publication).toEqual({ availability: 'available', status: 'published',
+      requestedLocales: ['de', 'en'], committedLocales: ['de', 'en'], draftDiffers: false, live: { de: 'live', en: 'live' } });
+    expect(response.body).not.toContain('digest');
+    expect(response.body).not.toContain('attemptId');
+    expect(response.body).not.toContain('1793000000000-1-0001');
+    expect((await b.app.inject({ method: 'GET', url: '/publication/summary', cookies: cookie })).statusCode).toBe(403);
+  });
+
+  it.each(['de', 'en'] as const)('keeps %s primary translation coverage pending through rejection and distinguishes commit from live inclusion', async (primary) => {
+    const secondary = primary === 'de' ? 'en' : 'de';
+    const language = memoryLanguageStore({ primary, locales: [primary, secondary] });
+    const b = build({ language, builder: stubBuilder({ ok: false, attemptId: 'failed', code: 'internal', error: buildFailureMessage('internal') }).builder });
+    const { cookie } = await authed(b);
+    const input = sample();
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', cookies: cookie,
+      payload: { ...input, [secondary]: { ...input[secondary], omitted: true, slug: '' } } });
+    const tk = created.json().translationKey;
+    await b.posts.publish(tk, await publishTokens(b.posts, tk));
+    await installManifest(b.posts, '1793000000000-1-0001');
+    const incomplete = { ...input, [secondary]: { ...input[secondary], omitted: false, bodyMarkdown: '' } };
+    const saved = await injectAuthoring(b.app, { method: 'PUT', url: `/posts/${tk}`, cookies: cookie, payload: incomplete });
+    expect(saved.json().publication).toMatchObject({ status: 'published', draftDiffers: true,
+      requestedLocales: ['de', 'en'], committedLocales: [primary], live: { [primary]: 'live', [secondary]: 'not-live' } });
+    const refused = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
+    expect(refused.statusCode).toBe(400);
+    expect((await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).json().publication.draftDiffers).toBe(true);
+    await injectAuthoring(b.app, { method: 'PUT', url: `/posts/${tk}`, cookies: cookie, payload: input });
+    const committed = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
+    expect(committed.json()).toMatchObject({ published: true, build: { ok: false }, publication: {
+      status: 'published', draftDiffers: false, committedLocales: ['de', 'en'],
+      live: { [primary]: 'live', [secondary]: 'not-live' },
+    } });
+    await installManifest(b.posts, '1793000000001-1-0002');
+    expect((await b.app.inject({ method: 'GET', url: '/posts', cookies: cookie })).json()[0].publication.live).toEqual({ de: 'live', en: 'live' });
+  });
+
+  it('POST and PUT return snapshot warnings, never persist them, and keep refusal precedence', async () => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder });
+    try {
+      const { cookie } = await authed(b);
+      const input = sample();
+      const line = '> https://i/gallery | 30x20 | alt="😀" | capton="Wrong"';
+      input.en.bodyMarkdown = `<BodyImage\n src="https://i/body"\n width={30} height={20} alt="View"\n/>\n\n> ~~~gallery extra\n${line}\n> ~~~`;
+      const expected = [{ code: 'invalid_gallery_metadata', locale: 'en', line: 7, column: line.indexOf('capton=') + 1, field: 'unknown', reason: 'unknown_field' }];
+      const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', cookies: cookie, payload: input });
+      expect(created.statusCode).toBe(200);
+      expect(created.json().galleryWarnings).toEqual(expected);
+      expect(created.json()).toMatchObject({ status: 'draft', de: input.de, en: { title: input.en.title } });
+      const url = `/posts/${created.json().translationKey}`;
+      const saved = await injectAuthoring(b.app, { method: 'PUT', url, cookies: cookie, payload: { ...input, updatedAt: created.json().updatedAt } });
+      expect(saved.statusCode).toBe(200);
+      expect(saved.json().galleryWarnings).toEqual(expected);
+      const before = (await injectAuthoring(b.app, { url, cookies: cookie })).json();
+      expect(before).not.toHaveProperty('galleryWarnings');
+      expect(before.en.bodyMarkdown).toContain(line);
+      const stale = await injectAuthoring(b.app, { method: 'PUT', url, cookies: cookie, payload: { ...input, updatedAt: new Date(0).toISOString() } });
+      expect(stale.statusCode).toBe(409);
+      expect(stale.json()).toMatchObject({ code: 'conflict' });
+      expect(stale.json()).not.toHaveProperty('galleryWarnings');
+      const duplicate = await injectAuthoring(b.app, { method: 'POST', url: '/posts', cookies: cookie, payload: input });
+      expect(duplicate.statusCode).toBe(409);
+      expect(duplicate.json()).not.toHaveProperty('galleryWarnings');
+      const renamed = await injectAuthoring(b.app, { method: 'PUT', url, cookies: cookie, payload: { ...input, de: { ...input.de, slug: 'renamed' } } });
+      expect(renamed.statusCode).toBe(409);
+      expect(renamed.json()).toMatchObject({ code: 'slug_change_unconfirmed' });
+      expect(renamed.json()).not.toHaveProperty('galleryWarnings');
+      const write = vi.spyOn(b.posts, 'upsertDraft').mockRejectedValueOnce(new Error('private storage failure'));
+      const failed = await injectAuthoring(b.app, { method: 'PUT', url, cookies: cookie, payload: input });
+      write.mockRestore();
+      expect(failed.statusCode).toBe(500);
+      expect(failed.json()).not.toHaveProperty('galleryWarnings');
+      expect(failed.body).not.toContain('private storage failure');
+      expect((await injectAuthoring(b.app, { url, cookies: cookie })).json()).toEqual(before);
+      const repaired = await injectAuthoring(b.app, { method: 'PUT', url, cookies: cookie, payload: { ...input, en: { ...input.en, bodyMarkdown: 'Fixed' } } });
+      expect(repaired.statusCode).toBe(200);
+      expect(repaired.json().galleryWarnings).toEqual([]);
+      expect(s.calls).toEqual([]);
+    } finally { await b.app.close(); }
+  });
+
+  it.each(['de', 'en'] as const)('rejects excessive %s slugs with a bounded field-specific 400 before create/update', async (locale) => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder });
+    const { cookie } = await authed(b);
+    for (const length of [252, 8192]) {
+      const input = sample();
+      input[locale].slug = 'a'.repeat(length);
+      const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', cookies: cookie, payload: input });
+      expect(created.statusCode).toBe(400);
+      expect(created.json().error).toBe(`${locale}.slug must be at most 251 ASCII bytes (received ${length})`);
+      expect(await b.posts.list()).toEqual([]);
+    }
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', cookies: cookie, payload: sample() });
+    const tk = created.json().translationKey as string;
+    const before = await b.posts.get(tk);
+    const revisions = await b.posts.listRevisions(tk);
+    for (const length of [252, 8192]) {
+      const input = { ...sample(), translationKey: tk, confirmSlugChange: true };
+      input[locale].slug = 'a'.repeat(length);
+      const updated = await injectAuthoring(b.app, { method: 'PUT', url: `/posts/${tk}`, cookies: cookie, payload: input });
+      expect(updated.statusCode).toBe(400);
+      expect(updated.json().error).toBe(`${locale}.slug must be at most 251 ASCII bytes (received ${length})`);
+      expect(await b.posts.get(tk)).toEqual(before);
+      expect(await b.posts.listRevisions(tk)).toEqual(revisions);
+    }
+    expect(s.calls).toEqual([]);
+    await b.app.close();
+  });
+
+  it.each([250, 251])('saves and publishes %i-byte DE/EN slugs byte-identically through HTTP', async (length) => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder });
+    const { cookie } = await authed(b);
+    const input = sample();
+    input.de.slug = 'd'.repeat(length);
+    input.en.slug = 'e'.repeat(length);
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', cookies: cookie, payload: input });
+    expect(created.statusCode).toBe(200);
+    const tk = created.json().translationKey as string;
+    const published = await injectAuthoring(b.app, { method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
+    expect(published.statusCode).toBe(200);
+    expect(await b.posts.get(tk)).toMatchObject({ status: 'published', de: { slug: input.de.slug }, en: { slug: input.en.slug } });
+    expect(s.calls).toHaveLength(1);
+    await b.app.close();
+  });
+
   it('requires the strict 4KiB explicit publish body without a bodyless compatibility path', async () => {
     const b = build(); const { cookie } = await authed(b);
     const saved = await b.posts.upsertDraft({ ...sample(), status: 'draft', de: { ...sample().de, locale: 'de' }, en: { ...sample().en, locale: 'en' } });
@@ -2323,7 +3721,8 @@ describe('posts editor', () => {
     const tokens = await publishBody(b.posts, saved.translationKey);
     const bodies = [undefined, {}, { baseUpdatedAt: tokens.baseUpdatedAt }, { ...tokens, extra: true },
       { ...tokens, baseUpdatedAt: 'not-a-date' }, { ...tokens, baseRouteVersion: '' },
-      { ...tokens, baseRouteVersion: 1 }];
+      { ...tokens, baseRouteVersion: 1 }, { baseUpdatedAt: tokens.baseUpdatedAt, baseRouteVersion: tokens.baseRouteVersion },
+      { ...tokens, baseLanguageUpdatedAt: 'not-a-date' }, { ...tokens, baseLanguageUpdatedAt: '2026-10-27' }];
     for (const payload of bodies) {
       const response = await b.app.inject({ method: 'POST', url, cookies: cookie, ...(payload === undefined ? {} : { payload }) });
       expect(response.statusCode).toBe(400);
@@ -2335,24 +3734,69 @@ describe('posts editor', () => {
     expect((await b.posts.get(saved.translationKey))!.status).toBe('draft');
   });
 
-  it.each(['single', 'bulk'] as const)('%s refuses a text change while publish gates are checking the reviewed pair', async (mode) => {
+  it.each(['single', 'bulk'] as const)('%s refuses a text change committed between review and the publication lock', async (mode) => {
     const s = stubBuilder();
     const b = build({ builder: s.builder }); const { cookie } = await authed(b);
     const saved = await b.posts.upsertDraft({ ...sample(), status: 'draft',
       de: { ...sample().de, locale: 'de', heroImage: { ...sample().de.heroImage, src: 'https://img.simonswanderlust.com/photo' } },
       en: { ...sample().en, locale: 'en' } });
     const tokens = await publishBody(b.posts, saved.translationKey);
-    vi.spyOn(b.media, 'notReadyKeys').mockImplementationOnce(async () => {
+    const publish = b.posts.publish.bind(b.posts);
+    vi.spyOn(b.posts, 'publish').mockImplementationOnce(async (...args) => {
       await b.posts.upsertDraft({ ...saved, de: { ...saved.de, bodyMarkdown: '![foreign](https://old.example/private.jpg)' } });
-      return new Set<string>();
+      return publish(...args);
     });
     const response = await b.app.inject(mode === 'single'
       ? { method: 'POST', url: `/posts/${saved.translationKey}/publish`, cookies: cookie, payload: tokens }
-      : { method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [saved.translationKey] } });
+      : { method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [saved.translationKey], baseLanguageUpdatedAt: tokens.baseLanguageUpdatedAt } });
     if (mode === 'single') { expect(response.statusCode).toBe(409); expect(response.json().code).toBe('conflict'); }
     else expect(response.json()).toMatchObject({ succeeded: 0, failed: 1 });
     expect((await b.posts.get(saved.translationKey))!.status).toBe('draft');
     expect(s.calls).toHaveLength(0);
+  });
+
+  it.each(['single', 'bulk'] as const)('%s holds the reviewed pair stable while image gates run', async (mode) => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder }); const { cookie } = await authed(b);
+    const saved = await b.posts.upsertDraft({ ...sample(), status: 'draft',
+      de: { ...sample().de, locale: 'de', heroImage: { ...sample().de.heroImage, src: 'https://img.simonswanderlust.com/photo' } },
+      en: { ...sample().en, locale: 'en' } });
+    const tokens = await publishBody(b.posts, saved.translationKey);
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    vi.spyOn(b.media, 'notReadyKeys').mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      return new Set<string>();
+    });
+    const request = b.app.inject(mode === 'single'
+      ? { method: 'POST', url: `/posts/${saved.translationKey}/publish`, cookies: cookie, payload: tokens }
+      : { method: 'POST', url: '/posts/bulk', cookies: cookie,
+          payload: { action: 'publish', keys: [saved.translationKey], baseLanguageUpdatedAt: tokens.baseLanguageUpdatedAt } }).then(response => response);
+    await entered.promise;
+    let settled = false;
+    const save = b.posts.upsertDraft({ ...saved, de: { ...saved.de, bodyMarkdown: '![foreign](https://old.example/private.jpg)' } })
+      .then(value => { settled = true; return value; });
+    try {
+      // Give the queued writer a turn while the publication gate remains held.
+      const turn = Promise.withResolvers<void>();
+      setImmediate(turn.resolve);
+      await turn.promise;
+      expect(settled).toBe(false);
+    } finally { release.resolve(); }
+    const [response, edited] = await Promise.all([request, save]);
+    expect(response.statusCode).toBe(200);
+    if (mode === 'single') expect(response.json().published).toBe(true);
+    else expect(response.json()).toMatchObject({ succeeded: 1, failed: 0 });
+    // The later edit is only a working copy, not part of the committed snapshot.
+    expect(edited.status).toBe('published');
+    expect(edited.publication).toMatchObject({ availability: 'available', draftDiffers: true });
+    expect(s.calls).toHaveLength(1);
+    const retry = await b.app.inject({ method: 'POST', url: `/posts/${saved.translationKey}/publish`,
+      cookies: cookie, payload: await publishBody(b.posts, saved.translationKey) });
+    expect(retry.statusCode).toBe(409);
+    expect(retry.json().code).toBe('foreign_images');
+    expect(s.calls).toHaveLength(1);
   });
 
   it('returns the committed publish timestamp even when a draft save happens during its build', async () => {
@@ -2360,23 +3804,24 @@ describe('posts editor', () => {
     let committed: Date | undefined;
     let tk = '';
     const b = build({ posts, builder: {
+      ...idleBuildState,
       hasRelease: () => true, quiesce: async () => {},
       build: async () => {
         const published = (await posts.get(tk))!;
         committed = published.updatedAt;
         await posts.upsertDraft({ ...published, de: { ...published.de, title: 'Later draft' } });
-        return { ok: false, error: 'synthetic build failure' };
+        return { ok: false, attemptId: 'failed', code: 'internal', error: buildFailureMessage('internal') };
       },
     } });
     const { cookie } = await authed(b);
-    const created = await b.app.inject({ method: 'POST', url: '/posts', cookies: cookie, payload: sample() });
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', cookies: cookie, payload: sample() });
     tk = created.json().translationKey;
     const response = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(posts, tk) });
     expect(response.statusCode).toBe(200);
     expect(response.json().updatedAt).toBe(committed!.toISOString());
     expect(response.json().build.ok).toBe(false);
     expect((await posts.get(tk))!.updatedAt.getTime()).toBeGreaterThan(committed!.getTime());
-    expect((await posts.get(tk))!.hasUnpublishedChanges).toBe(true);
+    expect((await posts.get(tk))!.publication).toMatchObject({ availability: 'available', draftDiffers: true });
   });
 
   it('GET /posts 401 without auth', async () => {
@@ -2385,7 +3830,7 @@ describe('posts editor', () => {
 
   it('create → list → publish (triggers the builder)', async () => {
     const b = build(); const { cookie } = await authed(b);
-    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     expect(created.statusCode).toBe(200);
     const tk = created.json().translationKey;
     const list = await b.app.inject({ method: 'GET', url: '/posts', cookies: cookie });
@@ -2401,7 +3846,7 @@ describe('posts editor', () => {
     expect(anonymous.statusCode).toBe(401);
     expect(anonymous.headers['cache-control']).toBe('no-store');
     const { cookie } = await authed(b, { isAdmin: false, username: 'author' });
-    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     expect(created.statusCode).toBe(200); // authors may still create/edit drafts
     const tk = created.json().translationKey;
     const pub = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
@@ -2412,37 +3857,37 @@ describe('posts editor', () => {
   it('publish rejects an incomplete post (400)', async () => {
     const b = build(); const { cookie } = await authed(b);
     const bad = sample(); bad.de.excerpt = '';
-    const c = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: bad });
+    const c = await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: bad });
     const tk = c.json().translationKey;
     const pub = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     expect(pub.statusCode).toBe(400);
   });
 
-  it('draft edits over a published post surface hasUnpublishedChanges until re-publish', async () => {
+  it('draft edits over a published post surface content differences until re-publish', async () => {
     const b = build(); const { cookie } = await authed(b);
-    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     const tk = created.json().translationKey;
     await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     let got = (await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).json();
-    expect(got).toMatchObject({ status: 'published', hasUnpublishedChanges: false });
+    expect(got).toMatchObject({ status: 'published', publication: { availability: 'available', draftDiffers: false } });
 
     const edited = { ...sample(), de: { ...sample().de, bodyMarkdown: '## edited' } };
-    const put = await b.app.inject({ method: 'PUT', url: `/posts/${tk}`, headers: { 'content-type': 'application/json' }, cookies: cookie, payload: edited });
+    const put = await injectAuthoring(b.app, { method: 'PUT', url: `/posts/${tk}`, headers: { 'content-type': 'application/json' }, cookies: cookie, payload: edited });
     expect(put.statusCode).toBe(200);
-    expect(put.json()).toMatchObject({ status: 'published', hasUnpublishedChanges: true });
+    expect(put.json()).toMatchObject({ status: 'published', publication: { availability: 'available', draftDiffers: true } });
 
     // The editor still gets the edited WORKING copy; the list carries the flag
     // for the posts page's "edited" badge.
     got = (await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).json();
     expect(got.de.bodyMarkdown).toBe('## edited');
-    expect(got.hasUnpublishedChanges).toBe(true);
+    expect(got.publication).toMatchObject({ availability: 'available', draftDiffers: true });
     const list = (await b.app.inject({ method: 'GET', url: '/posts', cookies: cookie })).json();
-    expect(list[0]).toMatchObject({ status: 'published', hasUnpublishedChanges: true });
+    expect(list[0]).toMatchObject({ status: 'published', publication: { availability: 'available', draftDiffers: true } });
 
     const repub = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     expect(repub.statusCode).toBe(200);
     got = (await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).json();
-    expect(got).toMatchObject({ status: 'published', hasUnpublishedChanges: false });
+    expect(got).toMatchObject({ status: 'published', publication: { availability: 'available', draftDiffers: false } });
   });
 
   it('delete and unpublish are admin-only (401 anonymous, 403 author)', async () => {
@@ -2462,7 +3907,7 @@ describe('posts editor', () => {
 
   it('PUT /posts/:tk 404s on an unknown key instead of creating a post', async () => {
     const b = build(); const { cookie } = await authed(b);
-    const put = await b.app.inject({ method: 'PUT', url: '/posts/nope', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    const put = await injectAuthoring(b.app, { method: 'PUT', url: '/posts/nope', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     expect(put.statusCode).toBe(404);
     expect((await b.app.inject({ method: 'GET', url: '/posts', cookies: cookie })).json()).toHaveLength(0);
   });
@@ -2471,11 +3916,11 @@ describe('posts editor', () => {
     const s = stubBuilder();
     const b = build({ builder: s.builder });
     const { cookie } = await authed(b);
-    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     const tk = created.json().translationKey;
     const del = await b.app.inject({ method: 'DELETE', url: `/posts/${tk}`, cookies: cookie });
     expect(del.statusCode).toBe(200);
-    expect(del.json()).toEqual({ deleted: true });
+    expect(del.json()).toEqual({ deleted: true, publication: { availability: 'missing' } });
     expect(s.calls.length).toBe(0); // a draft was never on the live site
     expect((await b.app.inject({ method: 'GET', url: '/posts', cookies: cookie })).json()).toHaveLength(0);
   });
@@ -2484,13 +3929,13 @@ describe('posts editor', () => {
     const s = stubBuilder();
     const b = build({ builder: s.builder });
     const { cookie } = await authed(b);
-    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     const tk = created.json().translationKey;
     await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     expect(s.calls.length).toBe(1); // publish built once
     const del = await b.app.inject({ method: 'DELETE', url: `/posts/${tk}`, cookies: cookie });
     expect(del.statusCode).toBe(200);
-    expect(del.json()).toEqual({ deleted: true, build: { ok: true, release: 'r1' } });
+    expect(del.json()).toEqual({ deleted: true, publication: { availability: 'missing' }, build: { ok: true, attemptId: 'r1', release: 'r1' } });
     expect(s.calls.length).toBe(2);
     expect((await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).statusCode).toBe(404);
   });
@@ -2499,7 +3944,7 @@ describe('posts editor', () => {
     const s = stubBuilder();
     const b = build({ builder: s.builder });
     const { cookie } = await authed(b);
-    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     const tk = created.json().translationKey;
     const un = await b.app.inject({ method: 'POST', url: `/posts/${tk}/unpublish`, cookies: cookie });
     expect(un.statusCode).toBe(409);
@@ -2511,40 +3956,111 @@ describe('posts editor', () => {
     const s = stubBuilder();
     const b = build({ builder: s.builder });
     const { cookie } = await authed(b);
-    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     const tk = created.json().translationKey;
-    await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
+    const published = await injectAuthoring(b.app, { method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     expect(s.calls.length).toBe(1);
+    const un = await injectAuthoring(b.app, { method: 'POST', url: `/posts/${tk}/unpublish`, cookies: cookie });
+    expect(un.statusCode).toBe(200);
+    expect(un.json()).toEqual({ unpublished: true, previousUpdatedAt: published.json().updatedAt, updatedAt: expect.any(String),
+      publication: { availability: 'available', status: 'draft', requestedLocales: ['de', 'en'], committedLocales: [],
+        draftDiffers: false, live: { de: 'not-live', en: 'not-live' } },
+      build: { ok: true, attemptId: 'r1', release: 'r1' } });
+    expect(s.calls.length).toBe(2);
+    const got = await injectAuthoring(b.app, { method: 'GET', url: `/posts/${tk}`, cookies: cookie });
+    expect(got.json().status).toBe('draft');
+    expect(un.json().updatedAt).toBe(got.json().updatedAt);
+    expect(new Date(un.json().updatedAt).getTime()).toBeGreaterThan(new Date(created.json().updatedAt).getTime());
+    const saved = await injectAuthoring(b.app, {
+      method: 'PUT', url: `/posts/${tk}`, cookies: cookie,
+      payload: { ...sample(), updatedAt: un.json().updatedAt },
+    });
+    expect(saved.statusCode).toBe(200);
+  });
+
+  it('unpublish returns its own token when a later writer saves during the rebuild', async () => {
+    const posts = memoryPostStore();
+    let tokenAtBuild: string | undefined;
+    const builder: SiteBuilder = {
+      ...stubBuilder().builder,
+      build: async () => {
+        const [summary] = await posts.list();
+        const pair = (await posts.get(summary!.translationKey))!;
+        tokenAtBuild = pair.updatedAt.toISOString();
+        await posts.upsertDraft({ ...pair, de: { ...pair.de, title: 'Another tab' } }, pair.updatedAt);
+        return { ok: true, attemptId: 'r1', release: 'r1' };
+      },
+    };
+    const b = build({ posts, builder });
+    const { cookie } = await authed(b);
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', cookies: cookie, payload: sample() });
+    const tk = created.json().translationKey;
+    await posts.publish(tk, await publishTokens(posts, tk));
+    const un = await injectAuthoring(b.app, { method: 'POST', url: `/posts/${tk}/unpublish`, cookies: cookie });
+    expect(un.statusCode).toBe(200);
+    expect(un.json().updatedAt).toBe(tokenAtBuild);
+    expect(un.json().updatedAt).not.toBe((await posts.get(tk))!.updatedAt.toISOString());
+    const stale = await injectAuthoring(b.app, {
+      method: 'PUT', url: `/posts/${tk}`, cookies: cookie,
+      payload: { ...sample(), updatedAt: un.json().updatedAt },
+    });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json().code).toBe('conflict');
+    expect((await posts.get(tk))!.de.title).toBe('Another tab');
+  });
+
+  it('reports the locked predecessor when another tab saves after the route preflight', async () => {
+    const posts = memoryPostStore();
+    const b = build({ posts, builder: stubBuilder().builder });
+    const { cookie } = await authed(b);
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', cookies: cookie, payload: sample() });
+    const tk = created.json().translationKey;
+    const published = await posts.publish(tk, await publishTokens(posts, tk));
+    const get = posts.get.bind(posts);
+    let precedingToken: Date | undefined;
+    vi.spyOn(posts, 'get').mockImplementationOnce(async (key) => {
+      const before = (await get(key))!;
+      const saved = await posts.upsertDraft({
+        ...before, de: { ...before.de, title: 'Saved between preflight and lock' },
+      }, before.updatedAt);
+      precedingToken = saved.updatedAt;
+      return before;
+    });
     const un = await b.app.inject({ method: 'POST', url: `/posts/${tk}/unpublish`, cookies: cookie });
     expect(un.statusCode).toBe(200);
-    expect(un.json()).toEqual({ unpublished: true, build: { ok: true, release: 'r1' } });
-    expect(s.calls.length).toBe(2);
-    const got = await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie });
-    expect(got.json().status).toBe('draft');
+    expect(un.json().previousUpdatedAt).toBe(precedingToken?.toISOString());
+    expect(un.json().previousUpdatedAt).not.toBe(published.updatedAt.toISOString());
+    const stale = await injectAuthoring(b.app, { method: 'PUT', url: `/posts/${tk}`, cookies: cookie,
+    payload: { ...sample(), updatedAt: published.updatedAt.toISOString() }, });
+    expect(stale.statusCode).toBe(409);
+    expect((await posts.get(tk))!.de.title).toBe('Saved between preflight and lock');
   });
 
   it('a failed rebuild is surfaced but the store change still lands (unpublish + delete)', async () => {
-    const s = stubBuilder({ ok: false, error: 'a build is already running' });
+    const s = stubBuilder({ ok: false, attemptId: 'failed', code: 'internal', error: buildFailureMessage('internal') });
     const b = build({ builder: s.builder });
     const { cookie } = await authed(b);
-    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     const tk = created.json().translationKey;
-    await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
+    const published = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     const un = await b.app.inject({ method: 'POST', url: `/posts/${tk}/unpublish`, cookies: cookie });
     expect(un.statusCode).toBe(200);
-    expect(un.json()).toEqual({ unpublished: true, build: { ok: false, error: 'a build is already running' } });
+    expect(un.json()).toEqual({ unpublished: true, previousUpdatedAt: published.json().updatedAt, updatedAt: expect.any(String),
+      publication: { availability: 'available', status: 'draft', requestedLocales: ['de', 'en'], committedLocales: [],
+        draftDiffers: false, live: { de: 'not-live', en: 'not-live' } },
+      build: { ok: false, attemptId: 'failed', code: 'internal', error: buildFailureMessage('internal') } });
     expect((await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).json().status).toBe('draft');
     // re-publish, then delete while the builder keeps failing: DB delete lands, outcome surfaced
     await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     const del = await b.app.inject({ method: 'DELETE', url: `/posts/${tk}`, cookies: cookie });
     expect(del.statusCode).toBe(200);
-    expect(del.json()).toEqual({ deleted: true, build: { ok: false, error: 'a build is already running' } });
+    expect(del.json()).toEqual({ deleted: true, publication: { availability: 'missing' }, build: { ok: false, attemptId: 'failed', code: 'internal', error: buildFailureMessage('internal') } });
     expect((await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).statusCode).toBe(404);
   });
 
   it('GET /posts summaries carry the hero, trip date, country and region for the list UI', async () => {
     const b = build(); const { cookie } = await authed(b);
-    await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     const [summary] = (await b.app.inject({ method: 'GET', url: '/posts', cookies: cookie })).json();
     expect(summary).toMatchObject({
       heroSrc: 'https://i/h', heroWidth: 9,
@@ -2554,27 +4070,23 @@ describe('posts editor', () => {
 
   it('GET /posts/:tk includes updatedAt, and a PUT echoing it saves fine', async () => {
     const b = build(); const { cookie } = await authed(b);
-    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     expect(created.json().updatedAt).toBeTruthy();
     const tk = created.json().translationKey;
     const got = (await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).json();
     expect(typeof got.updatedAt).toBe('string');
-    const put = await b.app.inject({
-      method: 'PUT', url: `/posts/${tk}`, headers: { 'content-type': 'application/json' }, cookies: cookie,
-      payload: { ...sample(), de: { ...sample().de, title: 'T2' }, updatedAt: got.updatedAt },
-    });
+    const put = await injectAuthoring(b.app, { method: 'PUT', url: `/posts/${tk}`, headers: { 'content-type': 'application/json' }, cookies: cookie,
+    payload: { ...sample(), de: { ...sample().de, title: 'T2' }, updatedAt: got.updatedAt }, });
     expect(put.statusCode).toBe(200);
     expect(put.json().de.title).toBe('T2');
   });
 
   it('PUT with a stale updatedAt → 409 code "conflict"; nothing is overwritten', async () => {
     const b = build(); const { cookie } = await authed(b);
-    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     const tk = created.json().translationKey;
-    const put = await b.app.inject({
-      method: 'PUT', url: `/posts/${tk}`, headers: { 'content-type': 'application/json' }, cookies: cookie,
-      payload: { ...sample(), de: { ...sample().de, bodyMarkdown: '## clobber' }, updatedAt: '2000-01-01T00:00:00.000Z' },
-    });
+    const put = await injectAuthoring(b.app, { method: 'PUT', url: `/posts/${tk}`, headers: { 'content-type': 'application/json' }, cookies: cookie,
+    payload: { ...sample(), de: { ...sample().de, bodyMarkdown: '## clobber' }, updatedAt: '2000-01-01T00:00:00.000Z' }, });
     expect(put.statusCode).toBe(409);
     expect(put.json()).toMatchObject({ code: 'conflict' });
     expect(put.json().error).toMatch(/modified/);
@@ -2584,17 +4096,13 @@ describe('posts editor', () => {
 
   it('PUT with an unparsable updatedAt → 400; without one the check is skipped', async () => {
     const b = build(); const { cookie } = await authed(b);
-    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     const tk = created.json().translationKey;
-    const bad = await b.app.inject({
-      method: 'PUT', url: `/posts/${tk}`, headers: { 'content-type': 'application/json' }, cookies: cookie,
-      payload: { ...sample(), updatedAt: 'not-a-date' },
-    });
+    const bad = await injectAuthoring(b.app, { method: 'PUT', url: `/posts/${tk}`, headers: { 'content-type': 'application/json' }, cookies: cookie,
+    payload: { ...sample(), updatedAt: 'not-a-date' }, });
     expect(bad.statusCode).toBe(400);
-    const none = await b.app.inject({
-      method: 'PUT', url: `/posts/${tk}`, headers: { 'content-type': 'application/json' }, cookies: cookie,
-      payload: sample(),
-    });
+    const none = await injectAuthoring(b.app, { method: 'PUT', url: `/posts/${tk}`, headers: { 'content-type': 'application/json' }, cookies: cookie,
+    payload: sample(), });
     expect(none.statusCode).toBe(200);
   });
 
@@ -2602,9 +4110,9 @@ describe('posts editor', () => {
   // slug, so renaming a draft slug must be an explicit act, never a side effect.
   it('renaming a draft slug needs confirmSlugChange: 409 without it (nothing saved), 200 with it', async () => {
     const b = build(); const { cookie } = await authed(b);
-    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     const tk = created.json().translationKey;
-    const put = (payload: Record<string, unknown>) => b.app.inject({ method: 'PUT', url: `/posts/${tk}`, headers: { 'content-type': 'application/json' }, cookies: cookie, payload });
+    const put = (payload: Record<string, unknown>) => injectAuthoring(b.app, { method: 'PUT', url: `/posts/${tk}`, headers: { 'content-type': 'application/json' }, cookies: cookie, payload });
     const renamed = { ...sample(), de: { ...sample().de, slug: 'renamed-de', bodyMarkdown: '## edited' } };
     const refused = await put(renamed);
     expect(refused.statusCode).toBe(409);
@@ -2623,18 +4131,18 @@ describe('posts editor', () => {
   it('filling in an unset EN slug on a DE-first draft needs no confirmation', async () => {
     const b = build(); const { cookie } = await authed(b);
     const deFirst = { ...sample(), en: { ...sample().en, slug: '', title: '' } };
-    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: deFirst });
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: deFirst });
     const tk = created.json().translationKey;
-    const res = await b.app.inject({ method: 'PUT', url: `/posts/${tk}`, headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    const res = await injectAuthoring(b.app, { method: 'PUT', url: `/posts/${tk}`, headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     expect(res.statusCode).toBe(200);
     expect(res.json().en.slug).toBe('en-s');
   });
 
   it('a second tab saving after another tab confirmed a rename gets "conflict", not a consent error', async () => {
     const b = build(); const { cookie } = await authed(b);
-    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     const tk = created.json().translationKey;
-    const put = (payload: Record<string, unknown>) => b.app.inject({ method: 'PUT', url: `/posts/${tk}`, headers: { 'content-type': 'application/json' }, cookies: cookie, payload });
+    const put = (payload: Record<string, unknown>) => injectAuthoring(b.app, { method: 'PUT', url: `/posts/${tk}`, headers: { 'content-type': 'application/json' }, cookies: cookie, payload });
     expect((await put({ ...sample(), de: { ...sample().de, slug: 'renamed-de' }, confirmSlugChange: true })).statusCode).toBe(200);
     // tab B still holds the old slug and a pre-rename updatedAt: it needs the
     // reload offer ('conflict'), not a slug prompt it has no way to answer.
@@ -2645,39 +4153,38 @@ describe('posts editor', () => {
 
   it('duplicate-slug 409 carries its own code, distinguishable from a conflict', async () => {
     const b = build(); const { cookie } = await authed(b);
-    await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
-    const dup = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    const dup = await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     expect(dup.statusCode).toBe(409);
     expect(dup.json().code).toBe('duplicate_slug');
   });
 
-  // Issue #120: malformed payloads used to throw a TypeError (or a pg 22P02)
-  // inside the handler and surface as a sanitized 500; the field is now named.
-  it('malformed post payloads are 400s naming the field, never 500s', async () => {
+  // Malformed requests must not become 500s or leave partially created drafts.
+  it('rejects malformed post payloads without creating drafts', async () => {
     const b = build(); const { cookie } = await authed(b);
-    const post = (payload: unknown) => b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: payload as Record<string, unknown> });
-    const cases: [unknown, RegExp][] = [
-      [[], /must be an object/],
-      [{ shared: {}, en: {} }, /^de must be an object/],
-      [{ shared: {}, de: { title: 42 }, en: {} }, /de\.title must be a string/],
-      [{ shared: {}, de: { title: '' }, en: {} }, /German title/],
-      [{ shared: { categories: 'a,b' }, de: { title: 'T' }, en: {} }, /shared\.categories must be an array of strings/],
-      [{ shared: { scheduledAt: 'junk' }, de: { title: 'T' }, en: {} }, /shared\.scheduledAt/],
-      [{ shared: { countryCode: 'R' }, de: { title: 'T' }, en: {} }, /shared\.countryCode must be 2 letters/],
-      [{ shared: { region: 'mars' }, de: { title: 'T' }, en: {} }, /shared\.region must be one of/],
-      [{ shared: { date: '3.10.2024' }, de: { title: 'T' }, en: {} }, /shared\.date must be YYYY-MM-DD/],
-      [{ shared: { coordinates: { lat: 'x', lng: 1 } }, de: { title: 'T' }, en: {} }, /shared\.coordinates/],
+    const post = (payload: unknown) => injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: payload as Record<string, unknown> });
+    const cases: unknown[] = [
+      [],
+      { shared: {}, en: {} },
+      { shared: {}, de: { title: 42 }, en: {} },
+      { shared: {}, de: { title: '' }, en: {} },
+      { shared: { categories: 'a,b' }, de: { title: 'T' }, en: {} },
+      { shared: { scheduledAt: 'junk' }, de: { title: 'T' }, en: {} },
+      { shared: { countryCode: 'R' }, de: { title: 'T' }, en: {} },
+      { shared: { region: 'mars' }, de: { title: 'T' }, en: {} },
+      { shared: { date: '3.10.2024' }, de: { title: 'T' }, en: {} },
+      { shared: { coordinates: { lat: 'x', lng: 1 } }, de: { title: 'T' }, en: {} },
     ];
-    for (const [payload, msg] of cases) {
+    for (const payload of cases) {
       const res = await post(payload);
       expect(res.statusCode, JSON.stringify(payload)).toBe(400);
-      expect(res.json().error, JSON.stringify(payload)).toMatch(msg);
     }
+    expect(await b.posts.list()).toEqual([]);
   });
 
   it('a title-only draft (the documented minimum) saves and reloads with visible placeholders', async () => {
     const b = build(); const { cookie } = await authed(b);
-    const res = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: { shared: {}, de: { locale: 'de', title: 'Nur ein Titel' }, en: { locale: 'en' } } });
+    const res = await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: { shared: {}, de: { locale: 'de', title: 'Nur ein Titel' }, en: { locale: 'en' } } });
     expect(res.statusCode).toBe(200);
     const got = (await b.app.inject({ method: 'GET', url: `/posts/${res.json().translationKey}`, cookies: cookie })).json();
     expect(got.shared).toMatchObject({ countryCode: 'XX', region: 'europe', coordinates: { lat: 0, lng: 0 } });
@@ -2687,16 +4194,14 @@ describe('posts editor', () => {
 
   it('publish response includes the fresh updatedAt so the editor can re-sync', async () => {
     const b = build(); const { cookie } = await authed(b);
-    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     const tk = created.json().translationKey;
     const pub = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     expect(pub.statusCode).toBe(200);
     expect(pub.json().updatedAt).toBeTruthy();
     // Echoing the post-publish value must not false-conflict.
-    const put = await b.app.inject({
-      method: 'PUT', url: `/posts/${tk}`, headers: { 'content-type': 'application/json' }, cookies: cookie,
-      payload: { ...sample(), status: 'published', updatedAt: pub.json().updatedAt },
-    });
+    const put = await injectAuthoring(b.app, { method: 'PUT', url: `/posts/${tk}`, headers: { 'content-type': 'application/json' }, cookies: cookie,
+    payload: { ...sample(), status: 'published', updatedAt: pub.json().updatedAt }, });
     expect(put.statusCode).toBe(200);
   });
 
@@ -2707,7 +4212,7 @@ describe('posts editor', () => {
     await writeFile(blocker, 'x');
     const b = build({ backupDir: join(blocker, 'backup') });
     const { cookie } = await authed(b);
-    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     const tk = created.json().translationKey;
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
@@ -2744,17 +4249,15 @@ describe('post revisions endpoints', () => {
 
   it('lists the revision created by a second save and serves its full snapshot', async () => {
     const b = build(); const { cookie } = await authed(b);
-    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     const tk = created.json().translationKey;
     let list = (await b.app.inject({ method: 'GET', url: `/posts/${tk}/revisions`, cookies: cookie })).json();
     expect(list).toEqual([]);
-    await b.app.inject({
-      method: 'PUT', url: `/posts/${tk}`, headers: { 'content-type': 'application/json' }, cookies: cookie,
-      payload: { ...sample(), de: { ...sample().de, title: 'T2', bodyMarkdown: '## new' } },
-    });
+    await injectAuthoring(b.app, { method: 'PUT', url: `/posts/${tk}`, headers: { 'content-type': 'application/json' }, cookies: cookie,
+    payload: { ...sample(), de: { ...sample().de, title: 'T2', bodyMarkdown: '## new' } }, });
     list = (await b.app.inject({ method: 'GET', url: `/posts/${tk}/revisions`, cookies: cookie })).json();
     expect(list).toHaveLength(1);
-    expect(list[0]).toMatchObject({ titleDe: 'T', status: 'draft' });
+    expect(list[0]).toMatchObject({ title: 'T', status: 'draft' });
     expect(typeof list[0].savedAt).toBe('string');
     expect(list[0].snapshot).toBeUndefined(); // summaries stay light
 
@@ -2775,8 +4278,8 @@ describe('post revisions endpoints', () => {
     const b = build(); const { cookie } = await authed(b);
     const revOf = async (slug: string) => {
       const payload = { ...sample(), de: { ...sample().de, slug: `de-${slug}` }, en: { ...sample().en, slug: `en-${slug}` } };
-      const tk = (await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload })).json().translationKey;
-      await b.app.inject({ method: 'PUT', url: `/posts/${tk}`, headers: { 'content-type': 'application/json' }, cookies: cookie, payload: { ...payload, de: { ...payload.de, title: 'T2' } } });
+      const tk = (await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload })).json().translationKey;
+      await injectAuthoring(b.app, { method: 'PUT', url: `/posts/${tk}`, headers: { 'content-type': 'application/json' }, cookies: cookie, payload: { ...payload, de: { ...payload.de, title: 'T2' } } });
       const [rev] = (await b.app.inject({ method: 'GET', url: `/posts/${tk}/revisions`, cookies: cookie })).json();
       return { tk, id: rev.id as string };
     };
@@ -2880,6 +4383,40 @@ describe('WordPress import', () => {
     expect(res.json().error).toBe('no importable posts found in export');
   });
 
+  it.each([false, true])('completes a groupless-only export as a rejection-only 202 job (overwrite=%s)', async (overwrite) => {
+    const rehost = vi.fn(async () => ({ src: 'https://img/unexpected', width: 1, height: 1 }));
+    const b = build({ prepareImport: (xml, deps) => prepareImport(xml, { ...deps, rehost }) });
+    const upsert = vi.spyOn(b.posts, 'upsertDraft');
+    const { cookie } = await authed(b);
+    const xml = wxrWith('https://wp.example/must-not-fetch.jpg')
+      .replaceAll('<category domain="post_translations" nicename="impg"><![CDATA[impg]]></category>', '');
+    const res = await postImport(b, cookie, xml, { overwriteDrafts: String(overwrite) });
+    expect(res.statusCode).toBe(202);
+    expect(res.json().planned).toEqual({
+      groups: { total: 0, done: 0 }, images: { planned: 0, hosted: 0, failed: 0 },
+    });
+    await b.importJobs.settle();
+    const status = await b.app.inject({ method: 'GET', url: '/import/status', cookies: cookie });
+    expect(status.statusCode).toBe(200);
+    const job = status.json().job;
+    expect(job).toMatchObject({
+      id: res.json().id, status: 'done',
+      progress: { groups: { total: 0, done: 0 }, images: { planned: 0, hosted: 0, failed: 0 } },
+      summary: {
+        imported: 0, updated: 0, skippedPublished: 0, rejected: 2, failed: 0,
+        images: { total: 0, hosted: 0, failed: 0 },
+        warnings: [
+          'imp-de (de): no translation (untranslated post) — rejected',
+          'imp-en (en): no translation (untranslated post) — rejected',
+        ],
+      },
+    });
+    expect(job.finishedAt).toBeTruthy();
+    expect(rehost).not.toHaveBeenCalled();
+    expect(upsert).not.toHaveBeenCalled();
+    expect(await b.posts.list()).toEqual([]);
+  });
+
   // issue #100: a re-run of an export whose posts are all already published is
   // a job with `skippedPublished` — "nothing to do" is a success the author can
   // read, not the 400 the old `skipped === 0` check returned (a 400 cannot say
@@ -2893,7 +4430,7 @@ describe('WordPress import', () => {
       de: { locale: 'de', slug: 'imp-de', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
       en: { locale: 'en', slug: 'imp-en', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
     };
-    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: seed });
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: seed });
     const tk = created.json().translationKey;
     await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     const summary = await importAndWait(b, cookie, wxrWith());
@@ -2957,7 +4494,7 @@ ${(['de', 'en'] as const).map((loc) => `  <item>
     expect(warnings).not.toMatch(/ECONNREFUSED|refusing to fetch/);
   });
 
-  const OK: ImportSummary = { imported: 1, updated: 0, skippedPublished: 0, rejected: 0, failed: 0, images: { total: 0, hosted: 0, failed: 0 }, warnings: [] };
+  const OK: ImportSummary = { imported: 1, updated: 0, skippedPublished: 0, skippedLocale: 0, rejected: 0, failed: 0, images: { total: 0, hosted: 0, failed: 0 }, warnings: [] };
   const PLANNED: ImportProgress = { groups: { total: 1, done: 0 }, images: { planned: 0, hosted: 0, failed: 0 } };
   /** A pre-flight stub: one group, whose run() is `run` (default: instant OK). */
   const prepared = (run: PreparedImport['run'] = async () => OK, groups = 1): PreparedImport => ({ groups, planned: PLANNED, run });
@@ -3139,7 +4676,7 @@ describe('POST /rebuild and GET /health', () => {
   it('reports whether a release exists, as information — a missing one is not a verdict', async () => {
     // #110: a fresh volume has no release for the first minutes and a persistent
     // build failure is healed by a publish, not by a container restart.
-    const none = build({ builder: { build: async () => ({ ok: true, release: 'r' }), hasRelease: () => false, quiesce: async () => {} } });
+    const none = build({ builder: { ...idleBuildState, build: async () => ({ ok: true, attemptId: 'r', release: 'r' }), hasRelease: () => false, quiesce: async () => {} } });
     const res = await none.app.inject({ method: 'GET', url: '/health' });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ ok: true, release: false });
@@ -3173,24 +4710,24 @@ describe('POST /rebuild and GET /health', () => {
   });
 
   it('rebuild triggers the builder and returns its outcome', async () => {
-    const s = stubBuilder({ ok: true, release: 'r9' });
+    const s = stubBuilder({ ok: true, attemptId: 'r9', release: 'r9' });
     const b = build({ builder: s.builder });
     const { cookie } = await authed(b);
     const res = await b.app.inject({ method: 'POST', url: '/rebuild', cookies: cookie });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ ok: true, release: 'r9' });
+    expect(res.json()).toEqual({ ok: true, attemptId: 'r9', release: 'r9' });
     expect(s.calls.length).toBe(1);
   });
 
   it('publish reports a failed build without unpublishing', async () => {
-    const s = stubBuilder({ ok: false, error: 'astro build exited 1' });
+    const s = stubBuilder({ ok: false, attemptId: 'failed', code: 'build_failed', error: buildFailureMessage('build_failed') });
     const b = build({ builder: s.builder });
     const { cookie } = await authed(b);
-    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     const tk = created.json().translationKey;
     const res = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     expect(res.statusCode).toBe(200);
-    expect(res.json().build).toEqual({ ok: false, error: 'astro build exited 1' });
+    expect(res.json().build).toEqual({ ok: false, attemptId: 'failed', code: 'build_failed', error: buildFailureMessage('build_failed') });
   });
 });
 
@@ -3276,6 +4813,47 @@ describe('backup routes', () => {
 });
 
 describe('pages routes', () => {
+  it('returns saved warnings beside a failed build, but none for conflict or write failure', async () => {
+    const outcome = { ok: false as const, attemptId: 'failed', code: 'internal' as const, error: buildFailureMessage('internal') };
+    const s = stubBuilder(outcome);
+    const b = build({ builder: s.builder });
+    try {
+      const { cookie } = await authed(b);
+      // A hosted photo: page saves publish immediately, so #284 refuses foreign images.
+      const line = 'https://img.simonswanderlust.com/pages/about/gallery | 30x20 | caption="Rom | Tag 2"';
+      const input = {
+        de: { locale: 'de', title: 'Über mich', bodyMarkdown: `~~~gallery\n${line}\n~~~`, images: {} },
+        en: { locale: 'en', title: 'About', bodyMarkdown: 'Keep', images: {} },
+      };
+      const response = await injectAuthoring(b.app, { method: 'PUT', url: '/pages/about', cookies: cookie, payload: input });
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json().build).toEqual(outcome);
+      expect(response.json().saved).toMatchObject({ key: 'about', de: input.de, en: input.en });
+      expect(response.json().saved).not.toHaveProperty('galleryWarnings');
+      expect(response.json().galleryWarnings).toEqual([{
+        code: 'invalid_gallery_metadata', locale: 'de', line: 2,
+        column: line.indexOf('caption=') + 1, field: 'caption', reason: 'malformed_field',
+      }]);
+      const before = await b.pages.get('about');
+      expect(before).not.toHaveProperty('galleryWarnings');
+      const stale = await injectAuthoring(b.app, { method: 'PUT', url: '/pages/about', cookies: cookie, payload: { ...input, updatedAt: new Date(0).toISOString() } });
+      expect(stale.statusCode).toBe(409);
+      expect(stale.json()).not.toHaveProperty('galleryWarnings');
+      const write = vi.spyOn(b.pages, 'save').mockRejectedValueOnce(new Error('private storage failure'));
+      const failed = await injectAuthoring(b.app, { method: 'PUT', url: '/pages/about', cookies: cookie, payload: input });
+      write.mockRestore();
+      expect(failed.statusCode).toBe(500);
+      expect(failed.json()).not.toHaveProperty('galleryWarnings');
+      expect(failed.body).not.toContain('private storage failure');
+      expect(await b.pages.get('about')).toEqual(before);
+      expect(s.calls).toHaveLength(1);
+      const repaired = await injectAuthoring(b.app, { method: 'PUT', url: '/pages/about', cookies: cookie, payload: { ...input, de: { ...input.de, bodyMarkdown: 'Fixed' } } });
+      expect(repaired.statusCode).toBe(200);
+      expect(repaired.json().galleryWarnings).toEqual([]);
+      expect(s.calls).toHaveLength(2);
+    } finally { await b.app.close(); }
+  });
+
   it('GET /pages/:key requires auth and returns the pair', async () => {
     const b = build();
     expect((await b.app.inject({ method: 'GET', url: '/pages/about' })).statusCode).toBe(401);
@@ -3287,54 +4865,71 @@ describe('pages routes', () => {
   });
 
   it('PUT /pages/:key is admin-only and saves + rebuilds', async () => {
-    const s = stubBuilder({ ok: true, release: 'r7' });
+    const s = stubBuilder({ ok: true, attemptId: 'r7', release: 'r7' });
     const b = build({ builder: s.builder });
     const body = {
       de: { locale: 'de', title: 'Über mich', bodyMarkdown: 'Hallo', images: {} },
       en: { locale: 'en', title: 'About me', bodyMarkdown: 'Hi', images: {} },
     };
-    expect((await b.app.inject({ method: 'PUT', url: '/pages/about', payload: body })).statusCode).toBe(401);
+    expect((await injectAuthoring(b.app, { method: 'PUT', url: '/pages/about', payload: body })).statusCode).toBe(401);
     const nonAdmin = await authed(b, { isAdmin: false, username: 'author' });
-    expect((await b.app.inject({ method: 'PUT', url: '/pages/about', cookies: nonAdmin.cookie, payload: body })).statusCode).toBe(403);
+    expect((await injectAuthoring(b.app, { method: 'PUT', url: '/pages/about', cookies: nonAdmin.cookie, payload: body })).statusCode).toBe(403);
     const admin = await authed(b);
-    const res = await b.app.inject({ method: 'PUT', url: '/pages/about', cookies: admin.cookie, payload: body });
+    const res = await injectAuthoring(b.app, { method: 'PUT', url: '/pages/about', cookies: admin.cookie, payload: body });
     expect(res.statusCode).toBe(200);
     expect(res.json().saved.de.title).toBe('Über mich');
-    expect(res.json().build).toEqual({ ok: true, release: 'r7' });
+    expect(res.json().build).toEqual({ ok: true, attemptId: 'r7', release: 'r7' });
     expect(s.calls.length).toBe(1);
+  });
+
+  it('does not apply the story-only H1 gate to About publication', async () => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder });
+    try {
+      const { cookie } = await authed(b);
+      const body = {
+        de: { locale: 'de', title: 'Über mich', bodyMarkdown: 'Über mich\n=========', images: {} },
+        en: { locale: 'en', title: 'About me', bodyMarkdown: '<h1>About me</h1>', images: {} },
+      };
+      const response = await injectAuthoring(b.app, { method: 'PUT', url: '/pages/about', cookies: cookie, payload: body });
+      expect(response.statusCode).toBe(200);
+      expect((await b.pages.get('about')).de.bodyMarkdown).toBe(body.de.bodyMarkdown);
+      expect((await b.pages.get('about')).en.bodyMarkdown).toBe(body.en.bodyMarkdown);
+      expect(s.calls).toHaveLength(1);
+    } finally { await b.app.close(); }
   });
 
   it('PUT /pages/:key rejects an unsafe key with 400', async () => {
     const b = build();
     const { cookie } = await authed(b);
-    const res = await b.app.inject({ method: 'PUT', url: '/pages/Bad_Key', cookies: cookie, payload: { de: { locale: 'de', title: '', bodyMarkdown: '', images: {} }, en: { locale: 'en', title: '', bodyMarkdown: '', images: {} } } });
+    const res = await injectAuthoring(b.app, { method: 'PUT', url: '/pages/Bad_Key', cookies: cookie, payload: { de: { locale: 'de', title: '', bodyMarkdown: '', images: {} }, en: { locale: 'en', title: '', bodyMarkdown: '', images: {} } } });
     expect(res.statusCode).toBe(400);
   });
 
   it('PUT /pages/:key with a stale updatedAt echo is a 409 conflict that rebuilds nothing (#141)', async () => {
-    const s = stubBuilder({ ok: true, release: 'r8' });
+    const s = stubBuilder({ ok: true, attemptId: 'r8', release: 'r8' });
     const b = build({ builder: s.builder });
     const { cookie } = await authed(b);
     const body = (title: string) => ({
       de: { locale: 'de', title, bodyMarkdown: 'Hallo', images: {} },
       en: { locale: 'en', title: 'About me', bodyMarkdown: 'Hi', images: {} },
     });
-    const first = await b.app.inject({ method: 'PUT', url: '/pages/about', cookies: cookie, payload: body('v1') });
+    const first = await injectAuthoring(b.app, { method: 'PUT', url: '/pages/about', cookies: cookie, payload: body('v1') });
     expect(first.statusCode).toBe(200);
     const loaded = first.json().saved.updatedAt;
     expect(typeof loaded).toBe('string');
     // Tab A saves with the echo it loaded — accepted and the echo advances.
-    const second = await b.app.inject({ method: 'PUT', url: '/pages/about', cookies: cookie, payload: { ...body('v2'), updatedAt: loaded } });
+    const second = await injectAuthoring(b.app, { method: 'PUT', url: '/pages/about', cookies: cookie, payload: { ...body('v2'), updatedAt: loaded } });
     expect(second.statusCode).toBe(200);
     expect(new Date(second.json().saved.updatedAt).getTime()).toBeGreaterThan(new Date(loaded).getTime());
     // Tab B still holds the old echo — refused, nothing written, no rebuild.
-    const stale = await b.app.inject({ method: 'PUT', url: '/pages/about', cookies: cookie, payload: { ...body('v3'), updatedAt: loaded } });
+    const stale = await injectAuthoring(b.app, { method: 'PUT', url: '/pages/about', cookies: cookie, payload: { ...body('v3'), updatedAt: loaded } });
     expect(stale.statusCode).toBe(409);
     expect(stale.json()).toMatchObject({ code: 'conflict' });
     expect((await b.pages.get('about')).de.title).toBe('v2');
     expect(s.calls.length).toBe(2);
     // Garbage echo → 400, not a silent skip of the check.
-    const bad = await b.app.inject({ method: 'PUT', url: '/pages/about', cookies: cookie, payload: { ...body('v4'), updatedAt: 'yesterday' } });
+    const bad = await injectAuthoring(b.app, { method: 'PUT', url: '/pages/about', cookies: cookie, payload: { ...body('v4'), updatedAt: 'yesterday' } });
     expect(bad.statusCode).toBe(400);
     // GET carries the echo the page needs.
     expect((await b.app.inject({ method: 'GET', url: '/pages/about', cookies: cookie })).json().updatedAt).toBe(second.json().saved.updatedAt);
@@ -3348,7 +4943,7 @@ describe('pages routes', () => {
       en: { locale: 'en', title: 'About me', bodyMarkdown: 'Hi', images: {} },
     });
     for (const t of ['v1', 'v2', 'v3']) {
-      expect((await b.app.inject({ method: 'PUT', url: '/pages/about', cookies: admin.cookie, payload: body(t) })).statusCode).toBe(200);
+      expect((await injectAuthoring(b.app, { method: 'PUT', url: '/pages/about', cookies: admin.cookie, payload: body(t) })).statusCode).toBe(200);
     }
     expect((await b.app.inject({ method: 'GET', url: '/pages/about/revisions' })).statusCode).toBe(401);
     // Read-only history is author-visible, like GET /pages/:key.
@@ -3356,12 +4951,20 @@ describe('pages routes', () => {
     const list = await b.app.inject({ method: 'GET', url: '/pages/about/revisions', cookies: author.cookie });
     expect(list.statusCode).toBe(200);
     // The first save of a key produces no revision; v1 and v2 were overwritten.
-    expect(list.json().map((r: { titleDe: string }) => r.titleDe)).toEqual(['v2', 'v1']);
+    expect(list.json().map((r: { title: string }) => r.title)).toEqual(['v2', 'v1']);
     const rev = await b.app.inject({ method: 'GET', url: `/pages/about/revisions/${list.json()[1].id}`, cookies: author.cookie });
     expect(rev.statusCode).toBe(200);
     expect(rev.json().snapshot.de.bodyMarkdown).toBe('Hallo v1');
     expect((await b.app.inject({ method: 'GET', url: '/pages/about/revisions/not-a-uuid', cookies: author.cookie })).statusCode).toBe(404);
-    expect((await b.app.inject({ method: 'GET', url: '/pages/other/revisions', cookies: author.cookie })).json()).toEqual([]);
+    for (const key of ['contact', 'other']) {
+      expect((await b.app.inject({ method: 'GET', url: `/pages/${key}/revisions`, cookies: author.cookie })).statusCode).toBe(404);
+      expect((await b.app.inject({ method: 'GET', url: `/pages/${key}/revisions/${list.json()[1].id}`, cookies: author.cookie })).statusCode).toBe(404);
+    }
+    const restored = await injectAuthoring(b.app, { method: 'PUT', url: '/pages/about', cookies: admin.cookie, payload: rev.json().snapshot });
+    expect(restored.statusCode).toBe(200);
+    expect((await b.pages.get('about')).de.bodyMarkdown).toBe('Hallo v1');
+    const afterRestore = await b.app.inject({ method: 'GET', url: '/pages/about/revisions', cookies: author.cookie });
+    expect(afterRestore.json().map((r: { title: string }) => r.title)).toEqual(['v3', 'v2', 'v1']);
   });
 });
 
@@ -3381,7 +4984,7 @@ describe('GET /posts/:tk/preview', () => {
   it('renders a DRAFT as text/html for an authed non-admin author', async () => {
     const b = build();
     const { cookie } = await authed(b, { isAdmin: false, username: 'author' });
-    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: draft() });
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: draft() });
     const tk = created.json().translationKey;
     const res = await b.app.inject({ method: 'GET', url: `/posts/${tk}/preview?locale=de`, cookies: cookie });
     expect(res.statusCode).toBe(200);
@@ -3394,7 +4997,7 @@ describe('GET /posts/:tk/preview', () => {
   it('defaults to the DE locale and honors locale=en', async () => {
     const b = build();
     const { cookie } = await authed(b);
-    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: draft() });
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: draft() });
     const tk = created.json().translationKey;
     const de = await b.app.inject({ method: 'GET', url: `/posts/${tk}/preview`, cookies: cookie });
     expect(de.body).toContain('Entwurf Bukarest');
@@ -3412,7 +5015,7 @@ describe('GET /posts/:tk/preview', () => {
   it('400 for an unsupported locale', async () => {
     const b = build();
     const { cookie } = await authed(b);
-    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: draft() });
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: draft() });
     const tk = created.json().translationKey;
     const res = await b.app.inject({ method: 'GET', url: `/posts/${tk}/preview?locale=fr`, cookies: cookie });
     expect(res.statusCode).toBe(400);
@@ -3421,7 +5024,7 @@ describe('GET /posts/:tk/preview', () => {
   it('keeps the admin security headers (/posts prefix)', async () => {
     const b = build();
     const { cookie } = await authed(b);
-    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: draft() });
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: draft() });
     const tk = created.json().translationKey;
     const res = await b.app.inject({ method: 'GET', url: `/posts/${tk}/preview?locale=de`, cookies: cookie });
     expect(res.headers['x-frame-options']).toBe('DENY');
@@ -3434,7 +5037,7 @@ describe('GET /posts/:tk/preview', () => {
   it('sends a CSP that allows only base-origin images and inline styles', async () => {
     const b = build();
     const { cookie } = await authed(b);
-    const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: draft() });
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: draft() });
     const tk = created.json().translationKey;
     const res = await b.app.inject({ method: 'GET', url: `/posts/${tk}/preview?locale=de`, cookies: cookie });
     const csp = String(res.headers['content-security-policy']);
@@ -3472,7 +5075,7 @@ describe('GET /posts/:tk/preview', () => {
       const b = build();
       const { cookie } = await authed(b, { isAdmin: false, username: 'author' });
       await seedLib(b.media);
-      const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: withGallery() });
+      const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: withGallery() });
       expect(created.statusCode).toBe(200);
       const tk = created.json().translationKey;
       const preview = async (locale: 'de' | 'en') =>
@@ -3495,7 +5098,8 @@ describe('GET /posts/:tk/preview', () => {
       const patched = await b.app.inject({
         method: 'PATCH', url: '/media/items/trips/gal/lib', cookies: cookie,
         headers: { 'content-type': 'application/json' },
-        payload: { alt: { de: '' }, caption: { de: '' } },
+        payload: { conditional: { version: 1, patch: { alt: { de: '' }, caption: { de: '' } },
+          expect: { alt: { de: 'Bibliothek DE' }, caption: { de: 'Text DE' } } } },
       });
       expect(patched.statusCode).toBe(200);
       const after = await preview('de');
@@ -3514,7 +5118,7 @@ describe('GET /posts/:tk/preview', () => {
       const failing: MediaStore = { ...media, descriptions: async () => { throw new Error('connect ECONNREFUSED 10.0.0.5:5432'); } };
       const b = build({ media: failing });
       const { cookie } = await authed(b);
-      const created = await b.app.inject({ method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: withGallery() });
+      const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: withGallery() });
       const tk = created.json().translationKey;
       const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
       try {
@@ -3646,6 +5250,28 @@ describe('POST /settings/image-preview', () => {
     expect((await b.media.list({})).items).toEqual([]);
   });
 
+  it.each(['avif', 'svg'] as const)('decodes %s preview input without retaining metadata or writing media', async (source) => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const input = source === 'avif'
+      ? await sharp(await gpsJpeg(300, 200)).withMetadata().avif().toBuffer()
+      : Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200"><rect width="300" height="200" fill="#5a7"/></svg>');
+    if (source === 'avif') expect((await sharp(input).metadata()).exif).toBeDefined();
+    const before = await readdir(dir);
+    // Decoder selection follows bytes, not the caller's untrusted MIME label.
+    const result = await preview(b, cookie, { format: 'webp', quality: '60' }, input);
+    expect(result.statusCode).toBe(200);
+    const meta = await sharp(result.rawPayload).metadata();
+    expect({ format: meta.format, width: meta.width, height: meta.height, exif: meta.exif })
+      .toEqual({ format: 'webp', width: 300, height: 200, exif: undefined });
+    const pixel = await sharp(result.rawPayload).extract({ left: 0, top: 0, width: 1, height: 1 }).raw().toBuffer();
+    for (const [index, expected] of [85, 170, 119].entries()) {
+      expect(Math.abs(pixel[index]! - expected)).toBeLessThan(25);
+    }
+    expect(await readdir(dir)).toEqual(before);
+    expect((await b.media.list({})).items).toEqual([]);
+  });
+
   it('accepts quality 1 and 100, and refuses anything else with a fixed message', async () => {
     const b = build();
     const { cookie } = await authed(b);
@@ -3698,5 +5324,307 @@ describe('POST /settings/image-preview', () => {
     expect((await first).statusCode).toBe(200);
     // The slot is released once the first finishes.
     expect((await preview(b, cookie, { format: 'webp', quality: '75' })).statusCode).toBe(200);
+  });
+});
+
+describe('admin onboarding metadata boundary', () => {
+  const initial: OnboardingState = {
+    schemaVersion: 1, state: 'eligible', reason: 'fresh',
+    evaluatedAt: '2026-10-27T12:00:00.000Z', dismissedAt: null, retiredAt: null,
+  };
+  const empty: OnboardingProgress = {
+    language: { primary: 'de', locales: ['de', 'en'], lockedAt: null, updatedAt: '2026-10-27T12:00:00.000Z' },
+    identity: false, ready: false, processing: false, attention: false,
+    story: false, published: false, newest: null, newestDraft: null,
+  };
+  it('requires admin for reads/actions before consulting state and does not issue cookies', async () => {
+    const onboarding = memoryOnboardingStore({ state: initial, progress: () => empty });
+    const read = vi.spyOn(onboarding, 'read');
+    const act = vi.spyOn(onboarding, 'act');
+    const b = build({ onboarding });
+    try {
+      for (const method of ['GET', 'POST'] as const) {
+        const res = await b.app.inject({ method, url: '/onboarding', ...(method === 'POST' ? { payload: { action: 'dismiss' } } : {}) });
+        expect(res.statusCode).toBe(401);
+        expect(res.headers['cache-control']).toBe('no-store');
+        expect(res.headers['set-cookie']).toBeUndefined();
+      }
+      const author = await authed(b, { isAdmin: false });
+      for (const method of ['GET', 'POST'] as const) {
+        const res = await b.app.inject({ method, url: '/onboarding', cookies: author.cookie, ...(method === 'POST' ? { payload: { action: 'dismiss' } } : {}) });
+        expect(res.statusCode).toBe(403);
+      }
+      expect(read).not.toHaveBeenCalled();
+      expect(act).not.toHaveBeenCalled();
+    } finally { await b.app.close(); }
+  });
+  it('shares hide/show across admins, preserves auth status shape and has no content/account/build side effects', async () => {
+    const progress = { ...empty, ready: true, story: true, published: true };
+    const onboarding = memoryOnboardingStore({ state: initial, progress: () => progress });
+    const builder = stubBuilder();
+    const b = build({ onboarding, builder: builder.builder });
+    try {
+      const first = await authed(b, { username: 'first' });
+      const second = await authed(b, { username: 'second' });
+      const mutations = [
+        vi.spyOn(b.users, 'create'), vi.spyOn(b.sessions, 'create'),
+        vi.spyOn(b.posts, 'upsertDraft'), vi.spyOn(b.posts, 'publish'),
+        vi.spyOn(b.pages, 'save'), vi.spyOn(b.media, 'upsert'),
+      ];
+      const post = (action: string) => b.app.inject({ method: 'POST', url: '/onboarding', cookies: first.cookie, payload: { action } });
+      expect((await post('dismiss')).json()).toMatchObject({ status: 'dismissed', complete: true });
+      expect((await b.app.inject({ url: '/onboarding', cookies: second.cookie })).json()).toMatchObject({ status: 'dismissed' });
+      expect((await post('resume')).json()).toMatchObject({ status: 'open' });
+      const finish = await post('finish');
+      expect(finish.json()).toEqual({ status: 'retired' });
+      expect(finish.headers['set-cookie']).toBeUndefined();
+      expect((await post('resume')).statusCode).toBe(409);
+      expect((await b.app.inject({ url: '/onboarding', cookies: second.cookie })).json()).toEqual({ status: 'retired' });
+      const status = await b.app.inject({ url: '/auth/status', cookies: first.cookie });
+      expect(status.json()).toEqual({ authenticated: true, username: 'first', isAdmin: true, needsSetup: false });
+      expect(mutations.every((spy) => spy.mock.calls.length === 0)).toBe(true);
+      expect(builder.calls).toEqual([]);
+    } finally { await b.app.close(); }
+  });
+  it('strictly rejects action shapes, enforces the body cap and rechecks completion', async () => {
+    const b = build({ onboarding: memoryOnboardingStore({ state: initial, progress: () => empty }) });
+    try {
+      const { cookie } = await authed(b);
+      for (const payload of [{}, [], { action: 'reset' }, { action: 'dismiss', extra: true }, { action: null }]) {
+        const res = await b.app.inject({ method: 'POST', url: '/onboarding', cookies: cookie, payload });
+        expect(res.statusCode).toBe(400);
+        expect(res.json()).toEqual({ error: 'invalid_onboarding_action' });
+      }
+      const large = await b.app.inject({ method: 'POST', url: '/onboarding', cookies: cookie, payload: { action: 'x'.repeat(1025) } });
+      expect(large.statusCode).toBe(413);
+      const finish = await b.app.inject({ method: 'POST', url: '/onboarding', cookies: cookie, payload: { action: 'finish' } });
+      expect(finish.statusCode).toBe(409);
+      expect(finish.json()).toEqual({ error: 'onboarding_incomplete' });
+    } finally { await b.app.close(); }
+  });
+  it('fails closed for absent state, DB failure and owner loss without borrowing the login limiter', async () => {
+    const onboarding = memoryOnboardingStore({ state: null, progress: () => empty });
+    const loginLimiter = { check: vi.fn(() => true) };
+    let writable = true;
+    const b = build({ onboarding, loginLimiter, isWritable: () => writable });
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { cookie } = await authed(b);
+      expect((await b.app.inject({ url: '/onboarding', cookies: cookie })).statusCode).toBe(500);
+      vi.spyOn(onboarding, 'read').mockRejectedValue(new Error('private DB details'));
+      const failed = await b.app.inject({ url: '/onboarding', cookies: cookie });
+      expect(failed.statusCode).toBe(500);
+      expect(failed.body).not.toContain('private DB details');
+      writable = false;
+      const refused = await b.app.inject({ method: 'POST', url: '/onboarding', cookies: cookie, payload: { action: 'dismiss' } });
+      expect(refused.statusCode).toBe(503);
+      expect(refused.json()).toMatchObject({ error: 'storage_read_only' });
+      expect(loginLimiter.check).not.toHaveBeenCalled();
+    } finally { log.mockRestore(); await b.app.close(); }
+  });
+});
+
+describe('write reconciliation HTTP trust boundaries (#305)', () => {
+  const draft = () => ({
+    translationKey: randomUUID(), shared: { date: '2026-10-27', countryCode: 'DE', region: 'europe', coordinates: { lat: 1, lng: 2 } },
+    de: { locale: 'de', slug: '', title: 'Draft', country: '', excerpt: '', bodyMarkdown: 'Local text', images: {} },
+    en: { locale: 'en', slug: '', title: '', country: '', excerpt: '', bodyMarkdown: '', images: {} },
+  });
+  it('refuses missing identities and wrong captured owners before post/page mutation or rebuild', async () => {
+    const builder = stubBuilder(); const b = build({ builder: builder.builder });
+    const a = await authed(b, { username: 'owner-a' }); const other = await authed(b, { username: 'owner-b' });
+    const saveId = randomUUID(); const input = draft();
+    expect((await b.app.inject({ method: 'POST', url: '/posts', cookies: a.cookie, payload: input })).statusCode).toBe(400);
+    const refused = await b.app.inject({ method: 'POST', url: '/posts', cookies: other.cookie,
+      payload: { ...input, saveId, expectedOwnerId: a.user.id } });
+    expect(refused.statusCode).toBe(403); expect(refused.json()).toMatchObject({ code: 'owner_changed' });
+    expect(await b.posts.list()).toEqual([]);
+    const page = await b.app.inject({ method: 'PUT', url: '/pages/about', cookies: other.cookie,
+      payload: { de: { title: 'Private A', bodyMarkdown: 'Do not write', images: {} }, en: {}, updatedAt: null, saveId, expectedOwnerId: a.user.id } });
+    expect(page.statusCode).toBe(403); expect(await b.pages.keys()).toEqual([]); expect(builder.calls).toEqual([]);
+    await b.app.close();
+  });
+  it('keeps a lost create recognizable, create-only and writer-private even with empty slugs', async () => {
+    const b = build(); const a = await authed(b, { username: 'writer' }); const other = await authed(b, { username: 'reader' });
+    const input = { ...draft(), saveId: randomUUID(), expectedOwnerId: a.user.id };
+    const first = await b.app.inject({ method: 'POST', url: '/posts', cookies: a.cookie, payload: input });
+    expect(first.statusCode).toBe(200);
+    const repeated = await b.app.inject({ method: 'POST', url: '/posts', cookies: a.cookie, payload: input });
+    expect(repeated.statusCode).toBe(409); expect(repeated.json()).toMatchObject({ code: 'already_exists' });
+    const own = await b.app.inject({ url: `/posts/${input.translationKey}`, cookies: a.cookie });
+    expect(own.json()).toMatchObject({ ownerUserId: a.user.id, lastSaveId: input.saveId, updatedAt: first.json().updatedAt, de: { title: 'Draft' } });
+    expect(own.headers['cache-control']).toBe('no-store');
+    const foreign = await b.app.inject({ url: `/posts/${input.translationKey}`, cookies: other.cookie });
+    expect(foreign.json()).toMatchObject({ ownerUserId: other.user.id, lastSaveId: null });
+    expect(await b.posts.list()).toHaveLength(1);
+    await b.app.close();
+  });
+  it('rejects missing/mismatched upload identity without retaining originals or media', async () => {
+    const b = build(); const a = await authed(b); const other = randomUUID();
+    for (const expectedOwnerId of [undefined, other]) {
+      const form = new FormData();
+      form.append('file', await jpeg(), { filename: 'photo.jpg', contentType: 'image/jpeg' });
+      if (expectedOwnerId) {
+        form.append('expectedOwnerId', expectedOwnerId); form.append('uploadId', randomUUID()); form.append('retryGeneration', '0');
+      }
+      const result = await b.app.inject({ method: 'POST', url: '/upload', cookies: a.cookie, headers: form.getHeaders(), payload: form });
+      expect(result.statusCode).toBe(expectedOwnerId ? 403 : 400);
+    }
+    expect((await b.media.list({})).total).toBe(0); expect(await readdir(dir)).toEqual([]);
+    await b.app.close();
+  });
+  it('probes exactly selected keys outside listing pagination without private metadata', async () => {
+    const b = build(); const a = await authed(b, { isAdmin: false });
+    for (let i = 0; i < 205; i++) await b.media.upsert({ key: `photos/p${i}`, folder: i === 204 ? 'Moved' : '',
+      width: 8, height: 6, origBytes: 20, status: 'ready', uploadedBy: a.user.id,
+      exif: { takenAt: null, camera: 'Camera', lens: null, lat: 12, lng: 13 } });
+    const result = await b.app.inject({ method: 'POST', url: '/media/lookup', cookies: a.cookie,
+      payload: { keys: ['photos/p204', 'photos/deleted'] } });
+    expect(result.statusCode).toBe(200); expect(result.headers['cache-control']).toBe('no-store');
+    expect(result.json()).toEqual({ items: [{ key: 'photos/p204', folder: 'Moved' }, { key: 'photos/deleted', missing: true }] });
+    for (const keys of [[], ['photos/p1', 'photos/p1'], ['../secret'], Array.from({ length: 101 }, (_, i) => `photos/p${i}`)]) {
+      expect((await b.app.inject({ method: 'POST', url: '/media/lookup', cookies: a.cookie, payload: { keys } })).statusCode).toBe(400);
+    }
+    expect((await b.app.inject({ method: 'POST', url: '/media/lookup', payload: { keys: ['photos/p204'] } })).statusCode).toBe(401);
+    await b.app.close();
+  });
+});
+
+describe('identity asset administration and release serving (#275)', () => {
+  function assetRequest(b: Built, cookie: { sid: string }, files: Buffer[], revision = 1, role = 'logo') {
+    const form = new FormData();
+    form.append('revision', String(revision));
+    for (const bytes of files) form.append('file', bytes, { filename: 'untrusted-name.png', contentType: 'image/png' });
+    return b.app.inject({ method: 'PUT', url: '/settings/identity/assets/' + role, cookies: cookie, headers: form.getHeaders(), payload: form.getBuffer() });
+  }
+  it('authorizes PUT and DELETE before inspecting bytes or revision', async () => {
+    const identityStore = memorySiteIdentityStore();
+    const b = build({ identityStore, workLock: createWorkLock() });
+    const { cookie } = await authed(b, { isAdmin: false });
+    try {
+      for (const method of ['PUT', 'DELETE'] as const) {
+        const url = '/settings/identity/assets/logo';
+        expect((await b.app.inject({ method, url, payload: { revision: 1 } })).statusCode).toBe(401);
+        expect((await b.app.inject({ method, url, cookies: cookie, payload: { revision: 1 } })).statusCode).toBe(403);
+      }
+      expect(identityStore.get().revision).toBe(1);
+    } finally { await b.app.close(); }
+  });
+  it('saves one role group under the real shared lock, shares text revisions, removes to defaults and never builds or retains originals', async () => {
+    const identityStore = memorySiteIdentityStore();
+    const lock = createWorkLock();
+    const replace = identityStore.replaceAssets.bind(identityStore);
+    const mutation = vi.spyOn(identityStore, 'replaceAssets').mockImplementation((revision, group, assets) => {
+      if (assets.length) expect(lock.stats().sharedRunning).toBe(1);
+      return replace(revision, group, assets);
+    });
+    const builder = stubBuilder();
+    const b = build({ identityStore, workLock: lock, builder: builder.builder });
+    const { cookie } = await authed(b);
+    try {
+      const source = await jpeg();
+      const uploaded = await assetRequest(b, cookie, [source]);
+      expect(uploaded.statusCode).toBe(200);
+      expect(uploaded.json()).toEqual({ revision: 2, savedAt: null, takesEffect: 'next_build', assets: { logo: true, favicon: false } });
+      expect(uploaded.headers['cache-control']).toBe('no-store');
+      expect(mutation).toHaveBeenCalledOnce();
+      expect(mutation.mock.calls[0]![2][0]!.bytes.equals(source)).toBe(false);
+      expect(await readdir(dir)).toEqual([]);
+      expect(b.enqueued).toEqual([]);
+      expect(builder.calls).toEqual([]);
+      // #276: the canonical origin is an editable, required field of every text save.
+      const identity = identityStore.get().identity;
+      const text = await b.app.inject({ method: 'PUT', url: '/settings/identity', cookies: cookie, payload: { revision: 2, identity: { ...identity, siteName: 'Field notes' } } });
+      expect(text.statusCode).toBe(200);
+      const stale = await assetRequest(b, cookie, [source], 2);
+      expect(stale.statusCode).toBe(409);
+      expect(stale.json().code).toBe('identity_conflict');
+      const favicon = await assetRequest(b, cookie, [source], 3, 'favicon');
+      expect(favicon.statusCode).toBe(200);
+      const settings = await b.app.inject({ url: '/settings/identity', cookies: cookie });
+      expect(settings.json()).toMatchObject({ revision: 4, assets: { logo: true, favicon: true }, identity: { siteName: 'Field notes' } });
+      expect(settings.json()).not.toHaveProperty('bytes');
+      const removed = await b.app.inject({ method: 'DELETE', url: '/settings/identity/assets/favicon', cookies: cookie, payload: { revision: 4 } });
+      expect(removed.statusCode).toBe(200);
+      expect(removed.json()).toMatchObject({ revision: 5, assets: { logo: true, favicon: false } });
+      const removedLogo = await b.app.inject({ method: 'DELETE', url: '/settings/identity/assets/logo', cookies: cookie, payload: { revision: 5 } });
+      expect(removedLogo.json()).toMatchObject({ revision: 6, assets: { logo: false, favicon: false } });
+      expect(builder.calls).toEqual([]);
+    } finally { mutation.mockRestore(); await b.app.close(); }
+  });
+  it('returns specific errors without replacing the previous asset or advancing its revision', async () => {
+    const identityStore = memorySiteIdentityStore();
+    const source = await jpeg();
+    await identityStore.replaceAssets(1, 'logo', await normalizeIdentityUpload(source, 'logo'));
+    const b = build({ identityStore, workLock: createWorkLock() });
+    const { cookie } = await authed(b);
+    try {
+      const frames = Buffer.concat([Buffer.alloc(180 * 180 * 3, 30), Buffer.alloc(180 * 180 * 3, 200)]);
+      const animated = await sharp(frames, { raw: { width: 180, height: 360, channels: 3, pageHeight: 180 } })
+        .webp({ loop: 0, delay: [100, 100] }).toBuffer();
+      const cases: [Buffer[], number, string][] = [
+        [[source, source], 413, 'too_many_files'],
+        [[Buffer.alloc(2 * 1024 * 1024 + 1)], 413, 'asset_too_large'],
+        [[Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"><script>alert(2)</script><image href="https://example.com/evil.png"/></svg>')], 415, 'unsupported_image_type'],
+        [[Buffer.from('not an image')], 415, 'unsupported_image_type'],
+        [[animated], 400, 'animated_image'],
+        [[await sharp({ create: { width: 4097, height: 4097, channels: 3, background: '#000' } }).png().toBuffer()], 400, 'image_too_large'],
+        [[(await sharp(source).png().toBuffer()).subarray(0, 40)], 400, 'image_invalid'],
+        [[await sharp(source).resize(31, 31).png().toBuffer()], 400, 'image_too_small'],
+      ];
+      for (const [files, status, code] of cases) {
+        const response = await assetRequest(b, cookie, files, 2);
+        expect(response.statusCode, code).toBe(status);
+        expect(response.json().code).toBe(code);
+        expect(identityStore.get().revision).toBe(2);
+        expect(identityStore.getAssetState()).toEqual({ logo: true, favicon: false });
+      }
+      expect((await assetRequest(b, cookie, [source], 2, 'other')).statusCode).toBe(400);
+      expect((await assetRequest(b, cookie, [source], 0)).statusCode).toBe(400);
+      const lowDisk = vi.spyOn(disk, 'diskSpace').mockResolvedValue({ free: 0, total: 1 });
+      try {
+        const response = await assetRequest(b, cookie, [source], 2);
+        expect(response.statusCode).toBe(507);
+        expect(response.json().code).toBe('insufficient_space');
+      } finally { lowDisk.mockRestore(); }
+      expect(identityStore.get().revision).toBe(2);
+    } finally { await b.app.close(); }
+  });
+  it('does not report success or change cached identity when persistence fails', async () => {
+    const identityStore = memorySiteIdentityStore();
+    const mutation = vi.spyOn(identityStore, 'replaceAssets').mockRejectedValue(new Error('private database failure'));
+    const b = build({ identityStore, workLock: createWorkLock() });
+    const { cookie } = await authed(b);
+    try {
+      const response = await assetRequest(b, cookie, [await jpeg()]);
+      expect(response.statusCode).toBe(500);
+      expect(response.body).not.toContain('private database failure');
+      expect(identityStore.get().revision).toBe(1);
+      expect(identityStore.getAssetState()).toEqual({ logo: false, favicon: false });
+    } finally { mutation.mockRestore(); await b.app.close(); }
+  });
+  it.each(['blog.example', 'localhost'])('serves release-owned PNG with nosniff and immutable caching on %s, not the dedicated image host', async (host) => {
+    const assets = await normalizeIdentityUpload(await jpeg(), 'logo');
+    const asset = assets[0]!;
+    const path = '/_identity/logo-' + asset.sha256.slice(0, 16) + '.png';
+    await mkdir(join(dir, 'site/current/_identity'), { recursive: true });
+    await writeFile(join(dir, 'site/current', path), asset.bytes);
+    const b = build({ imgHost: host === 'localhost' ? 'localhost' : 'images.example' });
+    try {
+      const response = await b.app.inject({ url: path, headers: { host } });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['content-type']).toMatch(/^image\/png/);
+      expect(response.headers['x-content-type-options']).toBe('nosniff');
+      expect(response.headers['cache-control']).toBe('public, max-age=31536000, immutable');
+      expect(response.rawPayload.equals(asset.bytes)).toBe(true);
+      if (host !== 'localhost') {
+        const foreign = await b.app.inject({ url: path, headers: { host: 'images.example' } });
+        expect(foreign.statusCode).toBe(404);
+        expect(foreign.headers['cache-control'] ?? '').not.toContain('immutable');
+      }
+      const missing = await b.app.inject({ url: path.replace(asset.sha256.slice(0, 16), '0'.repeat(16)), headers: { host } });
+      expect(missing.statusCode).toBe(404);
+      expect(missing.headers['cache-control'] ?? '').not.toContain('immutable');
+    } finally { await b.app.close(); }
   });
 });

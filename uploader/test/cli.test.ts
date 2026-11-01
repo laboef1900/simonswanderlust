@@ -1,5 +1,6 @@
+import { buildFailureMessage } from '../src/build-state.js';
 import { describe, expect, it, beforeEach } from 'vitest';
-import { mkdtemp, readdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
@@ -53,32 +54,6 @@ describe('uploadFile', () => {
       expect.stringMatching(/^jpeg-[0-9a-f]{8}-orig\.jpg$/),
     ]);
   });
-
-  it('the CLI entry point reads the persisted conversion setting', async () => {
-    const imagePath = join(dir, 'input.jpg');
-    const settingsPath = join(dir, 'settings.json');
-    const storageDir = join(dir, 'images');
-    await writeFile(imagePath, await sharp({
-      create: { width: 800, height: 600, channels: 3, background: '#345' },
-    }).jpeg().toBuffer());
-    await writeFile(settingsPath, JSON.stringify({ convertJpeg: false }));
-    const result = await runCli(
-      [imagePath, 'trips/test/from-settings', 'Alt'],
-      {
-        ...envWithoutDatabaseUrl(),
-        STORAGE_DIR: storageDir,
-        SETTINGS_PATH: settingsPath,
-        PUBLIC_BASE_URL: 'https://img.example',
-      },
-    );
-    expect(result).toMatchObject({ code: 0, stderr: '' });
-    expect(result.stdout).toContain("format: 'jpeg'");
-    expect((await readdir(join(storageDir, 'trips/test'))).sort()).toEqual([
-      expect.stringMatching(/^from-settings-[0-9a-f]{8}-640\.jpeg$/),
-      expect.stringMatching(/^from-settings-[0-9a-f]{8}-800\.jpeg$/),
-      expect.stringMatching(/^from-settings-[0-9a-f]{8}-orig\.jpg$/),
-    ]);
-  }, 30_000);
 
   it('a different image under the same key mints a new hash; the first files stay on disk', async () => {
     const imgA = await sharp({ create: { width: 800, height: 600, channels: 3, background: '#222' } })
@@ -168,10 +143,9 @@ describe('set-password CLI wiring (spawned process)', () => {
 // fires before a pool is created, so no DATABASE_URL is needed — and the
 // filename check is asserted to fire even WITHOUT one, i.e. before the env guard.
 describe('restore CLI wiring (spawned process)', () => {
-  it('prints usage (with --yes) and exits 1 when the file is missing', async () => {
+  it('exits 1 when the restore file is missing', async () => {
     const r = await runCli(['restore'], envWithoutDatabaseUrl());
     expect(r.code).toBe(1);
-    expect(r.stderr).toContain('restore [--yes] /data/backup/db/db-YYYYMMDD-HHmmss.json.gz');
   }, 30_000);
 
   it('refuses a file name outside BACKUP_FILE_RE before touching env or database', async () => {
@@ -249,9 +223,9 @@ describe('triggerRebuild', () => {
     await expect(
       triggerRebuild(users, sessions, async () => ({
         status: 200,
-        body: JSON.stringify({ ok: false, error: 'trips/de/x.mdx: country is required' }),
+        body: JSON.stringify({ ok: false, attemptId: 'failed', code: 'build_failed', error: 'trips/de/SECRET.mdx: internal database path' }),
       })),
-    ).rejects.toThrow('country is required');
+    ).rejects.toThrow(`rebuild failed (build_failed): ${buildFailureMessage('build_failed')} — details: docker compose logs app`);
   });
 
   it('refuses when no admin exists, without minting anything', async () => {

@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { memoryPageStore, validatePagePair, isSafePageKey, PageError, type PagePair } from '../src/pages.js';
 import { REVISION_CAP } from '../src/posts.js';
+import * as bodyContent from '../src/body-content.js';
 
 const pair = (key = 'about'): PagePair => ({
   key,
@@ -48,8 +49,82 @@ describe('page images-map validation', () => {
 describe('page gallery normalization', () => {
   const a = 'https://img/g/a-1a2b3c4d';
 
+  it.each([false, true])('preserves malformed metadata in both locales with existing images=%s', async (existingImages) => {
+    // About is always published (#288), so its images must be hosted on the image origin.
+    const store = memoryPageStore(undefined, { imageOrigin: 'https://img' });
+    const input = pair();
+    const fields = [
+      String.raw`caption="The \"Old\" Bridge"`, 'caption="Rom | Tag 2"',
+      'capton="Tippfehler"', 'alt = "Blick mit Leerzeichen"', "alt='Blick'",
+      'caption-override="broken',
+    ];
+    const lines = fields.map((field, index) => `> ${a}-${index} | 3000x2000 | alt="😀" | ${field}  `);
+    for (const locale of ['de', 'en'] as const) {
+      input[locale].bodyMarkdown = ['> ~~~gallery extra', ...lines, '> ~~~'].join('\r\n');
+      input[locale].images = existingImages
+        ? Object.fromEntries(fields.map((_, index) => [`${a}-${index}`, { width: 8, height: 6, caption: 'Keep' }]))
+        : {};
+    }
+    const saved = await store.save(input);
+    // #288 adds the stored slug and About's publication time beside the submitted content.
+    expect(saved.de).toMatchObject(input.de);
+    expect(saved.en).toMatchObject(input.en);
+    expect(saved.galleryWarnings).toHaveLength(fields.length * 2);
+    for (const locale of ['de', 'en'] as const) {
+      expect(saved.galleryWarnings.filter((warning) => warning.locale === locale).map((warning) => warning.line))
+        .toEqual(fields.map((_, index) => index + 2));
+    }
+    expect(saved.galleryWarnings[0]).toEqual({
+      code: 'invalid_gallery_metadata', locale: 'de', line: 2,
+      column: lines[0]!.indexOf('caption=') + 1, field: 'caption', reason: 'malformed_field',
+    });
+    expect(await store.get(input.key)).not.toHaveProperty('galleryWarnings');
+    const again = await store.save(saved);
+    expect(again.galleryWarnings).toEqual(saved.galleryWarnings);
+    const before = await store.get(input.key);
+    expect(before).not.toHaveProperty('galleryWarnings');
+    await expect(store.save(saved, new Date(0))).rejects.toMatchObject({ code: 'conflict' });
+    expect(await store.get(input.key)).toEqual(before);
+    const [revision] = await store.listRevisions(input.key);
+    expect((await store.getRevision(input.key, revision!.id))!.snapshot).not.toHaveProperty('galleryWarnings');
+    const repaired = await store.save({ ...again, de: { ...again.de, bodyMarkdown: 'Fixed' }, en: { ...again.en, bodyMarkdown: 'Fixed' } });
+    expect(repaired.galleryWarnings).toEqual([]);
+  });
+
+  it('normalizes nested and raw gallery nodes through direct saves in both locales', async () => {
+    const store = memoryPageStore(undefined, { imageOrigin: 'https://img' });
+    const input = pair();
+    input.de.bodyMarkdown = `- ~~~gallery extra\n  ${a} | 30x20 | alt="Blick"\n  ~~~`;
+    input.en.bodyMarkdown = `<pre><code class="language-gallery">${a} | 30x20 | alt="View"\n</code></pre>`;
+    const saved = await store.save(input);
+    expect(saved.de.bodyMarkdown).toBe(`- ~~~gallery extra\n  ${a}\n  ~~~`);
+    expect(saved.en.bodyMarkdown).toBe(`<pre><code class="language-gallery">${a}\n</code></pre>`);
+    expect(saved.de.images[a]).toEqual({ width: 30, height: 20, alt: 'Blick' });
+    expect(saved.en.images[a]).toEqual({ width: 30, height: 20, alt: 'View' });
+  });
+
+  it('leaves both locales, timestamp and revisions untouched after later locale analysis fails', async () => {
+    const store = memoryPageStore();
+    const saved = await store.save(pair());
+    const input = { ...saved, de: { ...saved.de, bodyMarkdown: `~~~gallery\n${a} | 30x20\n~~~` }, en: { ...saved.en, bodyMarkdown: 'EN analysis failure' } };
+    const normalize = bodyContent.normalizeGalleryFences;
+    const analysis = vi.spyOn(bodyContent, 'normalizeGalleryFences').mockImplementation((body, images) => {
+      if (body === input.en.bodyMarkdown) return Promise.reject(new Error('source mapping unavailable'));
+      return normalize(body, images);
+    });
+    try {
+      await expect(store.save(input)).rejects.toThrow('source mapping unavailable');
+      const { galleryWarnings, ...stored } = saved;
+      expect(galleryWarnings).toEqual([]);
+      expect(await store.get(saved.key)).toEqual(stored);
+      expect(await store.listRevisions(saved.key)).toEqual([]);
+      expect(input.de.images).toEqual({});
+    } finally { analysis.mockRestore(); }
+  });
+
   it('lifts per-line gallery metadata into the images map on save', async () => {
     const s = memoryPageStore();
+    s.configureImageOrigin('https://img');
     const p = pair();
     p.de.bodyMarkdown = `\`\`\`gallery\n${a} | 3000x2000 | alt="Blick" | caption="Tag 1"\n\`\`\``;
     await s.save(p);
@@ -65,8 +140,9 @@ describe('memoryPageStore', () => {
     const p = await s.get('about');
     expect(p).toEqual({
       key: 'about',
-      de: { locale: 'de', title: '', bodyMarkdown: '', images: {} },
-      en: { locale: 'en', title: '', bodyMarkdown: '', images: {} },
+      status: 'published',
+      de: { locale: 'de', title: '', bodyMarkdown: '', images: {}, slug: '', publishedAt: null },
+      en: { locale: 'en', title: '', bodyMarkdown: '', images: {}, slug: '', publishedAt: null },
       updatedAt: null,
     });
   });
@@ -80,10 +156,10 @@ describe('memoryPageStore', () => {
   it('keys() lists saved page keys once each, sorted', async () => {
     const s = memoryPageStore();
     expect(await s.keys()).toEqual([]);
-    await s.save(pair('imprint'));
+    await s.save(pair('legal'));
     await s.save(pair('about'));
     await s.save(pair('about'));
-    expect(await s.keys()).toEqual(['about', 'imprint']);
+    expect(await s.keys()).toEqual(['about', 'legal']);
   });
 
   it('refuses a save whose updatedAt echo predates the stored pair (conflict), and advances updatedAt on every save (#141)', async () => {
@@ -100,6 +176,36 @@ describe('memoryPageStore', () => {
     expect((await s.get('about')).updatedAt).toEqual(v3.updatedAt);
   });
 
+  it('overlapping saves from one updatedAt: exactly one is accepted, the other conflicts and writes nothing (#344)', async () => {
+    const s = memoryPageStore();
+    const base = await s.save(pair());
+    const edit = (title: string): PagePair => ({ ...pair(), de: { ...pair().de, title } });
+    // Both calls start before either settles — two tabs saving at once.
+    const [a, b] = await Promise.allSettled([s.save(edit('tab-a'), base.updatedAt!), s.save(edit('tab-b'), base.updatedAt!)]);
+    expect(b).toMatchObject({ status: 'rejected', reason: { code: 'conflict' } });
+    if (a.status !== 'fulfilled') throw new Error('first save was refused');
+    const stored = await s.get('about');
+    expect(stored.de.title).toBe('tab-a');
+    expect(a.value).toEqual({ ...stored, galleryWarnings: [] });
+    expect(a.value.updatedAt!.getTime()).toBeGreaterThan(base.updatedAt!.getTime());
+    // One revision: the true predecessor, taken once.
+    expect((await s.listRevisions('about')).map((r) => r.title)).toEqual(['Über mich']);
+  });
+
+  it('overlapping token-less saves are both accepted in order, and the overwritten one is a revision (#344)', async () => {
+    const s = memoryPageStore();
+    // A never-saved page kind (#288 accepts only known kinds; contact starts absent).
+    const edit = (title: string): PagePair => ({ ...pair('contact'), de: { ...pair('contact').de, title } });
+    const [a, b] = await Promise.all([s.save(edit('first')), s.save(edit('second'))]);
+    expect(a.de.title).toBe('first');
+    expect(b.de.title).toBe('second');
+    expect(b.updatedAt!.getTime()).toBeGreaterThan(a.updatedAt!.getTime());
+    expect({ ...await s.get('contact'), galleryWarnings: [] }).toEqual(b);
+    const revs = await s.listRevisions('contact');
+    expect(revs.map((r) => r.title)).toEqual(['first']);
+    expect((await s.getRevision('contact', revs[0]!.id))!.snapshot.de.title).toBe('first');
+  });
+
   it('snapshots the pre-save pair as a revision, newest first, capped at REVISION_CAP (#141)', async () => {
     const s = memoryPageStore();
     await s.save(pair());
@@ -111,10 +217,11 @@ describe('memoryPageStore', () => {
     expect(revs).toHaveLength(REVISION_CAP);
     // The newest revision is the state the LAST save overwrote (v21), the
     // oldest survivors dropped the seed and v1.
-    expect(revs[0]!.titleDe).toBe(`v${REVISION_CAP + 1}`);
-    expect(revs[REVISION_CAP - 1]!.titleDe).toBe('v2');
+    expect(revs[0]!.title).toBe(`v${REVISION_CAP + 1}`);
+    expect(revs[REVISION_CAP - 1]!.title).toBe('v2');
     const full = await s.getRevision('about', revs[0]!.id);
-    expect(full!.snapshot).toEqual({ de: { ...pair().de, title: `v${REVISION_CAP + 1}`, bodyMarkdown: `body ${REVISION_CAP + 1}` }, en: pair().en });
+    expect(full!.snapshot).toMatchObject({ de: { ...pair().de, title: `v${REVISION_CAP + 1}`, bodyMarkdown: `body ${REVISION_CAP + 1}` }, en: pair().en });
+    expect(full!.snapshot.de.publishedAt).toBeInstanceOf(Date);
     expect(await s.getRevision('about', 'nope')).toBeNull();
     expect(await s.getRevision('other', revs[0]!.id)).toBeNull();
   });

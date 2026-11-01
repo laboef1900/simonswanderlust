@@ -1,9 +1,12 @@
 import type { Loader } from 'astro/loaders';
-import { loaderPool } from './loader-pool.js';
-import { transformBodyImages, type ImageDims } from './body-images.js';
+import { loaderPool, withLoaderSnapshot } from './loader-pool.js';
+import { STORY_BODY_SIZES, bodyImageUses, transformBodyImagesWithUses, type GalleryUse, type ImageDims } from './body-images.js';
 import { imageOrigin, retargetImageOrigins, type RemoteHeroImage } from './images.js';
+import { siteLanguage } from './site-language.js';
+import { assertLoaderLanguage } from './build-language.js';
+import { PUBLISHED_SNAPSHOT_DIGEST_SQL, writeReleaseManifest, type ReleaseManifestV1 } from './publication-manifest.js';
 
-interface PostRow {
+export interface PostRow {
   translation_key: string; locale: 'de' | 'en'; slug: string; title: string; date: Date | string;
   country: string; country_code: string; region: string; excerpt: string;
   hero_image: RemoteHeroImage;
@@ -83,6 +86,33 @@ export function rowToEntryInput(row: PostRow, imageHost: string) {
   };
 }
 
+export interface ClassifiedRow {
+  gallery: GalleryUse[];
+  inline: string[];
+  heroImage: RemoteHeroImage;
+  titleImage?: RemoteHeroImage;
+}
+
+/**
+ * Classify a fresh working or published row through the loader's own retargeting
+ * and Markdown path. Occurrences stay ordered and repeated; callers count exact
+ * gallery identities and base/variant inline URLs for the media item of interest.
+ * Never cache this by published digest: working copies can change independently.
+ */
+export async function classifyRow(
+  row: PostRow,
+  imageOrigin: string,
+  renderMarkdown: (body: string) => Promise<string>,
+): Promise<ClassifiedRow> {
+  const input = rowToEntryInput(row, imageOrigin);
+  const uses = bodyImageUses(await renderMarkdown(input.body), input.images, imageOrigin);
+  return {
+    ...uses,
+    heroImage: input.data.heroImage,
+    ...(input.data.titleImage ? { titleImage: input.data.titleImage } : {}),
+  };
+}
+
 export function postgresTripsLoader(): Loader {
   return {
     name: 'postgres-trips',
@@ -93,24 +123,30 @@ export function postgresTripsLoader(): Loader {
       // runs in Node, same as DATABASE_URL above) and passed down explicitly,
       // so transformBodyImages stays pure and env-free for the uploader's
       // draft preview.
-      // @ai-note: with PUBLIC_BASE_URL unset this falls back to the production
-      // origin, so a local/CI build renders localhost gallery URLs as the bare
-      // <pre> instead of a grid. That is the fail-safe direction — set
-      // PUBLIC_BASE_URL (repo-root .env already does) to preview galleries.
+      // Standalone dev / CI builds without PUBLIC_BASE_URL use localhost:3000.
+      // Production supplies its independent image origin; canonical blog-domain
+      // changes never retarget these images.
       const galleryOrigin = imageOrigin(process.env.PUBLIC_BASE_URL);
       const pool = loaderPool(url);
+      const language = siteLanguage();
       try {
         store.clear();
         // @ai-warning: article content still comes ONLY from published snapshots,
         // never working columns (#20). Current library gallery descriptions are
         // the sole approved exception; they do not mutate the stored snapshot.
-        const { rows } = await pool.query<{ published_snapshot: PostRow }>(
-          `SELECT published_snapshot
-             FROM posts WHERE status = 'published' AND published_snapshot IS NOT NULL`,
-        );
-        const { rows: media } = await pool.query<MediaDescriptionRow>(
-          'SELECT key, alt_de, alt_en, caption_de, caption_en FROM media',
-        );
+        const { rows, media } = await withLoaderSnapshot(pool, async (client) => {
+          await assertLoaderLanguage(client, language);
+          const { rows } = await client.query<{ published_snapshot: PostRow; row_digest: string }>(
+            `SELECT published_snapshot, ${PUBLISHED_SNAPSHOT_DIGEST_SQL} AS row_digest
+               FROM posts WHERE status = 'published' AND published_snapshot IS NOT NULL`,
+          );
+          const { rows: media } = await client.query<MediaDescriptionRow>(
+            'SELECT key, alt_de, alt_en, caption_de, caption_en FROM media',
+          );
+          return { rows, media };
+        });
+        const enabledRows = rows.filter(({ published_snapshot: row }) => language.locales.includes(row.locale));
+        if (enabledRows.length !== rows.length) logger.info(`postgres-trips: excluded ${rows.length - enabledRows.length} disabled-locale entries`);
         const descriptions = {
           de: new Map<string, { alt: string; caption: string }>(),
           en: new Map<string, { alt: string; caption: string }>(),
@@ -120,14 +156,21 @@ export function postgresTripsLoader(): Loader {
           descriptions.de.set(src, { alt: photo.alt_de, caption: photo.caption_de });
           descriptions.en.set(src, { alt: photo.alt_en, caption: photo.caption_en });
         }
-        for (const { published_snapshot: row } of rows) {
+        const manifestPosts: ReleaseManifestV1['posts'] = [];
+        for (const { published_snapshot: row, row_digest } of enabledRows) {
           const input = rowToEntryInput(row, galleryOrigin);
           const data = await parseData({ id: input.id, data: input.data });
           const rendered = await renderMarkdown(input.body);
-          rendered.html = transformBodyImages(rendered.html, input.images, galleryOrigin, descriptions[row.locale]);
+          const transformed = await transformBodyImagesWithUses(rendered.html, input.images, galleryOrigin, { locale: row.locale, inlineSizes: STORY_BODY_SIZES }, descriptions[row.locale]);
+          rendered.html = transformed.html;
           store.set({ id: input.id, data, body: input.body, rendered });
+          manifestPosts.push({
+            translationKey: row.translation_key, locale: row.locale, slug: row.slug, digest: row_digest,
+            gallery: transformed.gallery.map(({ src, alt, caption }) => ({ src, alt, caption })),
+          });
         }
-        logger.info(`postgres-trips: loaded ${rows.length} published entries`);
+        await writeReleaseManifest(manifestPosts, undefined, (message) => logger.warn(message));
+        logger.info(`postgres-trips: loaded ${enabledRows.length} published entries`);
       } finally {
         await pool.end();
       }
