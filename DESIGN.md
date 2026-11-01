@@ -658,6 +658,24 @@ The story card used to carry two more — a bordered navy plate around its date
 line and a solid `brand-red` cover-story kicker, both stacked above the
 heading. Both are gone; see Story card below, and do not reintroduce either.
 
+### Journeys
+
+The journey is a reading surface, not a second homepage. Its opening pairs a bounded
+photograph with a paper title and plain-text introduction; below desktop they stack.
+The ordered stories remain primary: existing photographic StoryCards, with an explicit
+“Story n of m” register outside each card. The count and order include only public
+stories in the reader's locale. A flat photographic index exists only in live locales.
+
+The overview follows the list, with numbered 44px keyboard-link pins and independently
+drawn public GPS runs on the existing self-hosted chart. A visible discontinuity note,
+every member link and per-run public summaries remain outside the JavaScript surface.
+No inferred connecting lines, journey-wide distance, stops or new color language.
+
+A member story gains one quiet, dashed-rule journey strip after its reading/gallery
+surface and before comments. Its landmark names the journey distinctly; its text links
+step through visible members only. There are no thumbnails and no changes to the
+chronological StoryPagination below. Non-member pages gain no strip or navigation.
+
 ### Cards / Containers
 
 - **Story card** — a whole-tile link with navy body and `12px` corners.
@@ -1156,6 +1174,17 @@ and the `<dialog>`s appended to `<body>` share one set:
   visually hidden, so the command bar opens the workspace. The command bar separates
   primary actions from the full-width save/readiness status row. Error/status text
   wraps instead of disappearing behind ellipses.
+- On a phone the editor stays the same editor (#302). Preview opens its tab inside the tap
+  and fills it once the draft is saved — a tab opened after the save would be a blocked
+  popup — and if the browser still blocks it, the status line says so with an **Open
+  preview** link. Publish and Unpublish are shown only to admins (the routes are
+  admin-only; an author is never offered a control that can only fail). A dirty draft is
+  stashed the moment the tab is hidden, not only on `beforeunload`/`pagehide`, because a
+  backgrounded phone tab can be discarded without either.
+- Touch (coarse pointer) raises field text to 16px — iOS Safari otherwise zooms the page
+  into any smaller focused field — and checkboxes/radios to 24px; desktop keeps 14px and
+  16px. With large text below 900px the masthead's brand name truncates (its link keeps
+  the full name) so **View site** stays on screen.
 - The gallery picker keeps caption controls with the ordered selection: a native
   **Show captions** checkbox beside Layout and a locale-labelled textarea beneath
   each selected photo. **Use default caption** removes the local override and resumes
@@ -1212,6 +1241,14 @@ and the `<dialog>`s appended to `<body>` share one set:
   fields (marked unsaved) and offers the rest as a tinted note with **Use**. The bulk
   dialog is the exception that saves, so it states scope, fields, destination and photo
   count first; overwriting renames the action to **Generate and overwrite**.
+- Media's upload queue gives every picked file its own outcome in words (#301). Files the
+  browser can already rule out — over the 25 MB upload limit, HEIC/HEIF (the shipped image
+  pipeline decodes only AVIF-flavoured HEIF) or not an image — are **never sent**; their row
+  says "Not sent: …" with what to do instead, on its own full-width line under the file name,
+  red only repeating the words. A transferred file reads "Transferred; image processing may
+  still be running" (never "done"): the grid badge reports processing → ready/failed. While any
+  transfer is unsettled, a warn-toned note asks to keep the tab open; it disappears once every
+  file has a result, because encoding continues on the server without the tab.
 - Settings is one flat document per tab beside a quiet vertical tab index (**AI models**,
   Images, Comments, Site identity, Site & backups), not a stack of competing cards. The active tab sits
   on the accent-soft surface, is mirrored in the URL hash (unknown → AI models) and in

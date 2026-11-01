@@ -129,6 +129,12 @@ window.DraftGuard = (function () {
       stashNow(); e.preventDefault(); e.returnValue = '';
     });
     window.addEventListener('pagehide', () => { if (dirty) stashNow(); });
+    // A phone can discard a backgrounded tab without ever firing pagehide; being
+    // hidden is the last moment that reliably runs. Same stash, same key (#138)
+    // and generation (#22) as the debounce: it only takes it early (#302).
+    window.addEventListener('visibilitychange', () => {
+      if (dirty && typeof document !== 'undefined' && document.visibilityState === 'hidden') stashNow();
+    });
     return { initialize, ownerId: () => owner, markDirty, markClean, snapshot: () => generation,
       restoreGeneration: (value) => { generation = value; dirty = true; },
       isDirty: () => dirty, stashNow, tryRestore, adopt, dismissRestore, wasDismissed,

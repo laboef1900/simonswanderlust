@@ -431,8 +431,11 @@ The owner answered **Approve proposed matrix**, **Documented manual audit**, and
   (images; the app serves the blog on the image host only for loopback, so two names are
   required). It uses its own Compose project, data directory, database and loopback port,
   never production's; setup in the run sheet §"Disposable instance on the server".
-- **Build under test:** `dev` with #500 and #501 merged ahead of the run (owner, 2026-11-01);
-  #301/#302 stay open until this run passes.
+- **Build under test:** `dev` with #500 and #501 merged ahead of the run (owner, 2026-11-01).
+- **Closure without a recorded run (owner, later on 2026-11-01).** The owner closed #300–#302 and
+  #310 and will test on all systems himself, **Android included** — so E1 is superseded rather
+  than relied on. This matrix and the run sheet are his checklist; no §9 finding was recorded and
+  no cell is claimed as passed. Defects he finds are filed as new issues.
 
 ## 14. Mapping to #300's acceptance
 

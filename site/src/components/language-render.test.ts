@@ -15,7 +15,7 @@ import { ui, type Locale } from '../i18n/ui';
 
 const content = vi.hoisted(() => ({ trips: [] as Trip[] }));
 vi.mock('astro:content', () => ({
-  getCollection: async () => content.trips,
+  getCollection: async (name: string) => name === 'trips' ? content.trips : [],
   getEntry: async () => undefined,
   render: async () => ({ headings: [] }),
 }));

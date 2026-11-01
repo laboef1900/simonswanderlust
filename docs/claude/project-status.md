@@ -582,14 +582,37 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
   - **#98 `nameFromUrl` non-injectivity** — `foo.jpg`/`foo.png` collide on one key. Any fix must keep
     keys deterministic; #85's disk-derived resume depends on that.
 
-- **In review (#293, held for the owner):** the supported third-party
-  [installation guide](docs/install.md) — platforms as rehearsed (#292), requirements cited
-  only from measurements, secrets, uid-1000 data, the verified one-hop nginx example, blog
-  domain via Settings (#276), first run, links to the #298 upgrade and backup runbooks.
-  Compose now **requires** `PUBLIC_BASE_URL` and `IMG_HOST` (`:?`, no owner-host fallback) and
-  `uploader/.env.example` leaves them empty: a server `.env` without both refuses to start.
-- **In progress:** Phone authoring (#300, epic #299) — the owner-approved mobile acceptance
-  matrix (`docs/superpowers/specs/2026-10-27-mobile-acceptance-matrix-design.md`, decisions
-  2026-10-29 and 2026-11-01) and the G5 operator run sheet
-  (`docs/superpowers/plans/2026-11-01-issue-300-device-test-script.md`). Android is waived until
-  2027-05-01 (owner, 2026-11-01); the iPhone run is an owner gate and has **not** happened.
+- **Done:** #293 supported third-party [installation guide](../install.md) (merged 2026-11-01)
+  — platforms as rehearsed (#292), requirements cited only from measurements, secrets,
+  uid-1000 data, the verified one-hop nginx example, blog domain via Settings (#276), first run,
+  links to the #298 upgrade and backup runbooks. Compose now **requires** `PUBLIC_BASE_URL` and
+  `IMG_HOST` (`:?`, no owner-host fallback) and `uploader/.env.example` leaves them empty: a
+  server `.env` without both refuses to start. The second-person install criterion was waived by
+  the owner (recorded on #293).
+- **Done, closed by the owner without a recorded device run (#300–#302, epic #299,
+  2026-11-01):** the owner-approved mobile acceptance matrix
+  (`docs/superpowers/specs/2026-10-27-mobile-acceptance-matrix-design.md`) and the G5 run sheet
+  (`docs/superpowers/plans/2026-11-01-issue-300-device-test-script.md`) remain the checklist for
+  the owner's own testing on all systems, Android included. #301: Media refuses before transfer
+  what the server would refuse or cannot decode — over 25 MiB, HEIC/HEIF (shipped sharp decodes
+  only AVIF-HEIF), non-images — naming each reason; transferred rows never claim encoding; a
+  keep-this-tab-open note shows only while transfers are unsettled
+  (`docs/superpowers/specs/2026-11-01-phone-media-upload-audit.md`). #302: Preview opens its tab
+  inside the tap (fallback link if blocked), DraftGuard also stashes on `visibilitychange` →
+  hidden (#138 keys/#22 generations unchanged), Publish/Unpublish shown to admins only, 16px
+  field text and 24px checkboxes on coarse pointers (`--control-font`)
+  (`docs/superpowers/specs/2026-11-01-phone-compose-audit.md`).
+- **Done, closed by the owner without a recorded screen-reader pass (#310, epic #307,
+  2026-11-01):** public DE/EN journey pages (`/rundreisen/…`, `/en/journeys/…`, routes
+  owner-approved 2026-11-01), ordered published-only membership, story journey strips beside the
+  unchanged chronological pager, progressive overview map. The owner tests himself; the script
+  `docs/superpowers/plans/2026-11-01-issue-310-screen-reader-script.md` and fixture
+  `uploader/scripts/journey-sr-fixture.mjs` remain available.
+- **Done, closed by the owner (#296, epic #294, 2026-11-01):** offsite contract (Veeam
+  whole-server backup, ≥14 daily restore points, escrow); the restore drill is covered by the
+  owner's regular restore test, not recorded here.
+- **Tooling ready, owner run pending (G6):** the packaged native-lock harness takes
+  `--data-root` and runs its ownership matrix on bind-mounted subdirectories of a real directory
+  (passed on native amd64/arm64 ext4 runners). The owner qualifies the server's `/data`
+  filesystem with `docs/superpowers/plans/2026-11-01-g6-deployment-mount-qualification.md`
+  before #486–#489 are deployed.
