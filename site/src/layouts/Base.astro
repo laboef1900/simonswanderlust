@@ -12,6 +12,10 @@ import { SHIKI_CSS } from '../lib/shiki-classes';
 import { identity, identitySiteName, buildSiteOrigin } from '../lib/build-identity';
 import { rssPath } from '../lib/paths';
 import { siteLanguage } from '../lib/site-language';
+import { getCollection, getEntry } from 'astro:content';
+import { publicRoutes } from '../lib/public-routes';
+import { resolveNavigation } from '../lib/resolve-navigation';
+import { DEFAULT_NAVIGATION } from '../lib/navigation';
 
 interface Props {
   title: string;
@@ -32,6 +36,9 @@ const site = Astro.site ?? buildSiteOrigin();
 const canonical = new URL(Astro.url.pathname, site);
 const ogLocale: Record<Locale, string> = { de: 'de_DE', en: 'en_US' };
 const otherLocale: Locale = locale === 'de' ? 'en' : 'de';
+const [trips, pages, navEntry] = await Promise.all([getCollection('trips'), getCollection('pages'), getEntry('navigation', 'site')]);
+const routes = publicRoutes(trips, language, pages);
+const navigation = resolveNavigation(navEntry?.data ?? DEFAULT_NAVIGATION, routes, language, locale, Astro.url.pathname);
 
 // @ai-warning Preconnect to the IMAGE host, never to `site.origin`: the document's
 // own origin is already connected before <head> is parsed, so that hint is a
@@ -123,8 +130,8 @@ const shikiStyle = `<style>${SHIKI_CSS}</style>`;
     >
       {t('nav.skipToContent')}
     </a>
-    <Nav locale={locale} alternates={alternates} />
+    <Nav locale={locale} alternates={alternates} items={navigation.header} />
     <main id="main-content" class="flex-1"><slot /></main>
-    <Footer locale={locale} />
+    <Footer locale={locale} items={navigation.footer} legal={navigation.legal} />
   </body>
 </html>

@@ -1035,6 +1035,135 @@ Independent re-review found no remaining findings; both required CI jobs passed
 on `c18f516`. Final documentation CI and eventual stack qualification remain
 separate from this exact-source evidence.
 
+## #289 public-output and navigation interface
+
+The implementation extends the existing #285 `[...path].astro` catalogue, not
+parallel fixed route files. `pages` and `navigation` Content Layer collections
+import the same exported snapshot already used by trips/identity/language.
+Eligibility is applied before row parsing; Zod then rejects malformed published
+registry rows, missing enabled counterparts and invalid images. The sanitized
+body is checked for foreign image origins after portability rewriting (which
+re-points only registered `images` keys at this host, so it cannot introduce a
+foreign load) and before guarded responsive-picture/gallery rendering. About stays the existing
+resource and fixed localized route exactly once, including its fallback text.
+Generic pages have canonical/sitemap/actual-counterpart hreflang, not story feeds.
+The existing #288 sanitized saved-draft preview remains the preview surface.
+
+`publicRoutes` is the one full emitted HTML catalogue. Its deterministic guard
+names both competing owners and rejects page/story/static/locale collisions
+regardless of input creation order. Page reservations are strict; grandfathered
+app/legacy story names retain the approved warning policy. Navigation accepts only
+the existing version-1 schema, resolves each enabled locale against this catalogue
+(plus actual RSS/sitemap/error artifacts), omits unavailable page targets and warns
+on non-emitted relative paths. External URLs retain only the validator's HTTPS
+form and render escaped labels with the approved new-tab semantics. Footer legal
+links are optional; the existing identity social slot remains separate.
+
+### Owner editing and response contract
+
+- `GET /settings/navigation`: admin-only/no-store; `{ config, updatedAt, language,
+  socialLinks }`. `socialLinks` is the current read-only identity list, not a second
+  navigation setting.
+- `PUT /settings/navigation`: admin-only/no-store; strict `{ config, updatedAt }`
+  payload. Lock `site_language` first, then `site_nav`, validate the complete
+  document and active-locale URL/label pairs against that locked mode, compare the
+  optimistic token, save and commit. No model/provider/browser-storage involvement.
+- After commit and lock release, build once. Success is `{ saved, build }`; failed
+  returned or thrown builds are `502 { code: "navigation_build_failed",
+  persisted: true, saved, error }`, retaining the last successful release. Invalid
+  input is 400; stale token is 409 with no write/build.
+- Settings → Navigation edits header/footer/legal in stored order, bounded by
+  5/8/4 items, with all four kinds, target choice and enabled-locale label/URL
+  fields. Disabled-locale values survive ordinary edits. Move actions preserve
+  focus; removal/reload/rebuild use the existing confirmation helper. Missing
+  targets are author notices. Failed-build acknowledgements adopt the saved token;
+  conflicts or unacknowledged transport failures retain edits and require reload.
+  Retry rebuild does not resave. Social links link back to Site identity.
+
+### Deterministic evidence matrix for integration owner
+
+No checks/builds were run by the implementation worker. Run the full affected site
+and uploader suites/type checks once after integration, with `TEST_DATABASE_URL`
+set for actual PostgreSQL coverage. New focused suites cover page schema/filtering,
+all-mode routes/collisions, malicious navigation URLs, loader snapshot rejection,
+sanitized image rendering, navigation API roles/tokens/failure acknowledgement,
+memory/Postgres writer races and the real Settings DOM.
+
+`navigation-snapshot.integration.test.ts` uses a disposable schema and real exported
+snapshot for both primary languages. Its builder seam pauses after capture,
+mutates live page/navigation/identity/language rows, then imports the captured
+snapshot through actual page/navigation/trip loaders. A queued failed successor
+must preserve the earlier release; an expired supplied snapshot must fail without
+new-row fallback. This is a real database/loader/release test, not a claim that an
+Astro subprocess or browser has been exercised.
+
+For actual Astro output, build `BUILT_PAGE_CONTRACT_ROOT/<mode>/{seed,configured}`
+for `de-bilingual`, `en-bilingual`, `de-only`, `en-only`. Use the same disposable
+identity/trips as the #285 fixture matrix, plus:
+
+1. About keeps its existing row, empty slug and fixed route. Publish Contact
+   (`de: kontakt`, `en: contact`) and Legal (`de: impressum`, `en: legal`) with
+   nonempty localized title/body. Keep Privacy draft (`datenschutz`/`privacy`) with
+   `PRIVATE289` in its body. In single-locale builds put `PRIVATE289` in every
+   retained inactive page title/body, not enabled content. No real legal text.
+2. Identity social links contain `{ label: "Author", url:
+   "https://social.example/author" }`. No provider credentials or owner data.
+3. `seed` uses `DEFAULT_NAVIGATION`; configured header is Contact page, a relative
+   path to the locale's actual map URL, then external
+   `https://example.org/source?lang=<locale>` labeled literally
+   `<img src=x onerror=alert(289)> & source` in each locale. Configured footer keeps
+   About plus a missing relative `/missing-289/` and draft Privacy target; legal
+   contains Legal plus draft Privacy. Give relative paths nonempty localized
+   labels. Respect each slot's schema bounds.
+4. Run `BUILT_PAGE_CONTRACT_ROOT=... npx vitest run --config
+   vitest.built.config.ts test/built/pages.test.ts`. This project deliberately
+   refuses missing artifacts. Existing #285 route inventory tests use their own
+   `BUILT_ROUTE_CONTRACT_ROOT` without the new generic-page fixture; run separately
+   or supply both roots when running the entire built project.
+
+The actual-output suite asserts emitted/sitemap equality, all enabled page paths,
+no private bytes, one About/title per locale, correct canonical/alternate links,
+seed link preservation, escaped hostile labels, external attributes/indicator,
+current-page semantics, absent dangling/draft links and the preserved social slot.
+The implementing worker did not run these checks. The parent and separate runtime
+worker subsequently exercised the matrix below, using the current DESIGN/spec and
+independent synthetic content. No incumbent owner content was changed.
+
+### Observed #289 qualification (2026-10-29)
+
+Product source `7c0d21457b8be3ccfdffd5243db1d305aec10848` passed uploader
+type checking and the complete PostgreSQL-enabled suite, Astro check, the complete
+site suite and a real Astro build (`wave-two-results-1793288559109_86513.json`).
+The runtime worker then built all eight real artifact sets through `createSiteBuilder`
+and its exported PostgreSQL snapshot. The parent ran the built-page contract against
+those retained outputs: all four mode cases passed. All 452 artifact files were
+scanned without `PRIVATE289` bytes.
+
+Four actual main-process instances supported 36 Contact/Legal/About browser captures
+over enabled locales at 1440px and 320px. Actual sitemap-listed HTML routes and six
+RSS endpoints returned 200. Canonical/alternate links, literal hostile labels,
+responsive pictures, optional legal links, keyboard navigation, long labels and
+horizontal fit were exercised; screenshot contact sheets were visually inspected.
+
+Settings browser scenarios exercised navigation creation/editing/reorder, persisted
+order, scope confirmation, Escape/Cancel focus, stale-token 409 with explicit reload,
+invalid-scheme 400, author GET/PUT 403, inactive-field retention and transport failure.
+A real `/karte/` collision (`page:legal:de` versus `site:map:de`) failed the build after
+navigation committed, returning 502 with `persisted: true`. The previous `/kontakt/`
+still returned 200 with identical 12,148 bytes and SHA-256. Explicit UI Rebuild then
+recovered with 200 without resaving navigation.
+
+Canonical evidence: `issue-289-runtime-final.json` in the ignored execution ledger;
+the eight outputs remain under the issue worktree's `.issue-runtime/page-artifacts`.
+Only owned services/browsers were stopped; four private synthetic databases and
+recovery evidence remain retained. Reserved verification databases, earlier fixtures
+and owner content were untouched.
+
+This source retains the incumbent fixed canonical origin; #276 integration is a
+separate dependency qualification, not claimed by this proof. Likewise, manual
+screen-reader assessment, actual-target collision/deployment qualification,
+independent implementation-PR review, exact-final-head CI and resulting-stack
+qualification remain distinct. No merge, release or deployment is authorized.
 ## #288 current-dev integration (2026-11-01)
 
 Merged `origin/dev` at `b51a25d` (after #276, #279, #280, #281, #284, #285, #297,
@@ -1071,3 +1200,34 @@ confirmation was stubbed in-page for the editor click. Public rendering of
 non-About pages remains #289 (`/kontakt/` is 404 at this head by design). The
 G1 read-only owner inventory found no reserved-route collisions, matching a
 silent boot report.
+
+## #289 current-dev integration (2026-11-01)
+
+Merged `origin/dev` after #288 (#484) and the pre-route boot fix (#492) landed.
+Resolutions, keeping both intents:
+
+- **Page loader.** One render per row: registered images are re-pointed at this
+  host first (`retargetImageOrigins`; the stored origin is advisory), then any
+  still-foreign reference refuses the build, then the row's prose `description`
+  (#273 SEO) is extracted before responsive pictures are injected. Basic pages
+  use `BASIC_PAGE_BODY_SIZES` for their `max-w-3xl` column; About keeps
+  `ABOUT_BODY_SIZES`. `BasicPage` takes the loader description instead of a
+  regex-stripped body. The content schema is `pageDataSchema` plus `description`.
+- **Publish gate.** `foreignBodyImageSources` (shared with the loader) now reads
+  `analyzeRenderedBody`; the gate returns `hasH1` beside it.
+- **Navigation save (#297).** `PUT /settings/navigation` answers 200
+  `{ saved, build }` with the projected build report; the settings page adopts
+  the token either way and names the failure cause. The 502 `persisted`
+  envelope is gone.
+- `MAX_GALLERY_TEXT` now comes from `uploader/public/gallery-photo-line.js`.
+
+Verification: uploader `tsc` and full suite with isolated PostgreSQL (4166/4167,
+the remaining SQL-recovery case passes against its pg_dump wrapper database);
+site suite with PostgreSQL 763/763, `astro check` 0/0/0, `npm run build`,
+zero-content build 4/4. Runtime on a fresh database: contact page publish →
+`/kontakt/` and `/en/contact/` 200 with hreflang pair and prose description, in
+the sitemap; navigation save through the real settings page with a read-only
+`releases/` → saved, cause shown; successful save → footer legal link and
+header label live; unpublish → 404 and the footer link is omitted. Owner copy
+(isolated restore): boot report silent (matches G1), initial release built,
+`/`, `/uber-mich/`, `/en/about-me/`, `/karte/` 200.

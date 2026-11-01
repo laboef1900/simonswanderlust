@@ -27,7 +27,7 @@
  */
 import { setImmediate } from 'node:timers/promises';
 import { renderMarkdown } from '../../site/src/lib/render-markdown.js';
-import { STORY_BODY_SIZES, analyzeRenderedBody, transformBodyImages, type ImageDims } from '../../site/src/lib/body-images.js';
+import { STORY_BODY_SIZES, analyzeRenderedBody, foreignBodyImageSources, transformBodyImages, type ImageDims } from '../../site/src/lib/body-images.js';
 import type { Locale } from '../../site/src/i18n/ui.js';
 
 /** Heading semantics and foreign references before resolution; image loads after it. */
@@ -39,26 +39,10 @@ export async function analyzeBodyContent(
 ): Promise<{ hasH1: boolean; foreign: string[]; sources: string[] }> {
   // server.ts validates cfg.baseUrl at boot (previewCsp), so this cannot throw there.
   const allowed = new URL(imageOrigin).origin;
-  const found = new Set<string>();
   const html = await renderMarkdown(body);
-  const { hasH1, sources, galleryLines } = analyzeRenderedBody(html);
-  for (const raw of [...sources, ...galleryLines]) {
-    let u: URL;
-    // Resolved against the image host — which in this deployment is the origin
-    // that serves the blog too — because that is what the reader's browser
-    // does with a reference that carries no origin of its own. Parsing without
-    // a base disagreed with it in both directions: `//old.example/a.jpg`
-    // (also its `&#47;&#47;` and `\\` spellings, which WHATWG resolves the same
-    // way) failed to parse and was passed as harmless while the page hot-linked
-    // old.example, and `https:old.example/a.jpg` parsed as a foreign origin
-    // while the browser reads it as a path on our own host — a false refusal.
-    try { u = new URL(raw, allowed); } catch { continue; }
-    if (u.protocol !== 'https:' && u.protocol !== 'http:') continue;
-    if (u.origin !== allowed) found.add(raw);
-  }
   return {
-    hasH1,
-    foreign: [...found],
+    hasH1: analyzeRenderedBody(html).hasH1,
+    foreign: foreignBodyImageSources(html, allowed),
     sources: analyzeRenderedBody(await transformBodyImages(html, images, allowed, {
       locale,
       inlineSizes: STORY_BODY_SIZES,

@@ -1,21 +1,18 @@
 ---
 import { useTranslations, type Locale } from '../i18n/ui';
-import { aboutPath, homePath, mapPath } from '../lib/paths';
+import { homePath } from '../lib/paths';
 import LangSwitcher from './LangSwitcher.astro';
 import { identity, identitySiteName } from '../lib/build-identity';
+import type { ResolvedNavItem } from '../lib/resolve-navigation';
 
 interface Props {
   locale: Locale;
   alternates?: { de: string; en: string };
+  items: ResolvedNavItem[];
 }
 
-const { locale, alternates } = Astro.props;
+const { locale, alternates, items } = Astro.props;
 const t = useTranslations(locale);
-const pathname = Astro.url.pathname;
-
-const isHome = pathname === homePath(locale) || pathname === homePath(locale) + '/';
-const isMap = pathname.startsWith(mapPath(locale));
-const isAbout = pathname.startsWith(aboutPath(locale));
 
 // @ai-warning Two rules keep this header inside a phone viewport, and both are
 // load-bearing:
@@ -31,9 +28,9 @@ const isAbout = pathname.startsWith(aboutPath(locale));
 // after touching this file; `flex-wrap` on the nav is what makes 320 survive.
 // Mobile has no vertical shell padding: its two 44px target rows are the
 // irreducible height without overlapping controls.
-const link = 'inline-flex min-h-[44px] items-center rounded px-2 transition-[color]';
+const link = 'inline-flex min-h-[44px] max-w-full items-center rounded px-2 transition-[color] [overflow-wrap:anywhere]';
 const active = 'font-semibold text-brand-red';
-const idle = 'text-ink/80 hover:text-brand-red';
+const idle = 'text-ink/80 hover:text-brand-red active:text-brand-red';
 ---
 
 <header class="border-b border-navy/10 bg-canvas">
@@ -58,25 +55,17 @@ const idle = 'text-ink/80 hover:text-brand-red';
     </a>
     <nav
       aria-label={t('nav.ariaLabel')}
-      class="-mx-2 flex shrink-0 flex-wrap items-center gap-x-1 text-sm font-medium sm:mx-0 sm:justify-end"
+      class="-mx-2 flex min-w-0 flex-wrap items-center gap-x-1 text-sm font-medium sm:mx-0 sm:justify-end"
     >
-      <a
-        href={homePath(locale) + '#stories'}
-        aria-current={isHome ? 'page' : undefined}
-        class:list={[link, isHome ? active : idle]}
+      {items.map((item) => <a
+        href={item.href}
+        aria-current={item.current ? 'page' : undefined}
+        target={item.external ? '_blank' : undefined}
+        rel={item.external ? 'noopener noreferrer' : undefined}
+        class:list={[link, item.current ? active : idle]}
       >
-        {t('nav.stories')}
-      </a>
-      <a href={mapPath(locale)} aria-current={isMap ? 'page' : undefined} class:list={[link, isMap ? active : idle]}>
-        {t('nav.map')}
-      </a>
-      <a
-        href={aboutPath(locale)}
-        aria-current={isAbout ? 'page' : undefined}
-        class:list={[link, isAbout ? active : idle]}
-      >
-        {t('nav.about')}
-      </a>
+        <span>{item.label}{item.external && <> ↗<span class="sr-only"> {t('nav.newTab')}</span></>}</span>
+      </a>)}
       <LangSwitcher locale={locale} alternates={alternates} />
     </nav>
   </div>

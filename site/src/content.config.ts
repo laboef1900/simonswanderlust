@@ -4,6 +4,8 @@ import { postgresTripsLoader } from './lib/postgres-loader';
 import { postgresPagesLoader } from './lib/pages-loader';
 import { regions } from './lib/paths';
 import { publicTrackSchema } from './lib/public-track';
+import { pageDataSchema } from './lib/page-content';
+import { postgresNavigationLoader, navigationSchema } from './lib/navigation-loader';
 
 const storyImage = z.object({
   src: z.url(),
@@ -45,7 +47,10 @@ const trips = defineCollection({
 
 const pages = defineCollection({
   loader: postgresPagesLoader(),
-  schema: () => z.object({ title: z.string(), description: z.string() }),
+  // The loader derives `description` from the rendered body (#273 SEO) beside #289's page identity.
+  schema: () => pageDataSchema.and(z.object({ description: z.string() })),
 });
 
-export const collections = { trips, pages };
+const navigation = defineCollection({ loader: postgresNavigationLoader(), schema: () => navigationSchema });
+
+export const collections = { trips, pages, navigation };

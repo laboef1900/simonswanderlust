@@ -369,7 +369,7 @@ remote-fetch guards. Neither a domain edit nor a rebuild renames story paths or 
 Logo/favicon assets follow #275 above. Gallery image
 allow-listing, existing upload limits and EXIF policy are unchanged.
 
-### Editable pages and navigation storage (#288)
+### Editable pages and navigation (#288–#289)
 
 Owner approval is recorded in the [#287 contract](docs/superpowers/specs/2026-10-27-issue-287-pages-navigation.md).
 All page writes, Publish, unpublish, deletion and deletion-impact reads require
@@ -401,11 +401,22 @@ recovered collision/unsafe live body; About must instead be repaired.
 
 The typed `site_nav` document accepts closed targets, bounded labels with control
 characters removed, HTTPS external URLs without credentials, and bounded same-origin
-ASCII relative paths. Dump v13 requires valid page metadata and a valid navigation
-singleton; older versions explicitly normalize pages and preserve live navigation.
-Restore summaries warn rather than silently drop dangling navigation/colliding
-content. #289 owns navigation APIs/public interpolation and build-time revalidation;
-no user-supplied navigation markup is rendered by #288.
+ASCII relative paths. Its admin-only no-store API uses an optimistic token and locks
+the language row before navigation; post-commit build failure returns the saved token.
+The Settings editor uses text nodes, never author-supplied HTML. Public interpolation
+is escaped by Astro; external links alone use `_blank`, `noopener noreferrer`, a
+visible external marker and localized hidden new-tab text. Relative links are emitted
+only when their normalized pathname exists in the same captured public catalogue.
+The footer social slot remains separate from the configurable/legal link lists.
+
+Build-time Zod validation repeats the closed registry, enabled/published filtering,
+page completeness and image-origin checks before the shared sanitized Markdown and
+guarded picture/gallery rendering. Invalid published data or page/story/static route
+collisions fail the build rather than overwrite another URL. A supplied invalid or
+expired database snapshot fails closed: loaders never retry against current rows.
+Dump v13 requires valid page metadata and a valid navigation singleton; older versions
+explicitly normalize pages and preserve live navigation. Restore summaries warn
+rather than silently drop dangling navigation/colliding content.
 
 Recovery retains the last successful release if a post-commit rebuild fails and
 reports the committed state (`502`, `persisted: true`). Do not roll back to an

@@ -12,7 +12,9 @@ import { GET as feed } from '../pages/[...locale]/rss.xml';
 
 const content = vi.hoisted(() => ({ trips: [] as Trip[] }));
 vi.mock('astro:content', () => ({
-  getCollection: async () => content.trips,
+  // Only trips exist here; #289's pages/navigation collections are empty.
+  getCollection: async (name: string) => name === 'trips' ? content.trips : [],
+  getEntry: async () => undefined,
   render: async () => ({ headings: [] }),
 }));
 const windows: Window[] = [];

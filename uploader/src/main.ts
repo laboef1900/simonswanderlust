@@ -9,6 +9,7 @@ import { pgUserStore } from './users.js';
 import { pgSessionStore } from './sessions.js';
 import { pgPostStore } from './posts.js';
 import { pgPageStore } from './pages.js';
+import { pgNavigationStore } from './navigation.js';
 import { reportNamespaceCollisions } from './namespace-report.js';
 import { bootstrapRelease, createSiteBuilder } from './build.js';
 import { createDbBackup, createRouteManifestPinReader, isBackupDue, resolveBackupDir, dumpDatabase } from './backup.js';
@@ -198,6 +199,7 @@ const app = buildServer({
   secrets,
   posts,
   pages,
+  navigation: pgNavigationStore(pool),
   // Optional in ServerConfig so tests can omit them; omitted here, every
   // public and moderation comment route answers 503 in production.
   comments: pgCommentStore(pool),
