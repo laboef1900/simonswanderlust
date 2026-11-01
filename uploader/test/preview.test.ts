@@ -274,14 +274,18 @@ describe('renderPreviewHtml', () => {
   it('carries a draft banner and a robots noindex meta', async () => {
     const html = await renderPreviewHtml(pair(), 'de', ORIGIN);
     expect(html).toContain('<meta name="robots" content="noindex">');
-    expect(html).toContain('Draft preview — not published');
+    expect(html).toContain('Entwurfsvorschau — nicht die Live-Website');
     expect(html).toContain('· DE');
   });
 
-  it('labels a published post as published instead', async () => {
-    const html = await renderPreviewHtml(pair({ status: 'published' }), 'en', ORIGIN);
-    expect(html).toContain('Preview — published post');
-    expect(html).not.toContain('Draft preview');
+  it.each(['de', 'en'] as const)('keeps a published working-copy preview visibly draft-only in %s', async (locale) => {
+    const p = pair({ status: 'published' });
+    p[locale].bodyMarkdown = 'Saved working copy, not a release snapshot.';
+    const html = await renderPreviewHtml(p, locale, ORIGIN);
+    expect(html).toContain('Saved working copy, not a release snapshot.');
+    expect(html).toContain(locale === 'de' ? 'Entwurfsvorschau — nicht die Live-Website' : 'Draft preview — not the live site');
+    expect(html).toContain(locale === 'de' ? 'Galerien zeigen die aktuellen Medienbeschreibungen' : 'Galleries show current Media descriptions');
+    expect(html).not.toContain('Preview — published post');
   });
 
   it('renders a gallery fence as a grid, using the images map for alt/caption', async () => {

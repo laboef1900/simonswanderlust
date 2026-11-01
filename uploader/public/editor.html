@@ -497,6 +497,8 @@
     <script src="/admin/editor-gpx.js"></script>
     <script src="/admin/editor-image-copy.js"></script>
     <script src="/admin/build-reporting.js"></script>
+    <script src="/admin/publication-state.js"></script>
+    <script src="/admin/publication-refresh.js"></script>
     <script src="/admin/auth.js"></script>
     <script src="/admin/language.js"></script>
     <script src="/admin/admin-confirm.js"></script>
@@ -564,6 +566,18 @@
         return result;
       }
       let populatingBody = false;
+      let publication = { availability: 'unavailable' };
+      let publicationRefresh;
+      let publicationBuild = null;
+      function installPublication(value) {
+        publication = value.publication || { availability: 'unavailable' };
+        publicationBuild = value.buildStatus || null;
+        isPublished = publication.availability === 'available' ? publication.status === 'published' : null;
+        $('publicationState').textContent = PublicationState.label(publication, reviewIsAdmin);
+        $('publicationQualifier').textContent = reviewIsAdmin ? PublicationState.qualifiers(publication, publicationBuild) : '';
+        publicationRetry.hidden = !(currentTk || initialTk);
+        updateLocaleChip();
+      }
       let formVersion = 0;
       const deImages = {};        // src → {width, height}
       const enImages = {};
@@ -664,13 +678,14 @@
             history.replaceState(null, '', url.toString());
             $('pageTitle').textContent = 'Edit post';
           }
+          publicationRefresh.accept({ publication: body.publication });
           loadedUpdatedAt = body.updatedAt;
           loadedSlugs.de = body.de?.slug || '';
           loadedSlugs.en = body.en?.slug || '';
           savedRequestedLocales = language.locales.filter((locale) => body[locale] && !body[locale].omitted);
           loadRevisions().catch(() => {});
           refreshAltAudit().catch(() => {});
-          setStatus('');
+          setStatus(isPublished ? editorCopy.saveLiveUnchanged : '');
         },
         rebase: (body) => {
           currentTk = body.translationKey;
@@ -703,6 +718,39 @@
         if (el.textContent !== editorCopy[state]) el.textContent = editorCopy[state];
       }
       renderDraftState();
+      const publicationLine = document.createElement('p');
+      publicationLine.id = 'publicationState';
+      publicationLine.setAttribute('role', 'status');
+      const publicationQualifier = document.createElement('p');
+      publicationQualifier.id = 'publicationQualifier';
+      publicationQualifier.className = 'muted';
+      const publicationRetry = document.createElement('button');
+      publicationRetry.type = 'button';
+      publicationRetry.className = 'btn-secondary';
+      publicationRetry.textContent = PublicationState.text('refresh');
+      publicationRetry.hidden = !initialTk;
+      publicationRetry.setAttribute('aria-describedby', 'publicationState');
+      $('draftSaveState').after(publicationLine, publicationQualifier, publicationRetry);
+      publicationRefresh = PublicationRefresh.create({
+        resource: () => currentTk || initialTk,
+        async read(signal, publish) {
+          const post = PublicationRefresh.json('/posts/' + encodeURIComponent(currentTk || initialTk), signal)
+            .catch((error) => { if (error.status === 404) return { publication: { availability: 'missing' } }; throw error; })
+            .then((value) => { publish({ publication: value.publication, buildStatus: null }); return value; });
+          const build = reviewIsAdmin ? PublicationRefresh.json('/rebuild/status', signal).catch((error) => {
+            if (error.status === 401) throw error;
+            return null;
+          }) : null;
+          const [value, buildStatus] = await Promise.all([post, build]);
+          return { publication: value.publication, buildStatus };
+        },
+        apply: installPublication,
+        unavailable: () => installPublication({ publication: { availability: 'unavailable' } }),
+        unauthorized: () => guard.redirectToLogin(),
+      });
+      publicationRetry.addEventListener('click', () => publicationRefresh.refresh());
+      $('previewBtn').textContent = PublicationState.text('preview');
+      $('previewBtn').title = PublicationState.text('previewMedia');
       // Delegated listeners cover every static field plus dynamic key-fact rows;
       // the EasyMDE bodies live in CodeMirror and need their own change hooks.
       const mainEl = document.querySelector('main');
@@ -1772,12 +1820,13 @@
         if (details && g.trip.length) details.open = true;
         const pub = $('publishBtn');
         if (pub) {
-          const blocked = !language || loadBlocked || gapCount(g) > 0;
+          const blocked = !language || loadBlocked || (currentTk && publication.availability !== 'available') || gapCount(g) > 0;
           pub.disabled = blocked;
           pub.title = blocked ? 'Fill the missing fields before publishing.' : '';
         }
         const unpub = $('unpublishBtn');
         if (unpub) unpub.hidden = !isPublished;
+        if (unpub) unpub.disabled = publication.availability !== 'available';
       }
 
 
@@ -1973,7 +2022,13 @@
           }
           payload.confirmSlugChange = true;
         }
-        const saved = await writeRecovery.save(payload, snap);
+        publicationRefresh.beginAction();
+        let saved;
+        try {
+          saved = await writeRecovery.save(payload, snap);
+        } finally {
+          publicationRefresh.endAction();
+        }
         if (saved) {
           const savedMsg = guard.isDirty() ? editorCopy.saveNewer : isPublished ? editorCopy.saveLiveUnchanged : '';
           if (skipped || savedMsg) setStatus(skipped
@@ -2026,6 +2081,7 @@
         const btn = $('publishBtn');
         const publishingLocales = [...savedRequestedLocales];
         btn.disabled = true;
+        publicationRefresh.beginAction();
         const started = Date.now();
         setStatus('Building…');
         const tick = setInterval(() => {
@@ -2050,7 +2106,7 @@
           if (body.published !== true || !body.updatedAt) {
             showErr(BuildReporting.text('unknown')); setStatus(''); return;
           }
-          isPublished = true;
+          publicationRefresh.accept({ publication: body.publication });
           if (body.updatedAt) loadedUpdatedAt = body.updatedAt;
           for (const locale of publishingLocales) {
             publishedLocales[locale] = true;
@@ -2066,6 +2122,7 @@
           setStatus('');
         } finally {
           clearInterval(tick);
+          publicationRefresh.endAction();
           btn.disabled = false;
           updateLocaleChip();
         }
@@ -2085,6 +2142,7 @@
         if (!ok) return;
         const btn = $('unpublishBtn');
         btn.disabled = true;
+        publicationRefresh.beginAction();
         setStatus('Unpublishing…');
         try {
           const res = await fetch('/posts/' + encodeURIComponent(currentTk) + '/unpublish', { method: 'POST' });
@@ -2097,7 +2155,7 @@
           if (body.previousUpdatedAt === loadedUpdatedAt && body.updatedAt) {
             loadedUpdatedAt = body.updatedAt;
           }
-          isPublished = false;
+          publicationRefresh.accept({ publication: body.publication });
           for (const locale of ['de', 'en']) slugFieldFor(locale).disabled = publishedLocales[locale];
           BuildReporting.renderOutcome($('actionStatus'), 'unpublish', body, { title });
           updateLocaleChip();
@@ -2106,6 +2164,7 @@
           setStatus('');
         } finally {
           btn.disabled = false;
+          publicationRefresh.endAction();
         }
       }
 
@@ -2232,16 +2291,27 @@
       // Returns false only when it redirected to /login (callers must stop);
       // true otherwise — even on a failed load, so a local stash can still be offered.
       async function loadPost(tk, { snapshot, deferRouteRefresh = false } = {}) {
+        publicationRefresh.beginAction();
+        const controller = new AbortController();
+        const deadline = setTimeout(() => controller.abort(), 10000);
+        try { return await readPostIntoEditor(tk, snapshot, deferRouteRefresh, controller.signal); }
+        finally {
+          clearTimeout(deadline);
+          publicationRefresh.endAction();
+        }
+      }
+      async function readPostIntoEditor(tk, snapshot, deferRouteRefresh, signal) {
         // Reload explicitly replaces the editing base; older queued intents
         // must never be replayed against that newly accepted foreign version.
         const reloadEpoch = ++writeEpoch;
         loadBlocked = true;
+        installPublication({ publication: { availability: 'unavailable' } });
         setStatus('Loading…');
         let post;
         try {
           if (snapshot) post = snapshot;
           else {
-            const res = await fetch('/posts/' + encodeURIComponent(tk));
+            const res = await fetch('/posts/' + encodeURIComponent(tk), { cache: 'no-store', signal });
             if (res.status === 401) { guard.redirectToLogin(); return false; }
             if (!res.ok) {
               showErr('Could not load post: ' + res.status);
@@ -2269,7 +2339,7 @@
         if (recoveryDraft) guard.stashNow();
         const wasPublished = isPublished;
         try {
-          isPublished = post.status === 'published';
+          isPublished = post.publication?.availability === 'available' ? post.publication.status === 'published' : null;
           populateForm(post);
         } catch (error) {
           isPublished = wasPublished;
@@ -2302,9 +2372,9 @@
         // Conflict replacement already preserved the local copy in a separate context.
         if (guard.isDirty()) guard.markClean();
         renderDraftState();
-        setStatus(isPublished
-          ? (post.hasUnpublishedChanges ? editorCopy.loadedPublishedChanges : editorCopy.loadedPublished)
-          : '');
+        publicationRefresh.invalidate();
+        installPublication({ publication: post.publication });
+        setStatus('');
         // Initialization alone defers this read until after local stash recovery.
         // Explicit Reload holds the write queue closed across both reads.
         const routeReady = deferRouteRefresh || await gpxEditor.refresh();
@@ -2384,6 +2454,8 @@
 
       const gpxEditor = GpxEditor.wire({
         getPost: () => ({ tk: currentTk, baseUpdatedAt: loadedUpdatedAt }),
+        beginAction: () => publicationRefresh.beginAction(),
+        endAction: () => publicationRefresh.endAction(),
         runWrite: async (write) => {
           const intent = await captureSaveIntent();
           if (!intent) return false;
@@ -2519,6 +2591,7 @@
         } else {
           guard.markClean();
         }
+        publicationRefresh.start();
         // A failed post load is not a reconciled baseline, even if a stash was
         // recovered. Do not promote a route-only read to a reviewed token.
         if (!loadBlocked && !await gpxEditor.refresh()) loadBlocked = true;

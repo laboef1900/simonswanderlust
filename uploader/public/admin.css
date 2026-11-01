@@ -591,6 +591,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .posts-page .posts-table .col-languages { width: 6.5rem; }
 .posts-page .posts-table .col-updated { width: 7.5rem; }
 .posts-page .posts-table .col-actions { width: 11rem; }
+.posts-page .posts-table .status-pill { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.posts-page .posts-table .status-pill::before { flex-shrink: 0; }
 .posts-page .media-thumb { width: 3rem; height: 2.25rem; object-fit: cover; border-radius: 0.25rem; }
 .posts-page .posts-table tbody tr:hover { background: #fafbfc; }
 .posts-page .post-trip-meta { display: block; margin-top: 0.125rem; color: var(--muted); font-size: 0.75rem; line-height: 1.5; }
@@ -771,7 +773,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   /* Title row, then status + languages on one line, then date, then actions. */
   .posts-page .posts-table tbody tr {
     display: grid;
-    grid-template-columns: var(--control-h-sm) 3.25rem auto minmax(0, 1fr);
+    grid-template-columns: var(--control-h-sm) 3.25rem minmax(0, 1fr) auto;
     gap: 0.375rem 0.5rem;
     padding-block: 0.75rem;
     border-bottom: 1px solid var(--line);
@@ -792,7 +794,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   .posts-page .posts-table tbody .col-updated:not(:empty)::before { content: attr(data-label) ': '; }
   .posts-page .posts-table tbody td.col-actions { grid-row: 4; }
   .posts-page .posts-table tbody .posts-empty { grid-column: 1 / -1; padding: 1.25rem 0; }
-  .posts-page .post-more-actions { right: auto; left: 0; }
   .posts-page #bulkCount,
   .posts-page .selection-review { flex-basis: 100%; }
   .posts-page .bulk-bar > button { flex: 1 1 7rem; }

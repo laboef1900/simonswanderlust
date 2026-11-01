@@ -32,6 +32,9 @@ describe('ui dictionaries', () => {
   const IDENTICAL_ON_PURPOSE: readonly UIKey[] = [
     'editor.chrome.studioName',
     'editor.chrome.onboardingOptional', // “Optional” is the same adjective in DE and EN.
+    'editor.chrome.publicationLive', // “Live” is also the German status term.
+    'editor.chrome.publicationFactLive',
+    'editor.chrome.publicationLocaleFact', // Locale code + translated fact; only punctuation is shared.
     // Preserve ESA's prescribed English credit and the standard license identifier.
     'map.landcoverAttribution', 'map.landcoverLicense',
     'editor.chrome.identityLogo', // “Logo” is the same word in German and English.

@@ -1,10 +1,15 @@
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { setImmediate as nextTurn } from 'node:timers/promises';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { editorDocument, type EditorElement } from './editor-dom-harness.js';
 import { ui } from '../../site/src/i18n/ui.js';
 import type { OnboardingLanguage } from '../src/onboarding.js';
+
+const deskWindows: EventTarget[] = [];
+afterEach(() => {
+  for (const window of deskWindows.splice(0)) window.dispatchEvent(new Event('pagehide'));
+});
 
 // The Desk loads build-reporting.js before onboarding.js; failed-build wording comes from it.
 const sources = ['build-reporting.js', 'desk.js', 'language.js', 'admin-confirm.js', 'onboarding.js'].map((name) => readFileSync('public/' + name, 'utf8'));
@@ -316,8 +321,13 @@ async function deskPage(options: {
   const document = Object.assign(dom.document, { documentElement: { lang: 'en' }, title: 'Desk' });
   const location = { pathname: '/admin/', search: '?from=setup', href: '' };
   const requests: Request[] = [];
+  const window = new EventTarget();
+  deskWindows.push(window);
   const context: Record<string, unknown> = {
     document, location,
+    AbortController, setTimeout, clearTimeout,
+    addEventListener: window.addEventListener.bind(window),
+    removeEventListener: window.removeEventListener.bind(window),
     EditorCopy: { en: Object.fromEntries(Object.entries(ui.en)
       .filter(([key]) => key.startsWith('editor.chrome.'))
       .map(([key, text]) => [key.slice('editor.chrome.'.length), text])) },
@@ -339,9 +349,9 @@ async function deskPage(options: {
       if (url === '/posts') return options.posts ? options.posts() : Response.json([]);
       if (url === '/media/queue') return Response.json({ pending: 0, running: 0 });
       if (url === '/health') return Response.json({ release: false });
-      // The Desk reads the language mode (#284) and, for admins, build status (#297).
-      if (url === '/language') return Response.json({ primary: 'de', locales: ['de', 'en'], lockedAt: null, updatedAt: '2026-10-27T00:00:00.000Z' });
-      if (url === '/rebuild/status') return Response.json({ live: null, running: null, last: null, record: 'missing' });
+      // The Desk reads the language mode (#284) and, for admins, build status (#297) and the publication summary (#317).
+      if (url === '/rebuild/status') return Response.json({ record: 'missing', running: null, last: null, live: null });
+      if (url === '/publication/summary') return Response.json({ availability: 'available', release: 'none', posts: null, galleryDescriptions: null });
       throw new Error('Unexpected Desk request: ' + url);
     },
   };

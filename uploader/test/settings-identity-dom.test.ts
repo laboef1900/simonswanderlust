@@ -41,6 +41,7 @@ async function page(options: {
   }
   const requests: Request[] = [];
   const confirms: unknown[] = [];
+  const lifecycle: string[] = [];
   const context: Record<string, unknown> = {
     document, FormData, EditorCopy: {
       en: copy,
@@ -55,6 +56,7 @@ async function page(options: {
         ...(init?.body instanceof FormData ? { form: init.body } : {}),
       };
       requests.push(request);
+      if (request.method !== 'GET') lifecycle.push('request');
       if (url === '/rebuild/status') return Response.json({ running: null, last: null, live: null, record: 'missing' });
       if (request.method === 'GET') {
         const data = initial(options.locales);
@@ -69,8 +71,8 @@ async function page(options: {
   vm.runInContext(readFileSync('public/build-reporting.js', 'utf8'), context);
   vm.runInContext(source, context);
   // The production script's public entry point, invoked after the auth gate.
-  const controller = context.SettingsIdentity as { init(): Promise<void> };
-  await controller.init();
+  const controller = context.SettingsIdentity as { init(publication: { beginAction(): void; endAction(): void }): Promise<void> };
+  await controller.init({ beginAction: () => { lifecycle.push('begin'); }, endAction: () => { lifecycle.push('end'); } });
   const submit = async () => { el('identityForm').fire('submit'); await settle(); };
   const edit = (id: string, value: string) => { el(id).value = value; el(id).fire('input'); };
   const choose = (role: string, files = [new File(['image'], 'chosen.png', { type: 'image/png' })]) => {
@@ -80,7 +82,7 @@ async function page(options: {
     return files;
   };
   const click = async (id: string) => { el(id).click(); await settle(); };
-  return { el, edit, submit, choose, click, requests, confirms, document };
+  return { el, edit, submit, choose, click, requests, confirms, document, lifecycle };
 }
 
 describe('Site identity settings form', () => {
@@ -205,14 +207,14 @@ describe('Site identity settings form', () => {
     h.edit('identitySiteName', 'Not saved');
     h.el('identityRebuild').click();
     await vi.waitFor(() => {
-      expect(h.el('buildStatus').textContent).toContain(ui.en['admin.build.missing']);
+      expect(h.lifecycle).toEqual(['begin', 'request', 'end']);
     });
     expect(h.requests[1]).toEqual({ url: '/rebuild', method: 'POST', body: undefined });
     expect(h.confirms).toHaveLength(1);
     expect(h.el('identitySiteName').value).toBe('Not saved');
     expect(h.el('identityStatus').textContent).toContain('Release 1793000000000-1-0001 was promoted');
     expect(h.el('identityStatus').textContent).toContain('No live release yet');
-    expect(h.requests[2]?.url).toBe('/rebuild/status');
+    expect(h.requests).toHaveLength(2); // the shared Settings refresh owns status reads
   });
 
   it('reports a stopped rebuild without exposing diagnostics or urging an unsafe retry', async () => {
@@ -224,6 +226,30 @@ describe('Site identity settings form', () => {
     expect(h.el('identityStatus').textContent).not.toContain('SECRET');
     expect(h.el('identityStatus').textContent).not.toContain('Retry with Rebuild');
     expect(h.el('identitySiteName').value).toBe('Unsaved local name');
+  });
+
+  it('invalidates before a pending write and releases refresh after a failed outcome without erasing input', async () => {
+    const pending = Promise.withResolvers<Response>();
+    const h = await page({ route: () => pending.promise });
+    h.edit('identitySiteName', 'Kept local');
+    h.el('identityForm').fire('submit');
+    await settle();
+    expect(h.lifecycle).toEqual(['begin', 'request']);
+    expect(h.el('identityFields').disabled).toBe(true);
+    pending.resolve(Response.json({ error: 'failed' }, { status: 500 }));
+    await settle();
+    expect(h.lifecycle).toEqual(['begin', 'request', 'end']);
+    expect(h.el('identitySiteName').value).toBe('Kept local');
+  });
+
+  it('does not invalidate publication reads for cancelled rebuilds or client-side validation refusal', async () => {
+    const h = await page({ confirm: false });
+    h.el('identityRebuild').click();
+    await settle();
+    expect(h.lifecycle).toEqual([]);
+    h.edit('identitySiteName', 'x'.repeat(81));
+    await h.submit();
+    expect(h.lifecycle).toEqual([]);
   });
 
   it('warns about stored Punycode on load and preserves the exact saved bytes', async () => {

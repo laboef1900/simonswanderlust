@@ -448,6 +448,8 @@
         </div>
         <p id="buildStatusLabel" class="section-label"></p>
         <p id="buildStatus" class="page-status" role="status"></p>
+        <p id="publicationSummary" class="page-status" role="status"></p>
+        <button id="publicationRefresh" class="btn-secondary" type="button"></button>
         <p class="section-label">Last backup</p>
         <p id="backupStatus" class="page-status" role="status"></p>
         <p class="section-label">Backup files</p>
@@ -476,6 +478,8 @@
 
     <script src="/admin/editor-image-copy.js"></script>
     <script src="/admin/build-reporting.js"></script>
+    <script src="/admin/publication-state.js"></script>
+    <script src="/admin/publication-refresh.js"></script>
     <script src="/admin/gpx-copy.js"></script>
     <script src="/admin/auth.js"></script>
     <script src="/admin/admin-confirm.js"></script>
@@ -1605,6 +1609,29 @@
         }
       });
 
+      const publicationRefresh = PublicationRefresh.create({
+        async read(signal, publish) {
+          const observed = { summary: null, status: null };
+          const optional = (url, field) => PublicationRefresh.json(url, signal).catch((error) => {
+            if (error.status === 401) throw error;
+            return null;
+          }).then((value) => { observed[field] = value; publish({ ...observed }); });
+          await Promise.all([optional('/publication/summary', 'summary'), optional('/rebuild/status', 'status')]);
+          return observed;
+        },
+        apply({ summary, status }) {
+          $('publicationSummary').textContent = PublicationState.summary(summary);
+          if (status) BuildReporting.renderStatus($('buildStatus'), status);
+          else $('buildStatus').textContent = BuildReporting.text('unavailable');
+        },
+        unavailable() {
+          $('publicationSummary').textContent = PublicationState.text('summaryUnavailable');
+          $('buildStatus').textContent = BuildReporting.text('unavailable');
+        },
+        unauthorized() { location.href = '/login'; },
+      });
+      $('publicationRefresh').textContent = PublicationState.text('refresh');
+      $('publicationRefresh').addEventListener('click', () => publicationRefresh.refresh());
       $('rebuild').addEventListener('click', async () => {
         const ok = await AdminConfirm.ask({
           title: 'Rebuild the live site?',
@@ -1614,6 +1641,7 @@
         if (!ok) return;
         const btn = $('rebuild');
         btn.disabled = true;
+        publicationRefresh.beginAction();
         $('out').textContent = 'Rebuilding the site — this takes a minute…';
         try {
           const res = await fetch('/rebuild', { method: 'POST' });
@@ -1625,7 +1653,7 @@
           $('out').textContent = BuildReporting.text('unknown');
         } finally {
           btn.disabled = false;
-          await BuildReporting.loadStatus($('buildStatus'));
+          publicationRefresh.endAction();
         }
       });
 
@@ -1635,10 +1663,14 @@
         const s = await Auth.ensureAuthed({ admin: true });
         if (!s) return;
         Auth.renderHeader(s);
-        SettingsIdentity.init();
-        SettingsNavigation.init();
-        SettingsLanguage.init();
-        await BuildReporting.loadStatus($('buildStatus'));
+        const publicationActions = {
+          beginAction: () => publicationRefresh.beginAction(),
+          endAction: () => publicationRefresh.endAction(),
+        };
+        SettingsIdentity.init(publicationActions);
+        SettingsNavigation.init(publicationActions);
+        SettingsLanguage.init(publicationActions);
+        publicationRefresh.start();
         await loadBackups();
         await init();
       })();

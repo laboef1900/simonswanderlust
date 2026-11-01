@@ -854,3 +854,153 @@ The approved manifest design remains required; this evidence does not replace th
 verification matrix. Current authorization and Media redaction boundaries are reconfirmed as
 unchanged by this documentation-only issue. #317/#318 must implement and document the new
 projection and unserved release-state boundaries described in §18.
+
+## 20. #317 implementation handoff (2026-10-29)
+
+The #317 source implementation adds the shared strict manifest/digest module, guarded
+build lifecycle, actual-render gallery observations, uncached row classification,
+consistent store facts, per-post projection union and admin summary. Editor/list/Desk
+consumers replace the former post timestamp flag; preview labels distinguish the working
+copy from the live site. `ARCHITECTURE.md` records the release layout and refresh lifecycle,
+and `SECURITY.md` reconfirms authorization, redaction and ownership boundaries.
+
+Reusable interfaces for #318 are `bodyImageUses`/`classifyRow`, `ReleaseObservation`,
+`PostStore.publicationFacts`, `createPublicationProjection` and `galleryPending`. The latter
+returns photo/story counts and per-key locale/field booleans from fresh Media descriptions;
+it does not add Media endpoint fields or UI in #317. `classifyRow` returns retargeted
+hero/title fields plus ordered gallery and inline occurrences, so an impact consumer
+applies §8.2's exact per-item count rules without another parser.
+
+Regression coverage is added for the specified boundaries, but no implementation checks
+or runtime qualification were executed by the source-writing agents. The parent must run
+the complete §16 gates, including PostgreSQL, real build/promotion and browser failure/
+refresh protocols, before treating the implementation as qualified. No deployment,
+owner-content mutation, migration or automatic build is authorized by this handoff.
+
+## 21. #317 isolated qualification (2026-10-29)
+
+The parent subsequently qualified the actual `uploader/src/main.ts`, PostgreSQL,
+Astro builds/promotions and browser consumers at product commit
+`4d31f48caefb45b6dc5392df29f0846917bc848a`. The retained execution ledger contains
+138 observations, including 98 recorded API requests, served HTML, release manifests
+and ten inspected desktop/320px screenshots. This supersedes the unexecuted
+source-handoff status in §20, not its deployment restrictions.
+
+Observed behavior covered all four language configurations and the publication
+lattice, including no-op saves, newer drafts, omitted locales, failed publish,
+unpublish and delete after commit, missing/unreadable manifests, unavailable and
+partially available observations, author redaction, and DE/EN draft-preview labels.
+An actual failed build left public HTTP200 HTML byte-identical; the changed committed
+title appeared only after a successful rebuild. Dirty two-tab text and concurrency
+bases survived refresh, and a held older response could not replace newer state.
+Twenty-four simultaneous refresh triggers produced one post read and one build-status
+read, with no mutations. PR #271's merged prerequisite was independently confirmed.
+
+The complete integrated verification subsequently passed uploader types, the full
+PostgreSQL-backed uploader suite, Astro checking, the site suite and a real site build
+(`wave1793305473532_29724`). Later prerequisite documentation merges did not change
+the publication implementation. Final-head CI and independent actual-PR review remain
+separate gates recorded in the PR and execution ledger.
+
+Fixture corrections remain disclosed: the configured image host does not serve blog
+HTML, so final public-byte assertions used the separate loopback public hostname;
+early wrong-host 404 probes are not qualification. A coalesced-refresh experiment
+was replaced by the recorded real-mutation generation experiment. All owned processes
+and tabs were closed, faulted permissions restored exactly, and fixture data retained.
+No owner content, deployment, or physical accessibility audit was involved.
+
+### Independent-review refresh and layout repairs
+
+PR review found three lifecycle defects: BFCache restoration did not restart observation,
+Posts retained stale language/token facts, and an initial language-read failure escaped the
+recoverable unavailable state. Regressions failed before repair. Required posts/language
+reads now settle together; accepted language facts precede rendering and mutation tokens.
+Trusted persisted restoration restarts a previously running observer, but never an explicitly
+stopped or unauthorized one.
+
+Actual browser qualification verified native BFCache document restoration, held-old-response
+rejection, a second-tab language change followed by real bulk Publish using the fresh token,
+network/malformed-language Retry, and bounded reads with zero automatic writes. Visual checks
+then exposed a long status badge crossing desktop cells and a zero-width Languages column
+clipping its chip on phones. Wrapping the badge and reserving the language column corrected
+both; no text or unavailable state was hidden.
+
+At `f5f7bbb`, settled1400/768/390/320px screenshots and geometry showed complete, contained
+labels/chips without overlap or inner horizontal overflow. The320px workspace measured304px
+client and304px scroll width. Native keyboard Enter recovered genuine data from unavailable
+state with zero writes. Expiring only the synthetic server session produced actual401s and
+login navigation; native Back restored the same document with trusted persisted events.
+It stayed visible for31.546seconds with zero requests or writes. Fresh fixture data is retained;
+owned sessions, apps, tabs and fault injection were cleaned up. This is not physical or
+screen-reader qualification.
+
+A later review found that background row replacement discarded focused controls and
+expanded More actions panels. Rows now restore the surviving story/control identity and
+open disclosure, without stealing outside focus. Discarded disclosures are closed before
+replacement so queued native toggle events cannot close the new panel. Missing actions
+fall back to the matching title, and missing rows to Search; replacement targets use native
+focus scrolling so they are visible, while equivalent controls retain workspace scroll.
+Both consumer regressions failed before repair; all129 admin-action DOM cases passed.
+
+Actual `6c400b9` qualification covered14 native30-second cycles:42 GETs and zero automatic
+mutations, including separate posts and delayed genuine history-response phases. Selection,
+focused control, open menu, Escape and outside-focus behavior survived. It also exposed a
+compact menu extending beyond the320px workspace and an offscreen Search fallback. The
+compact left-alignment override was removed and fallback focus scrolling corrected.
+
+At `4723148`, native menus and their focus-outline envelopes fit320/390/1400px workspaces
+with equal client/scroll widths304/374/1176. The320px menu spanned96.063–272.063 inside8–312.
+Six further real timer windows made18 GETs and zero automatic writes. Confirmed mutations
+in the other owned tab removed Unpublish and then the row; the subsequent title and Search
+fallbacks were focused and visible, while equivalent-control refreshes retained scroll.
+Six screenshots were inspected. Apps, sessions, cookies and tabs were cleaned up; synthetic
+fixtures and both negative and repaired evidence remain retained.
+
+A subsequent full review found the same replacement problem on Desk. Publication repaint
+now restores the focused anchor's destination/control identity, including when its story
+moves between sections. A removed link falls back to visible Refresh; unchanged sections
+retain scroll, cross-section/fallback targets use native focus scrolling, and outside focus
+is untouched. Both consumer regressions failed before repair; all131 admin-action DOM
+cases passed.
+
+Actual `eb41d86` qualification covered13 genuine31.5-second windows and45 scoped GET200
+responses without automatic Desk mutations. Native title/action focus survived Draft,
+newer-published and Attention repaint, plus separately released posts, summary and history
+responses. Real other-tab lifecycle actions moved Review changes to Continue editing and
+then Attention. Empty New trip retained focus; its disappearance and story deletion both
+focused visible Refresh and scrolled to the top. Cross-section destinations were already
+visible, so those transitions did not need a scroll change.
+
+Settled320/390/1400px captures showed visible focus without horizontal overflow. Attention
+was established through an owned PostgreSQL pages lock that made an actual app build fail
+at its normal deadline; the lock was released and a later deletion rebuilt successfully.
+The correct-origin thumbnail and public alias returned200. Sessions, tabs, cookies,
+interceptions, app and fixture rows were cleaned; database/data/evidence remain retained.
+
+## #317 current-dev integration (2026-11-01)
+
+Merged `origin/dev` at `5844e62` (after #305, #306, #288/#289, #297 and the gallery
+warnings landed). Resolutions, keeping both intents:
+
+- **Body rendering.** dev's async renderer (`transformBodyImages(html, images,
+  origin, options)`, `analyzeRenderedBody`, `foreignBodyImageSources`) is the base;
+  #317's image-use accounting (`transformBodyImagesWithUses`, now async,
+  `bodyImageUses`) runs through dev's deferred gallery loop in document order and
+  shares one `imageSources` walk. The trips loader still writes the release manifest.
+- **Editor.** dev's serialized write queue and #305 WriteRecovery stay; #317's
+  `publicationRefresh.beginAction/endAction` wrap the queued save and GPX writes,
+  `loadPost` keeps #317's bounded read with dev's `{ snapshot, deferRouteRefresh }`
+  and `writeEpoch` barrier; the load-time "published" status lines were replaced by
+  the publication line (copy removed).
+- **Settings.** Navigation (new on dev) joins Identity and Language as a
+  publication action: its save and Rebuild run inside `begin/end`.
+- **Server.** Bulk publish keeps dev's readiness gate and #317's per-result tokens
+  and projection. `APP_SEGMENTS` reserves both `gallery` and `publication`.
+
+Verification: uploader `tsc` and full suite with isolated PostgreSQL 4467/4467;
+site 795/795 with PostgreSQL, `astro check` 0/0/0, `npm run build`. Runtime on a
+fresh database: draft → `status: draft`, not live; publish → live in both
+locales; a newer DE-only save → `draftDiffers`; publish with a read-only
+`releases/` → 200 with `release_write_failed`, DE `older-version-live`, EN `live`,
+served HTML byte-identical; Rebuild site now → both `live` and the new title
+served; Posts list at 390px shows "Live" as text, no horizontal overflow.

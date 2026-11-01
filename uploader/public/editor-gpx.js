@@ -421,6 +421,7 @@
       mutationPending = true;
       setBusy(true); clearError(); say('loading');
       let savedNewPost = false;
+      host.beginAction();
       try {
         await host.runWrite(async (saveDraft) => {
           if (!routeLoaded || outcomeUnknown) return;
@@ -452,7 +453,7 @@
           teardownPreview();
           fail(savedNewPost ? 'attachFailureSaved' : 'previewExpired', true, savedNewPost ? msg('previewExpired') : '');
         } else fail(savedNewPost ? 'attachFailureSaved' : errorKey(e));
-      } finally { mutationPending = false; setBusy(false); }
+      } finally { mutationPending = false; setBusy(false); host.endAction(); }
     }
     async function detachRoute() {
       if (busy || outcomeUnknown || !routeLoaded || routeTk !== host.getPost().tk || !route.geometry) return;
@@ -460,6 +461,7 @@
       if (!ok) return;
       mutationPending = true; setBusy(true); clearError();
       let detached = false;
+      host.beginAction();
       try {
         const result = await host.runWrite(async () => {
           if (!routeLoaded || routeTk !== host.getPost().tk || outcomeUnknown) return;
@@ -477,6 +479,7 @@
       }
       finally {
         mutationPending = false; setBusy(false);
+        host.endAction();
         if (detached && !errorCode) $($('gpxReimport').hidden ? 'gpxImportOpen' : 'gpxReimport').focus();
       }
     }

@@ -1,8 +1,13 @@
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { editorDocument, type EditorElement } from './editor-dom-harness.js';
 import { ui } from '../../site/src/i18n/ui.js';
+
+const deskWindows: EventTarget[] = [];
+afterEach(() => {
+  for (const window of deskWindows.splice(0)) window.dispatchEvent(new Event('pagehide'));
+});
 
 const buildCopy = Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [locale,
   Object.fromEntries(Object.entries(strings).filter(([key]) => key.startsWith('admin.build.')).map(([key, value]) => [key.slice('admin.build.'.length), value])),
@@ -110,6 +115,8 @@ async function desk(isAdmin: boolean) {
   const dom = editorDocument(html);
   const requests: string[] = [];
   let failing = true;
+  const window = new EventTarget();
+  deskWindows.push(window);
   const context: Record<string, unknown> = {
     document: Object.assign(dom.document, { documentElement: { lang: 'en' }, title: 'Desk' }), BuildCopy: buildCopy,
     EditorCopy: Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [locale,
@@ -117,6 +124,9 @@ async function desk(isAdmin: boolean) {
         .map(([key, text]) => [key.slice('editor.chrome.'.length), text])),
     ])),
     location: { pathname: '/admin/index.html', search: '', origin: 'https://blog.test' },
+    AbortController, setTimeout, clearTimeout,
+    addEventListener: window.addEventListener.bind(window),
+    removeEventListener: window.removeEventListener.bind(window),
     matchMedia: () => ({ matches: false, addEventListener() {} }),
     fetch: async (url: string) => {
       requests.push(url);
@@ -131,6 +141,7 @@ async function desk(isAdmin: boolean) {
       if (url === '/posts') return Response.json([]);
       if (url === '/media/queue') return Response.json({ pending: 0, running: 0 });
       if (url === '/health') return Response.json({ release: true });
+      if (url === '/publication/summary') return Response.json({ availability: 'available', release: 'unknown', posts: null, galleryDescriptions: null });
       if (url === '/rebuild/status') {
         if (failing) throw new Error('offline');
         return Response.json({ live, running: null, last, record: 'ok' });
@@ -155,11 +166,13 @@ describe('Desk build status authorization and recovery', () => {
     expect(h.document.getElementById('deskBuild')!.hidden).toBe(true);
   });
 
-  it('isolates status failures and retries through the resilient loader without duplicate requests', async () => {
+  it('isolates history failure from fresh posts and uses the shared read-only refresh without duplicate requests', async () => {
     const h = await desk(true);
     const root = h.document.getElementById('deskBuild')!;
     expect(root.hidden).toBe(false);
-    const retry = root.querySelector('button')!;
+    expect(root.textContent).toContain(ui.en['admin.build.unavailable']);
+    expect(h.document.getElementById('deskNext')!.querySelector('a')?.href).toBe('/admin/editor.html');
+    const retry = h.document.getElementById('publicationRefresh')!;
     h.recover();
     retry.click(); retry.click();
     await settle();

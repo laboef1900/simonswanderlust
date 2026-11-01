@@ -8,6 +8,7 @@ import * as publicTrack from '../public/gpx-public-track.js';
 import { editorDocument, EditorElement, EditorEvent } from './editor-dom-harness.js';
 import { ui } from '../../site/src/i18n/ui.js';
 import { memoryPostStore, type PostPair } from '../src/posts.js';
+import { publication } from './publication-client-fixture.js';
 
 const html = readFileSync('public/editor.html', 'utf8');
 const markup = html.slice(0, html.lastIndexOf('<script type="module">'));
@@ -111,8 +112,10 @@ function setup(options: SetupOptions = {}) {
   const adopted: { name: string; lat: number; lng: number }[][] = [];
   const renders: unknown[] = [];
   let saveCalls = 0;
+  const publicationActions: string[] = [];
   const fetcher = async (url: string, request: RequestInit = {}) => {
     requests.push({ url, options: request });
+    if (url.endsWith('/route') && ['PUT', 'DELETE'].includes(request.method || '')) publicationActions.push('request');
     const override = await options.fetch?.(url, request);
     if (override) return override;
     if (url.endsWith('/route') && request.method === 'GET') return response(route);
@@ -144,6 +147,8 @@ function setup(options: SetupOptions = {}) {
   vm.runInContext(script, context, { filename: 'editor-gpx.js' });
   const host = {
     getPost: () => ({ ...state }),
+    beginAction: () => { publicationActions.push('begin'); },
+    endAction: () => { publicationActions.push('end'); },
     runWrite: async <T>(write: (saveDraft: () => Promise<boolean>) => Promise<T>) => write(async () => {
       saveCalls++;
       if (options.failSave) return false;
@@ -170,7 +175,7 @@ function setup(options: SetupOptions = {}) {
     if (!el) throw new Error('missing #' + id);
     return el;
   };
-  return { api, element, requests, state, adopted, renders, get focused() { return dom.document.activeElement; }, get saveCalls() { return saveCalls; } };
+  return { api, element, requests, state, adopted, renders, publicationActions, get focused() { return dom.document.activeElement; }, get saveCalls() { return saveCalls; } };
 }
 
 function startImport(h: GpxTestHarness) {
@@ -267,11 +272,17 @@ function fullEditor(candidate: typeof preview, fetchOverride?: SetupOptions['fet
       if (overridden) {
         // Feature fixtures speak the #305 receipt protocol: acks carry the owner and
         // the sent saveId; reads carry the owner and the last receipt (none by default).
-        if (overridden.ok && sent) return response({ ...(await overridden.json() as Record<string, unknown>), translationKey: sent.translationKey,
-          ownerUserId: owner, saveId: sent.saveId });
+        // Both carry a publication observation (#317) unless the fixture supplies one.
+        if (overridden.ok && sent) {
+          const body = await overridden.json() as Record<string, unknown>;
+          return response({ publication: publication(body.status === 'published' ? 'published' : 'draft'), ...body,
+            translationKey: sent.translationKey, ownerUserId: owner, saveId: sent.saveId });
+        }
         if (overridden.ok && post && !options.method) {
           const body = await overridden.json() as Record<string, unknown>;
-          if (body && 'de' in body && 'en' in body) return response({ ownerUserId: owner, lastSaveId: null, ...body });
+          if (body && 'de' in body && 'en' in body) {
+            return response({ ownerUserId: owner, lastSaveId: null, publication: publication(body.status === 'published' ? 'published' : 'draft'), ...body });
+          }
           return response(body);
         }
         return overridden;
@@ -279,11 +290,11 @@ function fullEditor(candidate: typeof preview, fetchOverride?: SetupOptions['fet
       if (url === '/gpx/imports') return response(candidate, 201);
       if (url.startsWith('/gpx/imports/') && options.method === 'DELETE') return response({}, 204);
       if (url === '/posts' && options.method === 'POST') return response({
-        ...sent, translationKey: createdKey, updatedAt: '2026-10-24T10:00:30.000Z', ownerUserId: owner, saveId: sent.saveId,
+        ...sent, translationKey: createdKey, updatedAt: '2026-10-24T10:00:30.000Z', ownerUserId: owner, saveId: sent.saveId, publication: publication('draft'),
       });
       if (url === '/posts/' + createdKey + '/route' && options.method === 'PUT') return response({ error: 'gpx_conflict' }, 409);
       if (url === '/posts/' + createdKey && options.method === 'PUT') return response({
-        ...sent, translationKey: createdKey, updatedAt: '2026-10-24T10:00:40.000Z', ownerUserId: owner, saveId: sent.saveId,
+        ...sent, translationKey: createdKey, updatedAt: '2026-10-24T10:00:40.000Z', ownerUserId: owner, saveId: sent.saveId, publication: publication('draft'),
       });
       if (url.endsWith('/revisions')) return response([]);
       if (url.endsWith('/alt-audit')) return response({ images: [] });
@@ -296,6 +307,7 @@ function fullEditor(candidate: typeof preview, fetchOverride?: SetupOptions['fet
     setInterval: () => 0,
     clearInterval() {},
     addEventListener: dom.document.addEventListener,
+    removeEventListener: dom.document.removeEventListener,
     URLSearchParams, URL, AbortController, Event: EditorEvent, KeyboardEvent: EditorEvent, console,
     crypto: webcrypto, structuredClone,
     matchMedia: () => ({ matches: false, addEventListener() {} }),
@@ -318,7 +330,7 @@ function fullEditor(candidate: typeof preview, fetchOverride?: SetupOptions['fet
   };
   context.window = context;
   vm.createContext(context);
-  for (const file of ['build-reporting.js', 'language.js', 'draft-guard.js', 'write-recovery.js', 'waypoint-lookup.js', 'posts-filter.js', 'editor-title-image.js',
+  for (const file of ['build-reporting.js', 'publication-state.js', 'publication-refresh.js', 'language.js', 'draft-guard.js', 'write-recovery.js', 'waypoint-lookup.js', 'posts-filter.js', 'editor-title-image.js',
     'gallery-fence.js', 'gallery-metadata-warnings.js', 'media-api.js', 'gallery-library.js', 'editor-galleries.js', 'editor-linter.js',
     'llm.js', 'editor-excerpt.js', 'country-centers.js', 'country-coordinates.js', 'tabs.js',
     'editor-review.js', 'editor-inspector.js', 'editor-gpx.js']) {
@@ -390,6 +402,7 @@ describe('private GPX editor lifecycle', () => {
     expect(h.state.baseUpdatedAt).toBe('2026-10-24T10:01:00.000Z');
     expect(h.saveCalls).toBe(0);
     expect(h.api.hasPreview()).toBe(false);
+    expect(h.publicationActions).toEqual(['begin', 'request', 'end']);
   });
 
   it('saves a new post before route attachment and retains its saved identity when attachment fails', async () => {
@@ -402,6 +415,7 @@ describe('private GPX editor lifecycle', () => {
     expect(h.requests.some((request) => request.options.method === 'PUT')).toBe(true);
     expect(h.api.hasPreview()).toBe(true);
     expect(h.focused).toBe(h.element('gpxError'));
+    expect(h.publicationActions).toEqual(['begin', 'request', 'end']);
   });
 
   it('cancels a private preview without changing the attached route', async () => {
@@ -645,6 +659,7 @@ describe('private GPX editor lifecycle', () => {
     expect(h.focused).toBe(h.element(originalAvailable ? 'gpxReimport' : 'gpxImportOpen'));
     expect(h.focused?.hidden).toBe(false);
     expect(h.focused?.disabled).toBe(false);
+    expect(h.publicationActions).toEqual(['begin', 'request', 'end']);
   });
 
   it.each([
@@ -671,6 +686,7 @@ describe('private GPX editor lifecycle', () => {
     } else h.element('gpxDetach').click();
     await settle();
     expect(routeWrites(h)).toHaveLength(1);
+    expect(h.publicationActions).toEqual(['begin', 'request', 'end']);
     const mutationIndex = h.requests.findIndex(({ options }) => options.method === method);
     expect(h.requests.slice(mutationIndex + 1)).toContainEqual({ url: '/posts/pair-1/route', options: { method: 'GET' } });
     expect(h.element('gpxRouteStatus').textContent).toBe(method === 'PUT' ? 'statusAttached' : 'statusNone');
