@@ -555,14 +555,14 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
   deployed container answered 503 on every comment route while every suite (which injects stores
   directly) stayed green. `uploader/test/main-boot.integration.test.ts` now boots the real
   `src/main.ts` against Postgres and walks a comment from `POST` to moderation to public list.
-- **Implemented, release pending:** #291 software license (AGPL-3.0-only), content/brand
-  rights and the `wanderlust-studio` image name (owner-approved 2026-10-27). The committed
-  third-party inventory must match both lockfiles (`uploader/test/legal-assets.test.ts`
-  fails otherwise — regenerate with `node uploader/scripts/generate-third-party-inventory.mjs`).
-  Before a release is announced for third-party installs, run
-  `uploader/scripts/check-image-legal.mjs` against each published platform image with
-  `--revision <tag commit>`; see the spec's *Release-time artifact gate*
-  (`docs/superpowers/specs/2026-10-27-software-content-brand-rights-design.md`).
+- **Done, closed by the owner (#291, epic #290, 2026-11-01):** software license
+  AGPL-3.0-only, content/brand rights and the `wanderlust-studio` image name (owner-approved
+  2026-10-27). The committed third-party inventory must match both lockfiles
+  (`uploader/test/legal-assets.test.ts` fails otherwise — regenerate with
+  `node uploader/scripts/generate-third-party-inventory.mjs`). **Release checklist:** before a
+  release is announced for third-party installs, run `uploader/scripts/check-image-legal.mjs`
+  against each published platform image with `--revision <tag commit>`; see the spec's
+  *Release-time artifact gate* (`docs/superpowers/specs/2026-10-27-software-content-brand-rights-design.md`).
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details. Not
   started, deliberately: #67 (AI authoring — design spec landed 2026-07-28, implementation not
   started), #72 (Traefik timeouts). #68 (production EXIF audit) was **closed as obsolete**
