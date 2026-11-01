@@ -369,6 +369,50 @@ remote-fetch guards. Neither a domain edit nor a rebuild renames story paths or 
 Logo/favicon assets follow #275 above. Gallery image
 allow-listing, existing upload limits and EXIF policy are unchanged.
 
+### Editable pages and navigation storage (#288)
+
+Owner approval is recorded in the [#287 contract](docs/superpowers/specs/2026-10-27-issue-287-pages-navigation.md).
+All page writes, Publish, unpublish, deletion and deletion-impact reads require
+`requireAdmin`; authenticated authors may read saved drafts, previews and revisions.
+Only the closed shared `about/contact/privacy/legal` registry may be authored.
+About's immutable identity/path and non-deletable, always-published state are
+enforced in both stores, not merely hidden controls.
+
+Published saves and revision restoration pass the same enabled-locale completeness
+and rendered-body image-origin gate as first Publish. About may use empty-content
+fallbacks but is not exempt from image safety. Preview uses the real Markdown,
+sanitizer and body-image path with the existing deny-by-default CSP and `no-store`.
+Drafts may retain foreign images for repair; inactive translations may be prepared
+in stages, but activation revalidates all published page pairs under the shared
+language lock before committing mode and first-public timestamps.
+
+Cross-table slug checks use deterministic namespace advisory locks after language
+and content locks. Page claims include working and retained story snapshots.
+Unchanged legacy story names remain grandfathered, never silently renamed; WXR
+rejects a first-time reserved group before outbound fetches. Boot reports conflicts
+and unsupported legacy page keys read-only. Per-locale page first-public history
+survives unpublish/restore and permanently locks the slug until explicit deletion.
+
+Delete is scoped/confirmed and atomically removes rows, revisions and exact typed
+navigation references, not media or arbitrary links. The revision routes 404 after
+deletion; boot and restore sweep orphan page revisions. Stale editor tokens refuse
+instead of recreating a deleted page. Unpublish remains available to contain a
+recovered collision/unsafe live body; About must instead be repaired.
+
+The typed `site_nav` document accepts closed targets, bounded labels with control
+characters removed, HTTPS external URLs without credentials, and bounded same-origin
+ASCII relative paths. Dump v13 requires valid page metadata and a valid navigation
+singleton; older versions explicitly normalize pages and preserve live navigation.
+Restore summaries warn rather than silently drop dangling navigation/colliding
+content. #289 owns navigation APIs/public interpolation and build-time revalidation;
+no user-supplied navigation markup is rendered by #288.
+
+Recovery retains the last successful release if a post-commit rebuild fails and
+reports the committed state (`502`, `persisted: true`). Do not roll back to an
+image lacking inherited GPX/privacy/language fixes; use the captured compatible
+recovery set or fix forward. **Verification for this implementation is pending
+the parent integration/type/runtime checks; no production migration was performed.**
+
 ### Media metadata redaction
 
 `GET /media` and `GET /media/items/*` strip **`exif.lat`, `exif.lng` and `uploadedBy`** for

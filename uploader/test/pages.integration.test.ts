@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import pg from 'pg';
-import { describe, expect, it, beforeAll, afterAll, vi } from 'vitest';
+import { describe, expect, it, beforeAll, beforeEach, afterAll, vi } from 'vitest';
 import { createPool, ensureSchema, type DbPool } from '../src/db.js';
 import { pgPageStore, type PagePair, type StoredPagePair } from '../src/pages.js';
 import { REVISION_CAP } from '../src/posts.js';
@@ -29,7 +29,8 @@ maybe('pgPageStore (Postgres)', () => {
   it('keeps malformed metadata lossless and diagnostics transient in real page saves', async () => {
     const store = pgPageStore(pool);
     const input = about('Metadata');
-    input.key = 'gallery-metadata';
+    // #288 accepts known page kinds only; contact is a draft-capable kind.
+    input.key = 'contact';
     const fields = [String.raw`caption="The \"Old\" Bridge"`, 'caption="Rom | Tag 2"', 'capton="Tippfehler"', 'alt = "Blick"', "alt='Blick'", 'caption-override="broken'];
     const src = 'https://img/metadata';
     const lines = fields.map((field, index) => `> ${src}-${index} | 3000x2000 | alt="😀" | ${field}  `);
@@ -39,8 +40,9 @@ maybe('pgPageStore (Postgres)', () => {
     input.en.images = Object.fromEntries(fields.map((_, index) => [`${src}-${index}`, { width: 8, height: 6, caption: 'Keep' }]));
     try {
       const saved = await store.save(input);
-      expect(saved.de).toEqual(input.de);
-      expect(saved.en).toEqual(input.en);
+      // #288 adds the stored slug and publication time beside the submitted content.
+      expect(saved.de).toMatchObject(input.de);
+      expect(saved.en).toMatchObject(input.en);
       expect(saved.galleryWarnings).toHaveLength(fields.length * 2);
       expect(saved.galleryWarnings[0]).toEqual({
         code: 'invalid_gallery_metadata', locale: 'de', line: 2,
@@ -66,7 +68,7 @@ maybe('pgPageStore (Postgres)', () => {
     const store = pgPageStore(pool);
     const src = 'https://img/gallery';
     const input = about('Gallery');
-    input.key = 'gallery-analysis';
+    input.key = 'privacy';
     input.de.bodyMarkdown = `> ~~~gallery extra\n> ${src} | 30x20 | alt="Blick"\n> ~~~`;
     input.en.bodyMarkdown = `<pre><code class="language-gallery">${src} | 30x20 | alt="View"\n</code></pre>`;
     try {
@@ -96,7 +98,7 @@ maybe('pgPageStore (Postgres)', () => {
   });
 
   it('saves and reads back both locales with images', async () => {
-    const store = pgPageStore(pool);
+    const store = pgPageStore(pool, { imageOrigin: 'https://img' });
     await store.save({
       key: 'about',
       de: { locale: 'de', title: 'DE', bodyMarkdown: '![a](https://img/x)\nDE body', images: { 'https://img/x': { width: 800, height: 600 } } },
@@ -117,15 +119,15 @@ maybe('pgPageStore (Postgres)', () => {
     // finally-cleanup is ordered before that suite reads the table).
     try {
       await store.save({
-        key: 'imprint',
+        key: 'legal',
         de: { locale: 'de', title: 'Impressum', bodyMarkdown: 'x', images: {} },
         en: { locale: 'en', title: 'Imprint', bodyMarkdown: 'x', images: {} },
       });
       const keys = await store.keys();
       expect(keys).toContain('about');
-      expect(keys.filter((k) => k === 'imprint')).toEqual(['imprint']);
+      expect(keys.filter((k) => k === 'legal')).toEqual(['legal']);
     } finally {
-      await pool.query(`DELETE FROM pages WHERE key = 'imprint'`);
+      await pool.query(`DELETE FROM pages WHERE key = 'legal'`);
     }
   });
 
@@ -190,7 +192,12 @@ maybe('pgPageStore serializes saves of one page (Postgres, #344)', () => {
     de: { locale: 'de', title, bodyMarkdown: `DE ${title}`, images: {} },
     en: { locale: 'en', title: `EN ${title}`, bodyMarkdown: `EN ${title}`, images: {} },
   });
-  const freshKey = () => `p-${randomUUID()}`;
+  // #288 accepts known page kinds only: every test starts from an absent contact page.
+  const freshKey = () => 'contact';
+  beforeEach(async () => {
+    await pool.query("DELETE FROM page_revisions WHERE key='contact'");
+    await pool.query("DELETE FROM pages WHERE key='contact'");
+  });
 
   async function waiters(count: number): Promise<void> {
     const deadline = Date.now() + 10_000;
@@ -263,23 +270,15 @@ maybe('pgPageStore serializes saves of one page (Postgres, #344)', () => {
     expect((await store.getRevision(key, revs[0]!.id))!.snapshot).toEqual({ de: base.de, en: base.en });
   }, 20_000);
 
-  it('new page: of two creations from one supplied updatedAt, one is accepted and the other conflicts without writing', async () => {
+  it('new page: a supplied updatedAt for a page never saved is refused without writing (#288)', async () => {
     const store = pgPageStore(pool);
     const key = freshKey();
-    // A key never saved has no token to hold; an echo is only checked
-    // against a stored one, so the first creation passes it.
+    // #288: a token names an existing page; creation is token-less, so a stale
+    // echo can never create (or race to create) an absent page.
     const echo = new Date('2000-01-01T00:00:00.000Z');
-    const [a, b] = await race(
-      () => store.save(page(key, 'NEW-A'), echo),
-      () => store.save(page(key, 'NEW-B'), echo),
-    );
-    expect(b).toMatchObject({ ok: false, error: { code: 'conflict' } });
-    if (!a.ok) throw a.error;
-    const stored = await store.get(key);
-    expect(stored.de.title).toBe('NEW-A');
-    // The response is the stored state plus this save's (empty) gallery warnings.
-    expect(a.value).toEqual({ ...stored, galleryWarnings: [] });
-    await rowTokens(key, a.value.updatedAt!);
+    const results = await Promise.allSettled([store.save(page(key, 'NEW-A'), echo), store.save(page(key, 'NEW-B'), echo)]);
+    expect(results.map((result) => result.status === 'rejected' && (result.reason as { code?: string }).code)).toEqual(['not_found', 'not_found']);
+    expect((await store.get(key)).updatedAt).toBeNull();
     expect(await store.listRevisions(key)).toEqual([]);
   }, 20_000);
 

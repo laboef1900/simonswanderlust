@@ -50,7 +50,8 @@ describe('page gallery normalization', () => {
   const a = 'https://img/g/a-1a2b3c4d';
 
   it.each([false, true])('preserves malformed metadata in both locales with existing images=%s', async (existingImages) => {
-    const store = memoryPageStore();
+    // About is always published (#288), so its images must be hosted on the image origin.
+    const store = memoryPageStore(undefined, { imageOrigin: 'https://img' });
     const input = pair();
     const fields = [
       String.raw`caption="The \"Old\" Bridge"`, 'caption="Rom | Tag 2"',
@@ -65,8 +66,9 @@ describe('page gallery normalization', () => {
         : {};
     }
     const saved = await store.save(input);
-    expect(saved.de).toEqual(input.de);
-    expect(saved.en).toEqual(input.en);
+    // #288 adds the stored slug and About's publication time beside the submitted content.
+    expect(saved.de).toMatchObject(input.de);
+    expect(saved.en).toMatchObject(input.en);
     expect(saved.galleryWarnings).toHaveLength(fields.length * 2);
     for (const locale of ['de', 'en'] as const) {
       expect(saved.galleryWarnings.filter((warning) => warning.locale === locale).map((warning) => warning.line))
@@ -90,7 +92,7 @@ describe('page gallery normalization', () => {
   });
 
   it('normalizes nested and raw gallery nodes through direct saves in both locales', async () => {
-    const store = memoryPageStore();
+    const store = memoryPageStore(undefined, { imageOrigin: 'https://img' });
     const input = pair();
     input.de.bodyMarkdown = `- ~~~gallery extra\n  ${a} | 30x20 | alt="Blick"\n  ~~~`;
     input.en.bodyMarkdown = `<pre><code class="language-gallery">${a} | 30x20 | alt="View"\n</code></pre>`;
@@ -122,6 +124,7 @@ describe('page gallery normalization', () => {
 
   it('lifts per-line gallery metadata into the images map on save', async () => {
     const s = memoryPageStore();
+    s.configureImageOrigin('https://img');
     const p = pair();
     p.de.bodyMarkdown = `\`\`\`gallery\n${a} | 3000x2000 | alt="Blick" | caption="Tag 1"\n\`\`\``;
     await s.save(p);
@@ -137,8 +140,9 @@ describe('memoryPageStore', () => {
     const p = await s.get('about');
     expect(p).toEqual({
       key: 'about',
-      de: { locale: 'de', title: '', bodyMarkdown: '', images: {} },
-      en: { locale: 'en', title: '', bodyMarkdown: '', images: {} },
+      status: 'published',
+      de: { locale: 'de', title: '', bodyMarkdown: '', images: {}, slug: '', publishedAt: null },
+      en: { locale: 'en', title: '', bodyMarkdown: '', images: {}, slug: '', publishedAt: null },
       updatedAt: null,
     });
   });
@@ -152,10 +156,10 @@ describe('memoryPageStore', () => {
   it('keys() lists saved page keys once each, sorted', async () => {
     const s = memoryPageStore();
     expect(await s.keys()).toEqual([]);
-    await s.save(pair('imprint'));
+    await s.save(pair('legal'));
     await s.save(pair('about'));
     await s.save(pair('about'));
-    expect(await s.keys()).toEqual(['about', 'imprint']);
+    expect(await s.keys()).toEqual(['about', 'legal']);
   });
 
   it('refuses a save whose updatedAt echo predates the stored pair (conflict), and advances updatedAt on every save (#141)', async () => {
@@ -190,15 +194,16 @@ describe('memoryPageStore', () => {
 
   it('overlapping token-less saves are both accepted in order, and the overwritten one is a revision (#344)', async () => {
     const s = memoryPageStore();
-    const edit = (title: string): PagePair => ({ ...pair('fresh'), de: { ...pair('fresh').de, title } });
+    // A never-saved page kind (#288 accepts only known kinds; contact starts absent).
+    const edit = (title: string): PagePair => ({ ...pair('contact'), de: { ...pair('contact').de, title } });
     const [a, b] = await Promise.all([s.save(edit('first')), s.save(edit('second'))]);
     expect(a.de.title).toBe('first');
     expect(b.de.title).toBe('second');
     expect(b.updatedAt!.getTime()).toBeGreaterThan(a.updatedAt!.getTime());
-    expect({ ...await s.get('fresh'), galleryWarnings: [] }).toEqual(b);
-    const revs = await s.listRevisions('fresh');
+    expect({ ...await s.get('contact'), galleryWarnings: [] }).toEqual(b);
+    const revs = await s.listRevisions('contact');
     expect(revs.map((r) => r.title)).toEqual(['first']);
-    expect((await s.getRevision('fresh', revs[0]!.id))!.snapshot.de.title).toBe('first');
+    expect((await s.getRevision('contact', revs[0]!.id))!.snapshot.de.title).toBe('first');
   });
 
   it('snapshots the pre-save pair as a revision, newest first, capped at REVISION_CAP (#141)', async () => {
@@ -215,7 +220,8 @@ describe('memoryPageStore', () => {
     expect(revs[0]!.title).toBe(`v${REVISION_CAP + 1}`);
     expect(revs[REVISION_CAP - 1]!.title).toBe('v2');
     const full = await s.getRevision('about', revs[0]!.id);
-    expect(full!.snapshot).toEqual({ de: { ...pair().de, title: `v${REVISION_CAP + 1}`, bodyMarkdown: `body ${REVISION_CAP + 1}` }, en: pair().en });
+    expect(full!.snapshot).toMatchObject({ de: { ...pair().de, title: `v${REVISION_CAP + 1}`, bodyMarkdown: `body ${REVISION_CAP + 1}` }, en: pair().en });
+    expect(full!.snapshot.de.publishedAt).toBeInstanceOf(Date);
     expect(await s.getRevision('about', 'nope')).toBeNull();
     expect(await s.getRevision('other', revs[0]!.id)).toBeNull();
   });

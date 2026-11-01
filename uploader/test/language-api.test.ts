@@ -211,7 +211,7 @@ describe('inactive About preparation', () => {
     const before = await f.pages.get('about');
     const prepared = await save({ prepareLocale: secondary, [secondary]: unsafe, updatedAt: before.updatedAt!.toISOString() });
     expect(prepared.statusCode).toBe(200);
-    expect((await f.pages.get('about'))[primary]).toEqual(active);
+    expect((await f.pages.get('about'))[primary]).toEqual(original[primary]);
     expect(await f.language.get()).toMatchObject({ primary, locales: [primary] });
     f.build.mockClear();
     const refused = await f.put({ primary, locales: [primary, secondary] });
@@ -219,14 +219,14 @@ describe('inactive About preparation', () => {
     expect(refused.json()).toMatchObject({ code: 'language_pages_incomplete', blockers: [{ key: 'about', locale: secondary, field: 'images' }] });
     expect(f.build).not.toHaveBeenCalled();
     expect(await f.language.get()).toMatchObject({ primary, locales: [primary] });
-    expect((await f.pages.get('about'))[primary]).toEqual(active);
+    expect((await f.pages.get('about'))[primary]).toEqual(original[primary]);
     const current = await f.pages.get('about');
     const stale = await save({ prepareLocale: secondary, [secondary]: { title: '', bodyMarkdown: '', images: {} }, updatedAt: before.updatedAt!.toISOString() });
     expect(stale.statusCode).toBe(409);
     expect(await f.pages.get('about')).toEqual(current);
     expect((await save({ prepareLocale: secondary, [secondary]: { title: '', bodyMarkdown: '', images: {} }, updatedAt: current.updatedAt!.toISOString() })).statusCode).toBe(200);
     expect((await f.put({ primary, locales: [primary, secondary] })).statusCode).toBe(200);
-    expect((await f.pages.get('about'))[primary]).toEqual(active);
+    expect((await f.pages.get('about'))[primary]).toEqual(original[primary]);
     expect((await f.pages.get('about'))[secondary].bodyMarkdown).toBe('');
   });
 
@@ -249,21 +249,33 @@ describe('inactive About preparation', () => {
     expect((await f.pages.get('about'))[secondary].bodyMarkdown).toContain('prepared-photo');
   });
 
-  it('keeps prepared About content and the committed activation after a failed rebuild', async () => {
-    const f = await fixture({ primary: 'de', locales: ['de'] });
-    const active = await f.pages.save({ key: 'about', de: { locale: 'de', title: 'Public', bodyMarkdown: 'Keep DE.', images: {} } });
-    await f.pages.save({ key: 'about', en: { locale: 'en', title: 'Prepared', bodyMarkdown: 'Prepared EN.', images: {} } },
-      active.updatedAt!, { prepareLocale: 'en' });
+  it.each(['de', 'en'] as const)('keeps prepared About content and committed %s-primary activation after a failed rebuild', async (primary) => {
+    const secondary = primary === 'de' ? 'en' : 'de';
+    const f = await fixture({ primary, locales: [primary] });
+    const active = await f.pages.save({ key: 'about', [primary]: { locale: primary, title: 'Public', bodyMarkdown: 'Keep primary.', images: {} } });
+    await f.pages.save({ key: 'about', [secondary]: { locale: secondary, title: 'Prepared', bodyMarkdown: 'Prepared secondary.', images: {} } },
+      active.updatedAt!, { prepareLocale: secondary });
     const before = await f.pages.get('about');
+    expect(before[secondary].publishedAt).toBeNull();
     f.failBuild();
-    const failed = await f.put({ primary: 'de', locales: ['de', 'en'] });
+    const failed = await f.put({ primary, locales: [primary, secondary] });
+    // #297: the committed activation answers 200 with its failed build attempt.
     expect(failed.statusCode).toBe(200);
-    expect(failed.json()).toMatchObject({ primary: 'de', locales: ['de', 'en'], build: { ok: false } });
-    expect(await f.pages.get('about')).toEqual(before);
-    expect(await f.language.get()).toMatchObject({ primary: 'de', locales: ['de', 'en'] });
+    expect(failed.json()).toMatchObject({ primary, locales: [primary, secondary], build: { ok: false } });
+    const activated = await f.pages.get('about');
+    expect(activated[secondary].publishedAt).toBeInstanceOf(Date);
+    expect(activated).toEqual({
+      ...before,
+      [secondary]: { ...before[secondary], publishedAt: activated[secondary].publishedAt },
+      updatedAt: activated.updatedAt,
+    });
+    expect(activated.updatedAt!.getTime()).toBeGreaterThan(before.updatedAt!.getTime());
+    await expect(f.pages.save({ key: 'about', [primary]: active[primary] }, before.updatedAt!)).rejects.toMatchObject({ code: 'conflict' });
+    expect(await f.pages.get('about')).toEqual(activated);
+    expect(await f.language.get()).toMatchObject({ primary, locales: [primary, secondary] });
     f.recoverBuild();
     expect((await f.app.inject({ method: 'POST', url: '/rebuild', cookies: f.cookies })).statusCode).toBe(200);
-    expect(await f.pages.get('about')).toEqual(before);
+    expect(await f.pages.get('about')).toEqual(activated);
   });
 });
 
@@ -350,6 +362,124 @@ for (const publication of ['single', 'bulk'] as const) {
     });
   });
 }
+
+describe('editable page API lifecycle', () => {
+  const payload = () => ({
+    de: { title: 'Kontakt', bodyMarkdown: 'Schreib mir.', images: {}, slug: 'kontakt' },
+    en: { title: 'Contact', bodyMarkdown: 'Write to me.', images: {}, slug: 'contact' },
+  });
+  it('returns owner-naming 409s for page/story and static claims in either creation order', async () => {
+    const f = await fixture(); const storedStory = await f.story();
+    const reserved = await f.app.inject({ method: 'PUT', url: '/pages/contact', cookies: f.cookies,
+      payload: { ...payload(), de: { ...payload().de, slug: 'settings' } } });
+    expect(reserved.statusCode).toBe(409); expect(reserved.json()).toMatchObject({ code: 'reserved_slug', owner: { type: 'app', name: 'settings' } });
+    const taken = await f.app.inject({ method: 'PUT', url: '/pages/contact', cookies: f.cookies,
+      payload: { ...payload(), de: { ...payload().de, slug: storedStory.de.slug } } });
+    expect(taken.statusCode).toBe(409); expect(taken.json()).toMatchObject({ owner: { type: 'story', name: storedStory.translationKey } });
+    expect((await f.app.inject({ method: 'PUT', url: '/pages/contact', cookies: f.cookies, payload: payload() })).statusCode).toBe(200);
+    const changedStory = await f.app.inject({ method: 'PUT', url: '/posts/' + storedStory.translationKey, cookies: f.cookies,
+      payload: { ...storedStory, de: { ...storedStory.de, slug: 'kontakt' }, confirmSlugChange: true, baseUpdatedAt: storedStory.updatedAt.toISOString() } });
+    expect(changedStory.statusCode).toBe(409); expect(changedStory.json()).toMatchObject({ code: 'reserved_slug', owner: { type: 'page', name: 'contact' } });
+    expect((await f.posts.get(storedStory.translationKey))!.de.slug).toBe(storedStory.de.slug); expect(f.build).not.toHaveBeenCalled();
+  });
+  it('creates drafts without rebuilding, previews sanitized content, publishes, locks slugs and deletes histories', async () => {
+    const f = await fixture();
+    const put = (body: object) => f.app.inject({ method: 'PUT', url: '/pages/contact', cookies: f.cookies, payload: body });
+    const first = await put({ ...payload(), en: { ...payload().en, bodyMarkdown: ['Write to me.', '<script>alert("page-preview")</script>', '<a href="javascript:alert(1)">Unsafe link</a>'].join('\n\n') } });
+    expect(first.statusCode).toBe(200); expect(first.json().saved.status).toBe('draft'); expect(first.json().build).toBeNull();
+    expect(f.build).not.toHaveBeenCalled();
+    const preview = await f.app.inject({ method: 'GET', url: '/pages/contact/preview?locale=en', cookies: f.cookies });
+    expect(preview.statusCode).toBe(200); expect(preview.headers['cache-control']).toBe('no-store');
+    expect(preview.headers['content-security-policy']).toContain("default-src 'none'");
+    expect(preview.body).toContain('Write to me.');
+    expect(preview.body).not.toContain('<script>'); expect(preview.body).not.toContain('javascript:');
+    const saved = await put({ ...payload(), updatedAt: first.json().saved.updatedAt });
+    const rev = (await f.pages.listRevisions('contact'))[0]!;
+    const published = await f.app.inject({ method: 'POST', url: '/pages/contact/publish', cookies: f.cookies, payload: { updatedAt: saved.json().saved.updatedAt } });
+    expect(published.statusCode).toBe(200); expect(f.build).toHaveBeenCalledTimes(1);
+    const locked = await put({ ...payload(), de: { ...payload().de, slug: 'changed' }, updatedAt: published.json().saved.updatedAt });
+    expect(locked.statusCode).toBe(409); expect(locked.json().code).toBe('page_slug_locked');
+    const incomplete = await put({ ...payload(), en: { ...payload().en, bodyMarkdown: '' }, updatedAt: published.json().saved.updatedAt });
+    expect(incomplete.statusCode).toBe(400); expect(f.build).toHaveBeenCalledTimes(1);
+    const deleted = await f.app.inject({ method: 'DELETE', url: '/pages/contact', cookies: f.cookies, payload: { updatedAt: published.json().saved.updatedAt } });
+    expect(deleted.statusCode).toBe(200); expect(f.build).toHaveBeenCalledTimes(2);
+    for (const path of ['/pages/contact/revisions', '/pages/contact/revisions/' + rev.id, '/pages/contact/preview?locale=en']) {
+      expect((await f.app.inject({ method: 'GET', url: path, cookies: f.cookies })).statusCode).toBe(404);
+    }
+  });
+
+  it('keeps page reads at session level and every mutation/deletion scope admin-only', async () => {
+    const f = await fixture(); const author = await f.login(false);
+    await f.pages.save({ key: 'contact', de: { locale: 'de', ...payload().de }, en: { locale: 'en', ...payload().en } });
+    for (const path of ['/pages', '/pages/contact', '/pages/contact/revisions', '/pages/contact/preview?locale=de']) {
+      expect((await f.app.inject({ method: 'GET', url: path, cookies: author })).statusCode).toBe(200);
+      expect((await f.app.inject({ method: 'GET', url: path })).statusCode).toBe(401);
+    }
+    for (const [method, path] of [['PUT', '/pages/contact'], ['POST', '/pages/contact/publish'], ['POST', '/pages/contact/unpublish'], ['DELETE', '/pages/contact'], ['GET', '/pages/contact/deletion']] as const) {
+      expect((await f.app.inject({ method, url: path, cookies: author, ...(method !== 'GET' ? { payload: payload() } : {}) })).statusCode).toBe(403);
+    }
+    expect(f.build).not.toHaveBeenCalled();
+    expect((await f.app.inject({ method: 'PUT', url: '/pages/new-kind', cookies: f.cookies, payload: payload() })).json()).toMatchObject({ code: 'unknown_page_kind' });
+    for (const [method, path] of [['DELETE', '/pages/about'], ['POST', '/pages/about/unpublish']] as const) {
+      await f.pages.save({ key: 'about' });
+      expect((await f.app.inject({ method, url: path, cookies: f.cookies })).json()).toMatchObject({ code: 'page_fixed' });
+    }
+  });
+
+  it('refuses foreign images on first Publish, live PUT and revision restoration before any write or build', async () => {
+    const f = await fixture(); const clean = payload();
+    const bad = { ...clean, de: { ...clean.de, bodyMarkdown: '```gallery\nhttps://foreign.test/photo | 800x600 | alt="Photo"\n```' } };
+    const draft = await f.app.inject({ method: 'PUT', url: '/pages/contact', cookies: f.cookies, payload: bad });
+    expect(draft.statusCode).toBe(200);
+    const refused = await f.app.inject({ method: 'POST', url: '/pages/contact/publish', cookies: f.cookies });
+    expect(refused.statusCode).toBe(409); expect(refused.json()).toMatchObject({ code: 'foreign_images', locale: 'de', foreignImageCount: 1, foreignImages: ['https://foreign.test/photo'] });
+    expect(f.build).not.toHaveBeenCalled();
+    await f.app.inject({ method: 'PUT', url: '/pages/contact', cookies: f.cookies, payload: clean });
+    const unsafe = (await f.pages.listRevisions('contact'))[0]!;
+    await f.app.inject({ method: 'POST', url: '/pages/contact/publish', cookies: f.cookies });
+    const before = await f.pages.get('contact'); const history = await f.pages.listRevisions('contact');
+    const revision = (await f.pages.getRevision('contact', unsafe.id))!;
+    for (const body of [bad, revision.snapshot]) {
+      const result = await f.app.inject({ method: 'PUT', url: '/pages/contact', cookies: f.cookies, payload: { ...body, updatedAt: before.updatedAt?.toISOString() } });
+      expect(result.statusCode).toBe(409); expect(result.json().code).toBe('foreign_images');
+      expect(await f.pages.get('contact')).toEqual(before); expect(await f.pages.listRevisions('contact')).toEqual(history);
+    }
+    expect(f.build).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports saved-but-not-rebuilt with the committed token and recovers through a validated revision PUT', async () => {
+    const f = await fixture();
+    const initial = { key: 'about', de: { locale: 'de' as const, title: 'Before', bodyMarkdown: '', images: {} } };
+    await f.pages.save(initial); f.failBuild();
+    const result = await f.app.inject({ method: 'PUT', url: '/pages/about', cookies: f.cookies, payload: { de: { ...initial.de, title: 'Saved despite build failure' } } });
+    // #297: the committed save answers 200 beside its failed build attempt.
+    expect(result.statusCode).toBe(200); expect(result.json()).toMatchObject({ build: { ok: false }, saved: { de: { title: 'Saved despite build failure' } } });
+    const revision = (await f.pages.getRevision('about', (await f.pages.listRevisions('about'))[0]!.id))!;
+    f.recoverBuild();
+    const restored = await f.app.inject({ method: 'PUT', url: '/pages/about', cookies: f.cookies, payload: { ...revision.snapshot, updatedAt: result.json().saved.updatedAt } });
+    expect(restored.statusCode).toBe(200); expect(restored.json().saved.de.title).toBe('Before'); expect(restored.json().build.ok).toBe(true);
+  });
+
+  it.each(['de', 'en'] as const)('preflights complete non-About pages before adding the %s-primary secondary and retains saved mode on build failure', async (primary) => {
+    const secondary = primary === 'de' ? 'en' : 'de'; const f = await fixture({ primary, locales: [primary] });
+    const draft = await f.pages.save({ key: 'contact', [primary]: { locale: primary, ...payload()[primary] } });
+    await f.pages.publish('contact', draft.updatedAt!);
+    const before = await f.language.get();
+    const denied = await f.put({ primary, locales: [primary, secondary] });
+    expect(denied.statusCode).toBe(409); expect(denied.json().code).toBe('language_pages_incomplete'); expect(await f.language.get()).toEqual(before);
+    const current = await f.pages.get('contact');
+    const prepared = await f.app.inject({ method: 'PUT', url: '/pages/contact', cookies: f.cookies,
+      payload: { prepareLocale: secondary, updatedAt: current.updatedAt?.toISOString(), [secondary]: payload()[secondary] } });
+    expect(prepared.statusCode).toBe(200); expect(prepared.json().saved[secondary].publishedAt).toBeNull();
+    expect(await f.language.get()).toEqual(before);
+    f.failBuild();
+    const activation = await f.put({ primary, locales: [primary, secondary] });
+    expect(activation.statusCode).toBe(200); expect(activation.json()).toMatchObject({ primary, locales: [primary, secondary], build: { ok: false } });
+    expect((await f.pages.get('contact'))[secondary].publishedAt).toBeInstanceOf(Date);
+    f.recoverBuild();
+    expect((await f.app.inject({ method: 'POST', url: '/rebuild', cookies: f.cookies })).json().ok).toBe(true);
+  });
+});
 
 describe('revision restoration with a disabled language', () => {
   it.each(['de', 'en'] as const)('ignores the hidden %s slug while preserving active slug protections', async (secondary) => {

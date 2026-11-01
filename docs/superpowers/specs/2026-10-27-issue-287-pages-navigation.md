@@ -883,3 +883,191 @@ No new root segment is registered, so the app reservation set is unchanged by th
 | Approver / date | Repository owner, interactive implementation session, 2026-10-27 |
 | Independent review F7/F9 | Correctness clarifications incorporated; not a claim that the earlier review was clean |
 | Q12 / review F8 | Approved **“Prepare translations before activation”** after PR #407 head `93619a0ccb665c27152dff67fce496b779a3b38d` and PR #406 head `8542d78fa1f9168c0313d2cffdef3d17830eba6d`; option A only |
+
+## #288 implementation interface and scoped qualification
+
+This appendix records the implemented storage/CMS boundary for downstream #289 and
+#309. It does not change the approved scope or claim that public generic routes,
+navigation settings or a production migration have been exercised.
+
+### Shared modules and stored representation
+
+- `site/src/lib/page-kinds.ts`: `PAGE_KINDS`, `PageKind`, `isPageKind`. Each registry
+  entry supplies `slugs.{de,en}`, `deletable`, `unpublishable`, and default `slots`.
+  About's registry paths are fixed; its stored slug is always `''`. New-page
+  defaults are suggestions in the editor, not silently assigned route claims.
+- `site/src/lib/navigation.ts`: `Navigation` (`version: 1`, `header/footer/legal`),
+  the discriminated `NavItem` union, `NavLocaleText`, `NAV_SLOTS`, `DEFAULT_NAVIGATION`,
+  `validateNavigation`, `PageNavReference`, `pageNavReferences`,
+  `withoutPageNavigation`. The validator is pure and Astro-free. It validates
+  structure/URL safety/limits, not emitted-path eligibility: #289 must resolve
+  against actual emitted paths in the captured build mode and validate active
+  locale labels/destinations at its save boundary.
+- `pages`: existing `(key, locale)` primary key, new `slug text NOT NULL DEFAULT ''`,
+  `status text NOT NULL DEFAULT 'draft' CHECK ('draft','published')`, nullable
+  `published_at timestamptz`; existing `updated_at` is the optimistic pair token
+  (maximum row timestamp). The nonempty partial `(locale,slug)` index supplements
+  transactional cross-table checks. The pair shares status, not first-public time.
+- `site_nav`: singleton integer `id=1`, `config jsonb`, `updated_at timestamptz`.
+  Bootstrap seeds the shared default only when absent. #289 should update this
+  row in place with its stale-write guard, not introduce settings.json navigation.
+  Page deletion locks this row after language/content/namespace locks.
+
+### Store and API contract
+
+`uploader/src/pages.ts` remains the sole page store. `StoredPagePair` carries
+`key`, `status`, `updatedAt`, and `de/en` content with `slug` and `publishedAt`.
+`PageUpdate` is a partial locale update; `PageSaveOptions.prepareLocale` names an
+inactive locale explicitly. Omitted and ordinary inactive content is retained.
+`configureImageOrigin` binds the real server image origin before mutation; stores
+default fail-closed rather than infer an origin from untrusted content.
+
+`PageStore` exposes `get`, `keys`, `save`, `publish`, `unpublish`, `removalInfo`,
+`remove`, `listRevisions`, `getRevision`, and `prepareActivation`.
+`validatePublishedPage` is the shared uploader eligibility/image gate;
+`pagePairFromRows`/`PageRow` decode current database rows. #289's loader must
+select published registry kinds only and revalidate its own untrusted DB/build
+boundary; it must preserve About's existing fixed-route fallback and sanitization.
+
+| Route | Permission / result |
+|---|---|
+| `GET /pages` | Session; `{pages, language}` with registry defaults, existence/status/token, paths and locale title/slug/history; no bodies |
+| `GET /pages/:key` | Session; saved pair, or unsaved empty pair with `updatedAt: null` |
+| `PUT /pages/:key` | Admin; `{de?,en?,updatedAt?,prepareLocale?}`; locale fields `title/bodyMarkdown/images/slug`; caller history/status never changes lifecycle |
+| `POST /pages/:key/publish`, `/unpublish` | Admin; optional `{updatedAt}`; pair lifecycle operation |
+| `GET /pages/:key/preview?locale=de\|en` | Session; saved selected locale including inactive, real sanitized HTML, preview CSP, `no-store` |
+| `GET /pages/:key/revisions[/:id]` | Session; bounded history; 404 when page is absent |
+| `GET /pages/:key/deletion` | Admin; `{key,titles,paths,revisions,navigation,bodyReferences,updatedAt,published}` |
+| `DELETE /pages/:key` | Admin; optional `{updatedAt}`; same deletion impact as committed result |
+
+Successful mutations return `{saved,build}`, where `build:null` means no rebuild
+(draft save/deletion). A post-commit build failure returns HTTP 502,
+`code:"page_build_failed"`, `persisted:true`, `saved`; clients must adopt that token
+and report the prior release remains served. Validation/stale failures commit no
+revision. Reserved claims return HTTP 409 `reserved_slug` with `{owner:{type,name}}`;
+unknown kinds return 400 `unknown_page_kind`; fixed About operations and sticky
+slug edits return 409. A stale token for a deleted page returns 404, not recreation.
+Explicit inactive preparation requires the loaded token and rejects active-locale
+edits in the same payload. The existing editor URL defaults to About, with
+`?key=contact|privacy|legal` selecting others and `&prepareLocale=…` entering preparation.
+
+### Concurrency and downstream activation
+
+`content-namespace.ts` provides `lockContentNamespaces(client)` after the
+language singleton and content locks. Postgres holds namespace keys in a stable
+order. Memory stores share a `LanguageStore` instance plus registered working and
+retained snapshot claims; fixtures must inject that same language store into both.
+New/changed story claims call `PostStore.pageSlugOwner`; WXR uses the same boundary
+before fetch. Grandfathering remains based only on the same existing story row.
+
+`PageStore.prepareActivation(candidate, client?, validate?)` is called from the
+existing language-update preflight. Postgres requires that transaction's client,
+locks all published page rows and stamps newly enabled rows before the mode commit.
+Memory returns a commit closure, which the language store invokes only after every
+transition handler accepts; a later refusal cannot partially stamp a locale.
+The optional validation callback preserves About's incumbent media-readiness gate.
+`LanguageError("language_pages_incomplete")` carries page/locale blockers. Ordinary
+inactive saves do not claim public eligibility; activation rechecks under lock.
+#309 should reuse these blocks/actions, not add an independent activation protocol.
+
+### Migration and recovery
+
+`ensureSchema` adds columns/index/nav idempotently, keeps About text/URLs, marks
+About published once, and sweeps orphan page revisions. Unknown old keys are
+retained inert and reported by `reportNamespaceCollisions`; admins can delete them.
+The boot pre-migration capture extends the inherited recovery prerequisite to
+missing `site_nav`. It never manufactures a lower-version dump from new page data.
+Dump format 13 independently records page/nav introduction after language v12 and
+identity v11. New metadata is mandatory and validated before replacement, including
+sticky first-public timestamps for enabled published registry rows.
+
+Restore replaces new page/nav data together, preserves first-public history, and
+retains inherited identity/language/GPX handling. Pre-v13 page rows explicitly
+normalize to empty slugs, About published, others draft; absent v1 pages survive.
+Live navigation survives pre-v13 restores. `pageRecoverySummary` takes retained
+live context for those versions, reporting unresolved items and page/story/static
+collisions without deleting anything. Revision orphans are swept; surviving
+histories are not represented as recoverable dump content. Page mutation tokens
+are refreshed during restore so an open pre-restore editor cannot overwrite it.
+Containment is unpublish/delete (not About), or repair/rebuild; preserve the last
+successful release and the approved compatible recovery image/set.
+
+### Observed #288 acceptance evidence (2026-10-29)
+
+Complete uploader/PostgreSQL suites and TypeScript, site suites, Astro check and
+real build passed after the cancellation-focus regression fix
+(`wave-two-results-1793284517645_74185.json`).
+
+Actual `main.ts`, desktop/320px managed-browser and CLI scenarios covered catalog
+permissions, reserved/reverse/grandfathered claims, no-fetch WXR refusal, page
+history/conflicts/deletion scope, inactive translation preparation/activation,
+post-commit build failure and explicit recovery, restart preservation, and real
+v13 dump/restore with separately synthetic v12/v11/v10/v1 compatibility inputs.
+The corrected source `c90f1142befaf6ac5529462f96c3ec4375aa2e7c` restores enabled
+Delete-button focus after both Escape and Cancel; cancelled operations preserve
+exact page/revision state. Uploaded responsive media was rendered successfully.
+
+The canonical ignored evidence index is `issue-288-runtime-final.json` under
+`.local/backlog-execution-2026-10-27/`. Earlier successful phases retain their
+`a4acb88` source attribution. Earlier `/about-me/` equal-404 comparisons are
+explicitly excluded: supplemental failure proof requires actual `/uber-mich/`
+HTTP 200 with identical SHA-256 and byte length while the prior release remains.
+Fixtures and private recovery sets were retained; only owned services/browsers
+were stopped. No owner content or data was changed.
+
+This qualifies the CMS boundary, not #285's public language-mode routes or #289's
+non-About rendering/navigation. Those downstream public build/browser checks,
+independent actual-PR review, exact-head CI and stack integration remain distinct
+gates. Successful CMS publication alone does not establish the new public routes.
+
+
+Independent PR review subsequently found two additional UI defects: lifecycle
+responses could clear edits typed during rebuilding, and catalogue Delete
+cancellation lost focus. Both regressions failed before the repair and pass with
+the real DraftGuard/native confirmation implementations. Complete suites/type
+checks/Astro build passed at `c18f516` (wave `1793287726371_82151`).
+The actual-main/browser supplement `issue-288-runtime-c18f516-supplement.json`
+held genuine Publish and Unpublish acknowledgements after real builds: unsent
+titles, recovery stashes and native unload warnings survived both responses,
+while persisted titles stayed unchanged. Catalogue Escape and Cancel restored
+enabled-opener focus at 1440px and 320px without page/history mutations.
+Independent re-review found no remaining findings; both required CI jobs passed
+on `c18f516`. Final documentation CI and eventual stack qualification remain
+separate from this exact-source evidence.
+
+## #288 current-dev integration (2026-11-01)
+
+Merged `origin/dev` at `b51a25d` (after #276, #279, #280, #281, #284, #285, #297,
+#344 and the gallery-metadata warnings landed). Resolutions, keeping both intents:
+
+- **Build outcome (#297).** Page save/publish/unpublish/delete answer 200 with the
+  stored pair and the projected build report, never the earlier 502 `persisted`
+  envelope; `about.html` and `pages.html` render failed builds through
+  `BuildReporting` while keeping the stored state.
+- **Gallery warnings.** `mergePageUpdate` normalizes both locales with the async
+  `normalizeGalleryFences`; saves return transient `galleryWarnings` that are never
+  stored or snapshotted. Preview uses the async `transformBodyImages`.
+- **#344 serialization.** `transaction` already holds `site_language` FOR UPDATE
+  before `readPage`, which serializes every page mutation including two creations
+  of a never-saved key; no extra advisory lock was added. #344's suite now uses
+  the `contact` kind (only known kinds are writable) and expresses #288's token
+  contract: a supplied `updatedAt` for an absent page is `not_found` for both
+  racers, so creation is always token-less.
+- **Boot order.** `initializeApplicationSchema` → read-only
+  `reportNamespaceCollisions` → `initializeOnboarding`; the onboarding bootstrap
+  catalog accepts the additive page columns, `site_nav` (seed must equal
+  `DEFAULT_NAVIGATION`) and `pages_locale_slug_idx`.
+
+Verification on the merge: uploader `tsc` and full suite 4155/4155 with isolated
+PostgreSQL; site `astro check` 0/0, `npm run build`, and the zero-content build
+integration 4/4. Runtime on a fresh database: page catalogue, contact draft
+(200, no build), publish (200, build ok), reserved slug `karte` refused 409,
+About save returns `de:unknown_field` gallery warning; with a read-only
+`releases/`, unpublish and an editor Publish both answered 200 with
+`release_write_failed` and the editor showed the saved state with the Settings
+retry link; delete (200, build ok) and the Pages list rendered. The managed
+headless browser does not deliver native `<dialog>` close events, so the
+confirmation was stubbed in-page for the editor click. Public rendering of
+non-About pages remains #289 (`/kontakt/` is 404 at this head by design). The
+G1 read-only owner inventory found no reserved-route collisions, matching a
+silent boot report.

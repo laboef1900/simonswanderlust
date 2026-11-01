@@ -43,6 +43,7 @@ const query = async (sql: string) => ({
       id: true, primary_locale: 'de', enabled_locales: ['de', 'en'],
       locked_at: null, updated_at: '2026-10-27T12:00:00.000Z',
     }]
+      : sql.includes('FROM site_nav') ? [{ id: 1, config: { version: 1, header: [], footer: [], legal: [] }, updated_at: '2026-10-27T12:00:00.000Z' }]
       : sql.includes('FROM site_identity ORDER') ? [identityDumpRow()] : [],
 });
 const db: Connectable = { query, connect: async () => ({ query, release() {} }) };

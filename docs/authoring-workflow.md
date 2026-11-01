@@ -735,6 +735,43 @@ into the static site, so none of the switches below need a Publish or a rebuild.
 
 ---
 
+## Editable pages
+
+Admins open **Pages** (`/admin/pages.html`) to edit About, Contact, Privacy or Legal.
+The existing About editor is reused; old `/admin/about.html` bookmarks still select
+About. Its public paths stay fixed and it cannot be unpublished/deleted. Privacy
+and Legal are empty author-owned documents, not generated legal advice; their
+editor notice leaves the wording and applicable legal obligations with the owner.
+
+Other kinds start as drafts. Choose each enabled locale's slug before first Publish;
+after that locale has been public the slug stays locked, including after unpublish.
+Draft save does not rebuild. Live save and Publish show their scope, commit the
+page, and rebuild once. Unlike stories, pages have no separate published snapshot:
+**saving a live page is publication**. Preview shows the saved selected locale
+through the sanitized page renderer; save unsaved edits before using it.
+
+Ordinary editing shows only enabled languages. To prepare a new secondary language,
+use **Settings → Language → Prepare translations**, then select a page. Save title,
+slug and body in stages in that inactive-locale editor; these fields do not become
+public merely by saving. Return to Language settings and activate only after all
+published page blockers are complete. A revision loads into the editor for review;
+saving it still checks slug locks, completeness, image safety and the loaded token.
+If someone saved elsewhere, reload only after explicitly choosing to discard your
+unsaved fields.
+
+Delete names both locale paths/titles, the revisions being removed, navigation
+references and a best-effort count of links in bodies. Those body links are not
+rewritten, photos are retained, and the deleted slug may be reused. Cancel is safe.
+Unpublish removes public eligibility while keeping the page, revisions and slug lock.
+If a rebuild fails after any committed action, the error explicitly says the data
+was saved and the previous release is still serving: repair the failure and use
+**Rebuild site now**, rather than repeatedly resubmitting the obsolete page.
+
+**Delivery boundary:** #288 supplies this CMS/storage lifecycle and preview.
+Generic public Contact/Privacy/Legal routes and configurable navigation are #289;
+do not interpret a successful #288 rebuild as proof that those routes exist yet.
+DB backups, not posts-only MDX exports, preserve pages and navigation.
+
 ## Stage 3 — How the rebuild works
 
 The **Publish** button in the editor triggers a rebuild automatically and waits for it to finish
