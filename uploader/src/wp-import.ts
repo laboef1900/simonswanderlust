@@ -2,13 +2,16 @@ import { createHash } from 'node:crypto';
 import { parseWxr, type ParsedPost } from './wxr-parse.js';
 import { htmlToMarkdown, markdownImages } from './wp-content.js';
 import { rehostImage, type RehostResult, type RehostResume } from './wp-images.js';
-import { isSafeSlug, PostError, type ImageDims, type PostLocale, type PostPair, type PostStore, type PostSummary, type StoredPostPair } from './posts.js';
+import { checkSlug, PostError, type ImageDims, type PostLocale, type PostPair, type PostStore, type PostSummary, type StoredPostPair } from './posts.js';
 import { rewriteFences, rewriteOutsideGalleries } from './body-content.js';
 import { FetchError } from './safe-fetch.js';
 import { insufficientSpaceForImport, type DiskSpace } from './disk.js';
 import type { WorkLock } from './work-lock.js';
 import { normalizeProcessOptions, type ProcessOptions } from './pipeline.js';
 import { assertWorkWritable, cancellableSleep, type WorkCancellationOptions } from './work-cancellation.js';
+import { DEFAULT_LANGUAGE, type LanguageConfig } from './language.js';
+import { namespaceOf, reservation } from '../../site/src/lib/reserved-routes.js';
+import { ui } from '../../site/src/i18n/ui.js';
 
 /** Per-image accounting, so a partial import cannot masquerade as a clean one. */
 export interface ImportImageCounts {
@@ -25,6 +28,8 @@ export interface ImportSummary {
   updated: number;
   /** Already published before this run; deliberately not overwritten. A success, not a problem. */
   skippedPublished: number;
+  /** Tagged items in disabled locales; never fetched or stored. */
+  skippedLocale: number;
   /**
    * Rejected at the import boundary: a missing translation, a slug the importer refuses
    * (path-traversal defence), or a slug conflict with an existing post whose (DE, EN) slug
@@ -39,6 +44,8 @@ export interface ImportSummary {
 
 export interface ImportDeps extends WorkCancellationOptions {
   postStore: PostStore; storageDir: string; baseUrl: string;
+  /** Preflight mode; the post store revalidates current mode under its write lock. */
+  language?: LanguageConfig;
   /** Immutable image profile snapshot for this prepared import. */
   encoding?: ProcessOptions;
   rehost?: (url: string, key: string, alt: string, signal?: AbortSignal) => Promise<RehostResult>;
@@ -392,15 +399,15 @@ function resilientRehost(rehost: RehostFn, cfg: {
  * URLs it fetches, this must change with it, or the cap would count a different
  * set than the import performs. `test/wp-import.test.ts` pins them to agree.
  */
-function rehostUrlSet(p: ParsedPost, attachments: Map<string, string>, includeHero: boolean): Set<string> {
+async function rehostUrlSet(p: ParsedPost, attachments: Map<string, string>, includeHero: boolean): Promise<Set<string>> {
   const urls = new Set<string>();
   const heroUrl = includeHero && p.thumbnailId ? attachments.get(p.thumbnailId) : undefined;
   if (heroUrl) urls.add(heroUrl);
   const body = htmlToMarkdown(p.contentHtml, attachments);
-  for (const { url } of markdownImages(body)) {
+  for (const { url } of await markdownImages(body)) {
     if (/^https?:\/\//.test(url)) urls.add(url);
   }
-  rewriteFences(body, (line) => {
+  await rewriteFences(body, (line) => {
     const url = (line.split('|')[0] ?? '').trim();
     if (/^https?:\/\//.test(url)) urls.add(url);
     return line;
@@ -441,12 +448,13 @@ interface PlannedRehost {
  * this map is the #96 cap's quantity; its keys feed the #94 resume-aware
  * free-space estimate. `test/wp-import.test.ts` pins both against the run.
  */
-function rehostPlan(de: ParsedPost, en: ParsedPost, attachments: Map<string, string>, includeHero: boolean): Map<string, PlannedRehost> {
+async function rehostPlan(de: ParsedPost | undefined, en: ParsedPost | undefined, attachments: Map<string, string>, includeHero: boolean): Promise<Map<string, PlannedRehost>> {
   const plan = new Map<string, PlannedRehost>();
   const legacyOwners = new Map<string, number>();
   for (const p of [de, en]) {
+    if (!p) continue;
     const hero = includeHero && p.thumbnailId ? attachments.get(p.thumbnailId) : undefined;
-    for (const url of rehostUrlSet(p, attachments, includeHero)) {
+    for (const url of await rehostUrlSet(p, attachments, includeHero)) {
       if (plan.has(url)) continue;
       if (url === hero) { plan.set(url, { key: heroKey(p), legacy: null }); continue; }
       const legacy = legacyImageKey(p, url);
@@ -475,16 +483,14 @@ function rehostPlan(de: ParsedPost, en: ParsedPost, attachments: Map<string, str
  * parens, `<…>` around a space, a trailing " title") — issue #125. The rewrite
  * drops the title: Elementor fills it with the attachment filename, which is
  * noise, and the re-hosted URL needs no escaping.
- * @ai-warning: reuse `rewriteFences` rather than matching fences here. #75
- * already had to pin a second scanner (public/gallery-fence.js) against it
- * with gallery-fence-parity.test.ts; a third copy would silently disagree
- * about where a fence ends and drop or corrupt an author's photos. The inline
- * substitution is likewise confined to text OUTSIDE gallery fences
+ * @ai-warning Reuse the renderer-backed source analysis through `rewriteFences`
+ * rather than introducing a second gallery grammar. The inline substitution
+ * is likewise confined to text OUTSIDE gallery nodes
  * (`rewriteOutsideGalleries`): a gallery-local caption that reads like an
  * inline image is the author's text, and only the line's own URL field is
  * ever re-hosted.
  */
-function applyRehosts(body: string, rehosted: ReadonlyMap<string, RehostResult>, images: Record<string, ImageDims>): string {
+async function applyRehosts(body: string, rehosted: ReadonlyMap<string, RehostResult>, images: Record<string, ImageDims>): Promise<string> {
   // The store lifts a gallery line's `| alt= | caption=` into `images[url]` on
   // save — for a hot-link that failed last run, under the WordPress URL. Healing
   // the URL must carry that entry over, or the author's alt/caption is stranded
@@ -504,23 +510,27 @@ function applyRehosts(body: string, rehosted: ReadonlyMap<string, RehostResult>,
     images[r.src] = image;
     if (from !== r.src) delete images[from];
   };
-  body = rewriteOutsideGalleries(body, (text) => {
+  body = await rewriteOutsideGalleries(body, async (text) => {
     let out = text;
-    for (const { full, alt, url } of markdownImages(text)) {
+    for (const { full, alt, url } of await markdownImages(text)) {
       const r = rehosted.get(url);
       if (!r) continue;
-      out = out.replaceAll(full, `![${alt}](${r.src})`);
+      out = out.replaceAll(full, () => `![${alt}](${r.src})`);
       record(url, r);
     }
     return out;
   });
   return rewriteFences(body, (line) => {
-    const fields = line.split('|').map((f) => f.trim());
-    const url = fields[0] ?? '';
+    // Replace only the actual URL token. The suffix may be intentionally
+    // retained invalid metadata; trimming/reconstructing it would lose bytes.
+    const separator = line.indexOf('|');
+    const head = separator < 0 ? line : line.slice(0, separator);
+    const url = head.trim();
     const r = rehosted.get(url);
     if (!r) return line; // fetch failed — keep the original so nothing is lost
     record(url, r);
-    return [r.src, `${r.width}x${r.height}`, ...fields.slice(1)].join(' | ');
+    const start = head.length - head.trimStart().length;
+    return line.slice(0, start) + r.src + line.slice(start + url.length);
   });
 }
 
@@ -566,15 +576,25 @@ async function buildLocale(
     try { rehosted.set(url, await rehost(url, imageKey(p, url), alt)); }
     catch { /* reported by the tally wrapper; the WordPress URL is left in place */ }
   };
-  for (const { alt, url } of markdownImages(body)) await rehostOnce(url, alt);
+  for (const { alt, url } of await markdownImages(body)) await rehostOnce(url, alt);
   const galleryUrls: string[] = [];
-  rewriteFences(body, (line) => { galleryUrls.push((line.split('|')[0] ?? '').trim()); return line; });
+  await rewriteFences(body, (line) => { galleryUrls.push((line.split('|')[0] ?? '').trim()); return line; });
   for (const url of galleryUrls) await rehostOnce(url, '');
   const images: Record<string, ImageDims> = {};
-  const bodyMarkdown = applyRehosts(body, rehosted, images);
+  const bodyMarkdown = await applyRehosts(body, rehosted, images);
   return {
     locale: { locale: p.locale, slug: p.slug, title: p.title, excerpt: p.excerpt, country: '', heroImage, bodyMarkdown, images },
     rehosted,
+  };
+}
+
+function emptyLocale(locale: 'de' | 'en', language: LanguageConfig): BuiltLocale {
+  return {
+    locale: {
+      locale, slug: '', title: '', excerpt: '', country: '', bodyMarkdown: '', images: {},
+      heroImage: { ...PLACEHOLDER_HERO }, omitted: !language.locales.includes(locale),
+    },
+    rehosted: new Map(),
   };
 }
 
@@ -603,9 +623,9 @@ function includeHero(stored: StoredPostPair | null): boolean {
  * substitution over the STORED text,
  * so prose edits, alt edits, removed photos and reordered galleries survive.
  */
-function mergeLocale(stored: PostLocale, fresh: BuiltLocale): PostLocale {
+async function mergeLocale(stored: PostLocale, fresh: BuiltLocale): Promise<PostLocale> {
   const images: Record<string, ImageDims> = { ...stored.images };
-  const bodyMarkdown = applyRehosts(stored.bodyMarkdown, fresh.rehosted, images);
+  const bodyMarkdown = await applyRehosts(stored.bodyMarkdown, fresh.rehosted, images);
   const heroImage = stored.heroImage.src
     ? { ...stored.heroImage }
     : { ...fresh.locale.heroImage, alt: stored.heroImage.alt || fresh.locale.heroImage.alt };
@@ -620,9 +640,9 @@ export interface ImportProgress {
 
 /**
  * A parsed, validated, pre-flighted import that has not fetched anything yet.
- * `groups` counts EVERY group in the export (including those already rejected
- * or skipped as published), so the route can 400 an export with nothing in it
- * before starting a job; `planned` is what `run()` will do.
+ * `groups` counts every Polylang group plus each untranslated published DE/EN item,
+ * including refusals and published skips, so only an empty eligible export is a
+ * 400. `planned` counts accepted pairs only: what `run()` will actually do.
  */
 export interface PreparedImport {
   groups: number;
@@ -650,7 +670,8 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
   let boundary: WorkCancellationOptions = { signal: deps.signal, isWritable: deps.isWritable };
   const assertWritable = () => assertWorkWritable(boundary);
   assertWritable();
-  const { attachments, posts } = parseWxr(xml);
+  const language = deps.language ?? DEFAULT_LANGUAGE;
+  const { attachments, posts, skippedLocale, rejected, untranslated } = parseWxr(xml, language);
   const log = deps.log ?? console.log;
   const encoding = normalizeProcessOptions(deps.encoding);
   const baseRehost: RehostFn = async (url, key, alt) => {
@@ -665,6 +686,8 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
   };
   const images: ImportImageCounts = { total: 0, hosted: 0, failed: 0 };
   const warnings = warningSink();
+  for (const item of skippedLocale) warnings.push(`${item.slug}: ${item.locale} locale disabled — skipped`);
+  for (const item of rejected) warnings.push(`${item.slug}: ${item.reason} — rejected`);
 
   // @ai-note The defaults here are the INERT ones (no delay, no retry) and the
   // ROUTE passes the configured values, mirroring `cfg.loginLimiter ??
@@ -749,9 +772,17 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
     }
   };
 
-  // One bucket per outcome (issue #100): every group lands in exactly one, so
-  // imported + updated + skippedPublished + rejected + failed === group count.
-  const summary = { imported: 0, updated: 0, skippedPublished: 0, rejected: 0, failed: 0 };
+  // One bucket per reportable unit (#100, #387): distinct Polylang groups plus
+  // individual untranslated published DE/EN items, so
+  // imported + updated + skippedPublished + skippedLocale + rejected + failed === unit count.
+  // A filtered disabled item is its own outcome, even when its enabled sibling is imported.
+  // Never invent group identities.
+  const summary = { imported: 0, updated: 0, skippedPublished: 0, skippedLocale: skippedLocale.length, rejected: rejected.length + untranslated.length, failed: 0 };
+  for (const { slug, locale } of untranslated) {
+    assertWritable();
+    warnings.push(ui.en['import.untranslatedRejected'].replace(/\{(slug|locale)\}/g,
+      (_match, key: string) => key === 'slug' ? slug : locale));
+  }
 
   // Existing posts by slug, ANY locale → the posts using it (idempotency + published-skip).
   //
@@ -767,7 +798,7 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
   assertWritable();
   const owners = new Map<string, PostSummary[]>();
   for (const s of existing) {
-    for (const slug of new Set([s.slugDe, s.slugEn])) {
+    for (const slug of new Set([s.slugs.de, s.slugs.en])) {
       if (slug) owners.set(slug, [...(owners.get(slug) ?? []), s]);
     }
   }
@@ -781,17 +812,25 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
   // counts EXACTLY the groups that will be imported — no more, no less.
   // `stored` is the pair a MERGE run will write into (issue #126): resolved here,
   // before the count, because whether the hero is fetched depends on it.
-  const pending: { de: ParsedPost; en: ParsedPost; prior: Pick<PostSummary, 'translationKey' | 'status' | 'updatedAt'> | undefined; stored: StoredPostPair | null }[] = [];
+  const pending: { de: ParsedPost | undefined; en: ParsedPost | undefined; prior: Pick<PostSummary, 'translationKey' | 'status' | 'updatedAt'> | undefined; stored: StoredPostPair | null }[] = [];
   for (const [group, members] of groups) {
     assertWritable();
     const de = members.find((m) => m.locale === 'de');
     const en = members.find((m) => m.locale === 'en');
-    if (!de || !en) { summary.rejected++; warnings.push(`group ${group}: missing ${de ? 'en' : 'de'} translation (${members.map((m) => m.slug).join(', ')})`); continue; }
+    if (!(language.primary === 'de' ? de : en)) {
+      summary.rejected++; warnings.push(`group ${group}: missing ${language.primary} translation (${members.map((m) => m.slug).join(', ')})`); continue;
+    }
+    const deSlug = de?.slug ?? '';
+    const enSlug = en?.slug ?? '';
     // @ai-warning: validate slugs at the import boundary BEFORE re-hosting images
     // or writing to the DB — an unsafe slug would otherwise become a storage path
     // segment (traversal) and a live URL.
-    if (!isSafeSlug(de.slug) || !isSafeSlug(en.slug)) {
-      summary.rejected++; warnings.push(`group ${group}: unsafe slug (${de.slug} / ${en.slug}) — rejected`); continue;
+    try {
+      if (de) checkSlug(de.slug, 'de');
+      if (en) checkSlug(en.slug, 'en');
+    } catch (error) {
+      if (!(error instanceof PostError)) throw error;
+      summary.rejected++; warnings.push(`group ${group}: unsafe slug (${error.message}) — rejected`); continue;
     }
     // Pair identity is the (DE slug, EN slug) tuple as a UNIT: exactly one existing
     // post touches either slug AND it owns both. Binding on a single matching slug
@@ -799,22 +838,35 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
     // the author never meant to touch; a cross-locale namesake shares the image
     // storage namespace. Every such overlap is for the author to resolve in the
     // editor, not here.
-    const touching = [...new Set([...(owners.get(de.slug) ?? []), ...(owners.get(en.slug) ?? [])])];
-    const prior = touching.length === 1 && touching[0]!.slugDe === de.slug && touching[0]!.slugEn === en.slug ? touching[0] : undefined;
+    const touching = [...new Set([...(owners.get(deSlug) ?? []), ...(owners.get(enSlug) ?? [])])];
+    const prior = touching.length === 1 && touching[0]!.slugs.de === deSlug && touching[0]!.slugs.en === enSlug ? touching[0] : undefined;
     if (!prior && touching.length > 0) {
       summary.rejected++;
-      warnings.push(`${de.slug}/${en.slug}: slug conflict with an existing post (${touching.map((t) => `${t.slugDe}/${t.slugEn}`).join(', ')}) — rejected, nothing overwritten`);
+      warnings.push(`${deSlug}/${enSlug}: slug conflict with an existing post (${touching.map((t) => `${t.slugs.de}/${t.slugs.en}`).join(', ')}) — rejected, nothing overwritten`);
       continue;
     }
-    const earlier = claimed.get(de.slug) ?? claimed.get(en.slug);
+    if (!prior) {
+      let owner: string | null = null;
+      for (const member of members) {
+        const fixed = reservation(namespaceOf(member.locale, language), member.slug, language);
+        owner = fixed ? `${fixed.owner}:${fixed.pageKind ?? fixed.segment}` : await deps.postStore.pageSlugOwner(member.locale, member.slug);
+        if (owner) break;
+      }
+      if (owner) {
+        summary.rejected++;
+        warnings.push(`group ${group}: slug reserved by ${owner} — rejected, nothing fetched`);
+        continue;
+      }
+    }
+    const earlier = claimed.get(deSlug) ?? claimed.get(enSlug);
     if (earlier) {
       summary.rejected++;
-      warnings.push(`${de.slug}/${en.slug}: slug conflict within this export (also used by ${earlier}) — rejected, nothing written`);
+      warnings.push(`${deSlug}/${enSlug}: slug conflict within this export (also used by ${earlier}) — rejected, nothing written`);
       continue;
     }
-    claimed.set(de.slug, `${de.slug}/${en.slug}`);
-    claimed.set(en.slug, `${de.slug}/${en.slug}`);
-    if (prior?.status === 'published') { summary.skippedPublished++; warnings.push(`${de.slug}/${en.slug}: already published — not overwritten`); continue; }
+    if (deSlug) claimed.set(deSlug, `${deSlug}/${enSlug}`);
+    if (enSlug) claimed.set(enSlug, `${deSlug}/${enSlug}`);
+    if (prior?.status === 'published') { summary.skippedPublished++; warnings.push(`${deSlug}/${enSlug}: already published — not overwritten`); continue; }
     // A re-run over an existing draft MERGES by default: the stored pair is the
     // author's work, and the export only contributes the photos it re-hosts.
     // `overwriteDrafts` restores the wholesale rebuild for "I changed it in
@@ -828,7 +880,8 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
   // Count distinct (pair, url) — the same quantity `images.total` tallies per
   // fetch — and reject before any of it happens.
   const cap = deps.maxImages ?? DEFAULT_MAX_IMAGES;
-  const plans = pending.map((g) => rehostPlan(g.de, g.en, attachments, includeHero(g.stored)));
+  const plans: Map<string, PlannedRehost>[] = [];
+  for (const g of pending) plans.push(await rehostPlan(g.de, g.en, attachments, includeHero(g.stored)));
   let distinct = 0;
   for (const plan of plans) {
     distinct += plan.size;
@@ -882,16 +935,16 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
         assertWritable();
         // One cache per pair: de and en describe the same trip and share photos.
         const pairRehost = sharedRehost(runRehost);
-        const freshDe = await buildLocale(de, attachments, pairRehost, includeHero(stored));
+        const freshDe = de ? await buildLocale(de, attachments, pairRehost, includeHero(stored)) : emptyLocale('de', language);
         assertWritable();
-        const freshEn = await buildLocale(en, attachments, pairRehost, includeHero(stored));
+        const freshEn = en ? await buildLocale(en, attachments, pairRehost, includeHero(stored)) : emptyLocale('en', language);
         assertWritable();
         const pair: PostPair = stored
-          ? { translationKey: stored.translationKey, status: 'draft', shared: stored.shared, de: mergeLocale(stored.de, freshDe), en: mergeLocale(stored.en, freshEn) }
+          ? { translationKey: stored.translationKey, status: 'draft', shared: stored.shared, de: await mergeLocale(stored.de, freshDe), en: await mergeLocale(stored.en, freshEn) }
           : {
             translationKey: prior?.translationKey ?? '',
             status: 'draft',
-            shared: { date: de.date, countryCode: 'XX', region: 'europe', coordinates: { lat: 0, lng: 0 } },
+            shared: { date: (language.primary === 'de' ? de! : en!).date, countryCode: 'XX', region: 'europe', coordinates: { lat: 0, lng: 0 } },
             de: freshDe.locale,
             en: freshEn.locale,
           };
@@ -906,8 +959,8 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
         // sequence`, `ECONNREFUSED db:5432` — which goes to stdout instead, the
         // same split `failureReason` makes for photos (issue #143).
         const reason = e instanceof PostError ? e.message : 'could not be saved (see server logs)';
-        warnings.push(`${de.slug}/${en.slug}: ${reason}`);
-        log(`import: ${de.slug}/${en.slug} failed: ${(e as Error).message}`);
+        warnings.push(`${de?.slug ?? ''}/${en?.slug ?? ''}: ${reason}`);
+        log(`import: ${de?.slug ?? ''}/${en?.slug ?? ''} failed: ${(e as Error).message}`);
       }
       progress.groups.done++;
       tick();
@@ -920,11 +973,11 @@ export async function prepareImport(xml: string, deps: ImportDeps): Promise<Prep
     // abandoned (issue #72); the job row and GET /import/status now carry the
     // summary too, but the log line stays the channel that survives everything.
     log(`import finished: imported=${summary.imported} updated=${summary.updated} `
-      + `skippedPublished=${summary.skippedPublished} rejected=${summary.rejected} failed=${summary.failed} `
+      + `skippedPublished=${summary.skippedPublished} skippedLocale=${summary.skippedLocale} rejected=${summary.rejected} failed=${summary.failed} `
       + `images=${images.hosted}/${images.total} hosted, ${images.failed} failed`);
 
     return { ...summary, images, warnings: warnings.finish() };
   };
 
-  return { groups: groups.size, planned: progress, run };
+  return { groups: groups.size + skippedLocale.length + rejected.length + untranslated.length, planned: progress, run };
 }

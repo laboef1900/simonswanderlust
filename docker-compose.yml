@@ -1,22 +1,29 @@
 # Self-hosted stack, WordPress-style: one app container + Postgres.
-# Copy uploader/.env.example to .env (set POSTGRES_PASSWORD). Then:
-#   docker compose pull && docker compose up -d     # run the released GHCR image
-# Pin the published image version with IMAGE_TAG in .env (default below).
+# Copy uploader/.env.example to .env (set POSTGRES_PASSWORD, PUBLIC_BASE_URL, IMG_HOST
+# and IMAGE_TAG; see docs/install.md). Then:
+#   docker compose pull && docker compose up -d     # run a released GHCR image
+# IMAGE_TAG must identify a release published under wanderlust-studio (0.18.0 or
+# later) or `local`; there is no default. See README.md before upgrading.
 # Compose only RUNS the published image; to rebuild it, `docker build` from the
 # repo root (bases default to DHI — see Dockerfile).
 services:
   app:
-    image: ghcr.io/laboef1900/simonswanderlust-app:${IMAGE_TAG:-0.17.1}
+    image: ghcr.io/laboef1900/wanderlust-studio:${IMAGE_TAG:?set IMAGE_TAG to a published wanderlust-studio release or local after building}
     # tini as PID 1: forwards SIGTERM to node (clean shutdown handler in
     # uploader/src/main.ts) and reaps the spawned `astro build` child process.
     init: true
     ports:
-      # Loopback only: the reverse proxy on the host is the sole ingress, and it is the one hop `trustProxy: 1` trusts (#108).
+      # Host TLS proxy only: the app validates the bridge gateway at hop zero (#108, #369).
       - "127.0.0.1:3000:3000"
     environment:
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://img.simonswanderlust.com}
+      # Only valid for this bridge topology. Changing networks/network_mode or
+      # adding a CDN/proxy hop requires a new trust spec, not a broader allow-list.
+      TRUSTED_PROXY: docker-gateway
+      # Image domain only (the blog domain is Settings → Site identity). No default:
+      # a forgotten value must stop Compose, not publish another site's image host.
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL in .env}
       DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-images}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-images}}
-      IMG_HOST: ${IMG_HOST:-img.simonswanderlust.com}
+      IMG_HOST: ${IMG_HOST:?set IMG_HOST in .env}
       # Optional passthrough: omitted stays absent, explicitly empty is invalid.
       ENCRYPTION_KEY:
     # Memory ceiling (issue #71). Without one, a spike takes the whole `app`
@@ -25,17 +32,19 @@ services:
     # @ai-warning: sized as max(build, encode) + baseline, NOT their sum,
     # because uploader/src/work-lock.ts makes a site build and image encoding
     # MUTUALLY EXCLUSIVE. If that lock is ever removed, this number is wrong.
-    #   · astro build:  ~0.47 GB peak RSS measured on the current corpus
-    #                   (`/usr/bin/time -l node …/astro.mjs build`, 19 pages)
-    #   · encoding:     ~1.94 GB per 24 MP frame × ENCODE_CONCURRENCY 2 ≈ 3.9 GB
-    #   · app baseline: Fastify + pg, well under 0.5 GB
-    # ⇒ max(0.47, 3.9) + 0.5 ≈ 4.4 GB, rounded up.
+    # Native amd64/arm64 rehearsal (2026-10-29): two concurrent, synthetic
+    # 6000×4000 PNG uploads and one bilingual story. Sampled whole-cgroup maxima:
+    # encode 1945/1876 MiB; publish 1183/1229 MiB; idle 114/112 MiB.
+    # These are bounded observations, not per-frame costs or hosting minima.
+    # Keep the existing 4608 MiB ceiling conservatively; the small corpus does
+    # not justify lowering it. Full methods and limitations:
+    # docs/2026-10-29-clean-install-rehearsal.md
     #
     # @ai-warning: memswap_limit MUST equal mem_limit. Docker otherwise defaults
     # total swap to 2× mem_limit, so the container thrashes into swap instead of
     # being bounded — which on a small VPS is slower than an OOM and much harder
-    # to diagnose. Lower BOTH together if the host has less RAM than this; the
-    # encode concurrency (2) is the knob that makes a smaller ceiling safe.
+    # to diagnose. A smaller ceiling needs a separate representative-corpus
+    # rehearsal, including encode concurrency; change BOTH limits together.
     mem_limit: 4608m
     memswap_limit: 4608m
     volumes:

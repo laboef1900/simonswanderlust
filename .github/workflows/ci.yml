@@ -8,6 +8,13 @@ on:
   pull_request:
   push:
     branches: [dev, main]
+  workflow_dispatch:
+    inputs:
+      qualify_native_package:
+        description: Build and qualify the actual DHI package on native amd64 and arm64
+        type: boolean
+        required: false
+        default: false
 
 jobs:
   uploader:
@@ -39,6 +46,8 @@ jobs:
             uploader/package-lock.json
             site/package-lock.json
       - run: npm ci
+      # Product boot/restore tests exercise the owned addon, not a PG-only substitute.
+      - run: npm run build:native
       # The draft-preview route (src/preview.ts) reuses site/src/lib markdown
       # modules, whose deps (@astrojs/markdown-satteri, unified, rehype-*) live
       # in site/node_modules — install them so typecheck + tests can compile.
@@ -51,6 +60,254 @@ jobs:
       - run: npm test
         env:
           TEST_DATABASE_URL: postgres://ci:ci@localhost:5432/ci
+
+  # Permanent architecture coverage of current product source. These host-runner
+  # tests are NOT DHI/container/deployment-mount qualification.
+  native-owner:
+    if: >-
+      github.repository == 'laboef1900/simonswanderlust' &&
+      github.event.repository.private == false &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+    name: owned flock · native ${{ matrix.arch }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U ci -d ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: uploader
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: |
+            uploader/package-lock.json
+            site/package-lock.json
+      - run: npm ci
+      - run: npm run build:native
+      - run: npm ci
+        working-directory: site
+      # Native public amd64/arm64 hosts only: no QEMU, paid or self-hosted runners.
+      # The service database and test-created schema/data are disposable; no
+      # raw fixtures, credentials, logs or binaries are uploaded as artifacts.
+      - run: npm test -- --project integration test/data-owner.integration.test.ts test/storage-owner.integration.test.ts test/gpx-main-boot.integration.test.ts
+        env:
+          TEST_DATABASE_URL: postgres://ci:ci@localhost:5432/ci
+
+  # Actual Dockerfile/main/offline CLI qualification, distinct from host tests.
+  # Automatic secret-bearing execution stays on the owned #305 branch only.
+  # Named-volume evidence NEVER waives the deployment-mounted filesystem gate.
+  packaged-owner:
+    if: >-
+      github.repository == 'laboef1900/simonswanderlust' &&
+      github.event.repository.private == false &&
+      ((github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        github.event.pull_request.head.ref == 'feature/issue-305-write-reconciliation') ||
+       (github.event_name == 'workflow_dispatch' && inputs.qualify_native_package))
+    name: packaged owner · native ${{ matrix.arch }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+            kernel: x86_64
+            runner_arch: X64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+            kernel: aarch64
+            runner_arch: ARM64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      PACKAGE_ARCH: ${{ matrix.arch }}
+      FIXTURE_PREFIX: swl_305_package_${{ matrix.arch }}_${{ github.run_id }}_${{ github.run_attempt }}
+      PRIVATE_ROOT: ${{ github.workspace }}/.local/swl-305-package-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+      DOCKER_CONFIG: ${{ github.workspace }}/.local/swl-305-docker-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+      PACKAGE_IMAGE: swl-305-package:${{ github.event.pull_request.head.sha || github.sha }}-${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Test the real reviewed HEAD, never GitHub's synthetic merge commit.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Prepare private native fixture inputs
+        id: prepare
+        env:
+          EXPECTED_KERNEL: ${{ matrix.kernel }}
+          EXPECTED_RUNNER_ARCH: ${{ matrix.runner_arch }}
+        run: |
+          test "$(uname -s)" = Linux
+          test "$(uname -m)" = "$EXPECTED_KERNEL"
+          test "$RUNNER_ARCH" = "$EXPECTED_RUNNER_ARCH"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          umask 077
+          mkdir -p -m 700 "$GITHUB_WORKSPACE/.local"
+          mkdir -m 700 "$PRIVATE_ROOT" "$DOCKER_CONFIG"
+          python3 - <<'PY'
+          import os, secrets
+          from pathlib import Path
+          root = Path(os.environ['PRIVATE_ROOT'])
+          password = secrets.token_hex(32)
+          print('::add-mask::' + password)
+          # The same explicit superuser backs local psql and harness DATABASE_URL.
+          files = {
+              'postgres.env': 'POSTGRES_USER=package_owner\nPOSTGRES_PASSWORD=' + password + '\nPOSTGRES_DB=postgres\n',
+              'database.env': 'DATABASE_URL=postgres://package_owner:' + password + '@127.0.0.1:5432/postgres\n',
+          }
+          for name, content in files.items():
+              with (root / name).open('x') as file:
+                  file.write(content)
+              (root / name).chmod(0o600)
+          PY
+      - name: Authenticate DHI in job-private Docker config
+        env:
+          DHI_USERNAME: ${{ vars.DHI_USERNAME }}
+          DHI_TOKEN: ${{ secrets.DHI_TOKEN }}
+        run: |
+          test -n "$DHI_USERNAME" && test -n "$DHI_TOKEN"
+          printf '%s' "$DHI_TOKEN" | docker login dhi.io --username "$DHI_USERNAME" --password-stdin
+      - name: Build actual native application package
+        id: package
+        # No source overrides, emulation, pushed image, or exported binary layers.
+        run: |
+          docker build --platform="linux/$PACKAGE_ARCH" --progress=plain \
+            --label "org.opencontainers.image.revision=$SOURCE_SHA" \
+            --tag "$PACKAGE_IMAGE" . > "$PRIVATE_ROOT/build.log" 2>&1
+      - name: Discard DHI authentication
+        if: always()
+        run: |
+          # Only this job's freshly created auth directory; never the host default.
+          rm -rf -- "$DOCKER_CONFIG"
+      - name: Start new private PostgreSQL 18 fixture
+        id: postgres
+        run: |
+          docker network create "$FIXTURE_PREFIX"
+          if docker volume inspect "${FIXTURE_PREFIX}_pgdata" >/dev/null 2>&1; then
+            echo "Refusing an existing fixture volume" >&2
+            exit 1
+          fi
+          docker volume create "${FIXTURE_PREFIX}_pgdata"
+          # No PG host port. Only the harness's app port is published, on loopback.
+          docker run -d --name "${FIXTURE_PREFIX}_pg" --network "$FIXTURE_PREFIX" \
+            --platform="linux/$PACKAGE_ARCH" --env-file "$PRIVATE_ROOT/postgres.env" \
+            --mount "type=volume,src=${FIXTURE_PREFIX}_pgdata,dst=/var/lib/postgresql" \
+            --health-cmd 'pg_isready -U package_owner -d postgres' \
+            --health-interval 2s --health-timeout 5s --health-retries 30 \
+            postgres:18-alpine
+          for attempt in {1..60}; do
+            if [ "$(docker inspect --format '{{.State.Health.Status}}' "${FIXTURE_PREFIX}_pg")" = healthy ]; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Private PostgreSQL fixture did not become healthy" >&2
+          exit 1
+      - name: Exercise real packaged ownership and offline restore
+        id: qualify
+        run: |
+          python3 .github/native-owner/package-qualify.py \
+            --image "$PACKAGE_IMAGE" --source-sha "$SOURCE_SHA" \
+            --source-root "$GITHUB_WORKSPACE" --expected-arch "$PACKAGE_ARCH" \
+            --pg-container "${FIXTURE_PREFIX}_pg" \
+            --database-env "$PRIVATE_ROOT/database.env" \
+            --output "$PRIVATE_ROOT/output" --prefix "$FIXTURE_PREFIX" --port 34315
+      # The same matrix on a bind-mounted host directory (G6 path). Runner ext4 evidence
+      # proves the harness mode only; it never qualifies the owner's deployment mount.
+      - name: Exercise the same matrix on a bind-mounted ext4 directory
+        id: qualify_bind
+        if: always() && steps.postgres.outcome == 'success'
+        run: |
+          install -d -m 700 "$RUNNER_TEMP/g6-bind-root"
+          python3 .github/native-owner/package-qualify.py \
+            --image "$PACKAGE_IMAGE" --source-sha "$SOURCE_SHA" \
+            --source-root "$GITHUB_WORKSPACE" --expected-arch "$PACKAGE_ARCH" \
+            --pg-container "${FIXTURE_PREFIX}_pg" \
+            --database-env "$PRIVATE_ROOT/database.env" \
+            --output "$PRIVATE_ROOT/output-bind" --prefix "${FIXTURE_PREFIX}_b" --port 34316 \
+            --data-root "$RUNNER_TEMP/g6-bind-root"
+      - name: Stop only the private PostgreSQL fixture
+        if: always() && steps.postgres.outcome != 'skipped'
+        run: |
+          if docker container inspect "${FIXTURE_PREFIX}_pg" >/dev/null 2>&1; then
+            docker stop --time 10 "${FIXTURE_PREFIX}_pg"
+          fi
+      - name: Export bounded sanitized job outcome
+        if: always()
+        env:
+          PREPARE_OUTCOME: ${{ steps.prepare.outcome }}
+          PACKAGE_OUTCOME: ${{ steps.package.outcome }}
+          POSTGRES_OUTCOME: ${{ steps.postgres.outcome }}
+          QUALIFY_OUTCOME: ${{ steps.qualify.outcome }}
+          QUALIFY_BIND_OUTCOME: ${{ steps.qualify_bind.outcome }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          root = Path(os.environ['PRIVATE_ROOT'])
+          export = root / 'output' / 'sanitized-evidence'
+          export.mkdir(parents=True, exist_ok=True, mode=0o700)
+          evidence = {
+              'sourceSha': os.environ['SOURCE_SHA'],
+              'arch': os.environ['PACKAGE_ARCH'],
+              'runnerArch': os.environ['RUNNER_ARCH'],
+              'kernelArch': os.uname().machine,
+              'outcomes': {key: os.environ[key + '_OUTCOME'] for key in ['PREPARE', 'PACKAGE', 'POSTGRES', 'QUALIFY', 'QUALIFY_BIND']},
+              'deploymentMountGate': 'NOT qualified: mandatory separate operational gate',
+          }
+          (export / 'job-outcome.json').write_text(json.dumps(evidence, indent=2) + '\n')
+          # Build output is private; expose only a bounded, credential-screened
+          # failure excerpt. Never include Docker config, env, dumps or binaries.
+          log = root / 'build.log'
+          if os.environ['PACKAGE_OUTCOME'] == 'failure' and log.exists():
+              with log.open('rb') as file:
+                  file.seek(max(0, log.stat().st_size - 16000))
+                  text = file.read(16000).decode(errors='replace')
+              text = re.sub(r'(?i)(?:https?|postgres(?:ql)?)://\S+', '[REDACTED_URL]', text)
+              text = re.sub(r'(?i)(authorization|cookie|set-cookie):[^\r\n]*', r'\1: [REDACTED]', text)
+              (export / 'build-failure.txt').write_text(text)
+          PY
+      - name: Upload sanitized evidence only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: packaged-owner-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.PRIVATE_ROOT }}/output/sanitized-evidence/
+            ${{ env.PRIVATE_ROOT }}/output-bind/sanitized-evidence/
+          if-no-files-found: error
+          retention-days: 14
+          # All remaining fixtures/private files die with this ephemeral runner.
 
   site:
     name: site · tests + astro check
@@ -79,10 +336,9 @@ jobs:
             uploader/package-lock.json
       - run: npm ci
         working-directory: site
-      # The Content Layer loader queries Postgres during astro check, so
-      # bootstrap the schema first via the uploader's db module. The script
-      # only needs pg (+ tsx to run TS) — skip the full uploader install.
-      - run: npm install --no-save pg tsx
+      # The site snapshot integration exercises the uploader's real builder and
+      # schema alongside Astro loaders. Install its locked dependencies too.
+      - run: npm ci
         working-directory: uploader
       - run: npx tsx scripts/ci-ensure-schema.ts
         working-directory: uploader
@@ -90,6 +346,9 @@ jobs:
           DATABASE_URL: postgres://ci:ci@localhost:5432/ci
       - run: npm test
         working-directory: site
+        env:
+          # The real empty-build regression creates its own migrated schema.
+          TEST_DATABASE_URL: postgres://ci:ci@localhost:5432/ci
       - run: npx astro check
         working-directory: site
         env:

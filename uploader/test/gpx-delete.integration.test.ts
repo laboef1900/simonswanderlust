@@ -1,3 +1,6 @@
+import { idleBuildState } from './build-fixture.js';
+import { seedSiteIdentity } from '../src/site-identity.js';
+import { TEST_TRUST } from './trusted-proxy-fixture.js';
 import { publishTokens } from './publish-tokens.js';
 import { createPublicTrackWorker, type PublicTrackWorker } from '../src/gpx-public-worker.js';
 import { randomUUID } from 'node:crypto';
@@ -45,7 +48,7 @@ maybe('private GPX post deletion and durable cleanup', () => {
   let authorId: string;
   let cookies: { sid: string };
   let writable: boolean;
-  const build = vi.fn(async () => ({ ok: true as const, release: 'synthetic' }));
+  const build = vi.fn(async () => ({ ok: true as const, attemptId: 'synthetic', release: 'synthetic' }));
 
   function start() {
     files = createGpxFiles({ storageDir: join(root, 'images'), isWritable: () => writable });
@@ -56,12 +59,13 @@ maybe('private GPX post deletion and durable cleanup', () => {
     const media = memoryMediaStore({ baseUrl: 'https://images.test' });
     queue = createEncodeQueue({ store: media, storageDir: join(root, 'images'), lock: createWorkLock() });
     app = buildServer({
+      trustProxy: TEST_TRUST,
       storageDir: join(root, 'images'), baseUrl: 'https://images.test', imgHost: 'images.test',
       siteDir: join(root, 'site'), backupDir,
       users: pgUserStore(pool), sessions: pgSessionStore(pool), posts,
       pages: memoryPageStore(), media, encodeQueue: queue, secrets: memorySecretsStore(),
       settings: createSettingsStore({ path: join(root, 'settings.json'), defaults: defaultSettings() }),
-      builder: { build, hasRelease: () => true, quiesce: async () => {} },
+      builder: { ...idleBuildState, build, hasRelease: () => true, quiesce: async () => {} },
       dbBackup: createDbBackup({ db: pool, dir: backupDir, retention: () => 10, routeFiles: files }),
       dbCheck: async () => { await pool.query('SELECT 1'); }, gpx: service, isWritable: () => writable,
     });
@@ -73,6 +77,7 @@ maybe('private GPX post deletion and durable cleanup', () => {
     await observer.query(`CREATE SCHEMA ${schema}`);
     pool = new pg.Pool({ connectionString: url, options: `-c search_path=${schema}` });
     await ensureSchema(pool);
+    await seedSiteIdentity(pool);
     root = await mkdtemp(join(await realpath(tmpdir()), 'gpx-delete-'));
     backupDir = join(root, 'backup', 'db');
     for (const dir of ['images', 'site', 'backup/db']) await mkdir(join(root, dir), { recursive: true });
@@ -96,7 +101,7 @@ maybe('private GPX post deletion and durable cleanup', () => {
 
   async function seed() {
     const slug = randomUUID();
-    const locale = (locale: 'de' | 'en'): PostLocale => ({ locale, slug: `${locale}-${slug}`, title: 'Synthetic story', excerpt: '', country: 'Test', heroImage: { src: '', width: 1, height: 1, alt: '' }, bodyMarkdown: 'Synthetic text', images: {} });
+    const locale = (locale: 'de' | 'en'): PostLocale => ({ locale, slug: `${locale}-${slug}`, title: 'Synthetic story', excerpt: 'Synthetic excerpt', country: 'Test', heroImage: { src: 'https://images.test/hero', width: 100, height: 100, alt: 'Landscape' }, bodyMarkdown: 'Synthetic text', images: {} });
     const pair = await posts.upsertDraft({ translationKey: '', status: 'draft', shared: { date: '2026-01-01', countryCode: 'DE', region: 'europe', coordinates: { lat: 1, lng: 2 } }, de: locale('de'), en: locale('en') });
     const tk = pair.translationKey;
     const preview = await service.importBytes(authorId, xml);

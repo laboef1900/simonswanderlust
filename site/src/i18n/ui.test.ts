@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { defaultLocale, locales, ui, useTranslations, type UIKey } from './ui';
+import { defaultLocale, locales, ui, type UIKey } from './ui';
 
 describe('ui dictionaries', () => {
   it('defines every key in every other locale (no leak like the old WP footer)', () => {
@@ -16,12 +16,6 @@ describe('ui dictionaries', () => {
     }
   });
 
-  it('returns locale-specific strings', () => {
-    expect(useTranslations('de')('nav.about')).toBe('Über mich');
-    expect(useTranslations('en')('nav.about')).toBe('About me');
-    expect(useTranslations('en')('footer.latest')).toBe('Latest stories');
-  });
-
   it('no key has an empty-string value in any locale', () => {
     for (const locale of locales) {
       for (const [key, val] of Object.entries(ui[locale])) {
@@ -31,11 +25,20 @@ describe('ui dictionaries', () => {
   });
 
   /**
-   * Keys whose DE and EN values are legitimately identical — brand names and
-   * other proper nouns that must NOT be translated. Everything else that is
+   * Keys whose DE and EN values are legitimately identical — brand names,
+   * proper nouns, cognates and shared vocabulary. Everything else that is
    * byte-identical in both locales is almost certainly an untranslated copy/paste.
    */
-  const IDENTICAL_ON_PURPOSE: readonly UIKey[] = ['site.title', 'editor.chrome.studioName'];
+  const IDENTICAL_ON_PURPOSE: readonly UIKey[] = [
+    'editor.chrome.studioName',
+    'editor.chrome.onboardingOptional', // “Optional” is the same adjective in DE and EN.
+    'editor.chrome.publicationLive', // “Live” is also the German status term.
+    'editor.chrome.publicationFactLive',
+    'editor.chrome.publicationLocaleFact', // Locale code + translated fact; only punctuation is shared.
+    // Preserve ESA's prescribed English credit and the standard license identifier.
+    'map.landcoverAttribution', 'map.landcoverLicense',
+    'editor.chrome.identityLogo', // “Logo” is the same word in German and English.
+  ];
 
   it('flags untranslated values (identical in DE and EN) outside the allow-list', () => {
     const identical = (Object.keys(ui[defaultLocale]) as UIKey[]).filter(
@@ -107,9 +110,9 @@ function looksLikeProse(literal: string): boolean {
  * THE TRADEOFF. Requiring two words and a lowercase letter is what keeps the
  * false-positive rate at zero on this tree, and it is also the limit of the
  * guard. It cannot catch (verified, not assumed):
- *   - Single-word copy: `<p>Willkommen</p>` passes, because `Instagram ↗`
- *     (Footer.astro) and `Simon` (AboutPage.astro) are legitimate one-word text
- *     nodes and nothing distinguishes a proper noun from a one-word sentence.
+ *   - Single-word copy: `<p>Willkommen</p>` passes, just as a proper name or
+ *     a social platform label would. Nothing distinguishes a proper noun from
+ *     a one-word sentence without knowing its meaning.
  *     Umlauts are the one exception — `<p>Ausrüstung</p>` IS caught.
  *   - ALL-CAPS copy: this repo uppercases via the CSS `uppercase` class, so caps
  *     in the source is already a smell, but `<p>KEINE DATEN</p>` slips through.
@@ -344,8 +347,6 @@ describe('no hardcoded bilingual copy in templates', () => {
     // has gone blind and the guard above is no longer proving anything.
     const all = files.flatMap((file) => renderedText(readFileSync(file, 'utf8')));
     const texts = all.map((hit) => hit.text.trim());
-    expect(texts).toContain('Instagram ↗'); // Footer.astro
-    expect(texts).toContain('Simon'); // AboutPage.astro
     expect(texts).toContain('404'); // 404.astro — proves pages/ is really parsed
     expect(all.length).toBeGreaterThan(10);
   });

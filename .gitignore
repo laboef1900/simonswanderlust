@@ -22,3 +22,11 @@ ai-youtube-channel/
 # trees are site/node_modules and uploader/node_modules, ignored in their own
 # .gitignore files).
 node_modules/
+
+# Platform-specific ownership addon and its generated provenance.
+/uploader/native/
+# Generated static legal assets; refreshed from source notices and installed dependencies.
+/site/public/legal/
+/uploader/public/legal/
+/.issue-runtime/
+/source-release.json

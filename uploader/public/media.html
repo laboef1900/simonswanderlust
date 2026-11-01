@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Media · Simon's Wanderlust</title>
+    <title>Media</title>
     <link rel="stylesheet" href="/admin/admin.css" />
   </head>
   <body>
@@ -92,6 +92,14 @@
             <button id="clearSelection" type="button" class="btn-secondary">Clear</button>
           </div>
 
+          <div id="mediaEmpty" hidden>
+            <p id="mediaEmptyMessage" class="muted" role="status"></p>
+            <div class="form-actions">
+              <button id="emptyChoosePhotos" type="button"></button>
+              <button id="emptyShowAll" type="button" class="btn-secondary" hidden></button>
+            </div>
+          </div>
+
           <!-- aria-multiselectable + roving tabindex: arrows move focus, Space
                toggles, Shift+Arrow extends, Ctrl/Cmd+A selects all. -->
           <div id="grid" class="media-grid" role="listbox" aria-multiselectable="true" aria-label="Photos"></div>
@@ -152,6 +160,9 @@
     <script src="/admin/media-api.js"></script>
     <script src="/admin/media-ai.js"></script>
     <script src="/admin/media-ai-dialog.js"></script>
-    <script src="/admin/media-browser.js"></script>
+    <script type="module" src="/admin/media-conditional.js"></script>
+    <script src="/admin/publication-refresh.js"></script>
+    <script src="/admin/media-impact.js"></script>
+    <script type="module" src="/admin/media-browser.js"></script>
   </body>
 </html>

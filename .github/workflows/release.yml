@@ -1,7 +1,8 @@
 name: release
 
 # Build and publish the app image to GHCR, and cut a GitHub Release,
-# whenever a version tag (e.g. v0.2.0) is pushed.
+# whenever a new, owner-authorized version tag is pushed.
+# Image-name cutover applies to future releases only; never replay old tags here.
 on:
   push:
     tags:
@@ -15,6 +16,8 @@ jobs:
   images:
     name: build & push app
     runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
 
@@ -42,19 +45,26 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/simonswanderlust-app
+          images: ghcr.io/laboef1900/wanderlust-studio
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest
+          # GitHub reports the repository license as `AGPL-3.0`; the approved identifier
+          # is `AGPL-3.0-only` (#291). The Dockerfile sets the same fixed value.
+          labels: |
+            org.opencontainers.image.licenses=AGPL-3.0-only
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           build-args: |
             NODE_BUILD=dhi.io/node:26-dev
             NODE_RUNTIME=dhi.io/node:26
+            SOURCE_REPOSITORY=${{ github.repository }}
+            SOURCE_REVISION=${{ github.sha }}
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
@@ -74,3 +84,24 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+          body: |
+            ## Image and corresponding source
+
+            Image digest: `${{ needs.images.outputs.digest }}`.
+            Source revision: `${{ github.sha }}`.
+            [Download this revision's source](https://github.com/${{ github.repository }}/archive/${{ github.sha }}.tar.gz)
+            · [Browse source and build instructions](https://github.com/${{ github.repository }}/tree/${{ github.sha }}).
+
+            This archive contains tracked repository files; any tracked stories/content
+            remain excluded from the software license. It collects no deployed uploads,
+            databases, settings or secrets. Dependency versions, upstream source directions,
+            inspected base/native artifacts and notice limitations are recorded in
+            `docs/third-party-inventory.json`, `docs/third-party-evidence.json` and
+            `docs/third-party-image-evidence.json` at that revision and in the image's
+            `/app/docs/`. License and notice texts are delivered through the static
+            `/legal/` and `/admin/legal/` indexes. A project archive alone is not a claim
+            that every native dependency's corresponding-source duties are fulfilled.
+
+            Operators modifying this software must provide their actual version's
+            Corresponding Source at no charge and update its static source directions;
+            these upstream links do not describe uncommitted or private modifications.

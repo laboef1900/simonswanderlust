@@ -64,6 +64,11 @@ Implementation approval and merge authorization remain separate from design appr
   A failed build leaves the previous release served, not a partially updated public route.
   Single/bulk Publish responses are `no-store` at the response hook, including authorization
   and body-parser refusals that never reach the handler.
+  Explicit editor Reload awaits both the post and private route reads before admitting
+  queued writes. Pending/failed route reads cannot supply a Publish/Attach/Detach token;
+  a detached route keeps its non-null tombstone version. Reads neither publish nor
+  acknowledge uncertain mutations, discard previews, or advance a token without loading
+  its corresponding state. Initial stash recovery precedes the final route read.
 - Public projection uses 25 m per-run spherical simplification, four decimal places and
   strict 2D coordinates, capped at 100 runs, 2,000 vertices and 64 KiB. Discontinuities
   remain separate; ambiguous antipodal or antimeridian-crossing shortcuts are subdivided
@@ -83,6 +88,10 @@ Implementation approval and merge authorization remain separate from design appr
   a verified undo set and stages fresh source IDs before replacing database state.
   Unknown commit outcomes retain both source sets until reference-checked reconciliation.
   Restore is offline; do not force-terminate another process to bypass its admission check.
+  Release pruning rechecks writability immediately before each removal. Once lease loss is
+  observed, it admits no further cleanup mutation; an already-issued filesystem operation
+  cannot be recalled. A release promoted before lease loss remains a successful promotion,
+  not permission to write a recovery record or resume cleanup without ownership (#397).
 
 The specification defines transaction/file ordering, paired restore, misuse cases and
 rollback. Reverting code is not erasure, and removing future published geometry requires
@@ -114,8 +123,54 @@ an owner-authorized safe rebuild/release switch and cache assessment. No safety 
   carries the admin cookie, and a forged cookie on a public page costs no lookup. A store failure
   on a guarded route is a sanitized 500, never "anonymous" — a database outage must not read as
   "logged out". Spec: `docs/superpowers/specs/2026-09-06-lazy-session-resolution-design.md`.
+- **Protected-page context** (independently owner-approved 2026-10-29, #278 §9):
+  `GET /auth/me` requires a session and returns only
+  `{ authenticated: true, userId, username, isAdmin, needsSetup: false }`.
+  All responses, including 401 and server errors, are `Cache-Control: no-store`.
+  The shared `Auth.ensureAuthed` helper requests this context without caching, preserves
+  author/admin gating, and redirects only a 401 to login with an encoded local return path.
+  Network, non-401 HTTP and malformed-response failures never become "logged out".
+  The Desk consumes this same helper before its admin-only checklist; client roles are
+  presentation gates, while the onboarding routes still require admin authorization.
+  Login, setup, `/auth/status`, session issuance and expiry are unchanged.
+  The non-secret account ID is correlation context, never authorization. Separately approved
+  #305 uses it for captured-owner comparisons, writer-only receipt reads and scoped local
+  recovery; authenticated route roles remain authoritative (see **Ambiguous writes and local
+  recovery** below). Rolling back the helper now also requires rolling back those dependent
+  clients together, without clearing onboarding retirement state or restore fences.
 - **First-admin setup** (`/setup`) is only available while no users exist, and is **serialized**
   with a per-process lock so two concurrent requests cannot both create an admin (TOCTOU closed).
+- **First-run checklist** (#279, approved #278 Q1–Q5/P1–P2) is install-wide admin-only
+  operational metadata, not an authentication/setup permission input. `GET`/`POST /onboarding`
+  require `requireAdmin` (anonymous 401, author 403), with `no-store` on success and errors.
+  The strict 1 KiB action object permits only dismiss/resume/finish. Progress uses one
+  REPEATABLE READ snapshot; Finish locks/rechecks required photo/story/publication predicates
+  before permanent retirement. Identity is optional. Eligible responses contain fixed step/state
+  identifiers, required flags, server-built destinations (translation keys URL-encoded) and the
+  explicit language projection `{ primary, locales, lockedAt, updatedAt }` from that same snapshot.
+  No content titles/counts, internal retirement reasons/timestamps or photo metadata are disclosed.
+  Retired responses remain exactly `{ status: 'retired' }`. Language configuration has no completion
+  record and cannot affect Finish. Its explicit Save uses the existing admin-only `PUT /language`;
+  transactionally rechecked publication history remains authoritative, including races. Ambiguous
+  acknowledgements cause read-only reconciliation, never automatic write replay.
+  No account/session/content/build writes or cookies are performed by these handlers.
+  Missing/invalid state and DB errors fail through the sanitized error path, never anonymous
+  or a fabricated fresh checklist. Boot classifies before cleanup/listen and aborts on
+  uncertain evidence or commit; retired state cannot become eligible through an app action.
+  Existing `/setup`, `/login`, `/auth/status` contracts, setup lock, zero-user check,
+  login/setup rate limits and session policy are reconfirmed unchanged.
+- **Account removal** (#368) preserves at least one administrator in a configured installation.
+  `UserStore.remove` takes a short Postgres `SHARE ROW EXCLUSIVE` users-table lock before reading
+  the target/count and deleting in the same transaction; the memory store makes the same decision
+  without an intervening await. Concurrent authenticated cross-deletions yield one 200 and one
+  409 `cannot remove the last admin`, not an empty users table that reopens setup. Only a removed
+  account loses sessions (Postgres FK cascade; explicit invalidation only after `removed`).
+  Self-delete remains 409; a later request using a deleted account's cookie remains 401.
+  Password policy, lazy session resolution and setup rate limiting are unchanged.
+  Verified over real `main.ts` TCP routes against isolated Postgres with two admins, then with
+  extra authors; both sessions of each survivor remained usable and `/setup` stayed 409.
+  Approval, lock-barrier evidence and rollback containment:
+  `docs/superpowers/specs/2026-10-27-issue-368-atomic-last-admin-design.md`.
 - **Password changes** — `POST /users/me/password` lets an authenticated user rotate their own
   password after re-proving the **current** one (rate-limited, so a hijacked session cannot
   brute-force it — see *Rate limiting*). On success **all of that user's sessions are destroyed**
@@ -124,11 +179,96 @@ an owner-authorized safe rebuild/release switch and cache assessment. No safety 
   (`docker compose exec app node --import tsx src/cli.ts set-password <username>`), which also
   invalidates all of that user's sessions — recovery procedure in `ARCHITECTURE.md`.
 
+## Ambiguous writes and local recovery (#305)
+
+The owner-approved [weak-connection contract](docs/superpowers/specs/2026-10-27-issue-304-weak-connection-write-contract.md)
+adds no anonymous surface and does not renew sessions. `POST /posts` requires a
+client-generated UUID and is create-only; post/page saves require a UUID `saveId` and
+the form's captured `expectedOwnerId`. The latter is compared with the authenticated
+session before mutation; it is correlation, never authorization. Store transactions
+stamp the requesting writer and return content/token/receipt from one snapshot.
+Reads expose a last-save ID only to that writer. Import, publication, unpublication,
+GPX/token-changing writes and offline restore invalidate this evidence.
+
+Every upload caller supplies a captured owner, UUID upload ID and retry generation.
+Receipts bind one account/ID to one byte hash, canonical request identity and frozen
+encoding profile/key for the account's lifetime; account deletion cascades them.
+They contain no photo bytes, EXIF/GPS, credentials or session tokens. A receipt hit
+does not repeat metadata changes. A pending receipt is not success, a missing receipt
+is not permission to resend, and age never grants takeover. `GET /upload/receipts/:uploadId`
+is authenticated, owner-scoped, no-store and read-only. The selected-key folder probe
+(`POST /media/lookup`, 1–100 unique validated keys) is also authenticated/no-store and
+returns only key plus folder or an explicit missing marker, independently of listing
+pagination; existing GPS/uploader redaction remains unchanged.
+
+`data-owner.ts` holds the owned Node-API filesystem lock **before** acquiring the
+existing PostgreSQL owner. The stable lock file is `.storage-owner.lock` in the
+canonical parent of `STORAGE_DIR`. It must be a private, singly linked regular file;
+symlinks, failed acquisition or ownership changes fail closed. Never remove or replace
+this inode. The descriptor has CLOEXEC and remains strongly owned after a PG disconnect
+and until admitted asynchronous work quiesces. App, offline upload and restore/maintenance
+entry points use the same order. Receipt recovery uses receipt ownership followed by
+the existing #348 media-key admission boundary, with bounded pages, capacity wakeups
+and explicit admin Rescan. Deletion atomically makes receipts terminal with DB removal.
+
+The Media batch pauses in place on session loss. Login opens another tab; resuming is
+explicit and restricted to the original account. No File queue is persisted. Post/About
+reconciliation performs at most one automatic bounded read after an unknown response or
+receipt-check conflict; **Check again** is manual and never replays a write. Acknowledgement
+adoption checks owner, attempt identity and exact form generation, preserving newer edits.
+Local recovery uses immutable owner/resource/context/record keys. No draft storage is read
+or written until the stable authenticated owner is known; restoration checks the envelope
+against that owner and its exact scoped key. Cleanup names only the acknowledged generation's
+exact immutable records, never a resource prefix or another tab's newer work. Stale/missing
+base comparison and explicit rebase or stored-version loading retain the entire previous copy.
+The approved D7 envelope contains non-secret owner/resource/create identity, base token,
+attempt IDs, context/record/generation and attempted form snapshots alongside text and image
+URLs/dimensions. It grants no authority, contains no credentials and is never an executable
+queue. Offline/online events are informational and cannot trigger a request.
+
+Logout and expiry always preserve drafts. Unknown-owner legacy bytes remain unchanged and
+inaccessible through the app, including to admins: no preview, download, import, attribution
+or disposal UI. The original author/device custodian may privately back up the profile,
+inspect/export the exact legacy records in browser tools and manually transfer only their
+own text into an authenticated editor. Disposal requires backup/export and identification
+of exact records, outside the app. This is a browser-profile-access residual: account isolation
+does not encrypt storage or prevent direct inspection by someone with profile access.
+
+Media metadata PATCH uses only `{ conditional: { version: 1, patch, expect } }`. Missing,
+extraneous or legacy top-level mutable fields are refused before mutation. Shared pure
+canonicalization defines text/control/length, tag ordering/deduplication and NFC folder
+comparison. One row-locked transaction reads the stored preimage and executes the conditional
+UPDATE, checking all changed fields atomically; a mismatch refuses the whole patch.
+`changedDescriptions` compares that normalized preimage to this write's returned row before
+commit, never to a later reread. Folder ancestors commit in the same transaction.
+A conflict's current item uses the same GPS/uploader redaction as ordinary reads.
+Successful responses require `conditionalVersion: 1`; a nested envelope
+cannot mutate an old handler's top-level fields, and a missing marker never cleans local edits.
+Detail, single AI and bulk AI callers all participate; no schema column or dump-version change
+is involved. Unknown outcomes get one read and field-by-field comparison, not automatic replay.
+
+**Qualification and deployment restriction:** inherited native-binding evidence covers
+macOS arm64/APFS and native DHI Node 26.12.1/glibc amd64+arm64 on inspected ext4 bind mounts
+and Docker local named volumes (CI run 40866450527). This is not an execution claim for
+the integrated #305 product. The actual deployment mount remains unqualified and MUST
+pass the process/descriptor/PG-loss/restore matrix before deployment or enablement.
+NFS/SMB/FUSE, musl and Docker Desktop sharing are not approved. This gate is operational:
+successful lock acquisition does not identify or qualify a filesystem.
+
+**Containment/rollback:** there is no safe mixed-version online downgrade. Stop admission,
+drain or terminate all writers, retire open sessions/clients and deploy compatible
+client/server code together before authenticated reload. Keep local records and additive
+schema; reconcile by compatible roll-forward rather than treating ignored IDs as safety.
+Offline native restore clears post/page receipts and the upload table in its content
+transaction, including pages preserved by legacy v1 restore. Raw SQL/filesystem recovery
+must invalidate the same operational evidence offline before traffic resumes.
+
 ## Authorization
 
 - `requireAuth` gates all CMS/editor/upload endpoints.
 - `requireAdmin` gates **user management**, **settings** (`/settings` — backup schedule and
-  retention), **backups**, **rebuild**, **page edits**, the **WordPress import** (`POST /import`,
+  retention), **backups**, **rebuild and its status** (`POST /rebuild`, `GET /rebuild/status`),
+  **page edits**, the **WordPress import** (`POST /import`,
   since #97 — it creates/overwrites drafts, writes gigabytes under `/data`, and makes hundreds of
   outbound fetches to a host chosen by the export, governed by admin-only settings knobs), and,
   importantly, everything that
@@ -137,6 +277,37 @@ an owner-authorized safe rebuild/release switch and cache assessment. No safety 
   and their batch form **`POST /posts/bulk`** (`{action, keys[]}` — the `action` is checked
   against a fixed allow-list and `keys` is capped at 100 per request, since an unbounded array
   is an authenticated N-round-trip amplifier against the process that also serves the blog).
+- **Publication observations (#317)** — authenticated post reads/mutation responses expose only
+  the exact availability/status/locale-coverage/draft-difference/live-state union. Snapshot
+  digests and release stamps never enter author payloads. `GET /publication/summary` is
+  admin-only and `no-store`; it exposes aggregate counts, not deleted titles or build details.
+  Build history remains independently gated by #297. Optional projection failure preserves
+  known committed mutations and their own concurrency tokens, returning unavailable rather
+  than turning a successful write into an error. Read-only refresh never adopts foreign tokens
+  or writes content; stale/unknown actions are disabled until fresh facts are available.
+
+  Release manifests are unserved `site/manifests/<stamp>.json` files, strictly validated with
+  an 8 MiB cap and exact stamp/schema/types. They contain public render observations and internal
+  digests, no private route geometry, EXIF, uploader fields or credentials. Creation, publication
+  before the current flip, pruning and orphan cleanup obey the storage ownership guard. A
+  manifest write/read failure cannot block promotion, initiate a build or undo a committed CMS
+  action. The existing irreversible promotion boundary is unchanged. Host write access to `/data`
+  remains trusted; rollback reverts feature code without rewriting data or downgrading codecs.
+  See the owner-approved #316 contract and `ARCHITECTURE.md`.
+- **Media impact observations (#318)** — authenticated detail GET/PATCH responses are `no-store`.
+  `impact` contains only availability, the three story scopes, story key/title, and enumerated
+  per-locale gallery/following-caption/hero-title/inline counts. Mode, requested/committed
+  coverage and working/snapshot bodies come from one consistent story-store read and use
+  the actual renderer classifier; pages and retained ineligible translations are not reach.
+  Existing usage/deletion guards are unchanged. `livePending` is admin-only (absent, not null,
+  for authors); unknown release or failed comparison is null, not false. The existing
+  admin summary owns aggregate pending counts; no extra build/status endpoint is added.
+  The **owner-approved precise AC4 amendment** preserves camera/lens/capture fields on the
+  whole author Media item while GPS/uploader values remain null. The new impact projection
+  itself contains none of those fields. Optional enrichment cannot undo an acknowledged
+  write or replace its own result; unavailable impact is not an empty usage list.
+  Shared `PublicationRefresh` refreshes only impact/pending observations, never form values
+  or conditional expectations. No Media read/save triggers a rebuild or grants Publish.
 - **Media library** — browsing (`GET /media`, `GET /media/items/*`) and editing a photo's own
   metadata are **session-level**, a deliberate downgrade from the admin-only `GET /images` they
   replace: the gallery picker needs authors to browse. What makes that safe is the redaction
@@ -188,28 +359,264 @@ ASVS L1 exception record: `docs/superpowers/specs/2026-09-14-comments-design.md`
   comments_enabled`; when false the approved thread is still readable (closed, not hidden) and
   `POST` answers 409 `comments_disabled`. `GET` 404s for an unknown key and for a draft-only
   key with the same body, so it cannot enumerate unpublished posts. Response is `no-store`.
+  Since #284 the thread is **bound to the committed published locale set**: `GET` calls
+  `PostStore.getPublishedLocales(tk)` (`uploader/src/posts.ts` — enabled locales whose row is
+  `status = 'published'` with a non-null `published_snapshot`, empty unless the primary is among
+  them) and lists approved rows only for those locales (`comments-public.ts`, `listApproved` per
+  locale, then the existing merge/cap). An approved comment in a locale that is omitted,
+  disabled, unpublished or merely saved-but-not-published stays in the database and in the
+  admin queue (`withPublicLocaleMetadata` marks it `publicLocale: false` in
+  `comments-admin.ts`; `comments.html` labels it), but never in the public response.
+- **Author badges use the approved public row's stored flag** (#349), never an admin-list
+  lookup or a reader-supplied name/cookie. The explicit public key set above is unchanged.
+  An author reply returned for one story remains marked even after another story has more
+  than 500 approved comments. The existing per-story response cap and moderation permissions
+  are unchanged. Real-main/Postgres runtime proof on 2026-10-28 also kept public GET working
+  during a session-table lock and a deliberately injected moderation-query failure; neither
+  proves availability when the public comments/posts queries themselves fail.
 - **`POST` order of checks is load-bearing** and pinned by tests: (1) per-IP rate limit → 429,
   no insert; (2) **honeypot** — a non-blank `website` field answers **204 with an empty body**,
   no row, no log line (a 400 would train the bot; 204 does not look like the real 201);
-  (3) **Origin check** — the `Origin` header, else the origin of `Referer`, must equal
-  `new URL(PUBLIC_BASE_URL).origin` by **origin equality, never a prefix match** (the gallery
-  allow-list lesson: `https://simonswanderlust.com.evil.example` must fail); missing both,
-  unparsable, or mismatched → 403; (4) validation → 400 with the generic code `invalid_comment`,
-  never the store's wording; (5) published pair → 404; (6) global or per-post flag off → 409;
-  (7) insert as **`pending`** → 201 `{ ok: true }` — the new id is not echoed, so a caller cannot
+  (3) **Origin check** — the `Origin` header, else the origin of `Referer` only when Origin
+  is absent/empty, must equal the request's allowed **blog** origin by **origin equality,
+  never a prefix match** (#319). Credentials, malformed/non-HTTP(S) URLs, an Origin with
+  a path/query/fragment, missing both headers or mismatch → 403. A malformed Origin
+  cannot be rescued by Referer; (4) validation → 400 with the generic code `invalid_comment`,
+  never the store's wording; (5) committed published pair → 404 (`getPublishedLocales` empty);
+  (6) **`postedLocale` not in the committed published locale set → 400 `invalid_comment`** —
+  the same generic code as validation, so the route is no oracle for a draft, omitted or
+  disabled-locale row (#284); (7) global or per-post flag off → 409;
+  (8) insert as **`pending`** → 201 `{ ok: true }` — the new id is not echoed, so a caller cannot
   probe moderation. JSON body capped at 4 KiB; unknown fields (`email`, `parentId`, `status`)
-  are ignored, never stored.
+  are ignored, never stored. Steps 5–6 are pinned across save / failed publish / stale-token
+  publish / unpublish in `uploader/test/comments-public.test.ts` (*committed comment locale
+  coverage*) and against Postgres in `uploader/test/comments-language.integration.test.ts`.
+- **Blog-origin source (#319/#276):** resolve one origin per request. A supplied
+  `ServerConfig.commentsOrigin` override wins and invalid values fail closed. Otherwise the
+  current cached canonical identity is validated against the image topology and used when
+  configured; invalid configured identity refuses the request rather than falling back.
+  Only an unconfigured identity uses trusted `req.protocol` plus the **verbatim Host header**.
+  Neither path derives the expected origin from Origin, Referer or `X-Forwarded-Host`. The #369 immediate-peer
+  policy governs forwarded protocol and client IP; the proxy must preserve Host, overwrite
+  forwarded protocol and reject unintended public hostnames. Missing/malformed authority
+  fails closed. Both `PUBLIC_BASE_URL`'s image authority and actual `IMG_HOST` are excluded,
+  including alternate schemes. Authority comparisons normalize default ports under the
+  actual request protocol; explicit `:443`/`:80` cannot bypass the exclusion. A different
+  non-default port is not excluded merely for sharing a hostname. Malformed `IMG_HOST`
+  refuses the fallback, without overriding an explicit valid `commentsOrigin`. The only
+  exception is the existing single-origin loopback image/blog topology (`imgHostServesBlog`),
+  with matching image origin and serving authority.
+  This is CSRF equality, not authorization or a deployment-domain allow-list: until configured,
+  a non-image authority deliberately forwarded by the trusted proxy can accept its own
+  same-origin submissions. A successful identity save changes canonical comment-Origin
+  equality immediately, independently of the next static rebuild; the obsolete origin is
+  refused. Requests never seed identity. No CORS, session, persistence or ASVS-exception
+  expansion is involved.
 - **Hold-for-moderation.** Every accepted comment is `pending`; nothing is public until an admin
   approves it on `/admin/comments.html` (`requireAdmin`, see below). Deletion is erasure.
+- **Bounded, complete admin traversal (#350).** The separate admin list returns 50 rows
+  plus `hasMore`, using one-row lookahead and oldest-first `(created_at, id)` ordering.
+  Pending and Approved both support nonnegative safe-integer offsets, validated after
+  `requireAdmin` and before a list query; responses are `no-store`. Previous/Next reaches
+  comments beyond the old 500-row admin ceiling, including erasure targets. A successful
+  moderation action restarts at page one; concurrent external changes can shift offsets,
+  so traversal is not a snapshot and must restart to see the new state. Deletion and
+  unapproval remove a comment from the next public GET immediately, without rebuilding.
+  The public six-key shape, oldest-500 per-story response cap, author flag projection,
+  admin-only permissions and ASVS exception remain unchanged.
 - **Rate limit:** 5 `POST`s per address per 15 minutes plus a process-wide 200 per hour, keyed on
-  `req.ip` under `trustProxy: 1` — never on the reader-chosen name, which would let anyone DoS a
-  name. See *Rate limiting* for why these maps are separate from the login limiter.
+  `req.ip` under the address-validated, immediate-peer policy below — never on the reader-chosen
+  name, which would let anyone DoS a name. See *Rate limiting* for the separate limiter maps.
 - **Nothing on the public comment path logs a comment field** — not the name, body, honeypot
   value or translation key (spec invariant 11). A store failure is caught in the route and logged
   as the driver message only, because the global error handler logs `req.url`, which on `GET`
   carries the key. The client still gets the sanitized 500.
+- **Author reply identity (#274):** new admin replies store the cached site-identity
+  `authorName`, falling back to the literal `Author` when empty. The login username is never
+  used as the public display name. Existing comment rows keep their historical names.
 - **Not done by design:** no `workLock`, no rebuild (comments are runtime, never baked), no
   `safeFetch` or any outbound call, no markdown/HTML, no `parentId`.
+
+### Language modes — reconfirmation and leakage review (#282–#285)
+
+The owner-approved [four-mode contract](docs/superpowers/specs/2026-10-27-issue-283-language-mode-contract.md)
+(DE+EN DE-primary — simonswanderlust.com, byte-identical; DE+EN EN-primary; DE-only; EN-only)
+is implemented by #284 (uploader) and #285 (site). This section reconfirms the model above
+against it; nothing here adds an unauthenticated surface.
+
+- **Where the mode lives and who can touch it.** One Postgres singleton,
+  `site_language` (`uploader/src/db.ts`: `primary_locale`, `enabled_locales`, `locked_at`,
+  `updated_at`, CHECK-constrained to `de`/`en` with the primary among the enabled set), seeded
+  `('de', {de,en})` with `ON CONFLICT DO NOTHING`. `GET /language` is `requireAuth` (the editor
+  needs the enabled locales; the mode is public knowledge anyway from the URLs) and
+  `PUT /language` is `requireAdmin` (`uploader/src/server.ts`); both are `no-store`. The body is
+  validated to exactly `{ primary, locales }` (`validateLanguage`, `uploader/src/language.ts`);
+  anything else is 400 `invalid_language`. Transitions are refused inside the same transaction
+  that holds the row `FOR UPDATE`: once the install is **locked** — `locked_at` set at the first
+  story or journey publish, or derived from any retained `published_at`
+  (`readLanguage` `COALESCE`s both, so deleting every post cannot unlock it) — changing the
+  primary is 409 `language_primary_locked` and removing an enabled locale is 409
+  `language_locale_published` (`assertLanguageTransition`). Only *adding* the secondary remains
+  possible, which adds URLs and moves none. A slug that would land in a reserved namespace
+  under the new layout is 409 `reserved_slug` (`assertLanguageNamespace`). Pinned by
+  `uploader/test/language-api.integration.test.ts` (auth, no-store, each refusal) and the
+  published-URL-set invariant in `uploader/test/language-mode.integration.test.ts`.
+- **What a reader or attacker can learn about an unpublished or disabled locale: nothing beyond
+  the mode itself.** The static release is built from `SITE_LANGUAGE_JSON` plus one exported
+  database snapshot (see `ARCHITECTURE.md`, *Language modes*): the trips loader keeps only
+  `status = 'published' AND published_snapshot IS NOT NULL` rows **and** drops rows whose locale
+  is not enabled (`site/src/lib/postgres-loader.ts`), the pages loader filters by enabled locale
+  the same way, and `publicRoutes` (`site/src/lib/public-routes.ts`) generates routes only for
+  enabled locales — so a disabled locale has no page, no feed, no sitemap entry, no `hreflang`
+  and no switcher link (`site/src/components/language-render.test.ts` asserts no `/<absent>/`
+  link on any page; `site/test/built/routes.test.ts` greps every file of a real single-language
+  build for a marker planted in the disabled rows' titles, bodies and slugs). A row the database
+  marks `omitted` can never be published: `posts_omitted_unpublished` CHECKs
+  `status = 'draft' AND published_snapshot IS NULL AND published_at IS NULL`. Drafts are
+  unchanged — only `published_snapshot` ever reaches the build. The 404 page is rendered in the
+  enabled locales only. What *is* observable: the primary locale (root vs `/de/`/`/en/` prefix)
+  and whether a secondary is enabled, both of which are the published URL layout.
+- **Comments are bound to published locales.** `GET /comments` returns approved rows only for
+  the committed published locale set and `POST /comments` refuses a `postedLocale` outside it
+  with the generic 400 — see *Public comments* above for the exact order and the tests. The
+  public JSON key set is unchanged. Author replies default to the **primary** locale
+  (`uploader/src/comments.ts`, `comments-admin.ts`). Retained comments of a hidden locale
+  remain visible to the admin and are never deleted by a mode change.
+- **Dumps and restore carry the mode.** `site_language` is in every dump from v12
+  (`LANGUAGE_DUMP_VERSION = 12`, `uploader/src/backup.ts`) alongside `posts[].omitted`; older
+  apps refuse v12+ through their allow-list. `readDump` validates the language row, every
+  `omitted` row and the per-pair snapshot/history consistency against the **dump's** mode
+  before any `DELETE` (`BackupError`, nothing deleted). Pre-v12 dumps are normalized explicitly
+  to DE+EN DE-primary with `locked_at` derived from `min(published_at)` of the restored posts,
+  never from the live row. The dump's row **replaces** the live one in the same transaction
+  (restoring content under another layout would itself move every URL). The restore CLI
+  (`uploader/src/cli.ts`) prints the live and dump modes and, when they differ **and** the live
+  install is locked, refuses unless `--accept-language-change` is passed beside `yes`/`--yes`
+  (`requiresLanguageAcceptance`); the verified pre-restore dump captures the live
+  `site_language`, and the CLI prints the exact undo command. Pinned by
+  `uploader/test/language-backup.test.ts` and `backup.integration.test.ts`. Boot writes a
+  pre-migration recovery set before the first language schema write (`uploader/src/main.ts`).
+- **Other surfaces.** WXR import skips Polylang items of a disabled locale (`skippedLocale`,
+  never stored); MDX export writes only enabled, non-omitted, slug-bearing rows; legacy
+  WordPress redirects (`uploader/src/redirects.ts`) are eligible only for DE-primary installs,
+  and the `/en/…` entries only when EN is enabled — a 301 into a 404 is never emitted.
+
+### Site identity
+
+The [owner-approved contract](docs/superpowers/specs/2026-10-27-issue-273-site-identity-design.md)
+is implemented in stages. **#274** adds admin-only, `no-store` `GET`/`PUT /settings/identity`,
+revision-conflict protection, text/social settings, boot seeding and shared build snapshots.
+Identity lives in Postgres with content; operational settings remain in `settings.json`.
+
+- `site/src/lib/site-identity.ts` is the shared validator for saves, stored rows, builds and
+  restores. Names/localized text use NFC, reject any `\p{C}` before trimming, then enforce field caps.
+  Every retained DE/EN map is checked, including inactive values; unknown locale keys and malformed
+  maps are refused. No missing locale is filled with another locale's text.
+- Social links are bounded (six), `https:` only, without credentials, whitespace/control
+  characters, IP literals or loopback destinations. Labels are plain text. Rendered links use
+  escaped text/attribute interpolation and `rel="noopener noreferrer"`, never raw HTML.
+- Identity reaches HTML/JSON-LD/RSS through escaping serializers; admin consumers use
+  `textContent`. The unauthenticated copy script exposes only site name, the localized studio
+  descriptor and reserved canonical origin, never author identity, social links or credentials.
+- Runtime identity reads use a boot-loaded cache refreshed on successful saves, not a
+  per-request DB lookup. The build captures identity, assets and content in one exported
+  PostgreSQL snapshot under the exclusive lock; child loaders import it before reading.
+  Malformed snapshots fail closed, preserving the live release. Builder-set internal env
+  values override inherited ones. The exporter is bounded by the build deadline and released.
+- Fresh databases seed neutral; evidence of a pre-existing user/post seeds legacy once.
+  Neither seed sets `saved_at`; a later boot never overwrites a saved or neutral identity.
+- Restore treats a dump as untrusted. v11 requires both tables, valid singleton metadata,
+  full-field validation, canonical base64 assets, unique roles and complete favicon groups.
+  The shared asset validator checks SHA-256, ≤256 KiB, PNG format, role dimensions and full
+  pixel decode, and refuses embedded EXIF/XMP/IPTC/ICC. The CLI and direct restore perform
+  decoding before mutation. Recovered bytes are never repaired or silently skipped.
+
+#### Logo and favicon (#275)
+
+- `PUT`/`DELETE /settings/identity/assets/:role` are admin-only, `no-store` writes for
+  `logo` or `favicon`. They use the same optimistic revision as text saves; a stale revision
+  refuses the whole mutation. A favicon's three rows replace or disappear in one transaction.
+- Uploads accept one PNG, JPEG or static WebP, detected from decoded content rather than
+  the filename/MIME declaration. SVG and other formats are refused. Input is bounded to
+  2 MiB and 4096 × 4096 pixels; animated input is refused. Logos need 32 pixels of source
+  height; favicons need at least 180 × 180. The existing free-space precondition applies.
+- Normalization runs under the shared work lock. Orientation is applied, colour converted
+  to sRGB and pixels re-encoded as PNG without EXIF/GPS/XMP/IPTC/ICC. Originals are not kept,
+  and no URL is fetched. Logos fit inside 960 × 240 without enlargement; favicon outputs
+  are 32, 192 and 180 pixels square. The Apple icon is flattened onto canvas `#fbfbfd`.
+- Only normalized bytes enter Postgres, with SHA-256 and a 256 KiB per-output ceiling.
+  Assets are included in DB dumps, not the media library or image archives. The existing
+  restore boundary above validates them again before replacing live rows.
+- A save/remove does not rebuild or mutate the current public release. The next build copies
+  its captured bytes to content-hashed `/_identity/<role>-<hash16>.png` paths on the blog
+  origin, served as PNG with global `nosniff`. A replacement cannot change a previously
+  captured release's bytes; old release assets remain available with that release.
+
+**Canonical origin (#276):** the admin Settings editor asks for explicit domain-change confirmation.
+Strict shared origin validation, IDN serialization and image-topology separation apply at
+save/build/restore boundaries. Static canonical, alternate, social, structured-data, feed
+and sitemap URLs use the captured identity. An unset origin retains absolute metadata
+under `https://unconfigured.invalid`, adds `noindex`, and emits `Disallow: /` with no
+`Sitemap:` line. Runtime comment checks use the current cached
+identity, while outbound identification uses its configured origin without changing the
+remote-fetch guards. Neither a domain edit nor a rebuild renames story paths or image URLs.
+Logo/favicon assets follow #275 above. Gallery image
+allow-listing, existing upload limits and EXIF policy are unchanged.
+
+### Editable pages and navigation (#288–#289)
+
+Owner approval is recorded in the [#287 contract](docs/superpowers/specs/2026-10-27-issue-287-pages-navigation.md).
+All page writes, Publish, unpublish, deletion and deletion-impact reads require
+`requireAdmin`; authenticated authors may read saved drafts, previews and revisions.
+Only the closed shared `about/contact/privacy/legal` registry may be authored.
+About's immutable identity/path and non-deletable, always-published state are
+enforced in both stores, not merely hidden controls.
+
+Published saves and revision restoration pass the same enabled-locale completeness
+and rendered-body image-origin gate as first Publish. About may use empty-content
+fallbacks but is not exempt from image safety. Preview uses the real Markdown,
+sanitizer and body-image path with the existing deny-by-default CSP and `no-store`.
+Drafts may retain foreign images for repair; inactive translations may be prepared
+in stages, but activation revalidates all published page pairs under the shared
+language lock before committing mode and first-public timestamps.
+
+Cross-table slug checks use deterministic namespace advisory locks after language
+and content locks. Page claims include working and retained story snapshots.
+Unchanged legacy story names remain grandfathered, never silently renamed; WXR
+rejects a first-time reserved group before outbound fetches. Boot reports conflicts
+and unsupported legacy page keys read-only. Per-locale page first-public history
+survives unpublish/restore and permanently locks the slug until explicit deletion.
+
+Delete is scoped/confirmed and atomically removes rows, revisions and exact typed
+navigation references, not media or arbitrary links. The revision routes 404 after
+deletion; boot and restore sweep orphan page revisions. Stale editor tokens refuse
+instead of recreating a deleted page. Unpublish remains available to contain a
+recovered collision/unsafe live body; About must instead be repaired.
+
+The typed `site_nav` document accepts closed targets, bounded labels with control
+characters removed, HTTPS external URLs without credentials, and bounded same-origin
+ASCII relative paths. Its admin-only no-store API uses an optimistic token and locks
+the language row before navigation; post-commit build failure returns the saved token.
+The Settings editor uses text nodes, never author-supplied HTML. Public interpolation
+is escaped by Astro; external links alone use `_blank`, `noopener noreferrer`, a
+visible external marker and localized hidden new-tab text. Relative links are emitted
+only when their normalized pathname exists in the same captured public catalogue.
+The footer social slot remains separate from the configurable/legal link lists.
+
+Build-time Zod validation repeats the closed registry, enabled/published filtering,
+page completeness and image-origin checks before the shared sanitized Markdown and
+guarded picture/gallery rendering. Invalid published data or page/story/static route
+collisions fail the build rather than overwrite another URL. A supplied invalid or
+expired database snapshot fails closed: loaders never retry against current rows.
+Dump v13 requires valid page metadata and a valid navigation singleton; older versions
+explicitly normalize pages and preserve live navigation. Restore summaries warn
+rather than silently drop dangling navigation/colliding content.
+
+Recovery retains the last successful release if a post-commit rebuild fails and
+reports the committed state (`502`, `persisted: true`). Do not roll back to an
+image lacking inherited GPX/privacy/language fixes; use the captured compatible
+recovery set or fix forward. **Verification for this implementation is pending
+the parent integration/type/runtime checks; no production migration was performed.**
 
 ### Media metadata redaction
 
@@ -223,6 +630,11 @@ time are kept — they are useful and carry no location.
 > exactly the exposure the allow-list removed. `server.test.ts` asserts the redaction itself,
 > not merely the status code.
 
+The #317 shared gallery-description summary reads only the existing four localized description
+columns and rendered manifest occurrences. It does not widen Media item serialization or change
+this redaction contract. The approved #318 projection-key amendment remains separate from
+existing whole-item camera/lens/capture access; #317 adds no Media detail impact/pending response.
+
 ### Upload preconditions
 
 `POST /upload` refuses with **507** when `/data` lacks headroom for the whole cost of the photo
@@ -230,8 +642,9 @@ time are kept — they are useful and carry no location.
 able to run — see `uploader/src/disk.ts`. A full `/data` otherwise fails mid-pipeline and can
 leave a partial variant set with no complete record. The incremental images archive — the
 largest single writer on the volume — applies the same reserve on its way in (#113): it refuses
-when its estimated size would not leave that room, and its temp file never survives a failed or
-interrupted run, so the backup feature cannot fill the disk it shares with the site. Free space
+when its estimated size would not leave that room. Failed output is removed only after its
+writer settles; exit cleanup is best-effort and SIGKILL leftovers are swept on the next run.
+An unlink failure is logged for the next sweep, not reported as a successful archive. Free space
 is also reported on `/health` — **only to an admin session** (#132): the route itself is public
 because the compose healthcheck polls it without a cookie, but `free`/`total` for `/data` would
 let anyone on the internet watch the volume fill up and time a disk-exhaustion attempt against
@@ -248,6 +661,15 @@ clock rollback, foreign nested mounts and arbitrary network filesystems are outs
 timestamp protocol. Legacy, missing or corrupt cutoff provenance forces a full archive with
 the existing reserve, retaining old archives rather than guessing from filenames. Admin-only
 backup access, private original/EXIF handling, storage ownership and key guards are unchanged.
+
+Writer settlement was reconfirmed for #430 (2026-10-28): an owned tar pack and Node destination
+pipeline await destination open/write/close before failure cleanup or successful activation.
+Cancellation cannot activate the archive or advance its cutoff, and backup quiescence waits
+for that settlement before storage ownership is released. Tar may finish admitted **read-only**
+input work after its pack is destroyed; pipeline error listeners remain installed and the closed
+destination cannot receive further bytes. This does not claim every private tar input descriptor
+has closed at rejection. Prior completed archives, originals, dumps and route companions are
+not failure-cleanup targets. Authorization, restore validation and persisted formats are unchanged.
 
 `POST /import` has the same precondition (issue #94), with the same 507 and the same reserve, but
 sized from a **count** rather than a byte total — a WXR declares URLs, not sizes — using the
@@ -278,15 +700,33 @@ logs the full error server-side (stdout, captured by Docker) and returns a **gen
 never reach the client. Intentional 4xx framework responses (body-size 413, malformed JSON 400)
 keep their sanitized messages. (`uploader/src/server.ts`)
 
+WXR scalar text reconstruction (#388) concatenates adjacent CDATA fragments without
+inventing separators; it preserves actual commas and the existing parser policy.
+This does not relax XML/entity limits or `WxrParseError`'s fixed public error,
+slug admission, safe remote fetching, gallery-text isolation or render sanitization.
+Reconstructed source text remains untrusted. No persisted-content rewrite is performed.
+
 ## Rate limiting
 
 A per-client-IP fixed-window limiter throttles the password-verifying endpoints — the
 unauthenticated `/login` and `/setup`, plus the authenticated `POST /users/me/password` — to slow
 brute-force attempts: **10 requests per address per 15 minutes**. All three share the same per-IP
 bucket, so failed current-password guesses also count against login attempts from that IP. The
-per-IP key is `req.ip` derived under `trustProxy: 1`: the address the single trusted reverse
-proxy appended to `X-Forwarded-For`; client-supplied (leftmost) entries are ignored, so rotating
-the header does not open a fresh bucket.
+per-IP key is `req.ip`: only an allow-listed immediate socket peer may supply forwarding headers.
+For that peer, the rightmost `X-Forwarded-For` entry is the client; the walk stops after one hop,
+even if that entry is itself a trusted address. For any other peer, its socket address is the key.
+Rotating client-supplied leftmost entries or sending forged headers directly from another
+container does not open a fresh bucket.
+
+The async rate-limit preHandler **returns the Fastify refusal reply** (#372), rather than
+merely calling `send`: a pending asynchronous `onSend` hook must not allow later preHandlers
+or the login, setup or password-change handler to continue behind a client-visible 429.
+The account-lock refusal in `/login` follows the same return contract. Budgets, keys and
+authentication checks are unchanged. On 2026-10-27, real loopback HTTP requests against
+`buildServer` with PostgreSQL user/session stores verified unchanged persisted users,
+password hashes and sessions after refusals, both with the normal hook chain and an explicitly
+injected asynchronous send delay. This is a conditional hook-composition fixture, not evidence
+of a production exploit; see the #372 design spec's runtime verification record.
 
 `/login` additionally keeps a **per-account failure budget across all sources** — the defence
 against a guess spread over many addresses, which the per-IP bucket cannot see — and checks it
@@ -332,8 +772,20 @@ multiple replicas, limits would be counted per replica.)
   write, so a refused upload leaves no orphan original for the reconcile to adopt.
 - **Media text fields** (`title`, `alt`, `caption`) strip `\p{C}` before the length cap, like tags
   and EXIF strings, so a NUL can never reach Postgres `text` (which rejects it with a 500).
-- **Imported slugs** are validated at the WordPress-import boundary; a group with an unsafe slug is
-  skipped with a warning and never reaches the database, the storage path, or the MDX export.
+- **Story slugs** retain the ASCII grammar `[a-z0-9][a-z0-9-]*` and are bounded to
+  **251 bytes**, leaving four bytes for the `.mdx` export extension. HTTP draft validation
+  and both stores' shared normalization boundary reject excessive nonempty values before
+  writing; errors name the locale field, limit and byte count, not the submitted slug.
+  The empty draft sentinel remains allowed. Single/bulk publish validation requires both
+  bounded nonempty slugs, including legacy loaded rows, before publishing or building.
+  MDX export validates both filenames before writing either locale. No filename encoding,
+  slug rewriting, schema migration, or authorization/confirmation relaxation is involved.
+- **Imported slugs** use the same story-slug check in preflight; an unsafe group is counted
+  as `rejected` with a bounded diagnostic before image fetches or database writes.
+  The owner-approved #353 rollout requires a read-only inventory of **working and published
+  snapshot** slugs, including imported drafts. Any over-bound value blocks activation on
+  that installation; it is not renamed, unpublished, omitted, or repaired automatically.
+  See `uploader/scripts/slug-length-inventory.sql` and the approved slug-length spec.
 - **Coordinates** are bounded on publish (`lat ∈ [-90,90]`, `lng ∈ [-180,180]`, finite).
 - **SQL** is parameterized throughout (`pg` placeholders) — no string-built queries.
 - **Uploads** — `POST /upload` is capped at one file per request (`files: 1`); a second file in the
@@ -343,6 +795,28 @@ multiple replicas, limits would be counted per replica.)
   consumes the body itself, so without these an authenticated caller could stream an effectively
   unbounded request. (`uploader/src/server.ts`)
 
+### Native image decoders
+
+Image decoding uses sharp's prebuilt libvips in the app image. The #347 candidate DHI builds
+were exercised on Linux ARM64 (native) and AMD64 (emulated): both application trees loaded
+sharp **0.35.5**, libheif **1.23.5**, librsvg **2.63.2** and libvips **8.18.7**. Both DHI Node
+executables were measured as PIE (`ELF e_type = DYN`) on glibc 2.41; this is hardening evidence,
+not a substitute for patched decoders. See the [approved codec specification](docs/superpowers/specs/2026-10-27-issue-347-sharp-codec-upgrade.md)
+for advisory references and verification.
+
+Changing a lockfile or rebuilding the static blog does not patch a running container. Shipping
+this fix requires a new release image and an owner-controlled redeployment. Recovery is
+**roll forward only** while retaining the patched codec floors: restoring sharp 0.35.3/0.35.4
+would reopen vulnerable decoding, including boot/rescan of retained originals. Preserve data;
+do not re-import or bulk re-encode as a dependency rollback.
+The [app upgrade/recovery policy](ARCHITECTURE.md#app-upgrades-and-supported-recovery) does
+not relax this floor: no backward pair is currently eligible, and #347 remains roll-forward
+only. A retained vulnerable image digest is diagnostic evidence, never deployment approval.
+
+The metadata allow-list below, private-original restrictions, SVG original naming, accepted
+formats, and upload/import/preview authorization are unchanged. Benign JPEG, AVIF and SVG
+runtime checks retained those contracts, including EXIF-free previews and zero GPS variants.
+
 ### Published image metadata (allow-list)
 
 Public image variants carry an explicit **allow-list** of EXIF tags, built in
@@ -351,6 +825,13 @@ Public image variants carry an explicit **allow-list** of EXIF tags, built in
 `FocalLength`, plus the ICC profile. Everything else — the **GPS IFD**, XMP,
 IPTC and `Orientation` — is dropped by construction, because `withExif()`
 replaces the EXIF block wholesale rather than filtering it.
+
+The #371 numeric correction preserves that boundary: sub-unit values use a reciprocal
+only within 1% relative error, otherwise the existing /1000 representation. Supported
+number bounds and all tag/format rules are unchanged. Actual Linux amd64/arm64 uploads
+confirmed exposure 0.4/0.6/0.8 and 1/8000 plus aperture 0.95 in every served variant;
+GPS/XMP/IPTC remained absent and originals remained unchanged and unservable. Existing
+photos are not automatically re-encoded.
 
 This replaced a blanket `.withMetadata()` which republished source GPS
 coordinates on every public file. Untouched originals under `/data/images`
@@ -594,6 +1075,16 @@ fixed "could not be saved (see server logs)", the detail going to stdout. A malf
 400 (`WxrParseError`, fixed message; the parser's offset-and-context detail is logged only), never
 a 500 with a stack.
 
+Untranslated-post accounting (#387) preserves this import boundary: a published post with a
+recognized DE/EN language but no Polylang translation group is counted as a separate rejection
+before any photo fetch or draft write, including in overwrite mode. It never receives a synthetic
+group key or pairs with another groupless item. The existing bounded warning list names the
+export-supplied slug and locale as text (`import.html` uses `textContent`), with no new disclosure
+of server details. Rejection-only exports create ordinary completed jobs with zero planned work;
+empty eligible exports still return 400. Admin authorization, unknown-language exclusions, XML
+limits, slug/path guards, SSRF protection and private-original handling are unchanged. This is
+accounting for the current bilingual importer, not #283's future mode-aware admission policy.
+
 ### A partial import cannot be published (issue #91, 2026-09-06)
 
 A failed re-host leaves the source URL in the draft body. Rendering would then hot-link the old
@@ -601,14 +1092,14 @@ domain (an inline image with no `images` entry passes through unchanged) or drop
 gallery line fails the origin allow-list), and after the DNS cutover both 404. `POST
 /posts/:tk/publish` and the bulk `publish` action therefore refuse while the **rendered** body of
 either locale would emit an `<img>` — or contains a gallery line — whose **origin is not the image
-host** (`analyzeBodyImages`, `uploader/src/publish-gate.ts` — origin equality, never a prefix, the
+host** (`analyzeBodyContent`, `uploader/src/publish-gate.ts` — origin equality, never a prefix, the
 gallery allow-list's rule). Each candidate is resolved against the image host first, because a
 browser gives a reference with no origin of its own the page's: `//old.example/a.jpg` (and its
 `&#47;&#47;` and `\\` spellings) is a foreign hot-link the sanitizer keeps, while
 `https:old.example/a.jpg` is a path on our own host and refusing it would be a false refusal.
 The gate renders the body with the build's own `renderMarkdown` and
 reads `img`/`source` sources and gallery lines from the sanitized hast tree itself
-(`bodyImageSources` in `site/src/lib/body-images.ts`, before any `images` resolution), so every Markdown/HTML subtlety — escapes,
+(`analyzeRenderedBody` in `site/src/lib/body-images.ts`, before any `images` resolution), so every Markdown/HTML subtlety — escapes,
 `<…>` destinations, character references, code spans, backticks inside attributes — is decided
 by the one parser that decides it for readers; a text scanner cannot be kept in agreement with
 the renderer, and three review rounds proved it. No fetch, no DNS, no file access; the rendered
@@ -632,6 +1123,69 @@ gallery URL/dimension guards, preview CSP, and EXIF/privacy controls are reconfi
 See [the approved readiness specification](docs/superpowers/specs/2026-10-25-publish-readiness-references-design.md)
 for failure recovery, rollback, and verification.
 
+**Story heading semantics share this analysis** (#375). `publicationBody` uses the same
+render per locale to refuse any surviving sanitized HAST `h1` element at any depth.
+Single publish returns the expected locale-specific 400; bulk retains its per-pair failure
+envelope and publishes/rebuilds only successful pairs. Renderer failures remain internal errors,
+not H1 refusals or successes. The refusal precedes snapshot writes, exports and builds.
+`validateForPublish` remains synchronous structural validation, not the complete eligibility gate.
+No Markdown is rewritten and About/page publication gains no H1 restriction. Pre-transform
+foreign sources and post-transform readiness references retain their existing policies.
+See [the approved heading contract](docs/superpowers/specs/2026-10-27-rendered-body-h1-gate-design.md).
+
+**Gallery partition availability** (#356, owner-approved 2026-10-28). Preview and
+publication analysis await the same exact legal-edge optimizer used by static builds.
+Reachability and conservative height intervals prune impossible/noncompetitive counts;
+request callers inject `node:timers/promises.setImmediate` after at most 4096 accounted
+edge/state/photo operations, including preparation and reconstruction. Builds drain that
+same kernel without scheduling. The synchronous HAST visitor only queues request-local
+gallery replacements; every replacement is awaited before serialization.
+
+This does not change accepted photos, row order, the evenness/square objective, ties or
+the height floor. Origin equality, dimension/format guards, string coercion/escaping,
+sanitization order, preview CSP, authorization and EXIF policy are reconfirmed unchanged.
+Remaining total work is **O(n³ B)** (bounds O(n² B), B the legal row-length bound), with
+O(n² + nB) peak optimizer memory. A scheduling quantum is not a wall-clock or memory cap:
+allocation/GC, Markdown parsing, sanitization and HTML emission remain outside this
+optimizer's cooperative-work guarantee. No content cap or approximate fallback was added.
+Authenticated disposable 400-photo preview and actual publication/build returned 200;
+an unrelated static HTTP 200 completed before the last partition yield in both cases.
+See [the exact-search specification and measured evidence](docs/superpowers/specs/2026-10-27-gallery-partition-work-design.md).
+
+**Gallery grammar and source provenance** (#354, owner-approved 2026-10-28).
+`gallery-identity.ts` owns the unchanged sanitize-first gallery predicate and body
+schema. Satteri source analysis uses the same explicit parser features as Astro and
+preview; save/import/export/audit and browser tools consume its logical lines and
+UTF-16 source spans, including nested fences and raw HTML. HTML entities remain a
+text layer, never trusted markup. Source-map failures refuse the operation; there
+is no lexical-parser fallback or automatic content migration.
+
+`POST /gallery/analyze` requires a session and the existing post JSON size ceiling.
+It analyzes only the submitted unsaved body, returns `Cache-Control: no-store`, and
+does not read private metadata, fetch remote resources, write content/revisions,
+publish, or log source text. Browser results are tied to the exact request snapshot;
+failed/stale analysis cannot edit the manuscript. Both locales are normalized before
+store writes, and both export documents are prepared before either file is written.
+The warning-only alt audit is prepared before publication side effects.
+
+Pending accepted photo descriptions join the existing local draft recovery snapshot
+as locale-specific URL/value pairs, not source offsets. Explicit Restore obtains fresh
+authenticated analysis; it neither writes a post automatically nor sends recovery-only
+fields in the post payload. No credentials or unaccepted provider output are added.
+Recovery ownership/lifetime and authentication redirect policy are unchanged; the
+broader #304 recovery decisions remain deferred.
+
+Content injected after sanitize retains origin equality, HTTP(S)-only image URLs,
+dimension/format validation, string coercion/escaping and library-description
+precedence. Publish image guards still inspect the actual rendered tree. Preview
+CSP, authorization, EXIF/private-original policy and #356's awaited rendering and
+scheduling contract are unchanged. Recovery: stop gallery mutations/export if
+mapping is defective, retain the prior static release, and roll forward a targeted
+mapping fix; do not restore the lossy scanners or rewrite owner content silently.
+See [the approved grammar contract](docs/superpowers/specs/2026-10-27-gallery-grammar-agreement-design.md).
+
+
+
 ## Output sanitization (stored XSS)
 
 Post bodies are DB-stored Markdown rendered to HTML at build time. Before that HTML reaches the
@@ -641,13 +1195,36 @@ tuned so it does **not** break legitimate output: heading `id`s stay un-prefixed
 contents `#anchor` links resolve) and `class` survives everywhere. Verified end-to-end against a
 published post carrying an XSS payload.
 
+**Public journeys (#310)** have no new public write endpoint. Their loader imports the
+same exported read-only database epoch as stories and language, fails closed on invalid
+or expired epochs/snapshots, and releases checked-out connections on failure. It reads
+published journey snapshots only; membership resolution can see only the published
+`trips` collection. Draft/missing/inactive members cannot supply titles, URLs, images or
+geometry. Intro paragraphs and titles are ordinary escaped Astro text, never `set:html`.
+Canonical unsuffixed hero sources pass the shared snapshot validator before origin
+retargeting and the existing responsive image consumer. The map reads only approved
+public track runs, never private GPX or EXIF, and creates numbered links with DOM text.
+The public route bases remain structurally separate from authenticated `/journey-admin`.
+Actual-target reverse-collision evidence and human approval remain pre-merge gates;
+synthetic database fixtures do not satisfy them.
+The #375 H1 predicate reads the shared sanitize-first tree; it does not relax the
+schema, image injection guards, preview CSP or photo privacy controls. Enforcing one
+story H1 is a document-semantics rule, **not an XSS protection**.
+
+**Import formatting boundary reconfirmed (#389, 2026-10-28).** The facts-bounded
+opening-paragraph repair operates on Turndown's existing parsed DOM and emits Markdown,
+not raw HTML. It is not a sanitizer. The render sanitizer above, gallery origin equality
+and store-level `images` validation below remain mandatory and unchanged; gallery
+content is excluded from this prose repair. Import authorization, safe fetches,
+resource caps, cancellation, EXIF filtering, slug identity and publish gates are unchanged.
+
 **No element may carry `style`** (#124). Astro's Markdown renderer passes raw HTML through, so the
 sanitizer cannot distinguish a Shiki `<span style="color:…">` from an author-typed one — and an
 author-typed `style="position:fixed;inset:0;background:url(https://evil/…)"` would overlay every
 reader page (defacement) and fire a third-party request per view (reader IP leak), on the draft
 preview as well, so publish review would not catch it. Shiki therefore no longer emits inline
-styles at all: `site/src/lib/shiki-classes.ts` registers a transformer (in both
-`astro.config.mjs` and `MARKDOWN_OPTIONS`, lockstep-tested) that rewrites each colour into a
+styles at all: `site/src/lib/shiki-classes.ts` supplies the transformer registered in
+`MARKDOWN_OPTIONS`, shared directly by Astro configuration and draft previews, which rewrites each colour into a
 class, and `SHIKI_CSS` — generated from the same theme object — is inlined by `Base.astro` and
 by the draft preview. `style` is off the schema for every element; the gallery `--r` ratios and
 the hero focal point are the only inline styles on a page, and both are injected post-sanitize
@@ -670,8 +1247,8 @@ text, the configured image origin, and a known `ready` media item. Single and bu
 apply the same checks. Working and published title references both participate in media usage
 and deletion protection, so replacing a draft banner cannot orphan the live banner.
 Existing upload authorization, EXIF filtering and preview CSP remain unchanged. The
-`/admin/editor-image-copy.js` asset contains only public DE/EN interface strings, never
-post data or credentials. Schema and v9 backup recovery are documented in the
+`/admin/editor-image-copy.js` asset contains public DE/EN interface strings and the restricted
+`window.SiteIdentity` chrome subset described above, never post data or credentials. Schema and v9 backup recovery are documented in the
 [approved title-image spec](docs/superpowers/specs/2026-10-16-story-title-image-design.md).
 
 > We deliberately use a maintained, allow-list sanitizer rather than hand-rolled escaping — the
@@ -695,6 +1272,19 @@ double its attack surface.
 `<picture>` / gallery markup. Those injected nodes therefore inherit **none** of the sanitizer's
 protections, so they carry their own:
 
+- **Inline-image structure preserves sanitized nodes** (#378). Only an image-only root
+  paragraph, optionally containing one image-only link, becomes a figure. Other recognized
+  images become phrasing pictures in place; the single sanitized anchor is moved, never
+  cloned or reconstructed from raw attributes. Authored pictures remain sanitized units.
+  No allow-list expansion or DOM repair script is involved. Existing map validation,
+  source/format/dimension policy, private-original restrictions and EXIF allow-list remain.
+- **Section sizing trusts only renderer-owned pictures** (#379). `data-body-image` is
+  stripped from author markup and injected after sanitization only on generated inline
+  pictures, never galleries. `resizeBodyImages` accepts already trusted rendered HTML
+  and layout constants, then changes only direct `source.sizes` properties through HAST.
+  It does not accept author sizing policy, rewrite URLs/srcsets/image properties or
+  re-sanitize trusted gallery markup. Unmarked authored pictures remain untouched.
+  Source validation, formats, private originals, EXIF metadata and preview CSP are unchanged.
 - **Gallery URLs are allow-listed by origin equality.** A ` ```gallery ` fence's URLs arrive as
   *text* content, which `rehype-sanitize` never protocol-checks (unlike an `<img src>`), and they
   land in an `<a href>`. A `javascript:` line would fire. The check is
@@ -711,26 +1301,48 @@ protections, so they carry their own:
   matters is that hastscript treats a node-shaped object in a children array **as a node**, so a
   caption of `{"type":"raw","value":"<script>…</script>"}` would emit a live script tag — the
   render boundary additionally coerces with `String()` as a backstop.
+- **Gallery link names are serialized text** (#358). A nonblank resolved image alt names the
+  link natively; otherwise the resolved visible caption becomes a hast `aria-label` property,
+  or an explicitly localized positional action names the accepted photo. Hidden and cleared
+  captions never supply a name, and decorative image alt stays unchanged. Property serialization,
+  not attribute interpolation, keeps hostile caption text inert. Origin equality, dimension and
+  format checks, variant-only links, metadata-only projection, preview CSP and EXIF privacy remain.
+- **Photo metadata is line-atomic** (#355, owner-approved preserve-and-warn). The shared
+  `uploader/public/gallery-photo-line.js` codec validates every non-empty field before the
+  stores, exporter, browser tools or caption-override renderer use any of that line's metadata.
+  Invalid lines remain byte-identical and supply no partial map/override update. Successful
+  save responses carry bounded transient diagnostics with submitted-source coordinates;
+  diagnostics are text, never HTML or persisted fields. Visual rewrites cannot replace a
+  partially parsed line. This adds no publication refusal: preserved malformed text remains
+  untrusted and may not render as the author intended. Origin, HTTP(S), dimension/format,
+  map-validation, escaping, Media precedence, preview CSP and authorization guards remain.
 - **Gallery-local captions are fence text, rendered as text** (2026-10-19, owner-approved). A
   photo line's `caption-override="…"` and the fence's `#captions: hidden` directive are read by
-  `readCaptionOverride` / `readCaptionsVisible` in `site/src/lib/gallery-layout.ts` — the same
-  readers the save normalizer and MDX exporter in `uploader/src/body-content.ts` use. The override
-  is author-controlled text the sanitizer never sees, so it only ever becomes a hast **text node**
-  (`String()`-coerced, entity-escaped on output): HTML or fence syntax in it renders literally.
-  On the line it is stored `escapeMeta`-encoded and capped at 1,000 characters, so it can neither
-  end the photo line, add a `|` field, nor fake a directive line. It changes only the caption:
-  the URL is still read from the line's first field and passes the same origin, dimension and
+  `readCaptionOverride` in the shared photo-line codec and `readCaptionsVisible` in
+  `site/src/lib/gallery-layout.ts` — the same readers used by the normalizer and MDX exporter.
+  The override is author-controlled text the sanitizer never sees, so it becomes only
+  `String()`-coerced hast text or a serialized accessible-name property, never raw markup.
+  On the line it is stored entity-encoded and capped at 1,000 characters, so it can neither
+  end the photo line, add a `|` field, nor fake a directive line. The photo URL still comes
+  from the line's first field and passes the same origin, dimension and
   format guards before any override is consulted, and alt stays library/`images`-map
   authoritative. It is never lifted into the URL-keyed `images` map, so it cannot leak into
   another gallery using the same photo, and it creates no Media write. Precedence: hidden
   gallery → no caption (and so none in the lightbox, which reads `.jgal__cap` back out of the
   figure); line override (empty included) → that text; otherwise library caption, then the
-  stored one. Body-wide image passes run only outside gallery fences, through the one fence
-  scanner (`rewriteOutsideGalleries`, which `markdownImages` itself uses): the save-time
+  stored one. Body-wide image passes run only outside parser-established gallery ranges,
+  through `rewriteOutsideGalleries` (which `markdownImages` itself uses): the save-time
   `<BodyImage>` conversion, the MDX exporter's inline pass, the WXR importer's re-host scan,
   pre-flight count and merge substitution, the alt audit and media-sync's alt backfill. Gallery
   text that looks like an image or a tag therefore keeps its exact text through save, export,
   re-import and import re-runs, and is never fetched, audited or copied into Media.
+
+Inline-image re-host substitution (#360) emits replacement text literally. Dollar
+sequences in imported or author-edited alt text cannot copy surrounding Markdown
+or reinsert the old image destination. This is content preservation, not sanitization:
+gallery-text exclusion, image-map validation, origin equality, the foreign-image
+publish gate, SSRF/size/time guards and EXIF policy remain unchanged. Failed photos
+retain their original markup; the fix does not repair previously corrupted drafts.
 
 Why this is not merely theoretical: `GET /posts/:tk/preview` is `requireAuth` (**any** author, not
 just admins), runs the identical transform, and is served same-origin with `/admin/*`. A non-admin
@@ -756,22 +1368,49 @@ preview even though the live site would load it.
   intentionally omitted on the admin pages because they use inline scripts; a strict policy would
   need nonces. The one exception is `GET /posts/:tk/preview`, which renders author markup and has
   no scripts — see *Output sanitization*.)
-- The app sets `trustProxy: 1` (exactly one trusted hop), so it reads `X-Forwarded-*` as set by
-  that one reverse proxy for the client IP (rate limiting) and the cookie `Secure` flag. **It must
-  run behind a TLS-terminating reverse proxy that sets `X-Forwarded-Proto`**; the compose file
-  publishes port 3000 on `127.0.0.1` only, so the host proxy is the sole ingress. A second proxy
-  layer needs the hop count raised to `2` — never `true`, which trusts client-supplied entries.
-- **The proxy must forward the original, verbatim `Host` header for both domains**
-  (`simonswanderlust.com` and `img.simonswanderlust.com`) — nginx: `proxy_set_header Host $host;`.
-  Image-vs-blog/admin routing is a single Fastify process that dispatches on the `Host` header
-  (`IMG_HOST`); a proxy that rewrites `Host` (e.g. nginx's default `$proxy_host` behavior) breaks
-  every image URL by routing image requests into the blog/admin handler instead.
+- **Proxy trust validates the immediate peer's address and hop zero**, never `true`, a bare hop
+  count or a hop-only function. `TRUSTED_PROXY` unset or `loopback` trusts only `127.0.0.0/8`
+  and `::1` (including mapped IPv4). Compose sets the literal `TRUSTED_PROXY: docker-gateway`:
+  loopback plus the single IPv4 default gateway discovered from `/proc/net/route`, not the
+  bridge subnet or RFC1918 ranges. Empty/unknown modes and unreadable, missing or ambiguous
+  gateway discovery refuse boot; there is no silent loopback fallback.
+- **Supported public topology: one host-level TLS proxy, no CDN or second proxy hop.**
+  Compose publishes `127.0.0.1:3000` only. Container traffic from the host can arrive as the
+  bridge gateway rather than loopback, which is why the gateway is trusted. Other bridge
+  containers retain their own untrusted addresses. `docker-gateway` is valid only for this
+  bridge topology; changing `networks`/`network_mode`, adding a proxy container or adding a
+  CDN requires a new trust spec, not a broader allow-list or larger hop count.
+- **The proxy must preserve the original, verbatim `Host` for both domains**, overwrite
+  `X-Forwarded-Proto` with its own scheme, and append or overwrite `X-Forwarded-For` so its
+  rightmost entry is the client it accepted. For nginx, use `proxy_set_header Host $http_host;`,
+  `proxy_set_header X-Forwarded-Proto $scheme;`, and
+  `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`.
+  Routing and GPX Origin checks use raw `Host`, never `X-Forwarded-Host`. Rewriting `Host`
+  breaks image-domain routing; missing XFF collapses clients into one limiter bucket.
+- **Accepted residual: the host is the trust boundary.** A host-local process can forge
+  forwarding headers through the trusted gateway. A co-tenant container cannot. Trusted HTTPS
+  forwarding controls `Secure` cookies and GPX Origin matching; untrusted forwarded protocol
+  is ignored. Local plain HTTP intentionally does not set `Secure`.
+- **Verification boundary (#369):** an ARM64 production-image TCP probe in Docker Desktop's
+  Linux VM observed a host-network TLS proxy arriving as gateway `172.31.0.1`, two bridge
+  clients retaining independent limiter buckets, direct-container spoof refusal, HTTPS-only
+  `Secure` cookies, and trusted/untrusted GPX Origin acceptance/refusal. An internal bridge
+  without a default route refused boot. This is not a production/VPS rehearsal: that proxy
+  connected directly to the app bridge IP, not through published loopback DNAT. Before DNS
+  cutover, measure the target server's peer and proxy configuration and repeat independent
+  limiter checks from two external networks. See the
+  [#369 spec](docs/superpowers/specs/2026-10-27-issue-369-dependency-proxy-trust.md).
 
 ## Secrets
 
 - `DATABASE_URL` is provided via environment (compose `.env`), never committed. `.env`,
   credentials, and binaries are git-ignored.
-- The rebuild trigger (`POST /rebuild`) and the DB backup routes (`GET`/`POST /backups`,
+- Recovery escrow is independent of the data repository: retain every still-needed AI
+  master-key generation and repository access/decryption credentials with private recovery
+  instructions. If `.env` contains a master key, separate that value into escrow rather than
+  copying it into the data repository. Keep non-secret generation associations; never expose
+  environment values or probe key presence in the Settings recovery inventory.
+- The rebuild trigger/status (`POST /rebuild`, `GET /rebuild/status`) and the DB backup routes (`GET`/`POST /backups`,
   `GET /backups/:name`) are gated by `requireAdmin` — no separate shared secret; the retired
   `BUILD_SECRET` / `x-build-secret` mechanism no longer exists.
 - **AI provider credentials (#214, registry 2026-10-19):** one `app_secrets` row per remote
@@ -814,8 +1453,16 @@ preview even though the live site would load it.
   serialized provider/settings write prevalidates everything, commits the secret first, then
   writes settings. A subsequent failure can leave a new key with the old URL, or a removed key
   on a provider that still exists; responses explicitly report partial or unknown outcomes.
-  Reload and deliberately reconcile before inference. The UI clears its typed key, reloads
-  presence/settings, and never runs inference on save.
+  Reload and deliberately reconcile before inference. At validated/confirmed request handoff,
+  the UI clears only the submitted provider form's masked key; unrelated settings operations
+  preserve an unsubmitted key in that same form node, never a second cache or browser storage.
+  Completions belong to the originating form object, so an older request cannot clear a new
+  form. A failed settings refresh retains pending input but blocks registry mutations and
+  provider tests until fresh settings are available; page reload discards that input.
+  Cancel, form replacement and switching Add to local discard the pending key intentionally.
+  Stored-key destination confirmation and typed-key/URL binding remain unchanged, as do the
+  credential endpoints, per-provider secret slots, encryption and disclosure policy above.
+  Save refreshes presence/settings and never runs inference or automatically retries.
 - **Registry migration:** the first boot of the registry release copies the legacy shared
   `ai_api_key` envelope to every provider that already received it (the remote providers the
   two features had selected) and deletes the legacy row, in one Postgres transaction, without
@@ -856,18 +1503,74 @@ deliberate trade-off, not an oversight:
   `site/src/lib/loader-pool.ts`, whose connection and query timeouts turn a silently hung
   Postgres into a build error within about a minute. The deadline is not request-controlled, and
   every route that starts a build is admin-only, so an author cannot hold the lock by crafting
-  content. The last 4 KiB of the child's **stderr** (ANSI-stripped) is appended to the build error
-  returned to the authenticated caller so the admin learns which post failed the schema; it is
-  build diagnostics (entry ids, schema paths, library file paths), never `DATABASE_URL` — the
-  child reads that from the environment and neither astro nor pg echoes it on a query error.
+  content. Child stderr remains in server logs, not browser/CLI response bodies. Responses
+  carry a fixed failure code and localized safe copy; the pool-backed snapshot deadline is
+  also classified as `build_timeout`. Operators use `docker compose logs app` for details.
+- **Build reporting (#297):** `GET /rebuild/status` is admin-only and `no-store`; authors'
+  Desk does not request it. `/data/site/build-state.json` is unserved operational metadata,
+  bounded and validated on read, containing no stderr, stack trace or content body. A prior
+  running record becomes `interrupted` after restart; missing/unreadable/unpersisted records
+  remain explicit. The independently observed `current` release is not inferred from the
+  attempt outcome. Status persistence is best-effort and cannot undo a CMS commit or demote
+  a promoted release; ownership loss stops further writes. `/health` carries no attempt
+  history. A failed rebuild acknowledgement does not mean the preceding CMS mutation failed.
+- **Promotion commit point (#397):** a successful atomic `current` rename is final for the
+  build outcome. Post-promotion cleanup failures cannot reverse that success or change CMS
+  content. Unreadable release/current state or a current target different from the promoted
+  directory skips pruning; the current/promoted release and staging entries are protected.
+  Ordinary deletion errors are isolated per existing retention candidate, but ownership loss
+  stops new mutations. Warnings contain only a fixed message, generated promotion stamp,
+  fixed stage and allow-listed errno (otherwise `unknown`); neither arbitrary names, raw
+  exceptions nor build stderr enter these diagnostics. A logging failure also cannot reverse
+  promotion. The exclusive work lock, pre-promotion failures, retention selection, admin
+  authorization and storage-owner fencing remain unchanged. See the
+  [approved contract and containment plan](docs/superpowers/specs/2026-10-27-issue-397-promoted-release-pruning.md).
 - **`/health` reports `release`** (whether a built site exists) beside free space, and like free
   space it is **information, never a verdict**: a fresh volume legitimately has no release for
   the first minutes, a persistent build failure is healed by a publish rather than a container
   restart, and a 503 there would mask a real DB outage. The public blog already answers 503
   "site is building" in that state, so the flag discloses nothing new.
 
+### Journey authoring and recovery
+
+`/journey-admin*` is authenticated: authors may read/create/save, while publish/unpublish/delete
+are admin-only and retain the ordinary storage-owner/tracked-write admission checks. There is
+no new public write route. Member claims combine working membership and live snapshots;
+retained unpublished snapshots still participate in transactional deletion/boot cleanup.
+Language-first, sorted pair/journey locks serialize writers. Publication permanently locks
+locale slugs and the installation's primary language, including dormant journeys.
+
+Titles and intros are plain text, never trusted markup. Heroes must be canonical unsuffixed
+HTTP(S) bases at the configured image origin with safe keys; publish requires known ready media,
+not a legacy missing-row exemption. Working and retained snapshot heroes join media usage
+protection. The #310 public contract reads snapshots only and resolves members through published
+story entries; drafts, omitted locales, private route sources and EXIF are not public inputs.
+
+Version 14 recovery requires all three journey arrays. Strict validation covers complete
+locale pairs, history/coverage against the dump's mode, publication latch, canonical heroes,
+ordered unique membership and every retained reference. It rejects duplicate working/live
+claims and unknown snapshot fields without echoing content. Every restore into this schema,
+including pre-v14 input, uses a journey-aware reader: journeys are cleared before posts and
+matching language/content commits atomically. Pre-v14 input means empty journeys. The verified
+undo set contains journeys and language; orphan repair never rewrites incompatible modes.
+Keep #398 offline exclusive-owner/fencing admission, source/archive/undo validation and
+cross-mode consent. Rollback is journey-only on a compliant image: retain sharp ≥0.35.5,
+heif ≥1.23.2, rsvg ≥2.63.2 and applicable #369 controls, or fix forward. Tables are not dropped.
+Implementation verification and target-specific API collision evidence remain parent gates;
+this documentation records no production migration or recovery operation.
+
 ### Backups
 
+- App upgrades follow the [canonical recovery runbook](ARCHITECTURE.md#app-upgrades-and-supported-recovery).
+  Freeze/drain all mutations and storage writers before capture and retain one coherent
+  dump/settings/bootstrap/image/private-route generation with separate matching key escrow.
+  Settings capture remains operator-managed, not an app-native snapshot. Mixing pre-change
+  credentials with post-change provider settings can disclose a key to the wrong destination;
+  reconcile partial saves before capture. Protect original photo/GPX recovery material as
+  private data. Recovery preserves the storage-owner fence, source validation and verified
+  pre-restore undo set below; no reverse DDL, region mutation or volume deletion is implied.
+  Eligible backward recovery would additionally need an immediately previous secure,
+  release-specific rehearsed pair; none is established, and the codec floor above still applies.
 - Backup dumps (`/data/backup/db/db-*.json.gz`) contain the `users` table **including scrypt
   password hashes** — treat backup files as sensitive, same as the database itself. `sessions` are
   **never** dumped (disposable, and token hashes don't belong in a backup).
@@ -880,27 +1583,145 @@ deliberate trade-off, not an oversight:
   logical dumps do not capture the settings file. A lost master key requires reissuing
   the provider credential, not bypassing encryption. Removing a row does not revoke the
   key externally or remove copies in old backups.
-- Image archives (`/data/backup/db/images-*.tar`) contain no password hashes — only the already
-  publicly served image files — but their download route stays behind the same admin gate and
-  strict filename validation as the dumps.
+- Version 11 (`IDENTITY_DUMP_VERSION`) adds `site_identity` and `site_identity_assets` to the
+  same snapshot and restore transaction. Missing identity tables in identity-capable formats
+  are corruption. Invalid metadata, retained localized text, social URLs or asset bytes refuse
+  the whole restore before replacement. Supported older formats restore the legacy brand,
+  unset `saved_at`, clear assets and keep the live canonical origin if set; otherwise they use
+  the legacy origin. The CLI announces the legacy recovery and includes live identity/assets
+  in the verified undo set. Restart loads the restored cache; public output waits for Rebuild.
+- Version 12 (`LANGUAGE_DUMP_VERSION`) adds the `site_language` singleton and `posts[].omitted`
+  (#284). The language row is content identity — it decides the URL of every published row —
+  so a restore **replaces** the live row with the dump's in the same transaction, and the CLI
+  requires `--accept-language-change` beside `yes`/`--yes` whenever the live install is locked
+  and the modes differ (`requiresLanguageAcceptance`, `uploader/src/cli.ts`). The pre-restore
+  undo set includes the live language row. Pre-v12 formats restore as DE+EN DE-primary with
+  `omitted = false` everywhere and `locked_at` derived from the restored publication history;
+  a v12+ dump with missing or malformed language metadata is refused before any deletion.
+  See [Language modes](#language-modes--reconfirmation-and-leakage-review-282285).
+- **Coherent recovery generations (#296):** freeze new author/admin/public mutations and
+  scheduled/storage writers, drain admitted operations and resolve partial provider updates
+  before capturing the dump and operator-managed settings/bootstrap files. Hold the freeze
+  until every live-file reader has finished or a complete private staged set exists.
+  Provider registry URLs/assignments and encrypted credential rows must match: mixing
+  pre-change keys with post-change destinations can disclose credentials. `settings.json`
+  and its existing migration copy remain outside app dumps; capture their configured paths,
+  deployment/Compose configuration, pinned image and custom overrides without master keys.
+  Losing a master key does not block content/photo recovery or local AI, but requires a
+  privately configured replacement key and re-entered/reissued remote credentials. It never
+  permits weaker encryption or reassignment of old ciphertext.
+- Image archives (`/data/backup/db/images-*.tar`) contain public variants **and private
+  full-resolution originals**. Originals may retain EXIF/GPS and other source metadata:
+  handle these archives as sensitive recovery material, like database dumps. Downloads remain
+  admin-only with strict filename validation. Image archives are **never pruned** automatically;
+  each may hold a unique part of the recovery chain. Deleting a photo from the media library
+  does **not** purge earlier archives or their offsite copies.
+  The read-only [`audit-exif` command](#published-image-metadata-allow-list) inspects public
+  variants, not private originals or archive history: a clean result does not certify those
+  copies GPS-free and does not erase anything. Private GPX originals belong to **separate
+  companion route archives** referenced by v10 database dump manifests, not image tars.
+  Protect offsite copies and retain separate key escrow as described in
+  [Backups & disaster recovery](ARCHITECTURE.md#backups--disaster-recovery).
 - The download route (`GET /backups/:name`) is **admin-only** and validates the filename against a
   strict pattern (`^db-\d{8}-\d{6}\.json\.gz$` or `^images-\d{8}-\d{6}\.tar$`) before touching the
   filesystem — no path traversal.
-- Restore is **CLI-only**
-  (`docker compose exec app node --import tsx src/cli.ts restore [--yes] /data/backup/db/<file>`
-  — the shell-less runtime image requires invoking `node` directly), never a web route, because
-  it's destructive: it deletes and re-inserts `users`, `posts`, media, and `pages` in one
-  transaction (`pages` only when present in the dump — v1 dumps predate them and leave existing
-  pages untouched). Deleting `users` cascades to `sessions`, so a restore invalidates every login.
-  The CLI is guarded against operator mistakes, not attackers (#114): the file name must match
-  the dump pattern, the operator confirms against a summary of the dump and of the live rows
-  (`--yes` for scripts; the printed target is `host:port/dbname` — the `DATABASE_URL` password is
-  never echoed), and a **pre-restore dump** of the current state is written into the backup
-  directory first — the restore aborts if that dump fails, so a restore that cannot be undone is
-  never run.
-- In-app backups live on the **same disk** as the live data; disaster recovery requires an
-  offsite host-level backup of `./uploader/data` — see
-  [ARCHITECTURE.md](ARCHITECTURE.md#backups--disaster-recovery).
+- Restore is **CLI-only**, never a web route. Confirm the intended image, database and `/data`
+  mount, retain the source recovery set, stop every app/maintenance writer sharing them and
+  wait for exit and drained database sessions; keep Postgres running. Use:
+
+  ```sh
+  docker compose stop app
+  docker compose run --rm --no-deps --entrypoint node app --import tsx src/cli.ts restore /data/backup/db/db-YYYYMMDD-HHmmss.json.gz
+  ```
+
+  The explicit Node entrypoint supports the shell-less image. Do not add service ports.
+  Fresh-target recovery uses offline `prepare-native-restore [--yes]`, not HTTP boot to
+  create schema; keep ingress closed and auto-start disabled throughout the zero-user window.
+  Only recognized bootstrap-only schema/default singleton values are admitted, never saved
+  identity/content or unknown shapes. The shared schema/identity/language seed runs after permanent
+  fencing, without listeners/builds/workers. Preparation does not itself verify an undo set.
+  The language singleton may be absent or contain only the installed unlocked DE-primary,
+  DE+EN default; changed modes, publication history and invalid timestamps refuse admission.
+  Its exact column defaults, nullability, primary key and CHECK expressions, together with
+  `posts.omitted` and its unpublished-only CHECK, remain load-bearing. A genuinely absent
+  additive column/table/seed may be initialized; a missing CHECK on existing columns or an
+  altered constraint is not absence and is refused before any fence or schema mutation.
+  Catalog admission includes all installed indexes, not only table constraints: changed
+  uniqueness, expressions, predicates, methods or invalid enforcement refuse preparation before
+  any fence/schema mutation. Missing standalone indexes may be created by normal initialization
+  only when their schema-wide names are free: a non-index relation such as a sequence is refused,
+  including before the owning table exists. Same-name replacements cannot hide behind
+  `IF NOT EXISTS`. Fence durability includes all
+  data-root ancestor entries, re-flushed on retries even when a failed mkdir/fsync attempt left
+  directories present. Any unresolved flush failure still blocks replacement.
+  See [offline preparation](ARCHITECTURE.md#offline-preparation-for-a-fresh-native-restore-target).
+  This guidance reconfirms the unchanged [GPX storage-owner boundary](#gpx-routes--private-source-and-public-snapshot):
+  exclusive ownership and absence of app sessions are mandatory, never bypassed by killing
+  sessions or disabling fencing.
+  Current v14 recovery replaces `users`, `posts`, `pages`, `media`, `media_folders`,
+  `app_secrets`, `comments`, `post_routes`, `site_identity`, `site_identity_assets`,
+  `site_language`, `site_nav`, `journeys`, `journey_locales` and `journey_members`,
+  with manifest-paired private originals. Older versions retain their documented exceptions.
+  [Database dumps](ARCHITECTURE.md#database-dumps) documents legacy absent-field behavior.
+  Sessions are not restored; deleting users invalidates every login. Settings/key escrow
+  remain external. The CLI validates the source set, prints a credential-free target and
+  live/dump counts, and requires literal `yes`. `--yes` skips only that prompt, never ownership,
+  source validation or the **verified pre-restore recovery set** written before replacement.
+  If undo capture/verification fails, replacement aborts. Restart with `docker compose up -d app`
+  only after successful completion and result inspection, reconcile settings/key escrow,
+  then sign in and explicitly rebuild. Failed or ambiguous completion: leave the app stopped,
+  preserve input/undo/staged sets and investigate rather than retrying blindly.
+- **Restore-safe onboarding retirement:** native JSON excludes `onboarding_state`, but SQL,
+  physical backups and snapshots may contain eligible metadata. Every supported restore
+  (self/empty/partial/legacy, filesystem-only, host/clone and undo included) must retire before
+  replacement/activation. Native restore validates source and the actual captured undo dump,
+  identity assets and required paired archive first, then publishes the permanent off-DB
+  fence and separately commits retirement **before GPX staging**. Retirement survives later
+  failure, rollback and unknown content COMMIT; it does not certify successful content recovery.
+  Unknown fence durability or retirement commit stops replacement.
+  The fence is derived from `STORAGE_DIR`'s resolved parent as `onboarding.restore-retired`,
+  normally `/data/onboarding.restore-retired`; its fixed payload is
+  `swl-onboarding-restore-retired-v1\n`, with no credentials, owner content or progress.
+  Publication flushes the private temporary file and parent directory using no-clobber
+  activation; reads reject non-regular/symlink/multi-link/wrong-payload entries and unsafe roots.
+  Invalid/unreadable metadata fails boot/recovery closed; preserve it for diagnosis and
+  repair only to retired, under stopped writers. Never remove a fence to recover eligibility.
+- **SQL/host activation boundary:** use `onboarding-retire` against the configured destination
+  before replacement; it immediately writes/verifies only the fence, needs reachable
+  Postgres for the existing owner/drain check, and needs no application schema. Its lease
+  **ends on CLI exit**: it does not guard subsequent `psql`, copies, restart policies or
+  different-cluster writers. Stop all writers and disable automatic activation across command
+  boundaries and failures; use `psql -v ON_ERROR_STOP=1`. Preserve/exclude the destination
+  fence during copying and verify/re-fence the final recovered root before activation,
+  even if copied SQL is eligible. Raw whole-root snapshots require isolated offline staging
+  followed by fencing before the live-root switch. Never auto-start an unfenced restored
+  snapshot; unannounced whole-machine rollback cannot be inferred after both stores roll back.
+  Keep the prior root and recovery evidence. The
+  [managed recovery procedure](ARCHITECTURE.md#sql-filesystem-host-and-clone-recovery)
+  remains mandatory, not replaced by a filesystem lock or perpetual lease.
+  Code rollback preserves the table/fence; older code does not enforce them, so retain the
+  current retirement CLI/procedure and recheck before rolling forward. No web/CLI reset,
+  metadata deletion or owner-data wipe is authorized. Password/account-only recovery leaves
+  onboarding unchanged and is not a content restore.
+- In-app backups live on the **same disk** as live data. Operator-managed offsite recovery
+  must cover all configured source locations, validated dumps, complete required image
+  chains and each dump's GPX companion. Full private GPX locations/times, including removed
+  or detached source points, remain sensitive in archives; public tracks cannot replace them.
+  Protect password hashes, comments, photo metadata and route originals with restricted
+  access and encryption in transit and at rest, even when AI keys are escrowed elsewhere.
+  The approved policy is **14 completed daily offsite generations**, preserving older
+  chain dependencies and the last-known-restorable generation after failed copies. It is
+  not an app pruner; local dump retention and image-archive nonpruning are unchanged.
+  Releases/public tracks are rebuildable; MDX, scheduling state, sessions and temporary work
+  do not substitute for the recovery inventory.
+- The existing admin-only `/backups` metadata/download boundaries are unchanged; no new
+  API, environment/key probe, settings download or offsite status claim is introduced.
+  The chosen encrypted system's tool, non-secret destination and independent escrow/recovery
+  method remain prerequisites for #296's offsite-only drill; #295's independent restore
+  evidence is also required. Recover in isolated paths/project/database with ingress blocked.
+  Failed/ambiguous recovery leaves that target stopped and preserves input/undo/staged sets;
+  never delete live data, recovery history or bypass ownership controls.
+  See [the complete inventory and procedure](ARCHITECTURE.md#backups--disaster-recovery).
 
 ## Known limitations
 

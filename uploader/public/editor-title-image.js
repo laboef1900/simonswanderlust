@@ -114,16 +114,25 @@
       busy = true;
       ['Upload', 'Library', 'Remove', 'File'].forEach((name) => { el(name).disabled = true; });
       el('Status').textContent = copy.uploading;
-      const data = new FormData();
-      data.append('key', 'trips/' + slug + '/title');
-      data.append('file', file);
+      const ownerId = options.recovery.ownerId();
+      const previous = get();
+      const previousAlt = el('Alt').value;
       try {
-        const response = await fetch('/upload', { method: 'POST', body: data });
-        if (response.status === 401) { onUnauthed(); return; }
-        if (!response.ok) throw new Error('upload');
-        const result = await response.json();
+        const result = await root.UploadRecovery.run({
+          file, fields: { key: 'trips/' + slug + '/title' }, ownerId, recovery: options.recovery,
+          status: el('Status'), button: el('Upload'), onUnauthed,
+          copy: root.EditorCopy[locale],
+        });
+        if (!result || !options.recovery.canAdopt(ownerId)) return;
+        const current = get();
+        if (current?.src !== previous?.src) {
+          el('Status').textContent = root.EditorCopy[locale].uploadNotApplied + ' ' + result.src;
+          return;
+        }
+        const newerAlt = el('Alt').value !== previousAlt ? el('Alt').value : '';
+        const newerFocus = JSON.stringify(current?.focus) !== JSON.stringify(previous?.focus) ? current?.focus : undefined;
         set({ src: result.src, width: result.width, height: result.height,
-          alt: '', ...(result.format ? { format: result.format } : {}) });
+          alt: newerAlt, ...(newerFocus ? { focus: newerFocus } : {}), ...(result.format ? { format: result.format } : {}) });
         el('Status').textContent = result.status === 'processing' ? copy.processing : copy.selected;
         onChange();
       } catch {

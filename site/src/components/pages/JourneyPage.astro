@@ -1,0 +1,39 @@
+---
+import { getCollection } from 'astro:content';
+import Base from '../../layouts/Base.astro';
+import RemoteImage from '../RemoteImage.astro';
+import StoryCard from '../StoryCard.astro';
+import JourneyMap from '../JourneyMap.astro';
+import { journeyAlternates, type LiveJourney } from '../../lib/journeys';
+import { journeysIndexPath } from '../../lib/paths';
+import { useTranslations } from '../../i18n/ui';
+interface Props { journey: LiveJourney }
+const { journey } = Astro.props;
+const { title, intro, heroImage } = journey.entry.data;
+const t = useTranslations(journey.locale);
+const alternates = journeyAlternates(journey, await getCollection('journeys'), await getCollection('trips'));
+const paragraphs = intro.split(/\n\s*\n/).map((paragraph) => paragraph.trim()).filter(Boolean);
+---
+<Base title={title} description={intro} locale={journey.locale} image={heroImage} alternates={alternates}>
+  <div class="mx-auto max-w-6xl px-5 pt-6 pb-14 sm:pt-10">
+    <a href={journeysIndexPath(journey.locale)} class="inline-flex min-h-[44px] items-center text-sm text-navy underline underline-offset-4 hover:text-brand-red active:text-brand-red">{t('journey.index')}</a>
+    <header class="mt-4 grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] lg:items-center lg:gap-12">
+      <div class="min-w-0">
+        <h1 class="text-3xl leading-tight font-extrabold break-words text-navy sm:text-4xl">{title}</h1>
+        <p class="mt-4 font-mono text-xs tracking-log text-navy uppercase">{t('journey.count').replace('{count}', String(journey.members.length))}</p>
+        <div class="mt-6 max-w-prose space-y-4 text-lg leading-relaxed break-words">{paragraphs.map((paragraph) => <p class="whitespace-pre-line">{paragraph}</p>)}</div>
+      </div>
+      <RemoteImage image={heroImage} sizes="(min-width: 1200px) 600px, (min-width: 1024px) 55vw, calc(100vw - 40px)" loading="eager" fetchpriority="high" class="block max-h-[36rem] w-full object-cover" />
+    </header>
+    <section class="mt-12 sm:mt-16" aria-labelledby="journey-stories-heading">
+      <h2 id="journey-stories-heading" class="text-2xl font-extrabold text-navy">{t('journey.stories')}</h2>
+      <ol class="mt-6 grid gap-8 sm:grid-cols-2" data-journey-stories>
+        {journey.members.map((trip, index) => <li class="min-w-0">
+          <p class="mb-3 font-mono text-xs tracking-log text-navy uppercase">{t('journey.position').replace('{number}', String(index + 1)).replace('{count}', String(journey.members.length))}</p>
+          <div class="sm:h-[22rem]"><StoryCard trip={trip} span={{ sm: 3, lg: 3, lgRows: 1 }} /></div>
+        </li>)}
+      </ol>
+    </section>
+    <JourneyMap journey={journey} />
+  </div>
+</Base>

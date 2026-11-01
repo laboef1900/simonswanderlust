@@ -9,11 +9,15 @@ window.Desk = (function () {
   }
 
   function nextDraft(posts) {
-    return (posts || []).filter(function (p) { return p && p.status === 'draft'; }).sort(byUpdated)[0] || null;
+    return (posts || []).filter(function (p) { return p && p.publication?.availability === 'available' && p.publication.status === 'draft'; }).sort(byUpdated)[0] || null;
   }
 
   function unpublished(posts) {
-    return (posts || []).filter(function (p) { return p && p.hasUnpublishedChanges; }).sort(byUpdated);
+    return (posts || []).filter(function (p) { return p && PublicationState.newer(p.publication); }).sort(byUpdated);
+  }
+
+  function attention(posts) {
+    return (posts || []).filter((p) => PublicationState.attention(p.publication)).sort(byUpdated);
   }
 
   function encodeCount(stats) {
@@ -35,8 +39,11 @@ window.Desk = (function () {
     return release;
   }
 
-  function englishBodyLabel(hasEnBody) {
-    return hasEnBody ? 'English body started' : 'English body not started';
+  function secondaryBodyLabel(status, lang) {
+    const secondary = lang.locales.find((locale) => locale !== lang.primary);
+    if (!secondary || status === 'none' || status === 'omitted') return '';
+    return SiteLanguage.text(status === 'started' ? 'BodyStarted' : status === 'empty' ? 'BodyEmpty' : 'BodyUnknown',
+      { language: SiteLanguage.names[secondary] });
   }
 
   function formatUpdatedAt(value, locales) {
@@ -72,11 +79,12 @@ window.Desk = (function () {
   return {
     nextDraft,
     unpublished,
+    attention,
     encodeCount,
     releaseState,
     releaseFromResponse,
     formatUpdatedAt,
-    englishBodyLabel,
+    secondaryBodyLabel,
     resilientLoader,
     byUpdated,
   };

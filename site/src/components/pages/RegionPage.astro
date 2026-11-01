@@ -4,8 +4,11 @@ import Base from '../../layouts/Base.astro';
 import RegionFilter from '../RegionFilter.astro';
 import StoryGrid from '../StoryGrid.astro';
 import { useTranslations, type Locale, type UIKey } from '../../i18n/ui';
+import { countLabel } from '../../i18n/count';
 import { regionPath, regionsIndexPath, type Region } from '../../lib/paths';
 import { byLocale, liveRegions } from '../../lib/trips';
+import { identityTagline } from '../../lib/build-identity';
+import { localeAlternates } from '../../lib/seo';
 
 interface Props {
   locale: Locale;
@@ -24,19 +27,19 @@ const other: Locale = locale === 'de' ? 'en' : 'de';
 // (`liveRegions`), so hreflang/the switcher point across only when the other
 // side was built — otherwise no alternates, like an untranslated story.
 const alternates = !region
-  ? { de: regionsIndexPath('de'), en: regionsIndexPath('en') }
+  ? localeAlternates(regionsIndexPath)
   : liveRegions(collection, other).includes(region)
-    ? { de: regionPath(region, 'de'), en: regionPath(region, 'en') }
+    ? localeAlternates((code, language) => regionPath(region, code, language))
     : undefined;
 ---
 
-<Base title={title} description={`${title} – ${t('site.tagline')}`} locale={locale} alternates={alternates}>
+<Base title={title} description={`${title} – ${identityTagline(locale)}`} locale={locale} alternates={alternates}>
   <section class="border-b border-navy/10 bg-canvas py-10">
     <div class="mx-auto max-w-6xl px-5">
       <div class="flex flex-wrap items-end justify-between gap-4">
         <div>
           <p class="font-mono text-xs font-semibold tracking-log text-brand-red uppercase">
-            {trips.length} {t('stats.trips')}
+            {trips.length} {countLabel(trips.length, t('stats.trip'), t('stats.trips'))}
           </p>
           <h1 class="mt-1 text-3xl font-extrabold text-navy md:text-4xl">{title}</h1>
         </div>

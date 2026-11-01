@@ -40,12 +40,19 @@ wrote `trips/en/.mdx` for such a post.
 
 ## Migration behaviour on existing data
 
-`ensureSchema` (every boot) reads `pg_indexes.indexdef` for `posts_locale_slug_idx`; if the
-definition carries no `WHERE`, it runs `DROP INDEX` + `CREATE UNIQUE INDEX … WHERE slug <> ''` in
-**one transaction**, so a crash mid-way cannot leave the slug backstop missing. No rows are
-touched — the old non-partial index already guaranteed at most one `''` row per locale, so the
-partial index always builds. The step is idempotent (a partial index is left alone), and fresh
-installs create the partial form directly.
+`ensureSchema` (every boot) reads `pg_indexes.indexdef` for `posts_locale_slug_idx` **in the
+current schema only** (`schemaname = current_schema()`, 2026-11-01); if the definition carries no
+`WHERE`, it runs `DROP INDEX` + `CREATE UNIQUE INDEX … WHERE slug <> ''` in **one transaction**,
+so a crash mid-way cannot leave the slug backstop missing. No rows are touched — the old
+non-partial index already guaranteed at most one `''` row per locale, so the partial index always
+builds. The step is idempotent (a partial index is left alone), and fresh installs create the
+partial form directly. The schema qualifier is load-bearing: `indexdef` is `pg_get_indexdef()`,
+which opens the index's *table* to deparse the partial predicate, so the unqualified read opened
+every `posts` table in the database — a sibling schema being dropped mid-query surfaced as a boot
+failure (`XX000 could not open relation with OID`, CI runs 41263714065 and 41298018083), and a
+same-named index elsewhere could decide this migration. `uploader/test/pg.integration.test.ts`
+pins both: a migrated schema elsewhere must not mask a legacy index here, and a boot must never
+block on another schema's `posts` held under `ACCESS EXCLUSIVE`.
 
 ## Rollback
 

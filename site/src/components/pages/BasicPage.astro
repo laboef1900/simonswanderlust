@@ -1,0 +1,31 @@
+---
+import { getCollection, getEntry, render } from 'astro:content';
+import Base from '../../layouts/Base.astro';
+import GalleryIsland from '../GalleryIsland.astro';
+import type { Locale } from '../../i18n/ui';
+import { publicRoutes, pageAlternates } from '../../lib/public-routes';
+import { siteLanguage } from '../../lib/site-language';
+
+interface Props { locale: Locale; pageId: string }
+const { locale, pageId } = Astro.props;
+const entry = await getEntry('pages', pageId);
+if (!entry || entry.data.locale !== locale || entry.data.key === 'about') throw new Error('Missing published basic page');
+// Content Layer's renderer is the existing sanitize → guarded images pipeline, not raw author HTML.
+const { Content } = await render(entry);
+const [trips, pages, journeys] = await Promise.all([
+  getCollection('trips'), getCollection('pages'), getCollection('journeys'),
+]);
+const routes = publicRoutes(trips, siteLanguage(), { pages, journeys });
+// The loader's prose description (#273), extracted from the sanitized render.
+const description = entry.data.description || entry.data.title;
+---
+
+<Base title={entry.data.title} description={description} locale={locale} alternates={pageAlternates(routes, entry.data.key)}>
+  <section class="mx-auto max-w-3xl px-5 py-14 [overflow-wrap:anywhere]">
+    <h1 class="text-3xl font-extrabold text-navy md:text-4xl">{entry.data.title}</h1>
+    <article class="prose prose-lg mt-6 max-w-none prose-headings:font-extrabold prose-headings:text-navy prose-a:font-semibold prose-a:text-brand-red">
+      <Content />
+    </article>
+    <GalleryIsland locale={locale} />
+  </section>
+</Base>
