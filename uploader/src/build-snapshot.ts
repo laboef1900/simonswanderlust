@@ -6,6 +6,7 @@ import { toIdentitySnapshot, type IdentitySnapshot } from '../../site/src/lib/si
 import { identityFromRow, type IdentityRow } from './site-identity.js';
 import { validateIdentityAsset } from './site-identity-assets.js';
 import { readLanguage, type LanguageConfig } from './language.js';
+import { configuredOriginRoles, validateCanonicalRoles, type OriginRoles } from './canonical-origin.js';
 
 export interface BuildAsset {
   role: string;
@@ -36,7 +37,7 @@ export class BuildSnapshotTimeoutError extends Error {
  */
 export async function withBuildSnapshot<T>(
   pool: pg.Pool,
-  options: { timeoutMs: number; signal?: AbortSignal },
+  options: { timeoutMs: number; signal?: AbortSignal; originRoles?: OriginRoles },
   consume: (snapshot: BuildSnapshot) => Promise<T>,
 ): Promise<T> {
   const deadline = new AbortController();
@@ -83,6 +84,7 @@ export async function withBuildSnapshot<T>(
     const languageState = await readLanguage(client);
     const language: LanguageConfig = { primary: languageState.primary, locales: languageState.locales };
     const identity = toIdentitySnapshot(identityFromRow(rows[0]!), language.locales);
+    validateCanonicalRoles(identity.canonicalOrigin, options.originRoles ?? configuredOriginRoles());
     const { rows: assetRows } = await client.query<AssetRow>('SELECT role, sha256, width, height, bytes FROM site_identity_assets ORDER BY role');
     const assets: BuildAsset[] = [];
     for (const row of assetRows) {

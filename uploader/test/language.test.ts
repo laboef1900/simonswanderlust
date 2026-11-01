@@ -25,7 +25,7 @@ describe('language configuration integrity', () => {
   it('preserves inactive identity copy and refuses inactive-locale edits', async () => {
     const language = memoryLanguageStore({ primary: 'en', locales: ['en'] });
     const identity = memorySiteIdentityStore({ ...neutralIdentity(), tagline: { de: 'Retained', en: 'Active' } }, language);
-    const edit = { siteName: 'Journal', authorName: 'Author', tagline: { en: 'Edited' }, aboutRole: {}, aboutGear: {}, studioDescriptor: {}, socialLinks: [] };
+    const edit = { siteName: 'Journal', authorName: 'Author', canonicalOrigin: null, tagline: { en: 'Edited' }, aboutRole: {}, aboutGear: {}, studioDescriptor: {}, socialLinks: [] };
     const saved = await identity.update(1, edit);
     expect(saved.identity.tagline).toEqual({ de: 'Retained', en: 'Edited' });
     await expect(identity.update(saved.revision, { ...edit, tagline: { de: 'Overwrite' } })).rejects.toMatchObject({ code: 'invalid_identity' });

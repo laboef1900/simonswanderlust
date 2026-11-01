@@ -3,6 +3,27 @@
 window.Onboarding = (function () {
   const ids = ['account', 'identity', 'photo', 'story', 'publish'];
   const names = ['Account', 'Identity', 'Photo', 'Story', 'Publish'];
+  const modes = [
+    { primary: 'de', locales: ['de'], label: 'languageModeDeOnly' },
+    { primary: 'en', locales: ['en'], label: 'languageModeEnOnly' },
+    { primary: 'de', locales: ['de', 'en'], label: 'languageModeDeBoth' },
+    { primary: 'en', locales: ['en', 'de'], label: 'languageModeEnBoth' },
+  ];
+  function sameMode(a, b) {
+    return a.primary === b.primary && a.locales.length === b.locales.length
+      && a.locales.every(function (locale) { return b.locales.includes(locale); });
+  }
+  function languageFrom(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+      || Object.keys(value).sort().join(',') !== 'locales,lockedAt,primary,updatedAt'
+      || !Array.isArray(value.locales) || !modes.some(function (mode) { return sameMode(mode, value); })
+      || new Set(value.locales).size !== value.locales.length
+      || typeof value.updatedAt !== 'string' || !Number.isFinite(Date.parse(value.updatedAt))
+      || (value.lockedAt !== null && (typeof value.lockedAt !== 'string' || !Number.isFinite(Date.parse(value.lockedAt))))) {
+      throw new Error('unavailable');
+    }
+    return value;
+  }
 
   function editorLink(href) {
     if (typeof href !== 'string' || !href.startsWith('/admin/editor.html?tk=')) return false;
@@ -21,7 +42,12 @@ window.Onboarding = (function () {
 
   function viewFrom(value) {
     if (!value || typeof value !== 'object') throw new Error('unavailable');
-    if (value.status === 'retired') return { status: 'retired' };
+    if (value.status === 'retired') {
+      if (Object.keys(value).length !== 1) throw new Error('unavailable');
+      return { status: 'retired' };
+    }
+    if (Object.keys(value).sort().join(',') !== 'complete,language,status,steps') throw new Error('unavailable');
+    languageFrom(value.language);
     if (!['open', 'dismissed'].includes(value.status) || typeof value.complete !== 'boolean'
       || !Array.isArray(value.steps) || value.steps.length !== ids.length) throw new Error('unavailable');
     value.steps.forEach(function (step, index) {
@@ -52,6 +78,12 @@ window.Onboarding = (function () {
     let busy = false;
     let uncertain = false;
     let restoreFocus = false;
+    let selection = null;
+    let selectionDirty = false;
+    let languageNotice = '';
+    let languageRecovery = false;
+    let languageSettings = false;
+    let languageFocus = false;
     const fallbackFocus = options.focusTarget || document.querySelector('.cms-page-title, h1');
     root.classList.add('onboarding');
     openerRoot.classList.add('onboarding-opener');
@@ -62,6 +94,30 @@ window.Onboarding = (function () {
       if (className) node.className = className;
       if (text !== undefined) node.textContent = text;
       return node;
+    }
+    function text(key, values = {}) {
+      return copy[key].replace(/\{(\w+)\}/g, function (match, name) { return values[name] ?? match; });
+    }
+    function modeName(mode) {
+      return copy[modes.find(function (item) { return sameMode(item, mode); }).label];
+    }
+    function consequences(mode) {
+      return ['de', 'en'].map(function (locale) {
+        const path = window.SiteLanguage.publicPath(mode, locale, 'home');
+        const language = copy[locale === 'de' ? 'languageGerman' : 'languageEnglish'];
+        return path === null ? text('onboardingLanguageAbsent', { language })
+          : text(locale === mode.primary ? 'onboardingLanguagePrimary' : 'onboardingLanguageSecondary', { language, path });
+      }).join(' ');
+    }
+    function languageScope(next) {
+      const stored = current.language;
+      let key = 'languageScopeSame';
+      if (next.primary !== stored.primary) key = 'languageScopePrimary';
+      else if (next.locales.length < stored.locales.length) key = 'languageScopeDisable';
+      else if (next.locales.length > stored.locales.length) key = 'languageScopeAdd';
+      return text(key, { locale: next.locales.find(function (locale) { return !stored.locales.includes(locale); }) })
+        + (next.primary !== stored.primary && next.locales.length < stored.locales.length ? ' ' + copy.languageScopeDisable : '')
+        + ' ' + consequences(next);
     }
     const heading = element('h2', 'desk-heading', copy.onboardingTitle);
     heading.tabIndex = -1;
@@ -89,7 +145,7 @@ window.Onboarding = (function () {
       restoreFocus = false;
     }
     function captureFocus() {
-      restoreFocus = root.contains(document.activeElement) || openerRoot.contains(document.activeElement);
+      restoreFocus ||= root.contains(document.activeElement) || openerRoot.contains(document.activeElement);
     }
     function setBusy(value) {
       busy = value;
@@ -97,6 +153,76 @@ window.Onboarding = (function () {
       openerRoot.setAttribute('aria-busy', String(value));
       root.querySelectorAll('button').forEach(function (node) { node.disabled = value; });
       show.disabled = value;
+      root.querySelectorAll('fieldset').forEach(function (node) {
+        node.disabled = value || !current || current.status !== 'open' || current.language.lockedAt !== null;
+      });
+    }
+    function languageSection(view) {
+      const row = element('li', 'onboarding-step onboarding-language');
+      const detail = element('div', 'onboarding-detail');
+      const title = element('h3', 'onboarding-step-label', copy.languageHeading);
+      title.id = 'onboardingLanguageHeading';
+      title.tabIndex = -1;
+      detail.append(title, element('span', 'onboarding-optional', copy.onboardingOptional));
+      detail.appendChild(element('p', 'onboarding-language-current', text('onboardingLanguageCurrent', {
+        mode: modeName(view.language), consequences: consequences(view.language),
+      })));
+      const message = element('p', 'onboarding-language-status muted', languageNotice);
+      message.setAttribute('role', 'status');
+      message.setAttribute('aria-live', 'polite');
+      message.setAttribute('aria-atomic', 'true');
+      if (view.language.lockedAt !== null) {
+        detail.appendChild(element('p', 'muted', text('languageLocked', { date: new Date(view.language.lockedAt).toLocaleString() })));
+        const settings = element('a', '', copy.onboardingLanguageSettings);
+        settings.href = '/admin/settings.html#language';
+        detail.appendChild(settings);
+      } else {
+        if (!selectionDirty) selection = view.language;
+        const form = element('form', 'onboarding-language-form');
+        const fields = element('fieldset');
+        fields.appendChild(element('legend', '', copy.languageMode));
+        modes.forEach(function (mode, index) {
+          const label = element('label', 'onboarding-language-choice');
+          const radio = element('input');
+          radio.type = 'radio';
+          radio.setAttribute('name', 'onboarding-language');
+          radio.value = String(index);
+          radio.checked = sameMode(selection, mode);
+          const descriptionId = 'onboardingLanguageDescription' + index;
+          radio.setAttribute('aria-describedby', descriptionId);
+          radio.addEventListener('change', function () {
+            if (!busy && radio.checked) { selection = mode; selectionDirty = true; }
+          });
+          const words = element('span');
+          words.appendChild(element('span', '', copy[mode.label]));
+          const description = element('span', 'muted', consequences(mode));
+          description.id = descriptionId;
+          words.appendChild(description);
+          label.append(radio, words);
+          fields.appendChild(label);
+        });
+        const actions = element('div', 'form-actions');
+        const save = button(copy.onboardingLanguageSave, 'language-save', function () { saveLanguage(); });
+        save.className = '';
+        actions.appendChild(save);
+        fields.appendChild(actions);
+        form.appendChild(fields);
+        form.addEventListener('submit', function (event) { event.preventDefault(); saveLanguage(); });
+        detail.appendChild(form);
+      }
+      detail.appendChild(message);
+      if (languageSettings && view.language.lockedAt === null) {
+        const settings = element('a', '', copy.languageBack);
+        settings.href = '/admin/settings.html#language';
+        detail.appendChild(settings);
+      }
+      if (languageRecovery) {
+        const recovery = element('a', '', copy.languageRebuildLink);
+        recovery.href = '/admin/settings.html#site';
+        detail.appendChild(recovery);
+      }
+      row.appendChild(detail);
+      return row;
     }
     function render(view) {
       current = view;
@@ -106,8 +232,8 @@ window.Onboarding = (function () {
       openerRoot.hidden = view.status !== 'dismissed';
       body.replaceChildren();
       status.textContent = '';
-      if (view.status === 'retired') { focus(fallbackFocus); return; }
-      if (view.status === 'dismissed') { focus(show); return; }
+      if (view.status === 'retired') { languageFocus = false; focus(fallbackFocus); return; }
+      if (view.status === 'dismissed') { languageFocus = false; focus(show); return; }
       status.textContent = copy.onboardingProgress.replace('{done}', String(view.steps.slice(2).filter(function (step) {
         return step.state === 'done';
       }).length));
@@ -137,6 +263,7 @@ window.Onboarding = (function () {
         detail.appendChild(element('p', 'onboarding-step-status muted', stateCopy[step.state]));
         row.append(icon, detail);
         list.appendChild(row);
+        if (step.id === 'account') list.appendChild(languageSection(view));
       });
       body.appendChild(list);
       if (view.complete) body.appendChild(element('p', 'onboarding-complete', copy.onboardingComplete));
@@ -149,7 +276,10 @@ window.Onboarding = (function () {
       actions.appendChild(button(copy.onboardingHide, 'dismiss', function () { change('dismiss'); }));
       actions.appendChild(button(copy.onboardingRefresh, 'refresh', reload));
       body.append(actions, element('p', 'onboarding-help muted', copy.onboardingHideHelp));
-      focus(heading);
+      if (languageFocus) {
+        focus(root.querySelector('[data-onboarding-action="language-save"]') || root.querySelector('#onboardingLanguageHeading'));
+        languageFocus = false;
+      } else focus(heading);
     }
 
     function unavailable() {
@@ -186,6 +316,59 @@ window.Onboarding = (function () {
       return load();
     }
 
+    async function saveLanguage() {
+      if (busy || !current || current.status !== 'open' || current.language.lockedAt !== null || !selection) return;
+      const next = { primary: selection.primary, locales: [...selection.locales] };
+      captureFocus();
+      setBusy(true);
+      let sent = false;
+      try {
+        if (!(await window.AdminConfirm.ask({
+          title: copy.languageChangeTitle, body: languageScope(next), confirmLabel: copy.onboardingLanguageSave,
+        }))) return;
+        languageNotice = copy.saveSaving;
+        root.querySelector('.onboarding-language-status').textContent = languageNotice;
+        sent = true;
+        selectionDirty = true;
+        languageSettings = false;
+        const response = await fetch('/language', {
+          method: 'PUT', cache: 'no-store', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(next),
+        });
+        const result = await response.json();
+        if (response.ok) {
+          // #297: a committed change answers 200 with its build attempt beside the
+          // stored configuration; a same-mode save is a no-op without a build.
+          const { build, ...stored } = result;
+          const saved = languageFrom(stored);
+          if (!sameMode(saved, next)) throw new Error('unavailable');
+          selection = saved;
+          selectionDirty = false;
+          languageRecovery = build !== undefined && build !== null && build.ok === false;
+          // A failed attempt is reported with the shared build wording (#297), never as unsaved.
+          languageNotice = languageRecovery ? window.BuildReporting.describeOutcome('language', { build })
+            : (sameMode(current.language, next) ? copy.onboardingLanguageAccepted : copy.onboardingLanguageSaved);
+        } else {
+          const key = (response.status === 400 || response.status === 409) && {
+            language_primary_locked: 'languagePrimaryLocked', language_locale_published: 'languageLocaleLocked',
+            language_pages_incomplete: 'languagePagesIncomplete', invalid_language: 'onboardingLanguageInvalid',
+            reserved_slug: 'onboardingLanguageReserved',
+          }[result.code];
+          languageSettings = result.code === 'language_pages_incomplete' || result.code === 'reserved_slug';
+          languageNotice = key ? copy[key] : copy.onboardingLanguageUncertain;
+        }
+      } catch {
+        languageNotice = copy.onboardingLanguageUncertain;
+      } finally {
+        setBusy(false);
+        if (sent) {
+          // Reconcile eligibility, publication history and current configuration in
+          // one authoritative read. Retain the candidate; never replay PUT.
+          languageFocus = true;
+          await load();
+        } else focus(root.querySelector('[data-onboarding-action="language-save"]'));
+      }
+    }
     async function change(action) {
       if (busy || !current || current.status === 'retired'
         || (action === 'finish' && !current.complete)) return;

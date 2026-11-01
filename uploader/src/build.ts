@@ -10,6 +10,7 @@ import { BuildSnapshotTimeoutError, withBuildSnapshot, writeBuildAssets, type Bu
 import { DEFAULT_LANGUAGE } from './language.js';
 import { StorageReadOnlyError } from './storage-owner.js';
 import { buildFailureMessage, createBuildState, observeLiveRelease, type BuildFailureCode, type BuildReport, type BuildStatusResponse, type BuildTrigger } from './build-state.js';
+import type { OriginRoles } from './canonical-origin.js';
 
 export interface BuildOutcome extends BuildReport { cause?: unknown }
 
@@ -71,6 +72,7 @@ export interface SiteBuilderOptions extends WorkCancellationOptions {
   applicationName?: string;
   /** Required for real builds; test-only runBuild callbacks may omit the DB. */
   pool?: pg.Pool;
+  originRoles?: OriginRoles;
   siteAppDir: string;
   releasesRoot: string;
   keep?: number;
@@ -296,7 +298,8 @@ async function buildAndDeploy(opts: Pick<SiteBuilderOptions, 'siteAppDir' | 'rel
   await rename(tmpLink, join(opts.releasesRoot, 'current'));
   opts.promoted();
   // @ai-note The current-link rename is the commit point (#397). Housekeeping
-  // cannot report a failed build after readers already see this release.
+  // cannot report a failed build after readers already see this release, and
+  // neither can a snapshot cancellation that lands while it runs.
   await prunePromotedRelease(releases, stamp, opts);
   return stamp;
 }
@@ -348,7 +351,7 @@ export function createSiteBuilder(opts: SiteBuilderOptions): SiteBuilder {
               stamp: attemptId, promoted: () => { promoted = true; },
             });
           };
-          if (opts.pool) await withBuildSnapshot(opts.pool, { timeoutMs, signal: work.signal }, deploy);
+          if (opts.pool) await withBuildSnapshot(opts.pool, { timeoutMs, signal: work.signal, originRoles: opts.originRoles }, deploy);
           else {
             if (!opts.runBuild) throw new Error('A database pool is required for site builds');
             await deploy();

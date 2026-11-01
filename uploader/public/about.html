@@ -26,6 +26,7 @@
       <p id="legalNote" class="muted" data-pages-copy="LegalNote" hidden></p>
       <p id="preparationNotice" class="muted" role="status" hidden></p>
       <a id="languageSettingsLink" href="/admin/settings.html#language" data-language-copy="Back" hidden></a>
+      <div id="galleryMetadataWarnings" class="notice-warn" hidden></div>
       <div class="lang-switch-bar about-tabs" role="tablist" aria-label="Page language">
         <button type="button" class="tab-btn active" role="tab" id="tabbtn-de" aria-selected="true" aria-controls="tab-de" data-tab="de">Deutsch <span class="lang-code" aria-hidden="true">DE</span></button>
         <button type="button" class="tab-btn" role="tab" id="tabbtn-en" aria-selected="false" tabindex="-1" aria-controls="tab-en" data-tab="en">English <span class="lang-code" aria-hidden="true">EN</span></button>
@@ -88,7 +89,9 @@
     <script src="/admin/tabs.js"></script>
     <script src="/admin/image-markdown.js"></script>
     <script src="/admin/pages-ui.js"></script>
-    <script>
+    <script src="/admin/gallery-metadata-warnings.js"></script>
+    <script type="module">
+      import './gallery-fence.js';
       'use strict';
       const $ = (id) => document.getElementById(id);
       const KEY = new URLSearchParams(location.search).get('key') || 'about';
@@ -135,6 +138,8 @@
         error: (body, status) => { showErr(body?.error || (EditorCopy.en.writeRefused + ' ' + status)); setStatus(''); },
         adopt: async (saved, attempt, acknowledgement) => {
           acceptSaved(saved);
+          // Gallery diagnostics ride only on this tab's own acknowledgement, never a probe.
+          if (acknowledgement) galleryMetadataWarnings.saved(acknowledgement.galleryWarnings, attempt.sentPayload);
           loadRevisions().catch(() => {});
           if (acknowledgement) BuildReporting.renderOutcome($('actionStatus'), 'page', acknowledgement);
           else setStatus(BuildReporting.text('unknown'));
@@ -160,6 +165,15 @@
 
       const tabsApi = Tabs.wire(document.querySelector('[role="tablist"]'), {
         onChange: (tab) => { (tab === 'en' ? enMDE : deMDE).codemirror.refresh(); },
+      });
+      const galleryMetadataWarnings = GalleryMetadataWarnings.create({
+        root: $('galleryMetadataWarnings'),
+        editors: { de: deMDE.codemirror, en: enMDE.codemirror },
+        activate: (locale) => {
+          tabsApi.select(locale);
+          (locale === 'de' ? deMDE : enMDE).codemirror.refresh();
+        },
+        onUnauthed: () => guard.redirectToLogin(),
       });
 
       function showErr(msg) { const el = $('actionError'); el.textContent = msg; el.hidden = !msg; }
@@ -352,6 +366,7 @@
         const images = loc === 'de' ? deImages : enImages;
         for (const key of Object.keys(images)) delete images[key];
         if (data.images) Object.assign(images, data.images);
+        void galleryMetadataWarnings.reopen(loc);
       }
 
       (async () => {

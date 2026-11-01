@@ -6,9 +6,11 @@ import MapPage from '../components/pages/MapPage.astro';
 import RegionPage from '../components/pages/RegionPage.astro';
 import StoryPage from '../components/pages/StoryPage.astro';
 import { publicRoutes, type PublicRoute } from '../lib/public-routes';
+import BasicPage from '../components/pages/BasicPage.astro';
+import { siteLanguage } from '../lib/site-language';
 
 export async function getStaticPaths() {
-  return publicRoutes(await getCollection('trips')).map((route) => ({
+  return publicRoutes(await getCollection('trips'), siteLanguage(), await getCollection('pages')).map((route) => ({
     params: { path: route.path.slice(1, -1) || undefined },
     props: { route },
   }));
@@ -23,3 +25,4 @@ const { route } = Astro.props;
 {route.kind === 'regions' && <RegionPage locale={route.locale} />}
 {route.kind === 'region' && <RegionPage locale={route.locale} region={route.region} />}
 {route.kind === 'story' && <StoryPage trip={route.trip} />}
+{route.kind === 'page' && <BasicPage locale={route.locale} pageId={route.page.id} />}

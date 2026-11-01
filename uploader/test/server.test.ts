@@ -11,13 +11,14 @@ import { mkdtemp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
+import { setImmediate as nextTurn } from 'node:timers/promises';
 import type { BackupState, DbBackup } from '../src/backup.js';
 import sharp from 'sharp';
 import FormData from 'form-data';
 import { buildServer, type ServerConfig } from '../src/server.js';
 import { rehostImage } from '../src/wp-images.js';
 import { contentHashKey } from '../src/storage.js';
-import { rehostKey, ImportTooLargeError, ImportInsufficientSpaceError, type ImportDeps, type ImportProgress, type ImportSummary, type PreparedImport } from '../src/wp-import.js';
+import { prepareImport, rehostKey, ImportTooLargeError, ImportInsufficientSpaceError, type ImportDeps, type ImportProgress, type ImportSummary, type PreparedImport } from '../src/wp-import.js';
 import { createImportRunner, memoryImportJobStore, type ImportRunner } from '../src/import-jobs.js';
 import { defaultSettings, validate } from '../src/settings.js';
 import type { Settings, SettingsStore } from '../src/settings.js';
@@ -26,6 +27,9 @@ import { randomUUID } from 'node:crypto';
 import { memorySessionStore, type SessionStore } from '../src/sessions.js';
 import { memoryPostStore, type PostStore } from '../src/posts.js';
 import { memoryPageStore, type PageStore } from '../src/pages.js';
+import { memoryLanguageStore } from '../src/language.js';
+import { memoryNavigationStore } from '../src/navigation.js';
+import { DEFAULT_NAVIGATION } from '../../site/src/lib/navigation.js';
 import { memoryMediaStore, type MediaStore } from '../src/media-store.js';
 import { createEncodeQueue, type EncodeQueue } from '../src/encode-queue.js';
 import { createWorkLock, type WorkLock } from '../src/work-lock.js';
@@ -34,6 +38,12 @@ import type { SiteBuilder, BuildOutcome } from '../src/build.js';
 import { memorySecretsStore, SecretsError } from '../src/secrets.js';
 import type { AiProvider, AiProviderKind } from '../src/ai-providers.js';
 import { memoryOnboardingStore, type OnboardingProgress, type OnboardingState } from '../src/onboarding.js';
+import { memorySiteIdentityStore } from '../src/site-identity.js';
+import { normalizeIdentityUpload } from '../src/site-identity-assets.js';
+import * as disk from '../src/disk.js';
+import * as bodyRenderer from '../../site/src/lib/render-markdown.js';
+import * as gallerySource from '../../site/src/lib/gallery-source.js';
+import * as altAudit from '../src/alt-audit.js';
 
 let dir: string;
 beforeEach(async () => {
@@ -150,6 +160,65 @@ async function authed(b: Built, opts: { isAdmin?: boolean; username?: string } =
   return { user: u, cookie: { sid: token } };
 }
 
+describe('Postgres navigation API boundary', () => {
+  it('requires admin, validates URLs, detects stale tokens and builds once after a valid save', async () => {
+    const language = memoryLanguageStore();
+    const navigation = memoryNavigationStore(language);
+    const s = stubBuilder();
+    const b = build({ language, navigation, builder: s.builder });
+    try {
+      const admin = await authed(b);
+      const author = await authed(b, { isAdmin: false, username: 'author' });
+      for (const method of ['GET', 'PUT'] as const) {
+        expect((await b.app.inject({ method, url: '/settings/navigation' })).statusCode).toBe(401);
+        expect((await b.app.inject({ method, url: '/settings/navigation', cookies: author.cookie })).statusCode).toBe(403);
+      }
+      const loaded = await b.app.inject({ url: '/settings/navigation', cookies: admin.cookie });
+      expect(loaded.headers['cache-control']).toBe('no-store');
+      expect(loaded.json().config).toEqual(DEFAULT_NAVIGATION);
+      const updatedAt = loaded.json().updatedAt;
+      for (const href of ['javascript:alert(1)', 'data:text/html,x', '//evil.test']) {
+        const bad = await b.app.inject({ method: 'PUT', url: '/settings/navigation', cookies: admin.cookie,
+          payload: { updatedAt, config: { ...DEFAULT_NAVIGATION, header: [{ kind: 'external', href: { de: href }, label: { de: 'Link' } }] } } });
+        expect(bad.statusCode).toBe(400);
+      }
+      expect(s.calls).toHaveLength(0);
+      const payload = { updatedAt, config: { ...DEFAULT_NAVIGATION, legal: [{ kind: 'page', target: 'privacy' }] } };
+      const saved = await b.app.inject({ method: 'PUT', url: '/settings/navigation', cookies: admin.cookie, payload });
+      expect(saved.statusCode).toBe(200);
+      expect(saved.json().saved.config.legal).toEqual(payload.config.legal);
+      expect(saved.json().saved.updatedAt).not.toBe(updatedAt);
+      expect(s.calls).toHaveLength(1);
+      expect((await b.app.inject({ method: 'PUT', url: '/settings/navigation', cookies: admin.cookie, payload })).statusCode).toBe(409);
+      expect(s.calls).toHaveLength(1);
+    } finally { await b.app.close(); }
+  });
+  it.each(['outcome', 'throw'] as const)('acknowledges committed state on a %s rebuild failure', async (failure) => {
+    const language = memoryLanguageStore();
+    const navigation = memoryNavigationStore(language);
+    const builder = stubBuilder({ ok: false, attemptId: 'failed', code: 'internal', error: buildFailureMessage('internal') }).builder;
+    if (failure === 'throw') builder.build = async () => { throw new Error('private infrastructure detail'); };
+    const b = build({ language, navigation, builder });
+    try {
+      const { cookie } = await authed(b);
+      const updatedAt = (await navigation.get()).updatedAt.toISOString();
+      const saved = await b.app.inject({ method: 'PUT', url: '/settings/navigation', cookies: cookie,
+        payload: { updatedAt, config: { ...DEFAULT_NAVIGATION, footer: [] } } });
+      expect(saved.body).not.toContain('infrastructure');
+      expect((await navigation.get()).config.footer).toEqual([]);
+      if (failure === 'throw') {
+        // A builder that throws is an internal error; the commit stands and nothing leaks.
+        expect(saved.statusCode).toBe(500);
+        return;
+      }
+      // #297: the save is acknowledged with its own failed build evidence.
+      expect(saved.statusCode).toBe(200);
+      expect(saved.json()).toMatchObject({ saved: { config: { footer: [] } }, build: { ok: false } });
+      expect((await navigation.get()).updatedAt.toISOString()).toBe(saved.json().saved.updatedAt);
+    } finally { await b.app.close(); }
+  });
+});
+
 async function jpeg(): Promise<Buffer> {
   return sharp({ create: { width: 1000, height: 800, channels: 3, background: '#444' } }).jpeg().toBuffer();
 }
@@ -182,6 +251,161 @@ async function upload(
   form.append('file', img ?? (await jpeg()), { filename: fields.filename ?? 't.jpg', contentType: 'image/jpeg' });
   return injectAuthoring(b.app, { method: 'POST', url: '/upload', headers: { ...form.getHeaders() }, cookies: cookie, payload: form, });
 }
+
+describe('POST /gallery/analyze', () => {
+  const url = '/gallery/analyze';
+
+  it('requires a live session and does not cache an authentication refusal', async () => {
+    const b = build();
+    const { cookie } = await authed(b, { isAdmin: false });
+    await b.sessions.destroy(cookie.sid);
+    try {
+      for (const cookies of [undefined, cookie]) {
+        const res = await b.app.inject({ method: 'POST', url, cookies, payload: { bodyMarkdown: '' } });
+        expect(res.statusCode).toBe(401);
+        expect(res.headers['cache-control']).toBe('no-store');
+      }
+    } finally { await b.app.close(); }
+  });
+
+  it('lets an author analyze unsaved nested and raw HTML galleries with exact snapshot ranges', async () => {
+    const b = build();
+    const { cookie } = await authed(b, { isAdmin: false });
+    const bodyMarkdown = [
+      '🧭 Unsaved story',
+      '',
+      '> ~~~gallery extra',
+      '> https://images.example/photo | alt="A view"',
+      '> ~~~',
+      '',
+      '<pre><code class="language-gallery">https://images.example/raw | alt="A &amp; B"</code></pre>',
+      '',
+      '````text',
+      '```gallery',
+      'https://images.example/example',
+      '```',
+      '````',
+    ].join('\r\n');
+    try {
+      const expected = await gallerySource.analyzeGallerySource(bodyMarkdown);
+      const res = await b.app.inject({ method: 'POST', url, cookies: cookie, payload: { bodyMarkdown } });
+      expect(res.statusCode).toBe(200);
+      expect(res.headers['cache-control']).toBe('no-store');
+      expect(res.json()).toEqual(expected);
+      expect(res.json().bodyMarkdown).toBe(bodyMarkdown);
+      const galleries = expected.blocks.filter((block) => block.isGallery);
+      expect(galleries).toHaveLength(2);
+      expect(galleries.map((block) => block.kind)).toEqual(['fence', 'html']);
+      expect(bodyMarkdown.slice(galleries[0]!.start, galleries[0]!.end)).toContain('~~~gallery extra');
+      expect(galleries[1]!.content).toContain('alt="A & B"');
+      expect(expected.blocks.some((block) => !block.isGallery && block.content.includes('/example'))).toBe(true);
+    } finally { await b.app.close(); }
+  });
+
+  it('accepts an empty string without inventing a gallery', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    try {
+      const res = await b.app.inject({ method: 'POST', url, cookies: cookie, payload: { bodyMarkdown: '' } });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ bodyMarkdown: '', blocks: [] });
+    } finally { await b.app.close(); }
+  });
+
+  it.each([null, [], {}, { bodyMarkdown: null }, { bodyMarkdown: 7 }, { bodyMarkdown: [] }])(
+    'rejects an invalid JSON shape without coercion: %j', async (payload) => {
+      const b = build();
+      const { cookie } = await authed(b);
+      try {
+        const res = await b.app.inject({
+          method: 'POST', url, cookies: cookie,
+          headers: { 'content-type': 'application/json' }, payload: JSON.stringify(payload),
+        });
+        expect(res.statusCode).toBe(400);
+        expect(res.headers['cache-control']).toBe('no-store');
+        expect(res.json()).toEqual({ error: 'bodyMarkdown must be a string' });
+      } finally { await b.app.close(); }
+    },
+  );
+
+  it('keeps malformed JSON at 400 and the existing post JSON byte ceiling at 413', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    try {
+      const malformed = await b.app.inject({
+        method: 'POST', url, cookies: cookie,
+        headers: { 'content-type': 'application/json' }, payload: '{"bodyMarkdown":',
+      });
+      expect(malformed.statusCode).toBe(400);
+      expect(malformed.headers['cache-control']).toBe('no-store');
+      // Less than 1 MiB of UTF-16 characters, more than 1 MiB of JSON bytes.
+      const payload = { bodyMarkdown: 'é'.repeat(524_288) };
+      const res = await b.app.inject({ method: 'POST', url, cookies: cookie, payload });
+      const post = await b.app.inject({ method: 'POST', url: '/posts', cookies: cookie, payload });
+      expect(res.statusCode).toBe(413);
+      expect(post.statusCode).toBe(413);
+      expect(res.headers['cache-control']).toBe('no-store');
+    } finally { await b.app.close(); }
+  });
+
+  it('analyzes supplied source without content-store access, publication, network or source logging', async () => {
+    const settings = fakeStore();
+    const secrets = memorySecretsStore();
+    const { builder, calls } = stubBuilder();
+    const b = build({ settings, secrets, builder });
+    const { cookie } = await authed(b, { isAdmin: false });
+    const unused = [
+      vi.spyOn(b.posts, 'get'), vi.spyOn(b.posts, 'list'),
+      vi.spyOn(b.posts, 'upsertDraft'), vi.spyOn(b.posts, 'publish'),
+      vi.spyOn(b.posts, 'listRevisions'), vi.spyOn(b.pages, 'get'),
+      vi.spyOn(b.pages, 'save'), vi.spyOn(b.media, 'get'),
+      vi.spyOn(settings, 'get'), vi.spyOn(settings, 'update'),
+    ];
+    const fetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network forbidden'));
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const before = await readdir(dir);
+      const res = await b.app.inject({
+        method: 'POST', url, cookies: cookie,
+        payload: { bodyMarkdown: '~~~gallery\nhttps://private.example/unsaved | alt="Private source"\n~~~' },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().blocks.filter((block: { isGallery: boolean }) => block.isGallery)).toHaveLength(1);
+      for (const spy of [...unused, fetch, log, warn, error]) expect(spy).not.toHaveBeenCalled();
+      expect(calls).toEqual([]);
+      expect(b.enqueued).toEqual([]);
+      expect(await readdir(dir)).toEqual(before);
+    } finally {
+      for (const spy of [...unused, fetch, log, warn, error]) spy.mockRestore();
+      await b.app.close();
+    }
+  });
+
+  it('sanitizes parser failures without leaking source into the error log', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const source = 'PRIVATE UNSAVED SOURCE';
+    const analyze = vi.spyOn(gallerySource, 'analyzeGallerySource')
+      .mockRejectedValueOnce(new Error(`parser diagnostic: ${source}`));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await b.app.inject({ method: 'POST', url, cookies: cookie, payload: { bodyMarkdown: source } });
+      expect(res.statusCode).toBe(500);
+      expect(res.headers['cache-control']).toBe('no-store');
+      expect(res.json()).toEqual({ error: 'internal server error' });
+      expect(error).toHaveBeenCalledTimes(1);
+      expect(error.mock.calls.flat().map(String).join(' ')).not.toContain(source);
+      expect(error.mock.calls[0]![1]).toBeInstanceOf(Error);
+      expect((error.mock.calls[0]![1] as Error).message).toBe('Gallery source analysis failed');
+    } finally {
+      analyze.mockRestore();
+      error.mockRestore();
+      await b.app.close();
+    }
+  });
+});
 
 describe('POST /upload', () => {
   it('401 without auth', async () => {
@@ -278,6 +502,23 @@ describe('POST /upload', () => {
     const busy = await upload(b, cookie, { key: 'trips/dup/hero', folder: 'Norway' }, img);
     expect(busy.json()).toMatchObject({ duplicate: true, status: 'processing', folder: 'Iceland/South' });
     expect(b.enqueued).toEqual([key]);
+  });
+
+  it.each([
+    { status: 'failed' as const, storedFolder: 'Iceland/South', dropFolder: '', expected: 'Iceland/South' },
+    { status: 'missing' as const, storedFolder: 'Iceland/South', dropFolder: 'Norway', expected: 'Iceland/South' },
+    { status: 'failed' as const, storedFolder: '', dropFolder: 'Norway', expected: 'Norway' },
+  ])('re-uploading a $status photo keeps its curated folder or fills the root', async ({ status, storedFolder, dropFolder, expected }) => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const img = await jpeg();
+    const first = await upload(b, cookie, { key: 'trips/recover/hero', folder: storedFolder }, img);
+    const key = first.json().key as string;
+    await b.media.setStatus(key, status);
+    const recovered = await upload(b, cookie, { key: 'trips/recover/hero', folder: dropFolder }, img);
+    expect(recovered.statusCode).toBe(200);
+    expect(recovered.json()).toMatchObject({ key, status: 'processing', folder: expected });
+    expect((await b.media.get(key))?.folder).toBe(expected);
   });
 
   it('a failed duplicate metadata transaction never claims acceptance or the requested folder', async () => {
@@ -470,17 +711,25 @@ describe('POST /upload', () => {
     const b = await buildFullQueue();
     expect((await upload(b, b.cookie, { key: 'trips/full/hero' }, b.img)).statusCode).toBe(429);
     await b.media.setStatus(b.key, status, error ?? undefined);
+    const curated = {
+      folder: 'Iceland/South', title: 'Glacier',
+      alt: { de: 'Gletscher', en: 'Glacier' },
+      caption: { de: 'Am Morgen', en: 'At dawn' }, tags: ['ice'],
+    };
+    await b.media.patch(b.key, curated);
+    const form = { key: 'trips/full/hero', folder: 'Norway' };
 
-    expect((await upload(b, b.cookie, { key: 'trips/full/hero' }, b.img)).statusCode).toBe(429);
-    expect(await b.media.get(b.key)).toMatchObject({ status, error });
+    expect((await upload(b, b.cookie, form, b.img)).statusCode).toBe(429);
+    expect(await b.media.get(b.key)).toMatchObject({ ...curated, status, error });
     expect(b.queue.isActive(b.key)).toBe(false);
 
     await b.release();
-    const again = await upload(b, b.cookie, { key: 'trips/full/hero' }, b.img);
+    const again = await upload(b, b.cookie, form, b.img);
     expect(again.statusCode).toBe(200);
     expect(again.json().duplicate).toBeUndefined();
+    expect(again.json()).toMatchObject({ key: b.key, status: 'processing', folder: curated.folder });
     await b.queue.idle();
-    expect(await b.media.get(b.key)).toMatchObject({ status: 'ready', error: null });
+    expect(await b.media.get(b.key)).toMatchObject({ ...curated, status: 'ready', error: null });
   });
 
   it('a stranded processing row the queue does not hold is settled on a refused re-send and enqueued on a later one', async () => {
@@ -2091,12 +2340,114 @@ describe('user management', () => {
     expect((await b.app.inject({ method: 'DELETE', url: `/users/${bobId}`, cookies: cookie })).statusCode).toBe(200);
   });
 
-  it('rejects deleting yourself and the last admin', async () => {
+  it('rejects deleting yourself without changing accounts or sessions', async () => {
     const b = build();
     const me = await b.users.create({ username: 'admin', password: 'password123456', isAdmin: true });
-    const token = await b.sessions.create(me.id, 60_000);
-    const res = await b.app.inject({ method: 'DELETE', url: `/users/${me.id}`, cookies: { sid: token } });
-    expect(res.statusCode).toBe(409);
+    const tokens = await Promise.all([b.sessions.create(me.id, 60_000), b.sessions.create(me.id, 60_000)]);
+    const remove = vi.spyOn(b.users, 'remove');
+    const invalidate = vi.spyOn(b.sessions, 'destroyAllForUser');
+    try {
+      const res = await b.app.inject({ method: 'DELETE', url: `/users/${me.id}`, cookies: { sid: tokens[0]! } });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({ error: 'you cannot delete your own account' });
+      expect(remove).not.toHaveBeenCalled();
+      expect(invalidate).not.toHaveBeenCalled();
+      expect(await b.users.list()).toEqual([me]);
+      for (const token of tokens) expect((await b.sessions.find(token))?.userId).toBe(me.id);
+    } finally { await b.app.close(); }
+  });
+
+  it('authenticates and authorizes deletion before validating an id', async () => {
+    const b = build();
+    const { cookie } = await authed(b, { isAdmin: false, username: 'author' });
+    const remove = vi.spyOn(b.users, 'remove');
+    try {
+      expect((await b.app.inject({ method: 'DELETE', url: '/users/not-a-uuid' })).statusCode).toBe(401);
+      expect((await b.app.inject({ method: 'DELETE', url: '/users/not-a-uuid', cookies: cookie })).statusCode).toBe(403);
+      expect(remove).not.toHaveBeenCalled();
+    } finally { await b.app.close(); }
+  });
+
+  it('cross-deletion preserves the surviving admin and invalidates only the removed account', async () => {
+    const users = memoryUserStore();
+    const sessions = memorySessionStore();
+    const remove = users.remove;
+    let arrivals = 0;
+    const { promise: bothAuthenticated, resolve: release } = Promise.withResolvers<void>();
+    users.remove = async (id) => {
+      if (++arrivals === 2) release();
+      await bothAuthenticated;
+      return remove(id);
+    };
+    const invalidate = vi.spyOn(sessions, 'destroyAllForUser');
+    const b = build({ users, sessions });
+    const a = await authed(b, { username: 'admin-a' });
+    const c = await authed(b, { username: 'admin-b' });
+    const extraA = await sessions.create(a.user.id, 60_000);
+    const extraC = await sessions.create(c.user.id, 60_000);
+    try {
+      const results = await Promise.all([
+        b.app.inject({ method: 'DELETE', url: `/users/${c.user.id}`, cookies: a.cookie }),
+        b.app.inject({ method: 'DELETE', url: `/users/${a.user.id}`, cookies: c.cookie }),
+      ]);
+      expect(results.map((res) => res.statusCode).sort()).toEqual([200, 409]);
+      expect(results.find((res) => res.statusCode === 409)!.json()).toEqual({ error: 'cannot remove the last admin' });
+      const survivor = (await users.list())[0]!;
+      expect(await users.countAdmins()).toBe(1);
+      const deleted = survivor.id === a.user.id ? c : a;
+      expect(invalidate.mock.calls).toEqual([[deleted.user.id]]);
+      for (const [account, tokens] of [[a, [a.cookie.sid, extraA]], [c, [c.cookie.sid, extraC]]] as const) {
+        for (const token of tokens) {
+          expect((await sessions.find(token))?.userId ?? null).toBe(account.user.id === survivor.id ? survivor.id : null);
+        }
+      }
+      expect((await b.app.inject({ method: 'DELETE', url: `/users/${survivor.id}`, cookies: deleted.cookie })).statusCode).toBe(401);
+      expect((await b.app.inject({ method: 'GET', url: '/auth/status' })).json()).toEqual({ authenticated: false, needsSetup: false });
+      expect((await b.app.inject({ method: 'POST', url: '/setup', payload: { username: 'new', password: 'password123456' } })).statusCode).toBe(409);
+    } finally { release(); await b.app.close(); }
+  });
+
+  it('does not invalidate sessions for missing users or failed removals', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const target = await b.users.create({ username: 'target', password: 'password123456', isAdmin: false });
+    const token = await b.sessions.create(target.id, 60_000);
+    const invalidate = vi.spyOn(b.sessions, 'destroyAllForUser');
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      for (const id of ['not-a-uuid', randomUUID()]) {
+        const res = await b.app.inject({ method: 'DELETE', url: `/users/${id}`, cookies: cookie });
+        expect(res.statusCode).toBe(404);
+        expect(res.json()).toEqual({ error: 'user not found' });
+      }
+      vi.spyOn(b.users, 'remove').mockRejectedValueOnce(new Error('private transaction failure'));
+      const failed = await b.app.inject({ method: 'DELETE', url: `/users/${target.id}`, cookies: cookie });
+      expect(failed.statusCode).toBe(500);
+      expect(failed.json()).toEqual({ error: 'internal server error' });
+      expect(invalidate).not.toHaveBeenCalled();
+      expect(await b.users.findById(target.id)).toEqual(target);
+      expect((await b.sessions.find(token))?.userId).toBe(target.id);
+    } finally { log.mockRestore(); await b.app.close(); }
+  });
+
+  it('does not restore a deleted user when follow-up session invalidation fails', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const target = await b.users.create({ username: 'target', password: 'password123456', isAdmin: false });
+    const token = await b.sessions.create(target.id, 60_000);
+    vi.spyOn(b.sessions, 'destroyAllForUser').mockImplementation(async (id) => {
+      expect(await b.users.findById(id)).toBeNull();
+      throw new Error('private session-store failure');
+    });
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const failed = await b.app.inject({ method: 'DELETE', url: `/users/${target.id}`, cookies: cookie });
+      expect(failed.statusCode).toBe(500);
+      expect(failed.json()).toEqual({ error: 'internal server error' });
+      expect(await b.users.findById(target.id)).toBeNull();
+      expect((await b.sessions.find(token))?.userId).toBe(target.id);
+      expect((await b.app.inject({ method: 'GET', url: '/users', cookies: { sid: token } })).statusCode).toBe(401);
+    } finally { log.mockRestore(); await b.app.close(); }
   });
 
   it('POST /users 409 on duplicate username', async () => {
@@ -2105,6 +2456,156 @@ describe('user management', () => {
     await b.app.inject({ method: 'POST', url: '/users', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: { username: 'bob', password: 'password123456', isAdmin: false } });
     const dup = await b.app.inject({ method: 'POST', url: '/users', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: { username: 'BOB', password: 'password123456', isAdmin: false } });
     expect(dup.statusCode).toBe(409);
+  });
+});
+
+describe('auth rate-limit refusals with async onSend (#372)', () => {
+  const refusal = { error: 'too many attempts, please wait and try again' };
+
+  function buildWithAsyncSend(extra: Partial<ServerConfig> = {}) {
+    const b = build(extra);
+    // Install before readiness, without changing the production hook chain.
+    b.app.addHook('onSend', async (_req, _reply, payload) => { await Promise.resolve(); return payload; });
+    return b;
+  }
+
+  it.each(['password123456', 'wrong-password'])('refused login with %s neither verifies nor mutates sessions/account failures', async (password) => {
+    const accountLimiter = accountLockoutLimiter({ max: 3 });
+    const b = buildWithAsyncSend({
+      loginLimiter: fixedWindowLimiter({ max: 1, windowMs: 60_000 }),
+      accountLimiter,
+    });
+    try {
+      const { user, cookie } = await authed(b);
+      const hash = user.passwordHash;
+      const login = (password: string) => b.app.inject({
+        method: 'POST', url: '/login', payload: { username: user.username, password },
+      });
+      // A real admitted failure seeds the account counter and exhausts this IP.
+      expect((await login('wrong-password')).statusCode).toBe(401);
+      const lookup = vi.spyOn(b.users, 'findByUsername');
+      const createSession = vi.spyOn(b.sessions, 'create');
+      const failure = vi.spyOn(accountLimiter, 'recordFailure');
+      const success = vi.spyOn(accountLimiter, 'recordSuccess');
+
+      const denied = await login(password);
+      // Injection can finish before an incorrectly admitted async handler does.
+      // Let memory-store continuations finish before observing durable effects.
+      await nextTurn();
+      expect(denied.statusCode).toBe(429);
+      expect(denied.json()).toEqual(refusal);
+      expect(denied.headers['set-cookie']).toBeUndefined();
+      expect(lookup).not.toHaveBeenCalled(); // No stored hash read or scrypt either.
+      expect(createSession).not.toHaveBeenCalled();
+      expect(failure).not.toHaveBeenCalled();
+      expect(success).not.toHaveBeenCalled();
+      expect(await b.sessions.find(cookie.sid)).toMatchObject({ userId: user.id });
+      expect((await b.users.findById(user.id))?.passwordHash).toBe(hash);
+      // Observe the real limiter's state, not just method forwarding: neither
+      // an extra failure nor a successful-login reset may have happened.
+      accountLimiter.recordFailure(user.username);
+      expect(accountLimiter.isLocked(user.username)).toBe(false);
+      accountLimiter.recordFailure(user.username);
+      expect(accountLimiter.isLocked(user.username)).toBe(true);
+    } finally {
+      await b.app.close();
+    }
+  });
+
+  it.each(['password123456', 'wrong-password'])('refused password change with %s leaves hashes, sessions and account budget intact', async (currentPassword) => {
+    const passwordLimiter = accountLockoutLimiter({ max: 3 });
+    const b = buildWithAsyncSend({
+      loginLimiter: fixedWindowLimiter({ max: 2, windowMs: 60_000 }),
+      passwordLimiter,
+    });
+    try {
+      const { user, cookie } = await authed(b);
+      const otherToken = await b.sessions.create(user.id, 60_000);
+      const hash = user.passwordHash;
+      const change = (currentPassword: string, cookies?: Record<string, string>) => b.app.inject({
+        method: 'POST', url: '/users/me/password', ...(cookies ? { cookies } : {}),
+        payload: { currentPassword, newPassword: 'brand-new-password123' },
+      });
+      // The admitted path still requires both authentication and password proof.
+      expect((await change('password123456')).statusCode).toBe(401);
+      const wrong = await change('wrong-password', cookie);
+      expect(wrong.statusCode).toBe(400);
+      expect(wrong.json()).toEqual({ error: 'current password is incorrect' });
+      const findSession = vi.spyOn(b.sessions, 'find');
+      const createSession = vi.spyOn(b.sessions, 'create');
+      const destroySessions = vi.spyOn(b.sessions, 'destroyAllForUser');
+      const setPassword = vi.spyOn(b.users, 'setPassword');
+      const lookup = vi.spyOn(b.users, 'findById');
+      const failure = vi.spyOn(passwordLimiter, 'recordFailure');
+      const success = vi.spyOn(passwordLimiter, 'recordSuccess');
+
+      const denied = await change(currentPassword, cookie);
+      await nextTurn();
+      expect(denied.statusCode).toBe(429);
+      expect(denied.json()).toEqual(refusal);
+      expect(denied.headers['set-cookie']).toBeUndefined();
+      expect(findSession).not.toHaveBeenCalled(); // Stops the following requireAuth too.
+      expect(lookup).not.toHaveBeenCalled();
+      expect(setPassword).not.toHaveBeenCalled();
+      expect(createSession).not.toHaveBeenCalled();
+      expect(destroySessions).not.toHaveBeenCalled();
+      expect(failure).not.toHaveBeenCalled();
+      expect(success).not.toHaveBeenCalled();
+      expect((await b.users.findById(user.id))?.passwordHash).toBe(hash);
+      expect(await b.sessions.find(cookie.sid)).toMatchObject({ userId: user.id });
+      expect(await b.sessions.find(otherToken)).toMatchObject({ userId: user.id });
+      passwordLimiter.recordFailure(user.id);
+      expect(passwordLimiter.isLocked(user.id)).toBe(false);
+      passwordLimiter.recordFailure(user.id);
+      expect(passwordLimiter.isLocked(user.id)).toBe(true);
+    } finally {
+      await b.app.close();
+    }
+  });
+
+  it('refused setup creates no admin or session; after the window it succeeds only once', async () => {
+    let now = 0;
+    const b = buildWithAsyncSend({
+      loginLimiter: fixedWindowLimiter({ max: 2, windowMs: 60_000, now: () => now }),
+    });
+    try {
+      // Exhaust the SHARED bucket via login while leaving the user store empty.
+      for (let i = 0; i < 2; i++) {
+        expect((await b.app.inject({
+          method: 'POST', url: '/login', payload: { username: 'missing', password: 'wrong-password' },
+        })).statusCode).toBe(401);
+      }
+      const createUser = vi.spyOn(b.users, 'create');
+      const createSession = vi.spyOn(b.sessions, 'create');
+      const setup = () => b.app.inject({
+        method: 'POST', url: '/setup', payload: { username: 'first-admin', password: 'password123456' },
+      });
+      const denied = await setup();
+      await nextTurn();
+      expect(denied.statusCode).toBe(429);
+      expect(denied.json()).toEqual(refusal);
+      expect(denied.headers['set-cookie']).toBeUndefined();
+      expect(createUser).not.toHaveBeenCalled();
+      expect(createSession).not.toHaveBeenCalled();
+      expect(await b.users.count()).toBe(0);
+      expect(await b.users.findByUsername('first-admin')).toBeNull();
+
+      now = 60_000;
+      const allowed = await setup();
+      expect(allowed.statusCode).toBe(200);
+      expect(allowed.json()).toEqual({ username: 'first-admin', isAdmin: true });
+      const admin = await b.users.findByUsername('first-admin');
+      expect(admin).toMatchObject({ isAdmin: true });
+      const token = allowed.cookies.find((cookie) => cookie.name === 'sid')?.value;
+      expect(token).toBeDefined();
+      expect(await b.sessions.find(token ?? '')).toMatchObject({ userId: admin?.id });
+      expect((await setup()).statusCode).toBe(409);
+      expect(await b.users.count()).toBe(1);
+      expect(createUser).toHaveBeenCalledTimes(1);
+      expect(createSession).toHaveBeenCalledTimes(1);
+    } finally {
+      await b.app.close();
+    }
   });
 });
 
@@ -2556,6 +3057,37 @@ describe('alt-text audit (advisory, never a gate)', () => {
     expect((await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie })).json().status).toBe('published');
   });
 
+  it('refuses a failed audit analysis before publishing or building, without changing the draft', async () => {
+    const { builder, calls } = stubBuilder();
+    const b = build({ builder });
+    const { cookie } = await authed(b);
+    const tk = await create(b, cookie);
+    const before = await b.posts.get(tk);
+    const revisions = await b.posts.listRevisions(tk);
+    const publish = vi.spyOn(b.posts, 'publish');
+    const audit = vi.spyOn(altAudit, 'auditAltText')
+      .mockRejectedValueOnce(new Error('gallery source mapping failed'));
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await b.app.inject({
+        method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie,
+        payload: await publishBody(b.posts, tk),
+      });
+      expect(res.statusCode).toBe(500);
+      expect(res.json()).toEqual({ error: 'internal server error' });
+      expect(audit).toHaveBeenCalledTimes(1);
+      expect(publish).not.toHaveBeenCalled();
+      expect(calls).toEqual([]);
+      expect(await b.posts.get(tk)).toEqual(before);
+      expect(await b.posts.listRevisions(tk)).toEqual(revisions);
+    } finally {
+      publish.mockRestore();
+      audit.mockRestore();
+      quiet.mockRestore();
+      await b.app.close();
+    }
+  });
+
   it('serves the same audit before publishing, to any authed author', async () => {
     const b = build();
     const { cookie } = await authed(b, { isAdmin: false });
@@ -2612,7 +3144,7 @@ describe('alt-text audit (advisory, never a gate)', () => {
   });
 });
 
-describe('publish gate (foreign images, #91)', () => {
+describe('publish body gates (#91, #375)', () => {
   const IMG = 'https://img.simonswanderlust.com';
   const pairWithBody = (deBody: string, enBody = '## b') => ({
     translationKey: '', status: 'draft',
@@ -2622,6 +3154,144 @@ describe('publish gate (foreign images, #91)', () => {
   });
   const create = async (b: Built, cookie: { sid: string }, payload: Record<string, unknown>) =>
     (await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload })).json().translationKey;
+
+  it.each(['single', 'bulk'] as const)('%s refuses rendered H1s in either locale before writes, exports or builds', async (mode) => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder });
+    const publish = vi.spyOn(b.posts, 'publish');
+    const render = vi.spyOn(bodyRenderer, 'renderMarkdown');
+    try {
+      const { cookie } = await authed(b);
+      for (const locale of ['de', 'en'] as const) {
+        for (const body of ['# Title', 'Intro\n=====', '> # Title', '- # Title', '<div><h1 class="legacy">Title</h1></div>']) {
+          const input = pairWithBody('## Body');
+          input[locale].bodyMarkdown = body;
+          const tk = await create(b, cookie, input);
+          publish.mockClear();
+          render.mockClear();
+          const response = await b.app.inject(mode === 'single'
+            ? { method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) }
+            : { method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [tk], baseLanguageUpdatedAt: (await b.posts.language.get()).updatedAt.toISOString() } });
+          const error = `${locale}: body must not contain an H1; the story hero provides the page H1`;
+          if (mode === 'single') {
+            expect(response.statusCode, body).toBe(400);
+            expect(response.json().error).toBe(error);
+          } else {
+            expect(response.statusCode).toBe(200);
+            expect(response.json()).toMatchObject({ succeeded: 0, failed: 1, results: [{ key: tk, ok: false, error }] });
+            expect(response.json().build).toBeUndefined();
+          }
+          expect(render).toHaveBeenCalledTimes(locale === 'de' ? 1 : 2);
+          expect(publish).not.toHaveBeenCalled();
+          expect(s.calls).toEqual([]);
+          expect((await b.posts.get(tk))?.status).toBe('draft');
+          expect((await b.posts.usageRows()).filter(row => row.source === 'published')).toEqual([]);
+          expect(existsSync(join(dir, 'backup'))).toBe(false);
+          await b.posts.remove(tk);
+        }
+      }
+    } finally {
+      render.mockRestore();
+      publish.mockRestore();
+      await b.app.close();
+    }
+  });
+
+  it.each(['single', 'bulk'] as const)('%s publishes literal H1 examples in either locale with one render per locale', async (mode) => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder });
+    const render = vi.spyOn(bodyRenderer, 'renderMarkdown');
+    try {
+      const { cookie } = await authed(b);
+      let published = 0;
+      for (const locale of ['de', 'en'] as const) {
+        for (const body of [
+          'Use `<h1>` for the page title.',
+          '    <h1>Indented example</h1>',
+          '````markdown\n# Example heading\n<h1>Example HTML</h1>\n````\n\n## Real section',
+          '&lt;h1&gt;Escaped title&lt;/h1&gt;',
+          '<script><h1>Removed by sanitation</h1></script>\n\nSafe body',
+        ]) {
+          const input = pairWithBody('## Body');
+          input[locale].bodyMarkdown = body;
+          const tk = await create(b, cookie, input);
+          render.mockClear();
+          const response = await b.app.inject(mode === 'single'
+            ? { method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) }
+            : { method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [tk], baseLanguageUpdatedAt: (await b.posts.language.get()).updatedAt.toISOString() } });
+          expect(response.statusCode, body).toBe(200);
+          if (mode === 'bulk') expect(response.json()).toMatchObject({ succeeded: 1, failed: 0 });
+          expect(render).toHaveBeenCalledTimes(2);
+          expect(s.calls).toHaveLength(++published);
+          expect((await b.posts.get(tk))?.status).toBe('published');
+          expect((await b.posts.usageRows()).find(row => row.source === 'published' && row.locale === locale)?.bodyMarkdown).toBe(body);
+          expect(existsSync(join(dir, 'backup', 'trips', locale, `fgn-${locale}.mdx`))).toBe(true);
+          await b.posts.remove(tk);
+        }
+      }
+    } finally {
+      render.mockRestore();
+      await b.app.close();
+    }
+  });
+
+  it('bulk publishes eligible pairs while leaving an H1 pair untouched, exporting and rebuilding only successes', async () => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder });
+    const publish = vi.spyOn(b.posts, 'publish');
+    try {
+      const { cookie } = await authed(b);
+      const bad = await create(b, cookie, pairWithBody('## Body', '> # Title'));
+      const goodPair = pairWithBody('Use `<h1>` for a title.');
+      goodPair.de.slug = 'good-de';
+      goodPair.en.slug = 'good-en';
+      const good = await create(b, cookie, goodPair);
+      const response = await b.app.inject({ method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [bad, good], baseLanguageUpdatedAt: (await b.posts.language.get()).updatedAt.toISOString() } });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        succeeded: 1, failed: 1,
+        results: [{ key: bad, ok: false, error: expect.stringMatching(/^en: body must not contain an H1/) }, { key: good, ok: true }],
+      });
+      expect(publish).toHaveBeenCalledTimes(1);
+      expect(publish.mock.calls[0]?.[0]).toBe(good);
+      expect((await b.posts.get(bad))?.status).toBe('draft');
+      expect((await b.posts.get(good))?.status).toBe('published');
+      expect(existsSync(join(dir, 'backup', 'trips', 'en', 'fgn-en.mdx'))).toBe(false);
+      expect(existsSync(join(dir, 'backup', 'trips', 'en', 'good-en.mdx'))).toBe(true);
+      expect(s.calls).toHaveLength(1);
+    } finally {
+      publish.mockRestore();
+      await b.app.close();
+    }
+  });
+
+  it.each(['single', 'bulk'] as const)('%s preserves renderer failures as internal errors, not validation refusals', async (mode) => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder });
+    const publish = vi.spyOn(b.posts, 'publish');
+    const render = vi.spyOn(bodyRenderer, 'renderMarkdown');
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { cookie } = await authed(b);
+      const tk = await create(b, cookie, pairWithBody('## Body'));
+      render.mockRejectedValueOnce(new Error('private renderer failure'));
+      const response = await b.app.inject(mode === 'single'
+        ? { method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) }
+        : { method: 'POST', url: '/posts/bulk', cookies: cookie, payload: { action: 'publish', keys: [tk], baseLanguageUpdatedAt: (await b.posts.language.get()).updatedAt.toISOString() } });
+      if (mode === 'single') expect(response.statusCode).toBe(500);
+      else expect(response.json()).toMatchObject({ succeeded: 0, failed: 1, results: [{ key: tk, ok: false, error: 'internal error' }] });
+      expect(response.body).not.toMatch(/private renderer failure|H1/);
+      expect(publish).not.toHaveBeenCalled();
+      expect(s.calls).toEqual([]);
+      expect(existsSync(join(dir, 'backup'))).toBe(false);
+      expect((await b.posts.get(tk))?.status).toBe('draft');
+    } finally {
+      render.mockRestore();
+      publish.mockRestore();
+      log.mockRestore();
+      await b.app.close();
+    }
+  });
 
   it('409s with the count and examples while a body still hot-links another host, and publishes nothing', async () => {
     const s = stubBuilder();
@@ -2663,6 +3333,97 @@ describe('posts editor', () => {
     shared: { date: '2024-10-03', countryCode: 'RO', region: 'europe', coordinates: { lat: 1, lng: 2 } },
     de: { locale: 'de', slug: 'de-s', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
     en: { locale: 'en', slug: 'en-s', title: 'T', excerpt: 'e', country: 'X', heroImage: { src: 'https://i/h', width: 9, height: 9, alt: 'a' }, bodyMarkdown: '## b', images: {} },
+  });
+
+  it('POST and PUT return snapshot warnings, never persist them, and keep refusal precedence', async () => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder });
+    try {
+      const { cookie } = await authed(b);
+      const input = sample();
+      const line = '> https://i/gallery | 30x20 | alt="😀" | capton="Wrong"';
+      input.en.bodyMarkdown = `<BodyImage\n src="https://i/body"\n width={30} height={20} alt="View"\n/>\n\n> ~~~gallery extra\n${line}\n> ~~~`;
+      const expected = [{ code: 'invalid_gallery_metadata', locale: 'en', line: 7, column: line.indexOf('capton=') + 1, field: 'unknown', reason: 'unknown_field' }];
+      const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', cookies: cookie, payload: input });
+      expect(created.statusCode).toBe(200);
+      expect(created.json().galleryWarnings).toEqual(expected);
+      expect(created.json()).toMatchObject({ status: 'draft', de: input.de, en: { title: input.en.title } });
+      const url = `/posts/${created.json().translationKey}`;
+      const saved = await injectAuthoring(b.app, { method: 'PUT', url, cookies: cookie, payload: { ...input, updatedAt: created.json().updatedAt } });
+      expect(saved.statusCode).toBe(200);
+      expect(saved.json().galleryWarnings).toEqual(expected);
+      const before = (await injectAuthoring(b.app, { url, cookies: cookie })).json();
+      expect(before).not.toHaveProperty('galleryWarnings');
+      expect(before.en.bodyMarkdown).toContain(line);
+      const stale = await injectAuthoring(b.app, { method: 'PUT', url, cookies: cookie, payload: { ...input, updatedAt: new Date(0).toISOString() } });
+      expect(stale.statusCode).toBe(409);
+      expect(stale.json()).toMatchObject({ code: 'conflict' });
+      expect(stale.json()).not.toHaveProperty('galleryWarnings');
+      const duplicate = await injectAuthoring(b.app, { method: 'POST', url: '/posts', cookies: cookie, payload: input });
+      expect(duplicate.statusCode).toBe(409);
+      expect(duplicate.json()).not.toHaveProperty('galleryWarnings');
+      const renamed = await injectAuthoring(b.app, { method: 'PUT', url, cookies: cookie, payload: { ...input, de: { ...input.de, slug: 'renamed' } } });
+      expect(renamed.statusCode).toBe(409);
+      expect(renamed.json()).toMatchObject({ code: 'slug_change_unconfirmed' });
+      expect(renamed.json()).not.toHaveProperty('galleryWarnings');
+      const write = vi.spyOn(b.posts, 'upsertDraft').mockRejectedValueOnce(new Error('private storage failure'));
+      const failed = await injectAuthoring(b.app, { method: 'PUT', url, cookies: cookie, payload: input });
+      write.mockRestore();
+      expect(failed.statusCode).toBe(500);
+      expect(failed.json()).not.toHaveProperty('galleryWarnings');
+      expect(failed.body).not.toContain('private storage failure');
+      expect((await injectAuthoring(b.app, { url, cookies: cookie })).json()).toEqual(before);
+      const repaired = await injectAuthoring(b.app, { method: 'PUT', url, cookies: cookie, payload: { ...input, en: { ...input.en, bodyMarkdown: 'Fixed' } } });
+      expect(repaired.statusCode).toBe(200);
+      expect(repaired.json().galleryWarnings).toEqual([]);
+      expect(s.calls).toEqual([]);
+    } finally { await b.app.close(); }
+  });
+
+  it.each(['de', 'en'] as const)('rejects excessive %s slugs with a bounded field-specific 400 before create/update', async (locale) => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder });
+    const { cookie } = await authed(b);
+    for (const length of [252, 8192]) {
+      const input = sample();
+      input[locale].slug = 'a'.repeat(length);
+      const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', cookies: cookie, payload: input });
+      expect(created.statusCode).toBe(400);
+      expect(created.json().error).toBe(`${locale}.slug must be at most 251 ASCII bytes (received ${length})`);
+      expect(await b.posts.list()).toEqual([]);
+    }
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', cookies: cookie, payload: sample() });
+    const tk = created.json().translationKey as string;
+    const before = await b.posts.get(tk);
+    const revisions = await b.posts.listRevisions(tk);
+    for (const length of [252, 8192]) {
+      const input = { ...sample(), translationKey: tk, confirmSlugChange: true };
+      input[locale].slug = 'a'.repeat(length);
+      const updated = await injectAuthoring(b.app, { method: 'PUT', url: `/posts/${tk}`, cookies: cookie, payload: input });
+      expect(updated.statusCode).toBe(400);
+      expect(updated.json().error).toBe(`${locale}.slug must be at most 251 ASCII bytes (received ${length})`);
+      expect(await b.posts.get(tk)).toEqual(before);
+      expect(await b.posts.listRevisions(tk)).toEqual(revisions);
+    }
+    expect(s.calls).toEqual([]);
+    await b.app.close();
+  });
+
+  it.each([250, 251])('saves and publishes %i-byte DE/EN slugs byte-identically through HTTP', async (length) => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder });
+    const { cookie } = await authed(b);
+    const input = sample();
+    input.de.slug = 'd'.repeat(length);
+    input.en.slug = 'e'.repeat(length);
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', cookies: cookie, payload: input });
+    expect(created.statusCode).toBe(200);
+    const tk = created.json().translationKey as string;
+    const published = await injectAuthoring(b.app, { method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
+    expect(published.statusCode).toBe(200);
+    expect(await b.posts.get(tk)).toMatchObject({ status: 'published', de: { slug: input.de.slug }, en: { slug: input.en.slug } });
+    expect(s.calls).toHaveLength(1);
+    await b.app.close();
   });
 
   it('requires the strict 4KiB explicit publish body without a bodyless compatibility path', async () => {
@@ -2909,14 +3670,52 @@ describe('posts editor', () => {
     const { cookie } = await authed(b);
     const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', headers: { 'content-type': 'application/json' }, cookies: cookie, payload: sample() });
     const tk = created.json().translationKey;
-    const published = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
+    const published = await injectAuthoring(b.app, { method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     expect(s.calls.length).toBe(1);
-    const un = await b.app.inject({ method: 'POST', url: `/posts/${tk}/unpublish`, cookies: cookie });
+    const un = await injectAuthoring(b.app, { method: 'POST', url: `/posts/${tk}/unpublish`, cookies: cookie });
     expect(un.statusCode).toBe(200);
     expect(un.json()).toEqual({ unpublished: true, previousUpdatedAt: published.json().updatedAt, updatedAt: expect.any(String), build: { ok: true, attemptId: 'r1', release: 'r1' } });
     expect(s.calls.length).toBe(2);
-    const got = await b.app.inject({ method: 'GET', url: `/posts/${tk}`, cookies: cookie });
+    const got = await injectAuthoring(b.app, { method: 'GET', url: `/posts/${tk}`, cookies: cookie });
     expect(got.json().status).toBe('draft');
+    expect(un.json().updatedAt).toBe(got.json().updatedAt);
+    expect(new Date(un.json().updatedAt).getTime()).toBeGreaterThan(new Date(created.json().updatedAt).getTime());
+    const saved = await injectAuthoring(b.app, {
+      method: 'PUT', url: `/posts/${tk}`, cookies: cookie,
+      payload: { ...sample(), updatedAt: un.json().updatedAt },
+    });
+    expect(saved.statusCode).toBe(200);
+  });
+
+  it('unpublish returns its own token when a later writer saves during the rebuild', async () => {
+    const posts = memoryPostStore();
+    let tokenAtBuild: string | undefined;
+    const builder: SiteBuilder = {
+      ...stubBuilder().builder,
+      build: async () => {
+        const [summary] = await posts.list();
+        const pair = (await posts.get(summary!.translationKey))!;
+        tokenAtBuild = pair.updatedAt.toISOString();
+        await posts.upsertDraft({ ...pair, de: { ...pair.de, title: 'Another tab' } }, pair.updatedAt);
+        return { ok: true, attemptId: 'r1', release: 'r1' };
+      },
+    };
+    const b = build({ posts, builder });
+    const { cookie } = await authed(b);
+    const created = await injectAuthoring(b.app, { method: 'POST', url: '/posts', cookies: cookie, payload: sample() });
+    const tk = created.json().translationKey;
+    await posts.publish(tk, await publishTokens(posts, tk));
+    const un = await injectAuthoring(b.app, { method: 'POST', url: `/posts/${tk}/unpublish`, cookies: cookie });
+    expect(un.statusCode).toBe(200);
+    expect(un.json().updatedAt).toBe(tokenAtBuild);
+    expect(un.json().updatedAt).not.toBe((await posts.get(tk))!.updatedAt.toISOString());
+    const stale = await injectAuthoring(b.app, {
+      method: 'PUT', url: `/posts/${tk}`, cookies: cookie,
+      payload: { ...sample(), updatedAt: un.json().updatedAt },
+    });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json().code).toBe('conflict');
+    expect((await posts.get(tk))!.de.title).toBe('Another tab');
   });
 
   it('reports the locked predecessor when another tab saves after the route preflight', async () => {
@@ -3290,6 +4089,40 @@ describe('WordPress import', () => {
     expect(res.json().error).toBe('no importable posts found in export');
   });
 
+  it.each([false, true])('completes a groupless-only export as a rejection-only 202 job (overwrite=%s)', async (overwrite) => {
+    const rehost = vi.fn(async () => ({ src: 'https://img/unexpected', width: 1, height: 1 }));
+    const b = build({ prepareImport: (xml, deps) => prepareImport(xml, { ...deps, rehost }) });
+    const upsert = vi.spyOn(b.posts, 'upsertDraft');
+    const { cookie } = await authed(b);
+    const xml = wxrWith('https://wp.example/must-not-fetch.jpg')
+      .replaceAll('<category domain="post_translations" nicename="impg"><![CDATA[impg]]></category>', '');
+    const res = await postImport(b, cookie, xml, { overwriteDrafts: String(overwrite) });
+    expect(res.statusCode).toBe(202);
+    expect(res.json().planned).toEqual({
+      groups: { total: 0, done: 0 }, images: { planned: 0, hosted: 0, failed: 0 },
+    });
+    await b.importJobs.settle();
+    const status = await b.app.inject({ method: 'GET', url: '/import/status', cookies: cookie });
+    expect(status.statusCode).toBe(200);
+    const job = status.json().job;
+    expect(job).toMatchObject({
+      id: res.json().id, status: 'done',
+      progress: { groups: { total: 0, done: 0 }, images: { planned: 0, hosted: 0, failed: 0 } },
+      summary: {
+        imported: 0, updated: 0, skippedPublished: 0, rejected: 2, failed: 0,
+        images: { total: 0, hosted: 0, failed: 0 },
+        warnings: [
+          'imp-de (de): no translation (untranslated post) — rejected',
+          'imp-en (en): no translation (untranslated post) — rejected',
+        ],
+      },
+    });
+    expect(job.finishedAt).toBeTruthy();
+    expect(rehost).not.toHaveBeenCalled();
+    expect(upsert).not.toHaveBeenCalled();
+    expect(await b.posts.list()).toEqual([]);
+  });
+
   // issue #100: a re-run of an export whose posts are all already published is
   // a job with `skippedPublished` — "nothing to do" is a success the author can
   // read, not the 400 the old `skipped === 0` check returned (a 400 cannot say
@@ -3661,6 +4494,47 @@ describe('backup routes', () => {
 });
 
 describe('pages routes', () => {
+  it('returns saved warnings beside a failed build, but none for conflict or write failure', async () => {
+    const outcome = { ok: false as const, attemptId: 'failed', code: 'internal' as const, error: buildFailureMessage('internal') };
+    const s = stubBuilder(outcome);
+    const b = build({ builder: s.builder });
+    try {
+      const { cookie } = await authed(b);
+      // A hosted photo: page saves publish immediately, so #284 refuses foreign images.
+      const line = 'https://img.simonswanderlust.com/pages/about/gallery | 30x20 | caption="Rom | Tag 2"';
+      const input = {
+        de: { locale: 'de', title: 'Über mich', bodyMarkdown: `~~~gallery\n${line}\n~~~`, images: {} },
+        en: { locale: 'en', title: 'About', bodyMarkdown: 'Keep', images: {} },
+      };
+      const response = await injectAuthoring(b.app, { method: 'PUT', url: '/pages/about', cookies: cookie, payload: input });
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json().build).toEqual(outcome);
+      expect(response.json().saved).toMatchObject({ key: 'about', de: input.de, en: input.en });
+      expect(response.json().saved).not.toHaveProperty('galleryWarnings');
+      expect(response.json().galleryWarnings).toEqual([{
+        code: 'invalid_gallery_metadata', locale: 'de', line: 2,
+        column: line.indexOf('caption=') + 1, field: 'caption', reason: 'malformed_field',
+      }]);
+      const before = await b.pages.get('about');
+      expect(before).not.toHaveProperty('galleryWarnings');
+      const stale = await injectAuthoring(b.app, { method: 'PUT', url: '/pages/about', cookies: cookie, payload: { ...input, updatedAt: new Date(0).toISOString() } });
+      expect(stale.statusCode).toBe(409);
+      expect(stale.json()).not.toHaveProperty('galleryWarnings');
+      const write = vi.spyOn(b.pages, 'save').mockRejectedValueOnce(new Error('private storage failure'));
+      const failed = await injectAuthoring(b.app, { method: 'PUT', url: '/pages/about', cookies: cookie, payload: input });
+      write.mockRestore();
+      expect(failed.statusCode).toBe(500);
+      expect(failed.json()).not.toHaveProperty('galleryWarnings');
+      expect(failed.body).not.toContain('private storage failure');
+      expect(await b.pages.get('about')).toEqual(before);
+      expect(s.calls).toHaveLength(1);
+      const repaired = await injectAuthoring(b.app, { method: 'PUT', url: '/pages/about', cookies: cookie, payload: { ...input, de: { ...input.de, bodyMarkdown: 'Fixed' } } });
+      expect(repaired.statusCode).toBe(200);
+      expect(repaired.json().galleryWarnings).toEqual([]);
+      expect(s.calls).toHaveLength(2);
+    } finally { await b.app.close(); }
+  });
+
   it('GET /pages/:key requires auth and returns the pair', async () => {
     const b = build();
     expect((await b.app.inject({ method: 'GET', url: '/pages/about' })).statusCode).toBe(401);
@@ -3687,6 +4561,23 @@ describe('pages routes', () => {
     expect(res.json().saved.de.title).toBe('Über mich');
     expect(res.json().build).toEqual({ ok: true, attemptId: 'r7', release: 'r7' });
     expect(s.calls.length).toBe(1);
+  });
+
+  it('does not apply the story-only H1 gate to About publication', async () => {
+    const s = stubBuilder();
+    const b = build({ builder: s.builder });
+    try {
+      const { cookie } = await authed(b);
+      const body = {
+        de: { locale: 'de', title: 'Über mich', bodyMarkdown: 'Über mich\n=========', images: {} },
+        en: { locale: 'en', title: 'About me', bodyMarkdown: '<h1>About me</h1>', images: {} },
+      };
+      const response = await injectAuthoring(b.app, { method: 'PUT', url: '/pages/about', cookies: cookie, payload: body });
+      expect(response.statusCode).toBe(200);
+      expect((await b.pages.get('about')).de.bodyMarkdown).toBe(body.de.bodyMarkdown);
+      expect((await b.pages.get('about')).en.bodyMarkdown).toBe(body.en.bodyMarkdown);
+      expect(s.calls).toHaveLength(1);
+    } finally { await b.app.close(); }
   });
 
   it('PUT /pages/:key rejects an unsafe key with 400', async () => {
@@ -4123,6 +5014,7 @@ describe('admin onboarding metadata boundary', () => {
     evaluatedAt: '2026-10-27T12:00:00.000Z', dismissedAt: null, retiredAt: null,
   };
   const empty: OnboardingProgress = {
+    language: { primary: 'de', locales: ['de', 'en'], lockedAt: null, updatedAt: '2026-10-27T12:00:00.000Z' },
     identity: false, ready: false, processing: false, attention: false,
     story: false, published: false, newest: null, newestDraft: null,
   };
@@ -4276,5 +5168,144 @@ describe('write reconciliation HTTP trust boundaries (#305)', () => {
     }
     expect((await b.app.inject({ method: 'POST', url: '/media/lookup', payload: { keys: ['photos/p204'] } })).statusCode).toBe(401);
     await b.app.close();
+  });
+});
+
+describe('identity asset administration and release serving (#275)', () => {
+  function assetRequest(b: Built, cookie: { sid: string }, files: Buffer[], revision = 1, role = 'logo') {
+    const form = new FormData();
+    form.append('revision', String(revision));
+    for (const bytes of files) form.append('file', bytes, { filename: 'untrusted-name.png', contentType: 'image/png' });
+    return b.app.inject({ method: 'PUT', url: '/settings/identity/assets/' + role, cookies: cookie, headers: form.getHeaders(), payload: form.getBuffer() });
+  }
+  it('authorizes PUT and DELETE before inspecting bytes or revision', async () => {
+    const identityStore = memorySiteIdentityStore();
+    const b = build({ identityStore, workLock: createWorkLock() });
+    const { cookie } = await authed(b, { isAdmin: false });
+    try {
+      for (const method of ['PUT', 'DELETE'] as const) {
+        const url = '/settings/identity/assets/logo';
+        expect((await b.app.inject({ method, url, payload: { revision: 1 } })).statusCode).toBe(401);
+        expect((await b.app.inject({ method, url, cookies: cookie, payload: { revision: 1 } })).statusCode).toBe(403);
+      }
+      expect(identityStore.get().revision).toBe(1);
+    } finally { await b.app.close(); }
+  });
+  it('saves one role group under the real shared lock, shares text revisions, removes to defaults and never builds or retains originals', async () => {
+    const identityStore = memorySiteIdentityStore();
+    const lock = createWorkLock();
+    const replace = identityStore.replaceAssets.bind(identityStore);
+    const mutation = vi.spyOn(identityStore, 'replaceAssets').mockImplementation((revision, group, assets) => {
+      if (assets.length) expect(lock.stats().sharedRunning).toBe(1);
+      return replace(revision, group, assets);
+    });
+    const builder = stubBuilder();
+    const b = build({ identityStore, workLock: lock, builder: builder.builder });
+    const { cookie } = await authed(b);
+    try {
+      const source = await jpeg();
+      const uploaded = await assetRequest(b, cookie, [source]);
+      expect(uploaded.statusCode).toBe(200);
+      expect(uploaded.json()).toEqual({ revision: 2, savedAt: null, takesEffect: 'next_build', assets: { logo: true, favicon: false } });
+      expect(uploaded.headers['cache-control']).toBe('no-store');
+      expect(mutation).toHaveBeenCalledOnce();
+      expect(mutation.mock.calls[0]![2][0]!.bytes.equals(source)).toBe(false);
+      expect(await readdir(dir)).toEqual([]);
+      expect(b.enqueued).toEqual([]);
+      expect(builder.calls).toEqual([]);
+      // #276: the canonical origin is an editable, required field of every text save.
+      const identity = identityStore.get().identity;
+      const text = await b.app.inject({ method: 'PUT', url: '/settings/identity', cookies: cookie, payload: { revision: 2, identity: { ...identity, siteName: 'Field notes' } } });
+      expect(text.statusCode).toBe(200);
+      const stale = await assetRequest(b, cookie, [source], 2);
+      expect(stale.statusCode).toBe(409);
+      expect(stale.json().code).toBe('identity_conflict');
+      const favicon = await assetRequest(b, cookie, [source], 3, 'favicon');
+      expect(favicon.statusCode).toBe(200);
+      const settings = await b.app.inject({ url: '/settings/identity', cookies: cookie });
+      expect(settings.json()).toMatchObject({ revision: 4, assets: { logo: true, favicon: true }, identity: { siteName: 'Field notes' } });
+      expect(settings.json()).not.toHaveProperty('bytes');
+      const removed = await b.app.inject({ method: 'DELETE', url: '/settings/identity/assets/favicon', cookies: cookie, payload: { revision: 4 } });
+      expect(removed.statusCode).toBe(200);
+      expect(removed.json()).toMatchObject({ revision: 5, assets: { logo: true, favicon: false } });
+      const removedLogo = await b.app.inject({ method: 'DELETE', url: '/settings/identity/assets/logo', cookies: cookie, payload: { revision: 5 } });
+      expect(removedLogo.json()).toMatchObject({ revision: 6, assets: { logo: false, favicon: false } });
+      expect(builder.calls).toEqual([]);
+    } finally { mutation.mockRestore(); await b.app.close(); }
+  });
+  it('returns specific errors without replacing the previous asset or advancing its revision', async () => {
+    const identityStore = memorySiteIdentityStore();
+    const source = await jpeg();
+    await identityStore.replaceAssets(1, 'logo', await normalizeIdentityUpload(source, 'logo'));
+    const b = build({ identityStore, workLock: createWorkLock() });
+    const { cookie } = await authed(b);
+    try {
+      const frames = Buffer.concat([Buffer.alloc(180 * 180 * 3, 30), Buffer.alloc(180 * 180 * 3, 200)]);
+      const animated = await sharp(frames, { raw: { width: 180, height: 360, channels: 3, pageHeight: 180 } })
+        .webp({ loop: 0, delay: [100, 100] }).toBuffer();
+      const cases: [Buffer[], number, string][] = [
+        [[source, source], 413, 'too_many_files'],
+        [[Buffer.alloc(2 * 1024 * 1024 + 1)], 413, 'asset_too_large'],
+        [[Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"><script>alert(2)</script><image href="https://example.com/evil.png"/></svg>')], 415, 'unsupported_image_type'],
+        [[Buffer.from('not an image')], 415, 'unsupported_image_type'],
+        [[animated], 400, 'animated_image'],
+        [[await sharp({ create: { width: 4097, height: 4097, channels: 3, background: '#000' } }).png().toBuffer()], 400, 'image_too_large'],
+        [[(await sharp(source).png().toBuffer()).subarray(0, 40)], 400, 'image_invalid'],
+        [[await sharp(source).resize(31, 31).png().toBuffer()], 400, 'image_too_small'],
+      ];
+      for (const [files, status, code] of cases) {
+        const response = await assetRequest(b, cookie, files, 2);
+        expect(response.statusCode, code).toBe(status);
+        expect(response.json().code).toBe(code);
+        expect(identityStore.get().revision).toBe(2);
+        expect(identityStore.getAssetState()).toEqual({ logo: true, favicon: false });
+      }
+      expect((await assetRequest(b, cookie, [source], 2, 'other')).statusCode).toBe(400);
+      expect((await assetRequest(b, cookie, [source], 0)).statusCode).toBe(400);
+      const lowDisk = vi.spyOn(disk, 'diskSpace').mockResolvedValue({ free: 0, total: 1 });
+      try {
+        const response = await assetRequest(b, cookie, [source], 2);
+        expect(response.statusCode).toBe(507);
+        expect(response.json().code).toBe('insufficient_space');
+      } finally { lowDisk.mockRestore(); }
+      expect(identityStore.get().revision).toBe(2);
+    } finally { await b.app.close(); }
+  });
+  it('does not report success or change cached identity when persistence fails', async () => {
+    const identityStore = memorySiteIdentityStore();
+    const mutation = vi.spyOn(identityStore, 'replaceAssets').mockRejectedValue(new Error('private database failure'));
+    const b = build({ identityStore, workLock: createWorkLock() });
+    const { cookie } = await authed(b);
+    try {
+      const response = await assetRequest(b, cookie, [await jpeg()]);
+      expect(response.statusCode).toBe(500);
+      expect(response.body).not.toContain('private database failure');
+      expect(identityStore.get().revision).toBe(1);
+      expect(identityStore.getAssetState()).toEqual({ logo: false, favicon: false });
+    } finally { mutation.mockRestore(); await b.app.close(); }
+  });
+  it.each(['blog.example', 'localhost'])('serves release-owned PNG with nosniff and immutable caching on %s, not the dedicated image host', async (host) => {
+    const assets = await normalizeIdentityUpload(await jpeg(), 'logo');
+    const asset = assets[0]!;
+    const path = '/_identity/logo-' + asset.sha256.slice(0, 16) + '.png';
+    await mkdir(join(dir, 'site/current/_identity'), { recursive: true });
+    await writeFile(join(dir, 'site/current', path), asset.bytes);
+    const b = build({ imgHost: host === 'localhost' ? 'localhost' : 'images.example' });
+    try {
+      const response = await b.app.inject({ url: path, headers: { host } });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['content-type']).toMatch(/^image\/png/);
+      expect(response.headers['x-content-type-options']).toBe('nosniff');
+      expect(response.headers['cache-control']).toBe('public, max-age=31536000, immutable');
+      expect(response.rawPayload.equals(asset.bytes)).toBe(true);
+      if (host !== 'localhost') {
+        const foreign = await b.app.inject({ url: path, headers: { host: 'images.example' } });
+        expect(foreign.statusCode).toBe(404);
+        expect(foreign.headers['cache-control'] ?? '').not.toContain('immutable');
+      }
+      const missing = await b.app.inject({ url: path.replace(asset.sha256.slice(0, 16), '0'.repeat(16)), headers: { host } });
+      expect(missing.statusCode).toBe(404);
+      expect(missing.headers['cache-control'] ?? '').not.toContain('immutable');
+    } finally { await b.app.close(); }
   });
 });

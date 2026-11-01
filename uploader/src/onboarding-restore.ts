@@ -1,18 +1,19 @@
 import type { DbPool } from './db.js';
 import { restoreDatabase, type RestoreCounts } from './backup.js';
 import type { GpxFiles } from './gpx-files.js';
+import type { OriginRoles } from './canonical-origin.js';
 import { publishRestoreFence, readRestoreFence } from './onboarding-fence.js';
 import { assertBootstrapOnlyTarget, initializeApplicationSchema, retireOnboarding } from './onboarding-bootstrap.js';
 
 /** Supported native replacement boundary. Caller has confirmed scope and verified its real undo set. */
 export async function restoreWithOnboarding(pool: DbPool, file: string, options: {
-  storageDir: string; routeFiles: GpxFiles; assertOwner: () => Promise<void>;
+  storageDir: string; routeFiles: GpxFiles; assertOwner: () => Promise<void>; originRoles?: OriginRoles;
 }): Promise<RestoreCounts> {
   await options.assertOwner();
   await publishRestoreFence(options.storageDir, options.assertOwner);
   await retireOnboarding(pool, options.assertOwner);
   await options.assertOwner();
-  return restoreDatabase(pool, file, { routeFiles: options.routeFiles, assertOwner: options.assertOwner });
+  return restoreDatabase(pool, file, { routeFiles: options.routeFiles, assertOwner: options.assertOwner, originRoles: options.originRoles });
 }
 /** Offline preparation never starts the app or its maintenance/recovery workers. */
 export async function prepareNativeRestore(pool: DbPool, options: {

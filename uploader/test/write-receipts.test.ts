@@ -2,8 +2,8 @@ import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ensureSchema } from '../src/db.js';
-import { memoryPostStore, pgPostStore, type PostPair } from '../src/posts.js';
-import { memoryPageStore, pgPageStore, type PagePair } from '../src/pages.js';
+import { memoryPostStore, pgPostStore, type PostPair, type StoredPostPair } from '../src/posts.js';
+import { memoryPageStore, pgPageStore, type PagePair, type StoredPagePair } from '../src/pages.js';
 import { publishTokens } from './publish-tokens.js';
 
 const cleanup: Array<() => Promise<void>> = [];
@@ -40,7 +40,8 @@ for (const database of [false, true]) {
     it('returns only the requesting writer’s latest receipt with its own content and token', async () => {
       const { posts } = await fixture(database); const ownerUserId = randomUUID(); const stranger = randomUUID();
       const receipt = { ownerUserId, saveId: randomUUID() };
-      const saved = await posts.upsertDraft(story(), undefined, { receipt });
+      // A save's transient gallery diagnostics are never part of the stored content.
+      const { galleryWarnings: _warnings, ...saved } = await posts.upsertDraft(story(), undefined, { receipt });
       expect(await posts.getForSave(saved.translationKey, ownerUserId)).toEqual({ content: saved, ownerUserId, lastSaveId: receipt.saveId });
       expect(await posts.getForSave(saved.translationKey, stranger)).toEqual({ content: saved, ownerUserId: stranger, lastSaveId: null });
       const read = posts.getForSave(saved.translationKey, ownerUserId);
@@ -55,7 +56,7 @@ for (const database of [false, true]) {
     });
     it('invalidates receipts for importer writes, publish and unpublish without putting them in revisions', async () => {
       const { posts } = await fixture(database); const ownerUserId = randomUUID();
-      let saved = await posts.upsertDraft(story(), undefined, { receipt: { ownerUserId, saveId: randomUUID() } });
+      let saved: StoredPostPair = await posts.upsertDraft(story(), undefined, { receipt: { ownerUserId, saveId: randomUUID() } });
       saved = await posts.upsertDraft(saved);
       expect((await posts.getForSave(saved.translationKey, ownerUserId))?.lastSaveId).toBeNull();
       saved = await posts.upsertDraft(saved, saved.updatedAt, { receipt: { ownerUserId, saveId: randomUUID() } });
@@ -90,7 +91,7 @@ for (const database of [false, true]) {
     it.each(['contact', 'privacy', 'legal'])('clears %s receipts on publish, unpublish and deletion, keeping revisions private', async (key) => {
       const { pages } = await fixture(database); const ownerUserId = randomUUID();
       const receipt = { ownerUserId, saveId: randomUUID() };
-      let saved = await pages.save(page(key), undefined, { receipt, expectAbsent: true });
+      let saved: StoredPagePair = await pages.save(page(key), undefined, { receipt, expectAbsent: true });
       expect((await pages.getForSave(key, ownerUserId)).lastSaveId).toBe(receipt.saveId);
       saved = await pages.publish(key, saved.updatedAt!);
       expect((await pages.getForSave(key, ownerUserId)).lastSaveId).toBeNull();

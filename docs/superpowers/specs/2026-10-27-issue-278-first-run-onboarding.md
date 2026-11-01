@@ -523,10 +523,17 @@ helper has resolved admin role; client role checks avoid useless requests, never
 
 The first-story action opens the current new-post editor. First Save uses the existing post
 endpoint, slug guard and validation. No pre-created pair, invented slug, tutorial mode or sample.
-Language has no step until #281 lands after #284/#285 under the approved #282/#283 contract;
-#281 must define its real completion signal and allowed changes. A seeded language default does
-not prove explicit choice. Existing-install/changeability restrictions remain binding. #277
-can close without #281.
+Language is implemented by #281 on the integrated #284/#285 source under the approved #282/#283
+contract; its new implementation qualification is still pending.
+The owner approved #281 option A on 2026-10-29: an optional current-configuration section,
+with explicit Save but no completion badge or persisted acknowledgement. It does not enter
+progress counters or change Finish requirements. A seeded default still proves no explicit
+choice; subsequent reads show configuration, not remembered consent. Existing-install and
+changeability restrictions remain binding. See `2026-10-29-issue-281-language-choice.md`.
+Eligible projections include current language/history beside the progress steps, from the same
+read transaction. The optional section sits after Account and before Identity; only explicit
+confirmed Save uses the existing `PUT /language`, and publication-locked onboarding is read-only.
+#277 can close without #281.
 
 #273 is approved; #274 must expose `identityConfigured() = saved_at IS NOT NULL` before #279.
 Optionality is now settled by Q1; do not reopen it. #280 depends only on the inventory/roles,
@@ -790,3 +797,77 @@ still satisfy §12. Design approval or a successful browser journey alone is not
 These decisions authorize the documented design for implementation subject to those gates,
 not a merge, deployment, owner-data operation, login/session-policy change or revival of the
 withdrawn file-based progress design. Any material departure requires fresh explicit approval.
+
+## 15. #280 empty-state qualification (2026-10-29)
+
+Integrated source `c23c2da7887cafc6e24dfac3f1392c4893aa1c81` passed real
+`main.ts` empty-content builds in all four approved language modes. Managed-browser
+checks at 1280px and 320px covered every enabled-locale Home, Map and destinations
+page, empty RSS/sitemaps, inactive-route absence, and admin/author empty states.
+No sample stories, photos, map islands or region links were fabricated. Both roles'
+Media controls and narrowed-view recovery were keyboard exercised; admin-only
+pages/APIs and onboarding stayed unavailable to authors. Held/failed reads stayed
+distinct from genuine empty content. The fixture retained zero posts/media/comments,
+its original admin and a synthetic author; the original language mode was restored.
+
+The complete PostgreSQL-enabled uploader suite/typecheck and site suite/Astro
+check/build passed. Four-mode empty-build regression coverage removes internal
+snapshot handoffs from child environments rather than supplying malformed empty
+values. Bootstrap admission recognizes the exact approved `site_language` and
+`posts.omitted` catalog while continuing to reject altered or unknown schemas.
+
+Evidence lives in the worktree's ignored
+`.issue-runtime/evidence/final-c23c2da/` (acceptance/runtime/public reports and
+61 screenshots). This is not a populated-browser, screen-reader or deployment
+qualification. Parent review, exact-head CI and eventual stack integration remain
+separate gates; no owner content, production data or restore policy changed.
+
+## #279 current-dev integration (2026-11-01)
+
+Merged `dev` after the language (#284/#285), identity (#275/#276) and publish-recovery
+(#297) changes landed. Decisions:
+
+- **Boot order.** `captureBootEvidence` still runs first (read-only, before any sweep), then
+  dev's pre-language-migration recovery dump (only when `posts` exists, so that install is
+  already retired by schema evidence), then `initializeApplicationSchema` and onboarding
+  classification. `ensureSchema` creates `site_language` before `onboarding_state`.
+- **Bootstrap-only target catalog.** `assertBootstrapOnlyTarget` admits dev's schema exactly:
+  `posts.omitted` (additive, `NOT NULL DEFAULT false`, with the `posts_omitted_unpublished`
+  CHECK), and the `site_language` singleton (columns, defaults, primary key and its three
+  CHECKs). `site_language` counts as prior-schema evidence, may hold its boot seed in an
+  otherwise empty target, and preparation refuses any non-seed language row (a chosen or
+  locked mode is owner configuration, like a non-default identity).
+- **Restore.** `restoreWithOnboarding` forwards #276's `originRoles`, so the fenced native
+  restore keeps the canonical-origin topology check.
+- **Routes.** `/onboarding` joins `APP_SEGMENTS` (#287). The read-only reverse-collision check
+  of 2026-10-31 covered `onboarding` against the owner database: no story or page uses it.
+- **Desk.** The authenticated-context loader keeps onboarding activation and adds dev's
+  admin-only build status and the language-mode read before the first Desk paint.
+
+Verification at the merge: uploader `tsc` 0 and the PostgreSQL-enabled suite 3996/3996
+(one earlier run had a single load-sensitive failure that passed alone and on the rerun),
+including the real `pg_dump`/`psql` SQL-recovery test against an owned fixture database;
+site 689/689, `astro check` 0 errors, `astro build` OK. The real app from this worktree
+classified a fresh install as eligible, refused anonymous reads (401), dismissed/resumed,
+refused an early finish (409), advanced photo/story/publish from real upload, draft and
+publish requests, finished to `retired` and then refused resume (409). The Desk in managed
+Chromium at 1280 px showed the checklist, build status and unset-domain notice without
+horizontal overflow.
+
+## #280 current-dev integration (2026-11-01)
+
+Merged `dev` after #279 landed. #280 had carried its own copy of the bootstrap catalog's
+`site_language`/`posts.omitted` admission; the merge keeps one copy of each entry and #280's
+stricter language-row check (validated dates, `DEFAULT_LANGUAGE`). Desk keeps #280's loader,
+which reads the language mode inside the authenticated-context load so its failure is
+retryable, plus dev's admin build status. The map page keeps #280's empty state (no "0 pins"
+badge, no map island) together with dev's singular/plural pin label; dev's count-label test
+now asserts the empty state for zero trips. MapPage's lazy `await import()` of the map
+module is resolved to the module under test by the WebGL fallback test harness.
+
+Verification at the merge: uploader `tsc` 0 and the PostgreSQL-enabled suite 4028/4028
+(including the real `pg_dump`/`psql` recovery test); site 693/693 plus the four-mode
+`empty-build` PostgreSQL integration 4/4; `astro check` 0 errors; `astro build` OK. The real
+app built an empty install whose DE/EN map pages showed the empty state with no map island;
+after one real publish, managed Chromium loaded the lazily imported map module, rendered the
+canvas and pin and labelled it "1 Pin-Standort".

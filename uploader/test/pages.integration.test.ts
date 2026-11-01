@@ -1,7 +1,11 @@
-import { describe, expect, it, beforeAll, afterAll } from 'vitest';
+import { randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
+import pg from 'pg';
+import { describe, expect, it, beforeAll, beforeEach, afterAll, vi } from 'vitest';
 import { createPool, ensureSchema, type DbPool } from '../src/db.js';
-import { pgPageStore, type PagePair } from '../src/pages.js';
+import { pgPageStore, type PagePair, type StoredPagePair } from '../src/pages.js';
 import { REVISION_CAP } from '../src/posts.js';
+import * as bodyContent from '../src/body-content.js';
 
 const about = (title: string): PagePair => ({
   key: 'about',
@@ -21,6 +25,77 @@ maybe('pgPageStore (Postgres)', () => {
       locked_at=(SELECT min(published_at) FROM posts), updated_at=clock_timestamp() WHERE id=true`);
   });
   afterAll(async () => { await pool.end(); });
+
+  it('keeps malformed metadata lossless and diagnostics transient in real page saves', async () => {
+    const store = pgPageStore(pool);
+    const input = about('Metadata');
+    // #288 accepts known page kinds only; contact is a draft-capable kind.
+    input.key = 'contact';
+    const fields = [String.raw`caption="The \"Old\" Bridge"`, 'caption="Rom | Tag 2"', 'capton="Tippfehler"', 'alt = "Blick"', "alt='Blick'", 'caption-override="broken'];
+    const src = 'https://img/metadata';
+    const lines = fields.map((field, index) => `> ${src}-${index} | 3000x2000 | alt="😀" | ${field}  `);
+    const body = ['> ~~~gallery extra', ...lines, '> ~~~'].join('\r\n');
+    input.de.bodyMarkdown = body;
+    input.en.bodyMarkdown = body;
+    input.en.images = Object.fromEntries(fields.map((_, index) => [`${src}-${index}`, { width: 8, height: 6, caption: 'Keep' }]));
+    try {
+      const saved = await store.save(input);
+      // #288 adds the stored slug and publication time beside the submitted content.
+      expect(saved.de).toMatchObject(input.de);
+      expect(saved.en).toMatchObject(input.en);
+      expect(saved.galleryWarnings).toHaveLength(fields.length * 2);
+      expect(saved.galleryWarnings[0]).toEqual({
+        code: 'invalid_gallery_metadata', locale: 'de', line: 2,
+        column: lines[0]!.indexOf('caption=') + 1, field: 'caption', reason: 'malformed_field',
+      });
+      expect(saved.galleryWarnings[fields.length]?.locale).toBe('en');
+      expect(await store.get(input.key)).not.toHaveProperty('galleryWarnings');
+      const again = await store.save(saved, saved.updatedAt!);
+      expect(again.galleryWarnings).toEqual(saved.galleryWarnings);
+      const before = await store.get(input.key);
+      await expect(store.save(saved, new Date(0))).rejects.toMatchObject({ code: 'conflict' });
+      await expect(store.save({ ...again, de: { ...again.de, title: 'Must roll back' }, en: { ...again.en, title: null as never } })).rejects.toBeDefined();
+      expect(await store.get(input.key)).toEqual(before);
+      const [revision] = await store.listRevisions(input.key);
+      expect((await store.getRevision(input.key, revision!.id))!.snapshot).not.toHaveProperty('galleryWarnings');
+    } finally {
+      await pool.query('DELETE FROM page_revisions WHERE key=$1', [input.key]);
+      await pool.query('DELETE FROM pages WHERE key=$1', [input.key]);
+    }
+  });
+
+  it('normalizes both gallery locales and never commits half a page when analysis fails', async () => {
+    const store = pgPageStore(pool);
+    const src = 'https://img/gallery';
+    const input = about('Gallery');
+    input.key = 'privacy';
+    input.de.bodyMarkdown = `> ~~~gallery extra\n> ${src} | 30x20 | alt="Blick"\n> ~~~`;
+    input.en.bodyMarkdown = `<pre><code class="language-gallery">${src} | 30x20 | alt="View"\n</code></pre>`;
+    try {
+      const saved = await store.save(input);
+      expect(saved.de.bodyMarkdown).toBe(`> ~~~gallery extra\n> ${src}\n> ~~~`);
+      expect(saved.en.bodyMarkdown).toBe(`<pre><code class="language-gallery">${src}\n</code></pre>`);
+      expect(saved.de.images[src]).toEqual({ width: 30, height: 20, alt: 'Blick' });
+      expect(saved.en.images[src]).toEqual({ width: 30, height: 20, alt: 'View' });
+      const edit = { ...saved, de: { ...saved.de, bodyMarkdown: input.de.bodyMarkdown }, en: { ...saved.en, bodyMarkdown: 'EN analysis failure' } };
+      const revisions = await store.listRevisions(saved.key);
+      const normalize = bodyContent.normalizeGalleryFences;
+      const analysis = vi.spyOn(bodyContent, 'normalizeGalleryFences').mockImplementation((body, images) => {
+        if (body === edit.en.bodyMarkdown) return Promise.reject(new Error('source mapping unavailable'));
+        return normalize(body, images);
+      });
+      try {
+        await expect(store.save(edit, saved.updatedAt!)).rejects.toThrow('source mapping unavailable');
+        const { galleryWarnings, ...stored } = saved;
+        expect(galleryWarnings).toEqual([]);
+        expect(await store.get(saved.key)).toEqual(stored);
+        expect(await store.listRevisions(saved.key)).toEqual(revisions);
+      } finally { analysis.mockRestore(); }
+    } finally {
+      await pool.query('DELETE FROM page_revisions WHERE key=$1', [input.key]);
+      await pool.query('DELETE FROM pages WHERE key=$1', [input.key]);
+    }
+  });
 
   it('saves and reads back both locales with images', async () => {
     const store = pgPageStore(pool, { imageOrigin: 'https://img' });
@@ -85,5 +160,165 @@ maybe('pgPageStore (Postgres)', () => {
     // Malformed id → null (no 22P02), unknown uuid → null.
     expect(await store.getRevision('about', 'not-a-uuid')).toBeNull();
     expect(await store.getRevision('about', '00000000-0000-4000-8000-000000000000')).toBeNull();
+  });
+});
+
+type Outcome = { ok: true; value: StoredPagePair } | { ok: false; error: unknown };
+function outcome(promise: Promise<StoredPagePair>): Promise<Outcome> {
+  return promise.then((value) => ({ ok: true as const, value }), (error: unknown) => ({ ok: false as const, error }));
+}
+
+// #344: two saves of one page that overlap between the read and the commit.
+// The interleaving is forced by real PostgreSQL locks and observed through
+// pg_stat_activity — no sleeps standing in for ordering, no mocked queries.
+maybe('pgPageStore serializes saves of one page (Postgres, #344)', () => {
+  const schema = `page_concurrency_${randomUUID().replaceAll('-', '')}`;
+  const applicationName = `page-concurrency:${randomUUID()}`;
+  let owner: DbPool;
+  let pool: DbPool;
+  beforeAll(async () => {
+    owner = new pg.Pool({ connectionString: url });
+    await owner.query(`CREATE SCHEMA ${schema}`);
+    pool = new pg.Pool({ connectionString: url, options: `-c search_path=${schema}`, application_name: applicationName });
+    await ensureSchema(pool);
+  });
+  afterAll(async () => {
+    await pool?.end();
+    if (owner) { await owner.query(`DROP SCHEMA ${schema} CASCADE`); await owner.end(); }
+  });
+
+  const page = (key: string, title: string): PagePair => ({
+    key,
+    de: { locale: 'de', title, bodyMarkdown: `DE ${title}`, images: {} },
+    en: { locale: 'en', title: `EN ${title}`, bodyMarkdown: `EN ${title}`, images: {} },
+  });
+  // #288 accepts known page kinds only: every test starts from an absent contact page.
+  const freshKey = () => 'contact';
+  beforeEach(async () => {
+    await pool.query("DELETE FROM page_revisions WHERE key='contact'");
+    await pool.query("DELETE FROM pages WHERE key='contact'");
+  });
+
+  async function waiters(count: number): Promise<void> {
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      const { rows } = await owner.query<{ count: number }>(
+        `SELECT count(*)::int AS count FROM pg_stat_activity
+          WHERE datname = current_database() AND application_name = $1 AND wait_event_type = 'Lock'`,
+        [applicationName],
+      );
+      if (rows[0]?.count === count) return;
+      if (Date.now() >= deadline) throw new Error(`expected ${count} lock waiter(s), saw ${rows[0]?.count}`);
+      await delay(10);
+    }
+  }
+
+  /**
+   * The issue's reproduction: a SHARE lock on `pages` stops the first save at
+   * its row write, the second is started only once the first is blocked, and
+   * both are released together once the second is blocked too.
+   */
+  async function race(first: () => Promise<StoredPagePair>, second: () => Promise<StoredPagePair>): Promise<[Outcome, Outcome]> {
+    const blocker = await owner.connect();
+    const pending: Promise<Outcome>[] = [];
+    try {
+      await blocker.query('BEGIN');
+      await blocker.query(`LOCK TABLE ${schema}.pages IN SHARE MODE`);
+      pending.push(outcome(first()));
+      await waiters(1);
+      pending.push(outcome(second()));
+      await waiters(2);
+      await blocker.query('COMMIT');
+      return [await pending[0]!, await pending[1]!];
+    } finally {
+      await blocker.query('ROLLBACK');
+      blocker.release();
+      await Promise.all(pending);
+    }
+  }
+
+  /** Both locale rows carry exactly `expected`, at millisecond precision. */
+  async function rowTokens(key: string, expected: Date): Promise<void> {
+    const { rows } = await pool.query<{ locale: string; token: Date; ms: boolean }>(
+      `SELECT locale, updated_at AS token, updated_at = date_trunc('milliseconds', updated_at) AS ms
+         FROM pages WHERE key = $1 ORDER BY locale`, [key],
+    );
+    expect(rows.map((r) => [r.locale, r.token.toISOString(), r.ms]))
+      .toEqual([['de', expected.toISOString(), true], ['en', expected.toISOString(), true]]);
+  }
+
+  it('existing page: of two saves from one updatedAt, one is accepted and the other conflicts without writing', async () => {
+    const store = pgPageStore(pool);
+    const key = freshKey();
+    const base = await store.save(page(key, 'S0'));
+    const [a, b] = await race(
+      () => store.save(page(key, 'TAB-A'), base.updatedAt!),
+      () => store.save(page(key, 'TAB-B'), base.updatedAt!),
+    );
+    expect(b).toMatchObject({ ok: false, error: { code: 'conflict' } });
+    if (!a.ok) throw a.error;
+    const stored = await store.get(key);
+    expect(stored.de.title).toBe('TAB-A');
+    // The response is this save's own state and token.
+    // The response is the stored state plus this save's (empty) gallery warnings.
+    expect(a.value).toEqual({ ...stored, galleryWarnings: [] });
+    expect(a.value.updatedAt!.getTime()).toBeGreaterThan(base.updatedAt!.getTime());
+    await rowTokens(key, a.value.updatedAt!);
+    // The true predecessor, snapshotted once; the refused save left no trace.
+    const revs = await store.listRevisions(key);
+    expect(revs.map((r) => r.title)).toEqual(['S0']);
+    expect((await store.getRevision(key, revs[0]!.id))!.snapshot).toEqual({ de: base.de, en: base.en });
+  }, 20_000);
+
+  it('new page: a supplied updatedAt for a page never saved is refused without writing (#288)', async () => {
+    const store = pgPageStore(pool);
+    const key = freshKey();
+    // #288: a token names an existing page; creation is token-less, so a stale
+    // echo can never create (or race to create) an absent page.
+    const echo = new Date('2000-01-01T00:00:00.000Z');
+    const results = await Promise.allSettled([store.save(page(key, 'NEW-A'), echo), store.save(page(key, 'NEW-B'), echo)]);
+    expect(results.map((result) => result.status === 'rejected' && (result.reason as { code?: string }).code)).toEqual(['not_found', 'not_found']);
+    expect((await store.get(key)).updatedAt).toBeNull();
+    expect(await store.listRevisions(key)).toEqual([]);
+  }, 20_000);
+
+  it('new page: token-less creations stay last-writer-wins, but run in turn — the first is a revision and each gets its own token', async () => {
+    const store = pgPageStore(pool);
+    const key = freshKey();
+    const [a, b] = await race(
+      () => store.save(page(key, 'FIRST')),
+      () => store.save(page(key, 'SECOND')),
+    );
+    if (!a.ok) throw a.error;
+    if (!b.ok) throw b.error;
+    expect(a.value.de.title).toBe('FIRST');
+    expect(b.value.de.title).toBe('SECOND');
+    expect(b.value.updatedAt!.getTime()).toBeGreaterThan(a.value.updatedAt!.getTime());
+    expect({ ...await store.get(key), galleryWarnings: [] }).toEqual(b.value);
+    await rowTokens(key, b.value.updatedAt!);
+    const revs = await store.listRevisions(key);
+    expect(revs.map((r) => r.title)).toEqual(['FIRST']);
+    expect((await store.getRevision(key, revs[0]!.id))!.snapshot).toEqual({ de: a.value.de, en: a.value.en });
+  }, 20_000);
+
+  it('every accepted save strictly advances the token, even when the wall clock is behind the stored one', async () => {
+    const store = pgPageStore(pool);
+    const key = freshKey();
+    await store.save(page(key, 'S0'));
+    await pool.query(
+      `UPDATE pages SET updated_at = CASE locale WHEN 'de' THEN '2099-01-01T00:00:00.100Z'::timestamptz
+                                                 ELSE '2099-01-01T00:00:00.200Z'::timestamptz END
+        WHERE key = $1`, [key],
+    );
+    let token = new Date('2099-01-01T00:00:00.200Z');
+    for (const title of ['S1', 'S2']) {
+      const saved = await store.save(page(key, title), token);
+      expect(saved.updatedAt!.getTime()).toBe(token.getTime() + 1);
+      await rowTokens(key, saved.updatedAt!);
+      token = saved.updatedAt!;
+    }
+    // The token a tab held two saves ago is stale now.
+    await expect(store.save(page(key, 'stale'), new Date('2099-01-01T00:00:00.201Z'))).rejects.toMatchObject({ code: 'conflict' });
+    expect((await store.listRevisions(key)).map((r) => r.title)).toEqual(['S1', 'S0']);
   });
 });

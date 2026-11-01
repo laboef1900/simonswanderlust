@@ -12,7 +12,7 @@ describe('identity edit storage boundary', () => {
   it.each(['de', 'en'] as const)('keeps inactive text through an active-only %s save and re-enabling projection', (active) => {
     const inactive = active === 'de' ? 'en' : 'de';
     const stored = { ...neutralIdentity(), tagline: { de: 'DE', en: 'EN' }, aboutGear: { de: 'Camera', en: 'Notebook' } };
-    const { canonicalOrigin: _reserved, ...edit } = neutralIdentity();
+    const edit = neutralIdentity();
     const next = mergeIdentityEdit(stored, { ...edit, tagline: { [active]: 'Edited' } }, [active]);
     expect(next.tagline).toEqual({ [inactive]: stored.tagline[inactive], [active]: 'Edited' });
     expect(next.aboutGear).toEqual({ [inactive]: stored.aboutGear[inactive] });
@@ -21,16 +21,19 @@ describe('identity edit storage boundary', () => {
     expect(() => mergeIdentityEdit(stored, { ...edit, tagline: { [inactive]: 'Overwrite' } }, [active])).toThrow();
     expect(() => mergeIdentityEdit({ ...stored, tagline: { [inactive]: 'x'.repeat(161) } }, edit, [active])).toThrow();
   });
-  it('rejects stale memory writes and preserves reserved origin while normalizing text', async () => {
+  it('rejects stale memory writes and saves canonical changes while normalizing text', async () => {
     const store = memorySiteIdentityStore(LEGACY_IDENTITY);
-    const { canonicalOrigin: _reserved, ...edit } = store.get().identity;
+    const edit = store.get().identity;
     await expect(store.update(1, { ...edit, authorName: ' Ada\u200b ' })).rejects.toMatchObject({ code: 'invalid_identity', field: 'authorName' });
     expect(store.get().revision).toBe(1);
     expect(store.get().identity.authorName).toBe(LEGACY_IDENTITY.authorName);
     await store.update(1, { ...edit, authorName: ' Ada ' });
     expect(store.get().identity).toMatchObject({ canonicalOrigin: LEGACY_IDENTITY.canonicalOrigin, authorName: 'Ada' });
     await expect(store.update(1, edit)).rejects.toMatchObject({ code: 'identity_conflict' });
-    await expect(store.update(2, { ...edit, canonicalOrigin: null })).rejects.toMatchObject({ code: 'invalid_identity', field: 'canonicalOrigin' });
+    await store.update(2, { ...edit, canonicalOrigin: 'https://BÜCHER.example:443/' });
+    expect(store.get().identity.canonicalOrigin).toBe('https://xn--bcher-kva.example');
+    await store.update(3, { ...edit, canonicalOrigin: null });
+    expect(store.get().identity.canonicalOrigin).toBeNull();
   });
 });
 

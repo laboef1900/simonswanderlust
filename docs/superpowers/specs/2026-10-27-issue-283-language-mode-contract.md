@@ -1057,3 +1057,66 @@ are removed; rendered gallery markers, highlighted classes and sanitization regr
 remain. A database-free focused run passed all eight Markdown cases; full site tests,
 Astro check and the real build passed in wave `1793274723357_17653`. Build language still
 requires PostgreSQL; no fallback, skip or production guard was added.
+
+## 23. #284 current-dev integration (2026-11-01)
+
+Merged onto `dev` 65b110d (dump v11 → this change's v12). Decisions taken while
+integrating, each pinned by an updated or retained test:
+
+- **Namespace rollout (D2.6).** The read-only reverse-collision query ran against the
+  owner-confirmed content target on 2026-10-31: no story (working or published
+  snapshot) or page holds any reserved or newly proposed segment in DE-primary or
+  EN-primary mode. `dev` meanwhile gained the top-level `POST /gallery/analyze` route
+  (#354); the route-equality test therefore reserves `gallery` in `APP_SEGMENTS`, and the
+  same read-only query found no holder.
+- **Untranslated WXR items (#387).** In bilingual mode an item with a language but no
+  translation group stays an individually reported `untranslated` rejection; only an
+  item with no language at all is `no language`. Single-language mode still keys untagged
+  items by WordPress id. A group holding the primary imports primary-only.
+- **Publication body gate (#375).** The rendered-body analysis runs once per requested
+  locale on the reviewed pair before any mutation (H1 → 400, foreign images → 409). Under
+  the language lock only media readiness is re-read; the publish tokens prove the locked
+  pair is the analyzed one.
+- **Page saves (#344).** The Postgres store takes the shared language row first, then the
+  page's advisory lock, then reads; the memory store serializes saves on the language
+  queue. Saves of a language-limited payload return only the sent locales' gallery
+  warnings and leave the other locale's advisory state unchanged.
+- **Drafts.** Gallery normalization runs inside the post-pair lock, because a disabled
+  locale keeps the stored row read under that lock; its slug is not re-validated.
+
+## 24. #285 current-dev integration (2026-11-01)
+
+Merged `dev` after #284 landed. `astro.config.mjs` keeps this change's `MARKDOWN_OPTIONS`
+import (build and preview cannot diverge), so the lockstep test now pins the processor
+wiring and gallery exclusion instead of comparing two option objects. The About loader keeps
+dev's prose-description extraction and per-locale inline image sizes and applies them only to
+enabled locales, after the language assertion inside the loader snapshot. `byLocale` keeps
+dev's total `translationKey` tie-break and returns nothing for a disabled locale.
+
+Verification at the merge: site tests 668/668, `astro check` 0 errors, `astro build` and the
+uploader typecheck pass; the PostgreSQL-enabled uploader suite passed except one heavy test per
+run (`build-snapshot` once, `gpx-worker` once), neither touched by this change and both passing
+in isolation. A real app booted from this worktree published a bilingual DE-primary story (DE
+at root, EN under `/en/`, reciprocal `hreflang`, per-locale RSS) and refused both a primary
+change and removal of a published locale with 409; a fresh EN-primary instance served an
+EN-only story at root, 404 under `/en/`, `lang="en"` and no alternate.
+
+## Pre-route databases at first boot (2026-11-01)
+
+The boot-time pre-language recovery set read `post_routes` unconditionally. A
+database older than private routes (v10) — the owner's current production
+schema, which also predates site identity — therefore crashed boot with
+`relation "post_routes" does not exist` before any migration ran. Found while
+booting the held #289 stack against an isolated restored copy of the owner
+database (G1 plan; the owner database itself was only read by `pg_dump`).
+
+`dumpDatabase` with `preLanguageMigration` now checks `to_regclass('post_routes')`.
+When absent, the set is labelled v9 (`ROUTES_DUMP_VERSION - 1`) and carries no
+`post_routes` key, which is exactly what `readDump` requires below v10; identity
+metadata without the route schema is refused rather than mislabelled. Outside the
+pre-migration path the table stays mandatory.
+
+Evidence: `backup.test.ts` covers both shapes (failing before the change); the
+owner copy booted to `/health` ok with a built release, the v9 set passed
+`readDump`, and `restoreDatabase` restored it into a freshly migrated schema
+(18 posts, 2 pages, 698 media rows, language defaulted to `de`).
