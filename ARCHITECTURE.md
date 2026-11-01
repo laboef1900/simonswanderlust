@@ -124,7 +124,8 @@ RSS, region statistics or the global story map. No MDX export, preview or revisi
 
 ## Content pipeline (keyboard → published page)
 
-1. **Author** writes a post (DE + EN) in the in-admin editor (`/admin/editor.html`, EasyMDE). Body
+1. **Author** writes a post (one row per enabled locale — DE + EN on simonswanderlust.com) in
+   the in-admin editor (`/admin/editor.html`, EasyMDE). Body
    is Markdown; hero and body photos are uploaded inline and optimized by the app's image pipeline.
 2. **Store** — drafts and published posts live in the Postgres `posts` table (one row per locale).
    Postgres is the source of truth; git holds no content.
@@ -249,8 +250,9 @@ See the [approved contract](docs/superpowers/specs/2026-10-27-issue-316-publicat
 for vocabulary, trust boundaries, verification matrix and revert-only containment.
 
 The Astro entry `id`s (`de/<slug>` / `en/<slug>`) and the Zod schema are unchanged from the original
-MDX era, so the SEO slug contract (`site/src/lib/paths.ts`, `trips.ts`) holds: **DE at root, EN under
-`/en/`** — slugs are never renamed.
+MDX era, so the SEO slug contract (`site/src/lib/paths.ts`, `trips.ts`) holds: the **primary locale
+at root, the secondary under `/<locale>/`** — DE at root and EN under `/en/` on simonswanderlust.com
+and every DE-primary install — and slugs are never renamed. See *Language modes* below.
 
 **Build-on-boot:** on startup, if `/data/site/current` doesn't exist yet (fresh volume), the app
 kicks off an initial build in the background without blocking Fastify from listening; blog routes
@@ -318,6 +320,84 @@ the admin-only descriptor, reserves `canonicalOrigin` and carries captured asset
 outbound headers remain #276.
 The present fixed DE/EN projection is extended by #283's language contract, not by identity.
 Remaining branding exceptions are recorded in [the scoped allow-list](docs/site-identity-branding-allowlist.md).
+
+### Language modes (#282–#285)
+
+The owner-approved [four-mode contract](docs/superpowers/specs/2026-10-27-issue-283-language-mode-contract.md)
+gives an install a **primary locale** at the site root and an optional **secondary locale** under
+its own prefix (`/en/` when DE is primary, `/de/` when EN is primary): DE+EN DE-primary (today's
+site, byte-identical), DE+EN EN-primary, DE-only, EN-only. Route words and slugs are per locale
+and mode-independent; only `localePrefix` (`site/src/lib/paths.ts`) varies — with one exception,
+the EN map page at root is `/travel-map/` because the app owns `/map/*` for the basemap
+(`site/src/lib/route-words.ts`, `wordsFor`).
+
+**Storage.** One Postgres singleton, `site_language` (`uploader/src/db.ts`, `ensureSchema`):
+`id = true`, `primary_locale`, `enabled_locales text[]`, `locked_at`, `updated_at`, CHECK-constrained
+to `de`/`en` with the primary among the enabled set. Boot seeds `('de', {de,en})` with
+`locked_at = min(posts.published_at)` under `ON CONFLICT DO NOTHING`, so an upgraded install is
+recorded as DE+EN DE-primary and locked if anything was ever published; the row is never replaced
+on boot. The same migration adds `posts.omitted` with the `posts_omitted_unpublished` CHECK
+(an omitted row is `draft`, has no `published_snapshot` and no `published_at`). Both locale rows
+of a story always exist; an intentionally absent locale is the row with `slug = ''` (#119) and
+`omitted = true`. The mode lives in Postgres rather than `settings.json` because it decides the
+URL of every published row and must travel inside DB dumps (v12, below). `uploader/src/language.ts`
+owns the store (`pgLanguageStore` / `memoryLanguageStore`), `validateLanguage` (the body is exactly
+`{ primary, locales }`), `assertLanguageTransition` and `readLanguage`, which derives the lock as
+`COALESCE(locked_at, min(posts.published_at), min(journey_locales.published_at))`.
+
+**`PUT /language` and the lock.** `GET /language` is `requireAuth` (the editor and the admin
+language mirror `uploader/public/language.js` need the enabled locales); `PUT /language` is
+`requireAdmin` (`uploader/src/server.ts`); both `no-store`. Mode changes and publication are
+serialized by a **database** lock, not the build work lock: every writer that validates or changes
+locale coverage — `language.update`, story draft saves (`upsertDraft`, which the WXR importer
+also goes through), story and journey publish, page saves — begins
+a transaction and takes `SELECT … FROM site_language WHERE id = true FOR UPDATE` **first**, then
+post-pair / journey / namespace locks (lock order is language → sorted post pairs → sorted
+journeys → namespace). `update` re-reads the mode under that lock, applies the transition table
+(`assertLanguageTransition`: on a locked install changing the primary is 409
+`language_primary_locked`, removing an enabled locale is 409 `language_locale_published`,
+adding the secondary is allowed, same mode is a no-op), refuses a slug that would land in a
+reserved namespace under the new layout (409 `reserved_slug`), runs the page-activation preflight
+(`pages.prepareActivation`, 409 `language_pages_incomplete`), flips `omitted` on the affected
+rows, updates journey coverage and commits. Publish calls `markPublished()` inside its own
+language transaction (`UPDATE site_language SET locked_at = COALESCE(locked_at, now())`), which
+is what locks the primary at the first publish. Only after the transaction has committed and
+released its locks does the route await the ordinary `builder.build('rebuild')`, which acquires
+the exclusive work lock once; the response reports the persisted mode and the build outcome
+separately, so a failed rebuild never reads as an unsaved mode. No transaction ever waits for
+the work lock while holding the language row. The published-URL-set invariant — no mode change
+removes or moves a published path — is pinned by `uploader/test/language-mode.integration.test.ts`
+(URL set compared before/after each refused and allowed transition) and
+`uploader/test/language-api.integration.test.ts` (auth, no-store, each 409).
+
+**`SITE_LANGUAGE_JSON` hand-off.** Every production build captures one `REPEATABLE READ READ ONLY`
+database view under the exclusive build lock (`uploader/src/build-snapshot.ts`,
+`withBuildSnapshot`): it exports the snapshot id, then reads identity, assets and the language
+row (`readLanguage`) on that same connection. `uploader/src/build.ts` (`runChildBuild`) hands the
+child `SITE_LANGUAGE_JSON={"primary":…,"locales":[…]}` (primary first), `SITE_IDENTITY_JSON` and
+`SITE_DATABASE_SNAPSHOT`, deleting any operator-supplied snapshot id first; these are
+programmatic, not `.env` knobs. On the site side `site/astro.config.mjs` calls
+`resolveBuildLanguage` (`site/src/lib/build-language.ts`) before `defineConfig`: it opens the
+loader pool, imports the exported snapshot (`withLoaderSnapshot`, `SET TRANSACTION SNAPSHOT`),
+reads `site_language`, validates it with the Zod `languageSchema` (`site/src/lib/site-language.ts`)
+and **fails the build if a supplied `SITE_LANGUAGE_JSON` disagrees with the database** — an
+integrity failure never falls back to a weaker default, and the previous release stays live.
+The resolved value is re-exported as `SITE_LANGUAGE_JSON` and drives `i18n.defaultLocale` /
+`locales` in the Astro config; components and helpers read it through `siteLanguage()`. The
+trips and pages loaders re-assert the mode inside their own snapshot (`assertLoaderLanguage`)
+and additionally drop rows whose locale is not enabled. Route generation is one dynamic route,
+`site/src/pages/[...path].astro`, fed by `publicRoutes` (`site/src/lib/public-routes.ts`) for the
+enabled locales only; the hand-placed `src/pages/en/*` twins are gone. Standalone `npm run dev`,
+`astro check` and CI read the same Postgres truth without a snapshot. `site/test/built/routes.test.ts`
+compares the real four-mode build inventory (the DE-primary bilingual one byte-identical to the
+pre-#285 baseline) and greps single-language builds for a marker planted in the disabled rows.
+
+**Per-surface rules.** Comments are bound to the committed published locale set
+(`SECURITY.md`, *Public comments*); WXR import skips Polylang items of a disabled locale
+(`skippedLocale`); MDX export writes only enabled, non-omitted, slug-bearing rows; legacy
+WordPress redirects apply to DE-primary installs only (`uploader/src/redirects.ts`); the
+Settings → Language tab (`uploader/public/settings.html`) offers the four modes and shows the
+lock state and blockers.
 
 
 ## Write reconciliation and storage ownership (#305)
@@ -660,6 +740,12 @@ Created idempotently by `uploader/src/db.ts` (`ensureSchema`):
 - **`site_identity`** — singleton `id = true`, revision, seed provenance, nullable `saved_at`,
   `updated_at`, site/author names, reserved canonical origin, localized text maps and ordered
   social links. Only an explicit admin save marks it configured.
+- **`site_language`** — singleton `id = true`: `primary_locale` (`de`/`en`), `enabled_locales`
+  (`text[]`, one or two distinct values including the primary), `locked_at` (set at the first
+  story/journey publish; never cleared) and `updated_at` (the optimistic token every publish
+  re-validates). Seeded `('de', {de,en})` with `locked_at = min(posts.published_at)` under
+  `ON CONFLICT DO NOTHING`; never replaced on boot. Content identity, not settings: included in
+  DB dumps from v12 and replaced by restore. See [Language modes](#language-modes-282285).
 - **`site_identity_assets`** — logo and favicon role rows, SHA-256, dimensions, normalized PNG
   bytes (≤256 KiB each) and creation time. Included in DB dumps and copied into build releases;
   favicon writes/removals are atomic across `favicon-32`, `favicon-192` and `apple-touch-180`.
@@ -677,6 +763,9 @@ Created idempotently by `uploader/src/db.ts` (`ensureSchema`):
   Working copies and published snapshots keep separate selections. The additive column
   migration runs before snapshot SQL references it and never backfills an existing snapshot
   from an unpublished working copy.
+  **`omitted`** (boolean, default `false`, #284) marks a locale the story intentionally does not
+  publish; `posts_omitted_unpublished` CHECKs that such a row is `draft` with no
+  `published_snapshot` and no `published_at`, so an omitted locale can never reach the build.
 - **`pages`** — one row per (`key`, `locale`): title, Markdown, images, localized `slug`,
   pair-wide `status`, per-locale sticky `published_at`, and optimistic `updated_at`.
   The partial unique index covers nonempty `(locale, slug)`; cross-table claims are
@@ -941,7 +1030,17 @@ disposable `/data` host path and the credential-free database target printed by 
   to Settings → Site identity. The undo set includes the live identity/assets. Older images
   reject v11 dumps; rolling back code leaves the additive tables intact and returns to that
   image's compiled-in brand. Restart after restore, then rebuild to change the public release.
-  v12 preserves language mode/lock and omission-aware publication history.
+  v12 (`LANGUAGE_DUMP_VERSION = 12`, #284) adds the `site_language` singleton and
+  `posts[].omitted`. `dumpLanguage` reads the mode from the declared version, never from the
+  accidental presence of fields: pre-v12 dumps are normalized to DE+EN DE-primary with
+  `omitted = false` and `locked_at` derived from `min(published_at)` of the restored posts;
+  a v12+ dump with a missing or malformed language row, an omitted primary, an omitted row
+  with publication history, or a snapshot in a disabled locale is refused before any
+  `DELETE`. The dump's language row replaces the live one inside the restore transaction;
+  the CLI prints both modes and needs `--accept-language-change` on a locked install whose
+  mode differs (see [SECURITY.md](SECURITY.md#backups)). The boot migration writes a
+  pre-language recovery set (labelled v9 when `post_routes` does not exist yet) before the
+  first language schema write.
   v13 (`PAGES_NAV_DUMP_VERSION = 13`) adds page slug/status/first-public history and
   the complete navigation singleton. Missing/malformed new-format metadata refuses
   before destructive work; it is never interpreted as an empty legacy field.

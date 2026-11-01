@@ -10,6 +10,7 @@ import { Window } from 'happy-dom';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { initializeApplicationSchema } from '../../uploader/src/onboarding-bootstrap.js';
 import { ui } from '../src/i18n/ui.js';
+import { unallowedBranding } from '../../uploader/test/branding-allowlist.js';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const siteRoot = fileURLToPath(new URL('../', import.meta.url));
@@ -21,12 +22,12 @@ const modes = [
   { name: 'en-only', primary: 'en', locales: ['en'] },
 ] as const;
 
-async function documents(directory: string, prefix = ''): Promise<string[]> {
+async function documents(directory: string, prefix = '', all = false): Promise<string[]> {
   const paths: string[] = [];
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const relative = prefix + entry.name;
-    if (entry.isDirectory()) paths.push(...await documents(join(directory, entry.name), relative + '/'));
-    else if (/\.(html|xml)$/.test(entry.name)) paths.push(relative);
+    if (entry.isDirectory()) paths.push(...await documents(join(directory, entry.name), relative + '/', all));
+    else if (all || /\.(html|xml)$/.test(entry.name)) paths.push(relative);
   }
   return paths.sort();
 }
@@ -112,6 +113,13 @@ describe.skipIf(!databaseUrl)('real zero-content Astro builds', () => {
       expect(await documents(outDir)).toEqual(expected.sort());
       const sitemap = parse(await readFile(join(outDir, 'sitemap-0.xml'), 'utf8'), true);
       expect([...sitemap.querySelectorAll('url > loc')].map((node) => new URL(node.textContent!).pathname).sort()).toEqual(htmlPaths.sort());
+      // #272: no owner branding in any fresh-install release file (pages,
+      // feeds, scripts, styles, fonts) beyond docs/site-identity-branding-allowlist.json.
+      const branding = [];
+      for (const file of await documents(outDir, '', true)) {
+        branding.push(...unallowedBranding('site', file, await readFile(join(outDir, file), 'latin1')));
+      }
+      expect(branding).toEqual([]);
     } finally { await window.happyDOM.close(); }
   }, 150_000);
 });
