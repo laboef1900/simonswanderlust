@@ -1180,4 +1180,11 @@ blog/
   - **#98 `nameFromUrl` non-injectivity** — `foo.jpg`/`foo.png` collide on one key. Any fix must keep
     keys deterministic; #85's disk-derived resume depends on that.
 
+- **In review (#293, held for the owner):** the supported third-party
+  [installation guide](docs/install.md) — platforms as rehearsed (#292), requirements cited
+  only from measurements, secrets, uid-1000 data, the verified one-hop nginx example, blog
+  domain via Settings (#276), first run, links to the #298 upgrade and backup runbooks.
+  Compose now **requires** `PUBLIC_BASE_URL` and `IMG_HOST` (`:?`, no owner-host fallback) and
+  `uploader/.env.example` leaves them empty: a server `.env` without both refuses to start.
+
 Architecture overview: `ARCHITECTURE.md` · security model: `SECURITY.md` · top-level guide: `README.md`.
