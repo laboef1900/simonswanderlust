@@ -1100,3 +1100,23 @@ in isolation. A real app booted from this worktree published a bilingual DE-prim
 at root, EN under `/en/`, reciprocal `hreflang`, per-locale RSS) and refused both a primary
 change and removal of a published locale with 409; a fresh EN-primary instance served an
 EN-only story at root, 404 under `/en/`, `lang="en"` and no alternate.
+
+## Pre-route databases at first boot (2026-11-01)
+
+The boot-time pre-language recovery set read `post_routes` unconditionally. A
+database older than private routes (v10) — the owner's current production
+schema, which also predates site identity — therefore crashed boot with
+`relation "post_routes" does not exist` before any migration ran. Found while
+booting the held #289 stack against an isolated restored copy of the owner
+database (G1 plan; the owner database itself was only read by `pg_dump`).
+
+`dumpDatabase` with `preLanguageMigration` now checks `to_regclass('post_routes')`.
+When absent, the set is labelled v9 (`ROUTES_DUMP_VERSION - 1`) and carries no
+`post_routes` key, which is exactly what `readDump` requires below v10; identity
+metadata without the route schema is refused rather than mislabelled. Outside the
+pre-migration path the table stays mandatory.
+
+Evidence: `backup.test.ts` covers both shapes (failing before the change); the
+owner copy booted to `/health` ok with a built release, the v9 set passed
+`readDump`, and `restoreDatabase` restored it into a freshly migrated schema
+(18 posts, 2 pages, 698 media rows, language defaulted to `de`).
