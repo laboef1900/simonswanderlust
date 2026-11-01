@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { webcrypto } from 'node:crypto';
 import vm from 'node:vm';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { editorDocument, EditorElement } from './editor-dom-harness.js';
@@ -13,6 +14,7 @@ const start = html.lastIndexOf('<script type="module">');
 const markup = html.slice(0, start);
 const script = html.slice(html.indexOf("'use strict'", start), html.lastIndexOf('</script>'));
 const response = (body: unknown, status = 200) => Response.json(body, { status });
+const OWNER = '11111111-1111-4111-8111-111111111111';
 interface PagePayload { de: { bodyMarkdown: string }; en: { bodyMarkdown: string } }
 const drain = async () => {
   for (let i = 0; i < 12; i++) {
@@ -21,6 +23,15 @@ const drain = async () => {
     await promise;
   }
 };
+
+function storage() {
+  const values = new Map<string, string>();
+  return {
+    getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, String(value)); },
+    removeItem: (key: string) => { values.delete(key); }, key: (index: number) => [...values.keys()][index] ?? null,
+    get length() { return values.size; },
+  };
+}
 
 async function loadPage(save: (payload: PagePayload) => Promise<Response>) {
   const dom = editorDocument(markup);
@@ -56,16 +67,16 @@ async function loadPage(save: (payload: PagePayload) => Promise<Response>) {
   };
   const context: Record<string, unknown> = {
     ...galleryCodecBindings, document: dom.document, EasyMDE: BodyEditor,
-    AbortController, setTimeout, clearTimeout, console,
+    AbortController, setTimeout, clearTimeout, console, crypto: webcrypto, structuredClone, addEventListener() {},
+    localStorage: storage(), sessionStorage: storage(),
     location: { origin: 'http://localhost', search: '' }, URLSearchParams,
-    Auth: { ensureAuthed: async () => ({ isAdmin: true }), renderHeader() {} },
+    Auth: { ensureAuthed: async () => ({ isAdmin: true, userId: OWNER }), renderHeader() {} },
     EditorCopy: { en: Object.fromEntries(Object.entries(ui.en).filter(([key]) => key.startsWith('editor.chrome.')).map(([key, value]) => [key.slice('editor.chrome.'.length), value])) },
     AdminConfirm: { ask: async () => true },
     BuildCopy: Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [locale,
       Object.fromEntries(Object.entries(strings).filter(([key]) => key.startsWith('admin.build.'))
         .map(([key, value]) => [key.slice('admin.build.'.length), value])),
     ])),
-    DraftGuard: { createDraftGuard: () => ({ snapshot: () => 'snapshot', markDirty() {}, markClean() {}, redirectToLogin() {}, tryRestore: () => null, wasDismissed: () => false, isDirty: () => false }) },
     EditorGalleryCopy: Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [locale,
       Object.fromEntries(Object.entries(strings).filter(([key]) => key.startsWith('editor.gallery.'))
         .map(([key, value]) => [key.slice('editor.gallery.'.length), value])),
@@ -75,16 +86,21 @@ async function loadPage(save: (payload: PagePayload) => Promise<Response>) {
       if (url === '/language') return response({ primary: 'de', locales: ['de', 'en'], lockedAt: null, updatedAt: '2026-10-27T00:00:00.000Z' });
       // The generalized editor (#288) resolves its page kind from the catalogue first.
       if (url === '/pages' && !init?.method) return response({ pages: [{ key: 'about', known: true, defaults: { de: 'uber-mich', en: 'about-me' } }] });
-      if (url === '/pages/about' && !init?.method) return response({ key: 'about', status: 'published', updatedAt: null,
+      if (url === '/pages/about' && !init?.method) return response({ key: 'about', status: 'published', updatedAt: null, ownerUserId: OWNER, lastSaveId: null,
         de: { locale: 'de', title: '', bodyMarkdown: '', images: {}, slug: '' }, en: { locale: 'en', title: '', bodyMarkdown: '', images: {}, slug: '' } });
       if (url === '/gallery/analyze') return response(await analyzeGallerySource(JSON.parse(String(init?.body)).bodyMarkdown));
-      if (url === '/pages/about' && init?.method === 'PUT') return save(JSON.parse(String(init.body)) as PagePayload);
+      if (url === '/pages/about' && init?.method === 'PUT') {
+        // The real WriteRecovery sends the #305 identity; the route echoes it on acknowledgement.
+        const sent = JSON.parse(String(init.body)) as PagePayload & { saveId: string };
+        const result = await save(sent);
+        return result.ok ? response({ ...await result.json() as object, ownerUserId: OWNER, saveId: sent.saveId }) : result;
+      }
       return response([]);
     },
   };
   context.window = context;
   vm.createContext(context);
-  for (const file of ['build-reporting.js', 'language.js', 'tabs.js', 'pages-ui.js', 'gallery-fence.js', 'gallery-metadata-warnings.js']) vm.runInContext(browserScript(file), context);
+  for (const file of ['build-reporting.js', 'language.js', 'tabs.js', 'pages-ui.js', 'draft-guard.js', 'write-recovery.js', 'gallery-fence.js', 'gallery-metadata-warnings.js']) vm.runInContext(browserScript(file), context);
   vm.runInContext(script, context);
   const api = vm.runInContext('({ fill })', context) as { fill(locale: string, data: { title: string; bodyMarkdown: string }): void };
   // Let initialization (language + stored page) settle before the test edits.

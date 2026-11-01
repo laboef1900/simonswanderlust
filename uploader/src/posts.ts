@@ -93,6 +93,10 @@ export interface PostPair {
  * which the editor echoes back on save for optimistic concurrency (issue #28).
  */
 export interface StoredPostPair extends PostPair { hasUnpublishedChanges: boolean; updatedAt: Date }
+/** Operational evidence, never part of content, revisions or exports. */
+export interface SaveReceipt { readonly saveId: string; readonly ownerUserId: string }
+export interface SaveRead<T> { content: T; ownerUserId: string; lastSaveId: string | null }
+export interface PostSaveOptions { createOnly?: boolean; receipt?: SaveReceipt; baseLanguageUpdatedAt?: Date }
 /** Diagnostics belong to this save's submitted bodies, never to stored content. */
 export interface SavedPostPair extends StoredPostPair { galleryWarnings: GalleryWarning[] }
 /** Whole-pair snapshot of the working copy just BEFORE a save overwrote it (issue #28). */
@@ -183,6 +187,7 @@ export interface PostStore {
   pageSlugOwner(locale: Locale, slug: string): Promise<string | null>;
   list(): Promise<PostSummary[]>;
   get(translationKey: string): Promise<StoredPostPair | null>;
+  getForSave(translationKey: string, ownerUserId: string): Promise<SaveRead<StoredPostPair> | null>;
   getPublishState(translationKey: string): Promise<PublishState | null>;
   getPublishedTrack(translationKey: string): Promise<PublishedTrackProjection>;
   getPublishedLocales(translationKey: string): Promise<Locale[]>;
@@ -195,7 +200,7 @@ export interface PostStore {
    * Route-level slug consent uses this language token; recheck it under the
    * language lock before a newly enabled locale can become writable.
    */
-  upsertDraft(pair: PostPair, baseUpdatedAt?: Date, baseLanguageUpdatedAt?: Date): Promise<SavedPostPair>;
+  upsertDraft(pair: PostPair, baseUpdatedAt?: Date, options?: PostSaveOptions): Promise<SavedPostPair>;
   publish(translationKey: string, tokens: PublishTokens, validate?: PublishValidation): Promise<{ updatedAt: Date }>;
   /** Flip a pair back to draft (the "emergency brake" — the live site drops it on the next build). */
   unpublish(translationKey: string): Promise<{ previousUpdatedAt: Date; updatedAt: Date }>;
@@ -576,6 +581,7 @@ export interface MemoryPostStoreOptions {
 
 export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
   const byKey = new Map<string, Stored>();
+  const receipts = new Map<string, SaveReceipt>();
   const language = opts.language ?? memoryLanguageStore();
   registerMemoryClaims(language, function* () {
     for (const pair of byKey.values()) for (const locale of ['de', 'en'] as const) {
@@ -593,7 +599,7 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
         const omitted = locale === next.primary ? false : !next.locales.includes(locale) ? true : p[locale].omitted;
         if (omitted !== p[locale].omitted) { p[locale].omitted = omitted; changed = true; }
       }
-      if (changed) p.updatedAt = nextTime(p.updatedAt);
+      if (changed) { p.updatedAt = nextTime(p.updatedAt); receipts.delete(p.translationKey); }
       p.status = p.rowStatus[next.primary];
     }
   });
@@ -648,6 +654,13 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
         return Promise.resolve(p ? publicPair(p) : null);
       });
     },
+    async getForSave(tk, ownerUserId) {
+      return language.runExclusive(async () => {
+        const p = byKey.get(tk);
+        const receipt = receipts.get(tk);
+        return p ? { content: publicPair(p), ownerUserId, lastSaveId: receipt?.ownerUserId === ownerUserId ? receipt.saveId : null } : null;
+      });
+    },
     async getPublishState(tk) {
       return language.runExclusive(async (mode) => {
         const p = byKey.get(tk);
@@ -686,12 +699,14 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
         });
       });
     },
-    async upsertDraft(pair, baseUpdatedAt, baseLanguageUpdatedAt) {
+    async upsertDraft(pair, baseUpdatedAt, options = {}) {
+      const receipt = options.receipt ? { ...options.receipt } : undefined;
       const key = pair.translationKey || randomUUID();
       return language.runExclusive((mode) => withPair(key, async () => {
-        assertDraftLanguage(mode, baseLanguageUpdatedAt);
-        validateDraft(pair, mode);
         const existing = byKey.get(key);
+        if (options.createOnly && existing) throw new PostError('post already exists', 'already_exists');
+        assertDraftLanguage(mode, options.baseLanguageUpdatedAt);
+        validateDraft(pair, mode);
         const normalized = await draftWithDefaults(pair, mode, existing);
         pair = normalized.pair;
         if (!existing && baseUpdatedAt) throw new PostError('post not found', 'not_found');
@@ -729,6 +744,8 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
           hasUnpublishedChanges: status === 'published',
         };
         byKey.set(key, stored);
+        if (receipt) receipts.set(key, receipt);
+        else receipts.delete(key);
         return { ...publicPair(stored), galleryWarnings: normalized.galleryWarnings };
       }));
     },
@@ -741,6 +758,7 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
         await validate?.(publicPair(p), structuredClone(mode));
         await language.markPublished();
         p.updatedAt = nextTime(p.updatedAt);
+        receipts.delete(tk);
         for (const locale of requestedLocales(p, mode)) {
           p.rowStatus[locale] = 'published';
           p[locale].publishedAt = new Date(p.updatedAt);
@@ -760,6 +778,7 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
         p.rowStatus = { de: 'draft', en: 'draft' };
         p.hasUnpublishedChanges = false;
         p.updatedAt = nextTime(p.updatedAt);
+        receipts.delete(tk);
         return { previousUpdatedAt, updatedAt: new Date(p.updatedAt) };
       }));
     },
@@ -767,6 +786,7 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
       return language.runExclusive(() => withPair(tk, async () => {
         if (!byKey.has(tk)) throw new PostError('post not found');
         await opts.comments?.removeByTranslationKey(tk);
+        receipts.delete(tk);
         byKey.delete(tk);
         revisionsByKey.delete(tk);
       }));
@@ -1034,6 +1054,18 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
       });
     },
     get: (tk) => consistentRead((client, language) => readPostPair(client, tk, language)),
+    getForSave: (tk, ownerUserId) => consistentRead(async (client, language) => {
+      const { rows } = await client.query<PostRow & { last_save_id: string | null; last_save_by: string | null }>(
+        'SELECT * FROM posts WHERE translation_key=$1 ORDER BY locale', [tk],
+      );
+      const content = postPairFromRows(tk, rows, language);
+      const receipt = rows[0];
+      // Fail closed for incomplete/legacy inconsistent pairs rather than attribute a receipt.
+      const lastSaveId = receipt?.last_save_by === ownerUserId
+        && rows.every((row) => row.last_save_by === ownerUserId && row.last_save_id === receipt.last_save_id)
+        ? receipt.last_save_id : null;
+      return content ? { content, ownerUserId, lastSaveId } : null;
+    }),
     async getPublishState(tk) {
       return consistentRead(async (client, language) => {
         const state = await readPublishState(client, tk, language);
@@ -1079,16 +1111,21 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
         ...(r.title_image ? { titleImage: r.title_image } : {}),
       }));
     },
-    async upsertDraft(pair, baseUpdatedAt, baseLanguageUpdatedAt) {
+    async upsertDraft(pair, baseUpdatedAt, options = {}) {
+      const receipt = options.receipt ? { ...options.receipt } : undefined;
       const tk = pair.translationKey || randomUUID();
       writable();
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
         const language = await readLanguage(client, true);
-        assertDraftLanguage(language, baseLanguageUpdatedAt);
-        validateDraft(pair, language);
         await lockPostPair(client, tk);
+        if (options.createOnly) {
+          const present = await client.query('SELECT 1 FROM posts WHERE translation_key=$1 LIMIT 1', [tk]);
+          if (present.rows.length) throw new PostError('post already exists', 'already_exists');
+        }
+        assertDraftLanguage(language, options.baseLanguageUpdatedAt);
+        validateDraft(pair, language);
         const existing = await readPostPair(client, tk, language, true);
         await lockContentNamespaces(client);
         // Inside the pair lock: a disabled locale keeps the row read here.
@@ -1136,6 +1173,10 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
           await insertLocale(client, tk, status, pair.shared, { ...pair.en, locale: 'en' });
         }
         await touchPostPair(client, tk);
+        if (receipt) {
+          await client.query('UPDATE posts SET last_save_id=$2, last_save_by=$3 WHERE translation_key=$1',
+            [tk, receipt.saveId, receipt.ownerUserId]);
+        }
         // Return this save's token, not a later writer's post-COMMIT read.
         const saved = await readPostPair(client, tk, language);
         if (!saved) throw new PostError('failed to save post');

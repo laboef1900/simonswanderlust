@@ -14,6 +14,7 @@
     "copy:fonts": "node scripts/copy-fonts.mjs",
     "copy:easymde": "node scripts/copy-easymde.mjs",
     "copy:vendor": "node scripts/copy-vendor.mjs",
+    "build:native": "node scripts/build-native.mjs",
     "copy:legal": "node scripts/copy-legal.mjs uploader",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"

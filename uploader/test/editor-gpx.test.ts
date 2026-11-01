@@ -1,3 +1,4 @@
+import { webcrypto } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
@@ -189,17 +190,38 @@ function check(h: GpxTestHarness, id: string, value = true) {
   h.element(id).checked = value;
   h.element(id).fire('change');
 }
-/** Run the real editor serializer, DraftGuard, host callbacks and GPX controller.
+const EDITOR_OWNER = '11111111-1111-4111-8111-111111111111';
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+/** An unacknowledged save attempt as WriteRecovery records it in a stash (#305). */
+interface StashAttempt { saveId: string; expectedOwnerId: string; resource: string; baseUpdatedAt: string | null; generation: number; sentPayload: unknown }
+/** An owner-scoped DraftGuard record (#305) for `resource` ('new' or 'post:<tk>'),
+ * carrying the WriteRecovery state a real stash would: base version plus any
+ * unresolved attempts (a new post's `createKey` is its client-chosen identity). */
+function stashRecord(resource: string, payload: unknown, baseUpdatedAt: string | null,
+  recovery: { createKey?: string; attempts?: StashAttempt[] } = {}) {
+  const context = webcrypto.randomUUID(), recordId = webcrypto.randomUUID(), createKey = recovery.createKey ?? webcrypto.randomUUID();
+  const key = `swl:draft:u:${EDITOR_OWNER}:${resource}:${context}:record:${recordId}`;
+  const value = JSON.stringify({
+    version: 1, ownerUserId: EDITOR_OWNER, resource, context, recordId, generation: 1,
+    savedAt: '2026-10-28T11:00:00.000Z', payload,
+    recovery: { version: 1, expectedOwnerId: EDITOR_OWNER, kind: 'posts', resource: resource === 'new' ? createKey : resource.slice(5),
+      createKey, baseUpdatedAt, attempts: recovery.attempts ?? [] },
+  });
+  return { key, value };
+}
+/** Run the real editor serializer, DraftGuard, WriteRecovery, host callbacks and GPX controller.
  * Only browser/vendor facilities and network responses are substituted. */
 function fullEditor(candidate: typeof preview, fetchOverride?: SetupOptions['fetch'], options: {
   initialize?: boolean;
   tk?: string;
-  stash?: { key: string; value: unknown };
+  stash?: { key: string; value: string };
   confirm?: (title: string) => Promise<boolean>;
 } = {}) {
   const dom = gpxDocument();
   const requests: RequestRecord[] = [];
-  const values = new Map<string, string>(options.stash ? [[options.stash.key, JSON.stringify(options.stash.value)]] : []);
+  const values = new Map<string, string>(options.stash ? [[options.stash.key, options.stash.value]] : []);
+  const owner = EDITOR_OWNER;
+  let createdKey = '';
   const local = {
     getItem: (key: string) => values.get(key) ?? null,
     setItem: (key: string, value: string) => { values.set(key, String(value)); },
@@ -238,18 +260,30 @@ function fullEditor(candidate: typeof preview, fetchOverride?: SetupOptions['fet
     sessionStorage: local,
     fetch: async (url: string, options: RequestInit = {}) => {
       requests.push({ url, options });
+      const post = url === '/posts' || /^\/posts\/[^/]+$/.test(url);
+      const sent = options.body && post ? JSON.parse(String(options.body)) : null;
+      if (url === '/posts' && sent) createdKey = sent.translationKey;
       const overridden = await fetchOverride?.(url, options);
-      if (overridden) return overridden;
+      if (overridden) {
+        // Feature fixtures speak the #305 receipt protocol: acks carry the owner and
+        // the sent saveId; reads carry the owner and the last receipt (none by default).
+        if (overridden.ok && sent) return response({ ...(await overridden.json() as Record<string, unknown>), translationKey: sent.translationKey,
+          ownerUserId: owner, saveId: sent.saveId });
+        if (overridden.ok && post && !options.method) {
+          const body = await overridden.json() as Record<string, unknown>;
+          if (body && 'de' in body && 'en' in body) return response({ ownerUserId: owner, lastSaveId: null, ...body });
+          return response(body);
+        }
+        return overridden;
+      }
       if (url === '/gpx/imports') return response(candidate, 201);
       if (url.startsWith('/gpx/imports/') && options.method === 'DELETE') return response({}, 204);
       if (url === '/posts' && options.method === 'POST') return response({
-        translationKey: 'saved-pair', updatedAt: '2026-10-24T10:00:30.000Z',
-        de: { slug: 'private-walk' }, en: { slug: '' },
+        ...sent, translationKey: createdKey, updatedAt: '2026-10-24T10:00:30.000Z', ownerUserId: owner, saveId: sent.saveId,
       });
-      if (url === '/posts/saved-pair/route' && options.method === 'PUT') return response({ error: 'gpx_conflict' }, 409);
-      if (url === '/posts/saved-pair' && options.method === 'PUT') return response({
-        translationKey: 'saved-pair', updatedAt: '2026-10-24T10:00:40.000Z',
-        de: { slug: 'private-walk' }, en: { slug: '' },
+      if (url === '/posts/' + createdKey + '/route' && options.method === 'PUT') return response({ error: 'gpx_conflict' }, 409);
+      if (url === '/posts/' + createdKey && options.method === 'PUT') return response({
+        ...sent, translationKey: createdKey, updatedAt: '2026-10-24T10:00:40.000Z', ownerUserId: owner, saveId: sent.saveId,
       });
       if (url.endsWith('/revisions')) return response([]);
       if (url.endsWith('/alt-audit')) return response({ images: [] });
@@ -263,13 +297,13 @@ function fullEditor(candidate: typeof preview, fetchOverride?: SetupOptions['fet
     clearInterval() {},
     addEventListener: dom.document.addEventListener,
     URLSearchParams, URL, AbortController, Event: EditorEvent, KeyboardEvent: EditorEvent, console,
-    structuredClone,
+    crypto: webcrypto, structuredClone,
     matchMedia: () => ({ matches: false, addEventListener() {} }),
     navigator: {},
     alert() {},
     confirm: () => false,
     EasyMDE,
-    Auth: { ensureAuthed: async () => options.initialize ? { isAdmin: true } : null, renderHeader() {} },
+    Auth: { ensureAuthed: async () => options.initialize ? { isAdmin: true, userId: owner } : null, renderHeader() {} },
     AdminConfirm: { ask: async ({ title }: { title: string }) => options.confirm ? options.confirm(title) : true, liveUrls: () => ({ de: '', en: '' }), urlsPlain: () => '' },
     MediaPicker: { open() {} },
     AltSuggest: { wire() {} },
@@ -284,7 +318,7 @@ function fullEditor(candidate: typeof preview, fetchOverride?: SetupOptions['fet
   };
   context.window = context;
   vm.createContext(context);
-  for (const file of ['build-reporting.js', 'language.js', 'draft-guard.js', 'waypoint-lookup.js', 'posts-filter.js', 'editor-title-image.js',
+  for (const file of ['build-reporting.js', 'language.js', 'draft-guard.js', 'write-recovery.js', 'waypoint-lookup.js', 'posts-filter.js', 'editor-title-image.js',
     'gallery-fence.js', 'gallery-metadata-warnings.js', 'media-api.js', 'gallery-library.js', 'editor-galleries.js', 'editor-linter.js',
     'llm.js', 'editor-excerpt.js', 'country-centers.js', 'country-coordinates.js', 'tabs.js',
     'editor-review.js', 'editor-inspector.js', 'editor-gpx.js']) {
@@ -298,7 +332,7 @@ function fullEditor(candidate: typeof preview, fetchOverride?: SetupOptions['fet
   controller.wire = (host) => wire({ ...host, loadGeometry: async () => browserGeometry, loadPublicTrack: async () => browserPublicTrack });
   const inline = html.slice(html.indexOf("'use strict'", html.lastIndexOf('<script type="module">')), html.lastIndexOf('</script>'));
   vm.runInContext(inline, context, { filename: 'editor.html' });
-  vm.runInContext('language = SiteLanguage.config(); loadBlocked = false', context);
+  vm.runInContext(`language = SiteLanguage.config(); loadBlocked = false; writeRecovery.initialize('${owner}')`, context);
   const editor = vm.runInContext('({ buildPayload, loadPost, doSaveDraft, guard, gpxEditor, deMDE, addStopRow })', context) as {
     buildPayload(): Omit<PostPair, 'status'> & { updatedAt?: string };
     loadPost(tk: string): Promise<boolean>;
@@ -313,8 +347,20 @@ function fullEditor(candidate: typeof preview, fetchOverride?: SetupOptions['fet
     if (!found) throw new Error('missing #' + id);
     return found;
   };
+  const recovery = () => {
+    const box = dom.document.querySelector('.write-recovery');
+    if (!box) throw new Error('missing write-recovery section');
+    return box;
+  };
   return {
     editor, api: editor.gpxEditor, element, requests, local,
+    /** WriteRecovery's status line (the pause notice while the owner is unconfirmed). */
+    recoveryMessage: () => recovery().querySelector('p')!.textContent,
+    comparisonShown: () => !recovery().querySelector('details')!.hidden,
+    /** The paused state's sign-in link (a probe 401 pauses instead of redirecting). */
+    signInOffered: () => !recovery().querySelector('a')!.hidden,
+    /** The "Use stored" control of the comparison: adopt the stored version into the form. */
+    useStored: () => { recovery().querySelector('details')!.querySelector('button')!.click(); },
     get locationHref() { return (context.location as { href: string }).href; },
     get state() { return vm.runInContext('({ tk: currentTk, baseUpdatedAt: loadedUpdatedAt })', context) as HostState; },
     get saveCalls() { return requests.filter(({ url, options }) => url === '/posts' && options.method === 'POST').length; },
@@ -733,13 +779,12 @@ describe('GPX shares the real editor write queue', () => {
     const attachSave = Promise.withResolvers<void>();
     const savedVersions: string[] = [];
     let attachedAt = '';
+    let tk = ''; // the client's create-only identity (#305), not a server-chosen key
     const h = fullEditor(preview, async (url, request) => {
-      if ((url === '/posts' && request.method === 'POST') || (url === '/posts/saved-pair' && request.method === 'PUT')) {
+      if ((url === '/posts' && request.method === 'POST') || (url === '/posts/' + tk && request.method === 'PUT')) {
         const payload = JSON.parse(String(request.body)) as PostPair & { updatedAt?: string };
-        const stored = await posts.upsertDraft(
-          { ...payload, translationKey: payload.translationKey || 'saved-pair' },
-          payload.updatedAt ? new Date(payload.updatedAt) : undefined,
-        );
+        if (url === '/posts') tk = payload.translationKey;
+        const stored = await posts.upsertDraft(payload, payload.updatedAt ? new Date(payload.updatedAt) : undefined);
         const updatedAt = stored.updatedAt.toISOString();
         savedVersions.push(updatedAt);
         if (savedVersions.length === 1) await firstSave.promise;
@@ -747,7 +792,7 @@ describe('GPX shares the real editor write queue', () => {
         return response({ ...stored, updatedAt });
       }
       if (url.endsWith('/route') && request.method === 'PUT') {
-        attachedAt = new Date((await posts.get('saved-pair'))!.updatedAt.getTime() + 1).toISOString();
+        attachedAt = new Date((await posts.get(tk))!.updatedAt.getTime() + 1).toISOString();
         return response({ ...attachedRoute, updatedAt: attachedAt });
       }
       return undefined;
@@ -757,7 +802,8 @@ describe('GPX shares the real editor write queue', () => {
     h.element('deTitle').fire('input');
     const saving = h.editor.doSaveDraft();
     await settle();
-    expect((await posts.get('saved-pair'))!.de.title).toBe('First save A');
+    expect(tk).toMatch(UUID_RE);
+    expect((await posts.get(tk))!.de.title).toBe('First save A');
     h.element('deTitle').value = 'Save and attach B';
     h.element('deTitle').fire('input');
     await importPreview(h);
@@ -775,21 +821,21 @@ describe('GPX shares the real editor write queue', () => {
     firstSave.resolve();
     expect(await saving).toBe(true);
     await settle();
-    expect((await posts.get('saved-pair'))!.de.title).toBe('Save and attach B');
+    expect((await posts.get(tk))!.de.title).toBe('Save and attach B');
     expect(routeWrites(h)).toHaveLength(0); // wait for B's reply, not just its commit
     expect(h.element('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveSaving']);
-    const attachDraft = h.requests.find(({ url, options }) => url === '/posts/saved-pair' && options.method === 'PUT')!;
+    const attachDraft = h.requests.find(({ url, options }) => url === '/posts/' + tk && options.method === 'PUT')!;
     expect(JSON.parse(String(attachDraft.options.body))).toMatchObject({
-      translationKey: 'saved-pair', updatedAt: savedVersions[0], de: { title: 'Save and attach B' },
+      translationKey: tk, updatedAt: savedVersions[0], de: { title: 'Save and attach B' },
     });
     attachSave.resolve();
     await settle();
     expect(h.saveCalls).toBe(1);
     expect(await posts.list()).toHaveLength(1);
-    expect((await posts.get('saved-pair'))!.de.title).toBe('Save and attach B');
+    expect((await posts.get(tk))!.de.title).toBe('Save and attach B');
     expect(h.requests.filter(({ url, options }) => url.startsWith('/posts') && ['POST', 'PUT'].includes(options.method ?? ''))
       .map(({ url, options }) => [options.method, url])).toEqual([
-      ['POST', '/posts'], ['PUT', '/posts/saved-pair'], ['PUT', '/posts/saved-pair/route'],
+      ['POST', '/posts'], ['PUT', '/posts/' + tk], ['PUT', '/posts/' + tk + '/route'],
     ]);
     expect(routeWrites(h)).toHaveLength(1);
     expect(JSON.parse(String(routeWrites(h)[0]!.options.body))).toMatchObject({
@@ -801,7 +847,7 @@ describe('GPX shares the real editor write queue', () => {
     expect(h.editor.guard.isDirty()).toBe(laterTyping);
     expect(h.element('draftSaveState').textContent).toBe(ui.en[laterTyping ? 'editor.chrome.saveUnsaved' : 'editor.chrome.saveSaved']);
     expect(await h.editor.doSaveDraft()).toBe(true);
-    const nextSave = h.requests.filter(({ url, options }) => url === '/posts/saved-pair' && options.method === 'PUT').at(-1)!;
+    const nextSave = h.requests.filter(({ url, options }) => url === '/posts/' + tk && options.method === 'PUT').at(-1)!;
     expect(JSON.parse(String(nextSave.options.body)).updatedAt).toBe(attachedAt);
   });
 
@@ -813,21 +859,21 @@ describe('GPX shares the real editor write queue', () => {
         ...attachedRoute, updatedAt: '2026-10-24T10:01:00.000Z',
       });
       if (url.endsWith('/route') && request.method === 'DELETE') return pendingDetach.promise;
-      if (url === '/posts/saved-pair' && request.method === 'PUT') return pendingSave.promise;
+      if (/^\/posts\/[^/]+$/.test(url) && request.method === 'PUT') return pendingSave.promise;
       return undefined;
     });
     await settle();
     await importPreview(h);
     h.element('gpxAttach').click();
     await settle();
-    expect(h.state.tk).toBe('saved-pair');
+    expect(h.state.tk).toMatch(UUID_RE);
     const saving = h.editor.doSaveDraft();
     await settle();
     h.element('gpxDetach').click();
     await settle();
     expect(routeWrites(h).map(({ options }) => options.method)).toEqual(['PUT']);
     pendingSave.resolve(response({
-      translationKey: 'saved-pair', updatedAt: '2026-10-24T10:02:00.000Z',
+      translationKey: h.state.tk, updatedAt: '2026-10-24T10:02:00.000Z',
       de: { slug: 'private-walk' }, en: { slug: '' },
     }));
     expect(await saving).toBe(true);
@@ -934,8 +980,9 @@ describe('GPX privacy through the real editor save and stash boundary', () => {
     await settle();
     const saved = h.requests.find(({ url, options }) => url === '/posts' && options.method === 'POST')!;
     expect(saved).toBeDefined();
-    expect(JSON.parse(String(saved.options.body))).toEqual(expected);
-    expect(h.state.tk).toBe('saved-pair');
+    const sent = JSON.parse(String(saved.options.body));
+    expect(sent).toEqual({ ...expected, translationKey: expect.any(String), saveId: expect.any(String), expectedOwnerId: expect.any(String) });
+    expect(h.state.tk).toBe(sent.translationKey);
     expect(h.api.hasPreview()).toBe(true);
     expect(h.editor.deMDE.value()).toBe('## Unsaved story\n\nKeep these paragraphs.');
     const attached = routeWrites(h)[0]!;
@@ -949,10 +996,10 @@ describe('GPX privacy through the real editor save and stash boundary', () => {
     h.editor.deMDE.value('## Later edit\n\nKeep these too.');
     const later = JSON.parse(JSON.stringify(h.editor.buildPayload()));
     h.editor.guard.stashNow();
-    expect(JSON.parse(h.local.getItem('swl:draft:saved-pair')!).payload).toEqual(later);
+    expect(Array.from({ length: h.local.length }, (_, index) => JSON.parse(h.local.getItem(h.local.key(index)!)!)).some(stash => JSON.stringify(stash.payload) === JSON.stringify(later))).toBe(true);
     expect(await h.editor.doSaveDraft()).toBe(true);
-    const retry = h.requests.find(({ url, options }) => url === '/posts/saved-pair' && options.method === 'PUT')!;
-    expect(JSON.parse(String(retry.options.body))).toEqual(later);
+    const retry = h.requests.find(({ url, options }) => url === '/posts/' + h.state.tk && options.method === 'PUT')!;
+    expect(JSON.parse(String(retry.options.body))).toEqual({ ...later, saveId: expect.any(String), expectedOwnerId: expect.any(String) });
     expect(h.saveCalls).toBe(1);
     expect(routeWrites(h)).toHaveLength(1);
   });
@@ -1156,8 +1203,17 @@ const routeReads = (h: { requests: RequestRecord[] }) => h.requests.filter(({ ur
   url.endsWith('/route') && options.method === 'GET');
 const publicationWrites = (h: { requests: RequestRecord[] }) => h.requests.filter(({ url }) =>
   url.endsWith('/publish') || url.endsWith('/unpublish'));
+const draftWrites = (h: { requests: RequestRecord[] }) => h.requests.filter(({ url, options }) =>
+  /^\/posts(\/[^/]+)?$/.test(url) && (options.method === 'PUT' || options.method === 'POST'));
+type LocalStore = { length: number; key(index: number): string | null; getItem(key: string): string | null };
+/** Every DraftGuard record's payload, serialized as stored (the recovery a reader could restore). */
+const stashedPayloads = (h: { local: LocalStore }) => Array.from({ length: h.local.length }, (_, i) =>
+  JSON.stringify(JSON.parse(h.local.getItem(h.local.key(i)!)!).payload));
 
-describe('explicit conflict Reload reconciles the real editor and GPX controller', () => {
+// A conflicting save probes the stored version (#305); adopting it through the
+// comparison's "Use stored" control is the explicit reload the GPX controller
+// reconciles against, replacing the pre-#305 "Reload the latest version?" dialog.
+describe('explicitly adopting the stored version reconciles the real editor and GPX controller', () => {
   it.each([
     { name: 'attach', before: emptyRoute, after: attachedRoute, status: 'gpx.statusAttached', detach: true },
     { name: 'replace', before: attachedRoute, after: { ...attachedRoute, version: 'e'.repeat(36) }, status: 'gpx.statusAttached', detach: true },
@@ -1183,6 +1239,12 @@ describe('explicit conflict Reload reconciles the real editor and GPX controller
     h.element('deTitle').value = 'Unsaved local title';
     h.element('deTitle').fire('input');
     expect(await h.editor.doSaveDraft()).toBe(false);
+    // The probe alone reconciles nothing: no route read, no foreign form yet.
+    expect(h.comparisonShown()).toBe(true);
+    expect(routeReads(h)).toHaveLength(1);
+    expect(h.element('enTitle').value).not.toBe(stored.en.title);
+    h.useStored();
+    await settle();
     expect(routeReads(h)).toHaveLength(2);
     expect(h.element('enTitle').value).toBe(stored.en.title);
     expect(h.element('gpxRouteStatus').textContent).toBe(ui.en[status]);
@@ -1204,12 +1266,13 @@ describe('explicit conflict Reload reconciles the real editor and GPX controller
     const pending = Promise.withResolvers<Reply>();
     let reads = 0;
     let saves = 0;
+    let stored = reloadPostFixture();
     const h = fullEditor(preview, async (url, options) => {
       if (url === '/posts/pair-1' && options.method === 'PUT') {
         saves++;
         return response({ code: 'conflict' }, 409);
       }
-      if (url === '/posts/pair-1') return response(reloadPostFixture());
+      if (url === '/posts/pair-1') return response(stored);
       if (url.endsWith('/route') && options.method === 'GET') {
         reads++;
         return reads === 2 ? pending.promise : response(attachedRoute);
@@ -1217,14 +1280,19 @@ describe('explicit conflict Reload reconciles the real editor and GPX controller
       return undefined;
     });
     await h.editor.loadPost('pair-1');
+    stored = reloadPostFixture('2026-10-28T10:01:00.000Z'); // another tab saved: the probe finds a changed version
     const save = h.editor.doSaveDraft();
-    const obsoleteSave = h.editor.doSaveDraft();
-    h.element('publishBtn').click(); // queued before the conflict; must be cancelled
-    h.element('gpxDetach').click(); // same queue, never allowed through Reload
+    const queuedSave = h.editor.doSaveDraft(); // queued behind the conflict; refused by the unresolved comparison
+    h.element('publishBtn').click(); // same queue, same refusal
     await settle();
-    let finished = false;
-    void save.then(() => { finished = true; });
-    expect(finished).toBe(false);
+    expect(await save).toBe(false);
+    expect(await queuedSave).toBe(false);
+    expect(saves).toBe(1);
+    expect(publicationWrites(h)).toEqual([]);
+    expect(h.comparisonShown()).toBe(true);
+    h.useStored(); // the explicit reload: form adopted, route read pending
+    await settle();
+    expect(h.element('enTitle').value).toBe(reloadPostFixture().en.title);
     expect(h.element('gpxRouteStatus').textContent).toBe(ui.en['gpx.statusLoading']);
     for (const id of ['gpxReimport', 'gpxAttach', 'gpxDetach']) expect(h.element(id).disabled).toBe(true);
     expect(await h.editor.doSaveDraft()).toBe(false);
@@ -1240,8 +1308,6 @@ describe('explicit conflict Reload reconciles the real editor and GPX controller
     else if (failure === '500') pending.resolve(response({ error: 'unavailable' }, 500));
     else if (failure === 'json') pending.resolve({ status: 200, ok: true, json: async () => { throw new SyntaxError('invalid JSON'); } });
     else pending.resolve(response({ ...emptyRoute, version: 42 }));
-    await save;
-    await obsoleteSave;
     await settle();
     expect(h.element('gpxRouteStatus').textContent).toBe(ui.en['gpx.statusUnavailable']);
     expect(h.element('gpxRouteFeedback').textContent).toBe(ui.en['gpx.routeRefreshFailed']);
@@ -1298,15 +1364,15 @@ describe('explicit conflict Reload reconciles the real editor and GPX controller
     expect(JSON.parse(String(routeWrites(h)[0]!.options.body)).baseVersion).toBe(attachedRoute.version);
   });
 
-  it.each(['network', '500', 'population', '401'] as const)('does not reconcile a route after failed post loading (%s), preserving local recovery', async (failure) => {
-    let reloading = false;
+  // Adopting a stored version whose population fails rolls the form back (#332):
+  // the route is never read, nothing is written, and the local draft stays stashed.
+  it('does not reconcile a route when adopting the stored version fails to populate, preserving local recovery', async () => {
+    let conflicted = false;
     const h = fullEditor(preview, async (url, options) => {
       if (url.endsWith('/route') && options.method === 'GET') return response(attachedRoute);
       if (url === '/posts/pair-1' && options.method === 'PUT') return response({ code: 'conflict' }, 409);
       if (url === '/posts/pair-1') {
-        if (!reloading) return response(reloadPostFixture());
-        if (failure === 'network') throw new Error('offline');
-        if (failure === '500' || failure === '401') return response({}, Number(failure));
+        if (!conflicted) return response(reloadPostFixture());
         const post = reloadPostFixture('2026-10-28T12:00:00.000Z');
         return response({ ...post, de: { ...post.de, bodyMarkdown: 'Break population' } });
       }
@@ -1317,28 +1383,68 @@ describe('explicit conflict Reload reconciles the real editor and GPX controller
     h.element('deTitle').fire('input');
     h.editor.guard.stashNow();
     const before = structuredClone(h.editor.buildPayload());
-    if (failure === 'population') {
-      const value = h.editor.deMDE.value.bind(h.editor.deMDE);
-      h.editor.deMDE.value = (text?: string) => {
-        const result = value(text);
-        if (text === 'Break population') throw new Error('form failed after DE changed');
-        return result;
-      };
-    }
-    reloading = true;
+    const value = h.editor.deMDE.value.bind(h.editor.deMDE);
+    h.editor.deMDE.value = (text?: string) => {
+      const result = value(text);
+      if (text === 'Break population') throw new Error('form failed after DE changed');
+      return result;
+    };
+    conflicted = true;
     expect(await h.editor.doSaveDraft()).toBe(false);
+    expect(h.comparisonShown()).toBe(true);
     expect(routeReads(h)).toHaveLength(1);
+    h.useStored();
+    await settle();
+    expect(routeReads(h)).toHaveLength(1);
+    expect(h.element('deTitle').value).toBe('Keep my draft');
     expect(h.editor.buildPayload()).toEqual(before);
     expect(await h.editor.doSaveDraft()).toBe(false);
     h.element('publishBtn').click();
     h.element('gpxDetach').click();
     await settle();
+    expect(draftWrites(h)).toHaveLength(1);
     expect(publicationWrites(h)).toEqual([]);
     expect(routeWrites(h)).toEqual([]);
-    const stashes = Array.from({ length: h.local.length }, (_, i) => JSON.parse(h.local.getItem(h.local.key(i)!)!));
-    expect(stashes.some((entry) => JSON.stringify(entry.payload) === JSON.stringify(before))).toBe(true);
-    if (failure === '401') expect(h.locationHref).toMatch(/^\/login\?next=/);
-    else expect(h.editor.guard.isDirty()).toBe(true);
+    expect(stashedPayloads(h)).toContain(JSON.stringify(before));
+    expect(h.editor.guard.isDirty()).toBe(true);
+  });
+
+  // When the stored version cannot be read at all, no reload is offered: the
+  // attempt stays unresolved, nothing is resent, and the route is not re-read.
+  it.each(['network', '500', '401'] as const)('does not reconcile a route when the conflict probe fails (%s), preserving local recovery', async (failure) => {
+    let conflicted = false;
+    const h = fullEditor(preview, async (url, options) => {
+      if (url.endsWith('/route') && options.method === 'GET') return response(attachedRoute);
+      if (url === '/posts/pair-1' && options.method === 'PUT') return response({ code: 'conflict' }, 409);
+      if (url === '/posts/pair-1') {
+        if (!conflicted) return response(reloadPostFixture());
+        if (failure === 'network') throw new Error('offline');
+        return response({}, Number(failure));
+      }
+      return undefined;
+    });
+    await h.editor.loadPost('pair-1');
+    h.element('deTitle').value = 'Keep my draft';
+    h.element('deTitle').fire('input');
+    h.editor.guard.stashNow();
+    const before = structuredClone(h.editor.buildPayload());
+    conflicted = true;
+    expect(await h.editor.doSaveDraft()).toBe(false);
+    expect(routeReads(h)).toHaveLength(1);
+    expect(h.comparisonShown()).toBe(false);
+    expect(h.recoveryMessage()).toBe(ui.en[failure === '401' ? 'editor.chrome.writeOwnerChanged' : 'editor.chrome.writeUnknown']);
+    expect(h.signInOffered()).toBe(failure === '401');
+    expect(h.editor.buildPayload()).toEqual(before);
+    expect(await h.editor.doSaveDraft()).toBe(false);
+    h.element('publishBtn').click();
+    await settle();
+    expect(draftWrites(h)).toHaveLength(1); // the conflicting attempt; never resent
+    expect(routeReads(h)).toHaveLength(1);
+    expect(publicationWrites(h)).toEqual([]);
+    expect(routeWrites(h)).toEqual([]);
+    expect(stashedPayloads(h)).toContain(JSON.stringify(before));
+    expect(h.editor.guard.isDirty()).toBe(true);
+    expect(h.locationHref).toBe('http://localhost/admin/editor.html');
   });
 
   it('cancelled conflict Reload keeps edits and does not read a route', async () => {
@@ -1376,28 +1482,37 @@ describe('explicit conflict Reload reconciles the real editor and GPX controller
     expect(await h.editor.doSaveDraft()).toBe(true);
   });
 
+  // An existing post's stash is keyed by the URL's tk; a new post's stash carries
+  // its client-chosen key and the unacknowledged first save, which the restore
+  // probe confirms before the identity gets its one route read.
   it.each([false, true])('initialization offers stash before its single final route refresh (existing: %s)', async (existing) => {
     const restore = Promise.withResolvers<boolean>();
+    const createKey = webcrypto.randomUUID();
+    const saveId = webcrypto.randomUUID();
+    const tk = existing ? 'pair-1' : createKey;
     const payload = reloadPostFixture();
-    payload.translationKey = 'recovered-pair';
+    payload.translationKey = tk;
     payload.de.title = 'Local recovered title';
     const h = fullEditor(preview, async (url, options) => {
-      if (url === '/posts/pair-1') return response(reloadPostFixture());
-      if (url === '/posts/recovered-pair/route' && options.method === 'GET') return response(attachedRoute);
+      if (url === '/posts/' + tk && !options.method) return response({ ...reloadPostFixture(), translationKey: tk, lastSaveId: existing ? null : saveId });
+      if (url === '/posts/' + tk + '/route' && options.method === 'GET') return response(attachedRoute);
       return undefined;
     }, {
-      initialize: true, tk: existing ? 'pair-1' : undefined,
-      stash: { key: existing ? 'swl:draft:pair-1' : 'swl:draft:new:orphan', value: { savedAt: '2026-10-28T11:00:00.000Z', payload } },
-      confirm: async (title) => title === 'Restore unsaved draft?' ? restore.promise : true,
+      initialize: true, tk: existing ? tk : undefined,
+      stash: existing
+        ? stashRecord('post:pair-1', payload, '2026-10-28T10:00:00.000Z')
+        : stashRecord('new', payload, null, { createKey, attempts: [{ saveId, expectedOwnerId: EDITOR_OWNER, resource: createKey, baseUpdatedAt: null, generation: 1, sentPayload: payload }] }),
+      confirm: async (title) => title === ui.en['editor.chrome.restoreTitle'] ? restore.promise : true,
     });
     await settle();
     expect(routeReads(h)).toHaveLength(0);
     restore.resolve(true);
     await settle();
-    expect(routeReads(h).map(({ url }) => url)).toEqual(['/posts/recovered-pair/route']);
+    expect(routeReads(h).map(({ url }) => url)).toEqual(['/posts/' + tk + '/route']);
     expect(h.element('deTitle').value).toBe(payload.de.title);
-    expect(h.state.tk).toBe('recovered-pair');
+    expect(h.state.tk).toBe(tk);
     expect(h.api.publishVersion()).toBe(attachedRoute.version);
+    expect(draftWrites(h)).toEqual([]); // restoring never resends the stashed attempt
     h.editor.guard.stashNow();
     for (let i = 0; i < h.local.length; i++) {
       expect(h.local.getItem(h.local.key(i)!)).not.toMatch(/"(?:geometry|segments|importId|sourceBytes|baseVersion)"/);
@@ -1477,12 +1592,13 @@ it('keeps failed initialization in recovery mode without a route-only read after
   payload.de.title = 'Recover this draft';
   const h = fullEditor(preview, async (url) => url === '/posts/pair-1' ? response({}, 500) : undefined, {
     initialize: true, tk: 'pair-1',
-    stash: { key: 'swl:draft:pair-1', value: { savedAt: '2026-10-28T11:00:00.000Z', payload } },
+    stash: stashRecord('post:pair-1', payload, '2026-10-28T10:00:00.000Z'),
   });
   await settle();
   expect(h.element('deTitle').value).toBe(payload.de.title);
   expect(routeReads(h)).toEqual([]);
   expect(await h.editor.doSaveDraft()).toBe(false);
+  expect(draftWrites(h)).toEqual([]);
   expect(h.editor.guard.isDirty()).toBe(true);
-  expect(h.local.getItem('swl:draft:pair-1')).toContain('Recover this draft');
+  expect(stashedPayloads(h).some((stored) => stored.includes('Recover this draft'))).toBe(true);
 });

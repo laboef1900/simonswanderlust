@@ -40,7 +40,10 @@
     queue: null,
   };
 
-  var client = api.makeClient({ onUnauthed: function () { location.href = '/login'; } });
+  var client = api.makeClient({
+    onUnauthed: function () { uploads.pause(); say(copy.uploadNeedsAuth); },
+    canWrite: function () { return !!state.me && !uploads.snapshot().paused; },
+  });
   // Upload completion means the original was accepted, not that encoding is
   // ready. Reload the current query so the server supplies its actual status
   // and applies the author's folder, filters, sorting and page.
@@ -53,10 +56,19 @@
       if (snap.done > previousDone) refreshUploads();
     },
   });
+  window.addEventListener('beforeunload', function (event) {
+    if (!uploads.snapshot().unsettled) return;
+    event.preventDefault(); event.returnValue = '';
+  });
+  window.addEventListener('focus', async function () {
+    try { uploads.observeOwner((await client.me()).userId); }
+    catch (error) { if (error.status === 401) uploads.pause(); }
+  });
 
   function say(msg) { $('out').textContent = msg; }
 
   function fail(err) {
+    if (err && (err.status === 401 || err.code === 'owner_changed')) { uploads.pause(); say(copy.uploadNeedsAuth); return; }
     say('Error: ' + (err && err.message ? err.message : String(err)));
   }
 
@@ -236,29 +248,75 @@
   function renderQueue() {
     var box = $('uploadQueue');
     var snap = state.queue;
+    var focusId = box.contains(document.activeElement) ? document.activeElement.dataset.uploadId : undefined;
+    var focusTarget = null;
     box.innerHTML = '';
-    if (!snap || !snap.total) { box.hidden = true; return; }
+    if (!snap || !snap.total && !snap.paused) { box.hidden = true; return; }
     box.hidden = false;
     box.appendChild(el('p', 'muted', snap.done + ' of ' + snap.total + ' uploaded'
       + (snap.failed ? ' · ' + snap.failed + ' failed' : '')));
+    box.appendChild(el('p', 'muted', copy.uploadLimit));
+    if (snap.paused) {
+      var banner = el('div', 'upload-session');
+      banner.setAttribute('role', 'alert');
+      banner.appendChild(el('p', '', copy.uploadSessionSummary.replace('{done}', snap.done).replace('{waiting}', snap.waiting)));
+      var login = el('a', '', copy.uploadSignIn);
+      login.href = '/login?next=%2Fadmin%2F'; login.target = '_blank'; login.rel = 'noopener';
+      var resume = el('button', 'btn-secondary', copy.uploadResume); resume.type = 'button';
+      resume.addEventListener('click', async function () {
+        var me = await uploads.resume();
+        if (!me) { say(copy.uploadOwnerChanged); return; }
+        await activate(me);
+      });
+      var stop = el('button', 'btn-secondary', copy.uploadStop); stop.type = 'button';
+      stop.addEventListener('click', async function () {
+        var count = uploads.snapshot().items.filter(function (item) { return ['queued', 'needs-auth', 'failed', 'retryable'].indexOf(item.state) !== -1; }).length;
+        if (count && await window.AdminConfirm.ask({ title: copy.uploadStop, body: copy.uploadStopConfirm.replace('{count}', count), confirmLabel: copy.uploadStop, danger: true })) uploads.stopWaiting();
+      });
+      banner.append(login, resume, stop); box.appendChild(banner);
+    }
     snap.items.forEach(function (i) {
       var row = el('div', 'upload-row');
+      row.tabIndex = -1;
+      row.dataset.uploadId = String(i.id);
+      row.setAttribute('role', 'group');
+      row.setAttribute('aria-label', i.name);
+      if (focusId === row.dataset.uploadId) focusTarget = row;
       row.appendChild(el('span', 'upload-row__name', i.name));
-      row.appendChild(el('span', 'upload-row__state', api.queueState(i)));
+      var label = i.state === 'unknown' ? copy.uploadUnknown : i.state === 'checking' ? copy.uploadChecking
+        : i.state === 'needs-auth' ? copy.uploadNeedsAuth : i.state === 'retryable' ? copy.uploadRetryable
+        : i.state === 'gone' ? copy.uploadGone : api.queueState(i);
+      var status = el('span', 'upload-row__state', label);
+      status.id = 'upload-state-' + i.id;
+      row.appendChild(status);
+      row.setAttribute('aria-describedby', status.id);
+      if (i.originalRetained) row.appendChild(el('span', 'muted', copy.uploadRetained));
+      if (i.reason === 'queue_full' || i.reason === 'recovery_required') row.appendChild(el('span', 'muted', copy.uploadRecoveryRequired));
+      if (i.state === 'unknown') {
+        var check = el('button', 'btn-secondary', copy.uploadCheckAgain); check.type = 'button'; check.disabled = snap.paused;
+        check.dataset.uploadId = row.dataset.uploadId;
+        if (focusId === check.dataset.uploadId && !check.disabled) focusTarget = check;
+        check.addEventListener('click', function () { uploads.check(i.id); });
+        row.appendChild(check);
+      }
       box.appendChild(row);
     });
     if (snap.failed) {
-      var retry = el('button', 'btn-secondary', 'Retry failed (' + snap.failed + ')');
+      var retry = el('button', 'btn-secondary', copy.uploadRetry + ' (' + snap.failed + ')');
       retry.type = 'button';
+      retry.disabled = snap.paused;
       retry.addEventListener('click', function () { uploads.retryFailed(); });
       box.appendChild(retry);
     }
-    if (snap.done && snap.active === 0) {
+    if (snap.done && snap.active === 0 && !snap.paused && !snap.unsettled) {
       var clear = el('button', 'btn-secondary', 'Clear finished');
       clear.type = 'button';
       clear.addEventListener('click', function () { uploads.clearFinished(); reload(); });
       box.appendChild(clear);
     }
+    // A resolved check removes its button; keep keyboard focus on that photo,
+    // but never take it back after the author has moved to another control.
+    if (focusTarget) focusTarget.focus();
   }
 
   // The detail panel is the one place on this page the author types. Rebuilding
@@ -760,12 +818,78 @@
     });
   }
 
+  // Each uncertain operation keeps its own bounded read/control. A listing,
+  // filter change or later operation cannot erase evidence about selected keys.
+  async function folderMoveOperation(operation) {
+    var panel = el('section', 'write-recovery');
+    var message = el('p', '');
+    message.setAttribute('role', 'status');
+    var results = el('ul', '');
+    var check = el('button', 'btn-secondary', copy.writeCheckAgain); check.type = 'button';
+    var again = el('button', 'btn-secondary', operation.kind === 'folder' ? copy.folderCreateAgain : copy.moveAgain); again.type = 'button';
+    check.hidden = true; again.hidden = true;
+    panel.append(message, results, check, again);
+    $('out').insertAdjacentElement('afterend', panel);
+    var busy = false;
+    async function probe() {
+      if (busy) return;
+      busy = true; check.disabled = true; again.hidden = true; results.textContent = '';
+      message.textContent = operation.kind === 'folder' ? copy.folderChecking : copy.moveChecking;
+      try {
+        if (operation.kind === 'folder') {
+          var folders = await client.folders();
+          if (!Array.isArray(folders) || folders.some(function (path) { return typeof path !== 'string'; })) throw new Error('invalid_response');
+          state.folders = folders;
+          renderFolders();
+          renderToolbar();
+          var present = folders.indexOf(operation.path) !== -1;
+          message.textContent = (present ? copy.folderPresent : copy.folderAbsent) + ' ' + operation.path;
+          again.hidden = present;
+        } else {
+          var lookup = await client.lookup(operation.keys);
+          if (!lookup || !Array.isArray(lookup.items) || lookup.items.length !== operation.keys.length
+            || new Set(lookup.items.map(function (item) { return item.key; })).size !== operation.keys.length
+            || lookup.items.some(function (item) { return operation.keys.indexOf(item.key) === -1 || item.missing !== true && typeof item.folder !== 'string'; })) throw new Error('invalid_response');
+          message.textContent = copy.moveStored + ' ' + copy.movePolicy;
+          lookup.items.forEach(function (item) { results.appendChild(el('li', '', item.key + ': ' + (item.missing ? copy.moveDeleted : item.folder || '/'))); });
+          again.hidden = false;
+          // Refresh the visible query separately; the scoped lookup remains its evidence.
+          void reload();
+        }
+      } catch (error) { message.textContent = copy.writeUnknown; if (error.status === 401) fail(error); }
+      finally { check.hidden = false; check.disabled = false; busy = false; }
+    }
+    async function send() {
+      if (busy) return;
+      busy = true; check.hidden = true; again.hidden = true;
+      try {
+        var acknowledged = operation.kind === 'folder'
+          ? await client.createFolder(operation.path)
+          : await client.move(operation.keys, operation.folder);
+        if (!acknowledged || acknowledged.ok !== true
+          || operation.kind === 'folder' && (!Array.isArray(acknowledged.folders) || acknowledged.folders.indexOf(operation.path) === -1)
+          || operation.kind === 'move' && (!Number.isSafeInteger(acknowledged.moved) || acknowledged.moved < 0 || acknowledged.moved > operation.keys.length)) {
+          throw Object.assign(new Error('invalid_response'), { unknown: true });
+        }
+        // A valid acknowledgement is displayed separately from this optional refresh.
+        message.textContent = operation.kind === 'folder' ? copy.folderPresent : copy.moveStored;
+        void reload().catch(function () {});
+      } catch (error) {
+        if (api.isUnknown(error)) { busy = false; await probe(); }
+        else { message.textContent = error.message; fail(error); }
+      } finally { busy = false; }
+    }
+    check.addEventListener('click', probe);
+    again.addEventListener('click', send);
+    await send();
+  }
+
   function bindFolderActions() {
     $('newFolder').addEventListener('click', async function () {
       var path = prompt('New folder name (inside "' + (state.folder || 'root') + '"):');
       if (!path) return;
       var full = state.folder ? state.folder + '/' + path : path;
-      try { await client.createFolder(full); await reload('Folder created.'); } catch (e) { fail(e); }
+      await folderMoveOperation({ kind: 'folder', path: full });
     });
     $('renameFolder').addEventListener('click', async function () {
       if (!state.folder) { say('Pick a folder first.'); return; }
@@ -796,10 +920,9 @@
 
   function bindBulk() {
     $('moveSelected').addEventListener('click', async function () {
-      try {
-        var res = await client.move(state.selected, $('moveTarget').value);
-        await reload('Moved ' + res.moved + ' photo(s).');
-      } catch (e) { fail(e); }
+      var keys = state.selected.slice();
+      if (!keys.length || keys.length > 100) { say(copy.mediaLookupLimit); return; }
+      await folderMoveOperation({ kind: 'move', keys: keys, folder: $('moveTarget').value });
     });
     $('retrySelected').addEventListener('click', async function () {
       try {
@@ -855,15 +978,18 @@
     });
   }
 
-  (async function init() {
-    state.me = await window.Auth.ensureAuthed();
-    if (!state.me) return;
+  var initialized = false;
+  async function activate(me) {
+    state.me = me;
+    uploads.initialize(me.userId);
     window.Auth.renderHeader(state.me);
     if (!state.me.isAdmin) {
       $('rescan').hidden = true;
       $('renameFolder').hidden = true;
       $('deleteFolder').hidden = true;
     }
+    if (initialized) { await reload(); return; }
+    initialized = true;
     $('emptyChoosePhotos').textContent = copy.mediaChoosePhotos;
     $('emptyChoosePhotos').addEventListener('click', function () {
       $('fileInput').focus();
@@ -888,5 +1014,9 @@
     $('detail').addEventListener('input', markDetailDirty);
     $('detail').addEventListener('change', markDetailDirty);
     await reload();
+  }
+  (async function init() {
+    try { await activate(await client.me()); }
+    catch (error) { fail(error); }
   })();
 })();

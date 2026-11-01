@@ -309,7 +309,7 @@
         return context;
       }, {
         loading() { $('deskError').hidden = true; },
-        ready(context) {
+        async ready(context) {
           if (!context) return;
           authenticatedContext = context;
           isAdmin = context.isAdmin === true;

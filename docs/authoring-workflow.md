@@ -113,9 +113,9 @@ text by hand.
 > Key naming: use `trips/<slug>/<name>` (lowercase `a–z 0–9 / _ -`). The `<slug>` should match
 > the post slug (below). Upload before publishing, or the URLs 404.
 
-> The uploader accepts **one photo per request** (a second file in the same upload is rejected —
-> bulk upload is a Phase 2 feature), and published variants keep only camera make/model, lens,
-> capture date and exposure settings — never location, even if the original photo had it.
+> The uploader accepts **one photo per request**; Media batches send separate identified
+> requests. Published variants keep only camera make/model, lens, capture date and exposure
+> settings — never location, even if the original photo had it.
 
 ---
 
@@ -143,6 +143,26 @@ Unpublish. The save indicator distinguishes **Not saved yet**, **Unsaved changes
 leaves edits unsaved; edits typed while a save is running still need another save.
 Browser recovery copies do not mean the draft has been saved to the server.
 
+**When a save response is lost:** keep the tab open. Story and registered page editors make one bounded
+read to check whether that exact account's save landed; **Check again** performs another
+read, never a replay. A confirmed save advances only its captured snapshot: text typed
+while waiting stays dirty. If another writer changed the stored version, compare the
+local form, attempted snapshots and stored content before explicitly choosing **Use stored**.
+That choice preserves a separate local recovery copy first. Missing or unavailable evidence
+stays Unknown; it does not prove the original request failed.
+
+**A different account in another tab:** the form keeps its original owner and pauses.
+Sign in in a second tab, then explicitly resume as that same account. Signing in/focusing
+alone does not send writes. A story/page editor 401 may return to login after stashing; restore
+the original account's copy afterwards. Browser recovery copies are scoped to account,
+resource and independent tab context; logout and expiry always keep them.
+
+Ordinary page editing and inactive-language preparation have separate recovery scopes.
+Return to the same editing mode to restore its copy; saving in one mode cannot clean the
+other mode's unsent text.
+
+Old unscoped copies have no trustworthy owner and are not shown or adopted by any account,
+including admins. Browser-profile access can still expose local copies on a shared device.
 Writes from one editor tab run in order. Repeated **Save draft** clicks or
 **Cmd/Ctrl+S** requests each keep the form as it was when requested; a second
 save waits for the first response and uses its updated version. This also applies
@@ -454,6 +474,25 @@ get back are final, but the responsive AVIF/WebP variants take a few seconds per
 19 s for a 24 MP frame — so a freshly uploaded photo shows a **processing** badge and its
 thumbnail appears once it is done. You can close the tab: uploading needs the tab open,
 encoding does not.
+
+**Unknown transfer is not a failed transfer.** Media, hero, body, About and title-image
+uploads keep a client-generated ID and check its server receipt once after an ambiguous
+response. **Check again** is read-only. Only an explicit retry authorized by definite
+failure or a new server retry generation can send bytes again. A retained original waiting
+for queue capacity recovers on the server; **Rescan** is the explicit admin recovery action
+after a disk/database error. An accepted transfer may still be encoding or later fail encoding.
+
+If a Media batch loses its session, it pauses in place: sign in in a second tab and use
+the explicit same-account resume action. Completed records remain visible, and unresolved
+files cannot move to another account. The tab warns before leaving with pending work.
+Files and their queue are never saved to browser storage; closing or reloading loses them.
+Reselecting a file is a **new upload**, with no cross-year or changed-profile deduplication
+promise. Do not reselect merely because an earlier response is Unknown.
+
+Folder creation and bulk moves also keep ambiguous outcomes visible. A folder check reads
+the authoritative tree; a move check reports each selected photo's stored folder or deletion,
+independent of the visible page and filters. Explicit **Create again** is idempotent;
+**Move again** is last-writer-wins. Neither read proves an earlier request cannot finish later.
 
 Two consequences worth knowing:
 

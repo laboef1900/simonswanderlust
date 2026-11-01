@@ -4,6 +4,7 @@
 <header class="cms-page-meta"><h1 data-pages-copy="Title"></h1></header>
 <main><p id="pagesNotice" class="muted" role="status" data-pages-copy="Loading"></p>
 <p id="pagesError" class="err" role="alert" hidden></p>
+<p id="pagesOutcome" role="status"></p>
 <a id="languageSettingsLink" href="/admin/settings.html#language" data-language-copy="Back" hidden></a>
 <div id="pagesList"></div></main>
 <script src="/admin/editor-image-copy.js"></script><script src="/admin/build-reporting.js"></script><script src="/admin/auth.js"></script>
@@ -41,15 +42,12 @@ async function loadPages() {
         remove.disabled = true; errorEl.hidden = true;
         let cancelled = false;
         try {
-          const removed = await PagesUI.remove(page.key);
-          if (!removed) cancelled = true;
-          else {
+          const result = await PagesUI.remove(page.key);
+          if (result) {
+            BuildReporting.renderOutcome(document.getElementById('pagesOutcome'), 'delete', result, { title: PagesUI.kind(page.key) });
             await loadPages();
-            // Deleted from the CMS; a failed rebuild is reported beside it (#297).
-            if (removed.build && removed.build.ok === false) BuildReporting.renderOutcome(document.getElementById('pagesNotice'), 'delete', removed, { title: removed.saved.titles[(await SiteLanguage.get()).primary] || PagesUI.kind(page.key) });
-          }
-        }
-        catch (error) { showError(error); }
+          } else cancelled = true;
+        } catch (error) { showError(error); }
         finally { remove.disabled = false; if (cancelled) remove.focus(); }
       }); actions.append(remove);
     }

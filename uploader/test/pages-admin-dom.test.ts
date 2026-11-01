@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { webcrypto } from 'node:crypto';
 import vm from 'node:vm';
 import { describe, expect, it } from 'vitest';
 import { editorDocument } from './editor-dom-harness.js';
@@ -6,9 +7,11 @@ import { browserScript, galleryCodecBindings } from './gallery-browser-module.js
 import { ui } from '../../site/src/i18n/ui.js';
 const stamp = '2026-10-29T00:00:00.000Z';
 const copy = { en: Object.fromEntries(Object.entries(ui.en).filter(([key]) => key.startsWith('editor.chrome.')).map(([key, value]) => [key.slice(14), value])) };
+const buildCopy = Object.fromEntries(['de', 'en'].map(locale => [locale, Object.fromEntries(Object.entries(ui[locale as 'de' | 'en']).filter(([key]) => key.startsWith('admin.build.')).map(([key, value]) => [key.slice(12), value]))]));
+const owner = '11111111-1111-4111-8111-111111111111';
 type UnloadEvent = { defaultPrevented: boolean; returnValue?: string; preventDefault(): void };
 async function settle() { for (let i = 0; i < 40; i++) await Promise.resolve(); }
-async function editor(key = 'contact', status = 'draft', prepare = false) {
+async function editor(key = 'contact', status = 'draft', prepare = false, options: { storage?: Map<string, string>; singleLocale?: boolean } = {}) {
   const html = readFileSync('public/about.html', 'utf8'); const dom = editorDocument(html);
   const el = (id: string) => { const node = dom.document.getElementById(id); if (!node) throw new Error(id); return node; };
   const locale = (locale: 'de' | 'en') => ({ locale, title: locale + ' title', bodyMarkdown: locale + ' body', images: {}, slug: key === 'about' ? '' : locale + '-contact', publishedAt: status === 'published' && !(prepare && locale === 'en') ? stamp : null });
@@ -17,7 +20,7 @@ async function editor(key = 'contact', status = 'draft', prepare = false) {
   let confirmed = true; let failure: { status: number; body: object } | null = null;
   let lifecycleWait: Promise<void> | undefined;
   let unload: ((event: UnloadEvent) => void) | undefined;
-  const storage = new Map<string, string>();
+  const storage = options.storage ?? new Map<string, string>();
   const timers = new Map<number, () => void>();
   let timerId = 0;
   class EasyMDE {
@@ -27,10 +30,9 @@ async function editor(key = 'contact', status = 'draft', prepare = false) {
   }
   const response = (body: unknown, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => body });
   const context: Record<string, unknown> = {
-    document: dom.document, URLSearchParams, EasyMDE, EditorCopy: copy,
-    BuildCopy: Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [locale, Object.fromEntries(Object.entries(strings)
-      .filter(([key]) => key.startsWith('admin.build.')).map(([key, value]) => [key.slice('admin.build.'.length), value]))])),
-    location: { search: '?key=' + key + (prepare ? '&prepareLocale=en' : ''), origin: 'https://journal.test', href: '' },
+    document: dom.document, URLSearchParams, EasyMDE, EditorCopy: copy, BuildCopy: buildCopy,
+    crypto: webcrypto, structuredClone, AbortController,
+    location: { search: '?key=' + key + (prepare ? '&prepareLocale=en' : ''), pathname: '/admin/about.html', origin: 'https://journal.test', href: '' },
     localStorage: {
       getItem: (key: string) => storage.get(key) ?? null,
       setItem: (key: string, value: string) => storage.set(key, value),
@@ -41,26 +43,29 @@ async function editor(key = 'contact', status = 'draft', prepare = false) {
     setTimeout: (callback: () => void) => { const id = ++timerId; timers.set(id, callback); return id; },
     clearTimeout: (id: number) => timers.delete(id),
     addEventListener: (type: string, callback: (event: UnloadEvent) => void) => { if (type === 'beforeunload') unload = callback; },
-    Auth: { ensureAuthed: async () => ({ isAdmin: true }), renderHeader() {} },
+    Auth: { ensureAuthed: async () => ({ userId: owner, isAdmin: true }), renderHeader() {} },
     AdminConfirm: { ask: async (question: { title: string; body: string }) => { questions.push(question); return confirmed; } },
     fetch: async (url: string, init: RequestInit = {}) => {
       requests.push({ url, init });
       if (init.method === 'POST' && lifecycleWait) await lifecycleWait;
       if (init.method && failure) return response(failure.body, failure.status);
-      if (url === '/language') return response({ primary: 'de', locales: prepare ? ['de'] : ['de', 'en'], updatedAt: stamp, lockedAt: null });
+      if (url === '/language') return response({ primary: 'de', locales: prepare || options.singleLocale ? ['de'] : ['de', 'en'], updatedAt: stamp, lockedAt: null });
       if (url === '/pages') return response({ pages: [{ key, known: true, defaults: { de: 'kontakt', en: 'contact' } }] });
       if (url.endsWith('/revisions')) return response([]);
       if (url.endsWith('/deletion')) return response({ key, titles: { de: page.de.title, en: page.en.title }, paths: ['/de-contact/', '/en/en-contact/'], revisions: 3,
         navigation: [{ slot: 'footer', label: { en: 'Write to Simon' } }], bodyReferences: 2, updatedAt: stamp });
-      if (init.method === 'PUT') return response({ saved: { ...page, ...JSON.parse(String(init.body)), updatedAt: '2026-10-29T00:01:00.000Z' }, build: status === 'published' ? { ok: true } : null });
+      if (init.method === 'PUT') {
+        const sent = JSON.parse(String(init.body));
+        return response({ ownerUserId: owner, saveId: sent.saveId, saved: { ...page, ...sent, updatedAt: '2026-10-29T00:01:00.000Z' }, build: status === 'published' ? { ok: true, release: 'new-release' } : null });
+      }
       if (init.method === 'DELETE') return response({ saved: { key }, build: null });
       if (init.method === 'POST') return response({ saved: { ...page, status: url.endsWith('/unpublish') ? 'draft' : 'published' }, build: { ok: true } });
-      return response(page);
+      return response({ ...page, ownerUserId: owner, lastSaveId: null });
     },
   };
   context.window = context; vm.createContext(context);
   Object.assign(context, galleryCodecBindings);
-  for (const file of ['build-reporting.js', 'draft-guard.js', 'language.js', 'tabs.js', 'pages-ui.js', 'gallery-fence.js', 'gallery-metadata-warnings.js']) vm.runInContext(browserScript(file), context);
+  for (const file of ['build-reporting.js', 'draft-guard.js', 'language.js', 'tabs.js', 'pages-ui.js', 'gallery-fence.js', 'gallery-metadata-warnings.js', 'write-recovery.js']) vm.runInContext(browserScript(file), context);
   // The page script is a module (it imports the gallery fence); run its body.
   const start = html.lastIndexOf('<script type="module">');
   vm.runInContext(html.slice(html.indexOf("'use strict'", start), html.lastIndexOf('</script>')), context);
@@ -85,16 +90,20 @@ describe('generalized page editor', () => {
     h.el('deSlug').value = 'new-contact'; h.el('saveBtn').click(); await settle();
     const put = h.requests.find(({ init }) => init.method === 'PUT')!;
     expect(put.url).toBe('/pages/contact'); expect(JSON.parse(String(put.init.body)).de.slug).toBe('new-contact');
-    expect(h.questions).toEqual([]); expect(h.el('actionStatus').textContent).toContain('Not public yet');
+    expect(h.questions).toEqual([]); expect(h.el('actionStatus').textContent).toContain('The site was not rebuilt');
   });
-  it('retains unsaved inputs on a conflict unless the author explicitly reloads', async () => {
+  it('preserves local inputs and compares the current generic page after a conflict without replay', async () => {
     const h = await editor('contact', 'published'); h.el('deTitle').value = 'My unsaved title';
+    h.page.updatedAt = '2026-10-29T00:02:00.000Z';
+    h.page.de.title = 'Other tab title';
     h.fail(409, { code: 'conflict', error: 'Saved elsewhere' });
-    // The first confirmation permits live save; the second rejects the destructive reload.
-    let count = 0; const confirm = h.context.AdminConfirm as { ask: () => Promise<boolean> }; confirm.ask = async () => ++count === 1;
     h.el('saveBtn').click(); await settle();
-    expect(h.el('deTitle').value).toBe('My unsaved title'); expect(h.el('actionError').textContent).toBe('Saved elsewhere');
-    expect(h.requests.filter(({ url }) => url === '/pages/contact')).toHaveLength(2);
+    expect(h.el('deTitle').value).toBe('My unsaved title');
+    const panel = h.dom.document.querySelector('.write-recovery')!;
+    expect(panel.textContent).toContain('My unsaved title');
+    expect(panel.textContent).toContain('Other tab title');
+    expect(h.requests.filter(({ url }) => url === '/pages/contact')).toHaveLength(3);
+    expect(h.requests.filter(({ init }) => init.method === 'PUT')).toHaveLength(1);
   });
   it('shows the exact destructive scope and cancellation performs no deletion', async () => {
     const h = await editor('contact', 'published'); h.confirm(false);
@@ -123,13 +132,17 @@ describe('generalized page editor', () => {
     const h = await editor('contact', action === 'publish' ? 'draft' : 'published');
     const release = h.pauseLifecycle();
     h.el(action + 'Btn').click(); await settle();
-    expect(h.requests.find(({ init }) => init.method === 'POST')?.init.body).toBe(JSON.stringify({ updatedAt: stamp }));
+    // Gallery analysis also POSTs; the lifecycle request is the one to /pages/:key/:action.
+    expect(h.requests.find(({ url, init }) => init.method === 'POST' && url.endsWith('/' + action))?.init.body).toBe(JSON.stringify({ updatedAt: stamp }));
     h.el('deTitle').value = 'New work not in the lifecycle request';
     h.el('deTitle').fire('input'); h.flushStash();
     release(); await settle();
-    const retained = h.storage.get('swl:draft:page:contact');
-    expect(retained).toBeDefined();
-    expect(JSON.parse(retained!).payload.de.title).toBe('New work not in the lifecycle request');
+    const records = [...h.storage].filter(([key]) => key.startsWith('swl:draft:u:' + owner + ':page:contact:'));
+    expect(records).toHaveLength(1);
+    const retained = JSON.parse(records[0]![1]);
+    expect(retained).toMatchObject({ ownerUserId: owner, resource: 'page:contact',
+      payload: { de: { title: 'New work not in the lifecycle request' } } });
+    expect(h.storage.has('swl:draft:page:contact')).toBe(false);
     expect(h.beforeUnload().defaultPrevented).toBe(true);
     expect(h.el('deTitle').value).toBe('New work not in the lifecycle request');
   });
@@ -146,7 +159,32 @@ describe('generalized page editor', () => {
     h.el('enSlug').value = 'prepared-contact'; h.el('saveBtn').click(); await settle();
     const payload = JSON.parse(String(h.requests.find(({ init }) => init.method === 'PUT')!.init.body));
     expect(payload.de).toBeUndefined(); expect(payload.prepareLocale).toBe('en'); expect(payload.en.slug).toBe('prepared-contact');
-    expect(h.el('actionStatus').textContent).toContain('not public');
+    expect(h.el('preparationNotice').textContent).toContain('not public');
+    expect(h.el('actionStatus').textContent).toContain('Saved in the CMS');
+  });
+  it('keeps ordinary and inactive-language recovery records separate across saves', async () => {
+    const storage = new Map<string, string>();
+    const options = { storage, singleLocale: true };
+    const preparation = await editor('contact', 'published', true, options);
+    preparation.el('enTitle').value = 'Unsent English preparation';
+    preparation.el('enTitle').fire('input'); preparation.flushStash();
+    const retainedPreparation = [...storage.entries()];
+
+    const ordinary = await editor('contact', 'published', false, options);
+    expect(ordinary.el('enTitle').value).toBe('en title');
+    expect([...storage.entries()]).toEqual(retainedPreparation);
+    ordinary.el('deTitle').value = 'Unsent German edit';
+    ordinary.el('deTitle').fire('input'); ordinary.flushStash();
+    const retainedOrdinary = [...storage.entries()].find(([, raw]) => JSON.parse(raw).payload.de.title === 'Unsent German edit')!;
+
+    const restoredPreparation = await editor('contact', 'published', true, options);
+    expect(restoredPreparation.el('enTitle').value).toBe('Unsent English preparation');
+    expect(restoredPreparation.el('deTitle').value).toBe('de title');
+    restoredPreparation.el('saveBtn').click(); await settle();
+    expect(storage.get(retainedOrdinary[0])).toBe(retainedOrdinary[1]);
+
+    const restoredOrdinary = await editor('contact', 'published', false, options);
+    expect(restoredOrdinary.el('deTitle').value).toBe('Unsent German edit');
   });
 });
 

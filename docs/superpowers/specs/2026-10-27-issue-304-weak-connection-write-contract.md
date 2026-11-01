@@ -977,6 +977,176 @@ runtime ownership safeguards. Before deployment qualification, the owner must pr
 authorized disposable target directory on the actual deployment filesystem; no existing
 production content is a qualification fixture.
 
+## #305 implementation integration and qualification handoff
+
+Implementation notes, **not a passed qualification record**. The implementing worker did not
+run builds, tests, typechecks, formatters, containers or browser sessions. The parent owns the
+single combined qualification wave and subsequent independent review. The inherited #304
+platform evidence above remains binding; it is not evidence that this integration or the
+actual deployment mount passed.
+
+### Source boundaries and acceptance map
+
+| Acceptance | Implementation boundary | Added/updated regression evidence to execute |
+|---|---|---|
+| Create-only UUID post identity; empty slugs do not merge independent attempts | `server.ts` validates canonical create identity; `PostSaveOptions.createOnly` checks inside memory/PG serialization before slug collision checks | `write-receipts.test.ts`, raw protocol cases in `server.test.ts` |
+| Required captured owner/save ID, writer-only latest receipt, atomic read projection | `posts.ts` repeatable-read projection and `pages.ts` single-query projection; owner fence before content/revision/build writes; no-store responses | `write-receipts.test.ts`, `server.test.ts`, `write-recovery.test.ts` |
+| Every competing writer invalidates evidence | `touchPostPair`, receipt-less importer saves, publish/unpublish/language transitions, page saves; offline restore clears preserved v1 pages too | `write-receipts.test.ts`, real-main GPX receipt invalidation in `gpx-main-boot.integration.test.ts`, `backup.integration.test.ts` |
+| One bounded probe, no automatic write replay, late own-save recognition | `write-recovery.js` retains unresolved attempts and exact snapshots; unavailable probes allow only manual Check again; ordinary acknowledgements use the same owner/generation gate | `write-recovery.test.ts`, `editor-dom.test.ts`, `language-admin-dom.test.ts`, `editor-gpx.test.ts` |
+| Preserve-and-compare without cleaning newer edits | Shared controller compares current form, attempts and stored text; stored-version adoption creates a separate recovery context first and refuses if preservation fails | `write-recovery.test.ts` includes newer edits, older late attempt, A→B late acknowledgement retention, quota failure and private legacy bytes |
+| All upload entry points use immutable account-scoped identities | `media-api.js` plus `upload-recovery.js`; Media, editor hero/body, About body and title-image consumers; newer hero selection/title alt/framing are preserved | `media-api.test.ts`, `upload-recovery.test.ts`, inline adoption cases in `editor-dom.test.ts`; real-browser all-caller gate below |
+| Durable upload state, frozen hash/profile, account-lifetime identity, terminal deletion | `upload-receipts.ts`, `upload-service.ts`, user FK cascade, receipt/media deletion transaction and #348 same-key admission | `upload-receipts.integration.test.ts`, `upload-service.test.ts`, existing #348 server/queue regressions |
+| Deferred recovery and crash boundaries | One startup page, coalesced capacity wakeups, keyset continuation, explicit Rescan after uncertainty; GET never enqueues; accepted and retryable counts are distinct | `upload-service.test.ts`: queue-full retained original, delayed finalization, positive absence, failed original write, corrupt original, ready-without-original and >100 receipts |
+| Native lifetime ownership, filesystem-before-PG admission, no lease fallback | `data-owner.ts` wraps the qualified owned N-API binding; main and offline storage-writing CLI paths hold its descriptor until explicit quiescence/exit | `data-owner.integration.test.ts`, strengthened real-main PG-loss/restore test in `gpx-main-boot.integration.test.ts`; native production-image matrix below |
+| Folder/move reconciliation independent of visible pagination | Bounded reads; one no-store, authenticated `/media/lookup` query for 1–100 keys; explicit missing entries; per-operation panels survive list refresh | `server.test.ts`, `media-browser-dom.test.ts` (lost create, incomplete lookup, malformed 2xx, later filter change) |
+| Paused Media batch, explicit same-owner resume and no persisted Files | Queue pause is distinct from in-flight evidence; focus/login never replay; Unknown cannot transfer; page-exit warning remains active | `media-api.test.ts`, `upload-recovery.test.ts`, parent second-tab/browser scenarios |
+| Strict bootstrap/restore compatibility | `onboarding-bootstrap.ts` extends the merged #280 catalog with exact receipt and actual #288 page/navigation types, defaults, nullability, CHECKs, indexes and FK semantics | `onboarding.integration.test.ts`, `backup.integration.test.ts`; parent supplied exact disposable PG18 receipt and page/navigation catalogs; unrelated journey tables are not admitted |
+
+The local stack integrates the actual #348 queue-recovery branch and actual #280
+empty-state/language-catalog branch (including #285 public-output work), rather than copying
+their patches. #284's consent race fence is retained as
+`PostSaveOptions.baseLanguageUpdatedAt`; there is no Date/options compatibility overload.
+The actual #288 generic-page branch is integrated, not copied: all four registry keys use
+the same page receipt/options contract, generic editor and upload identity. Publish,
+unpublish, deletion and language activation invalidate receipts. Draft saves do not build;
+committed actions use #297 HTTP 200/projected build outcomes, while real 5xx remain Unknown.
+The merged generic-page lifecycle/DOM tests, `write-receipts.test.ts` and strict bootstrap
+tests cover those integration boundaries; no worker execution is claimed.
+The actual #369 dependency/proxy branch (including the #347 sharp security floor) is
+also integrated. Every server construction chooses its immediate-peer trust policy;
+native filesystem ownership is not a substitute for proxy/topology qualification.
+The owned addon build and production packaging remain in place alongside those locks.
+#306 retains ownership of conditional media PATCH/offline/full conflict-dialog work; it is
+not a deferral of the preserve-and-compare behavior implemented here.
+
+### Parent qualification commands and scenarios
+
+Use Node 26 and the parent's isolated PostgreSQL 18 fixture, never a content database.
+Keep the parent's already-qualified `pg_dump` wrapper on `PATH`. With the appropriate
+`TEST_DATABASE_URL`/`DATABASE_URL` already exported:
+
+```sh
+# Working directory: uploader/
+npm ci
+npm run build:native
+npm run typecheck
+npm test
+
+# Working directory: site/
+npm ci
+npm test
+npx astro check
+npm run build
+```
+
+`build:native` uses `.github/native-owner/` and pinned Node 26.12.1 headers; CI builds
+the binding before uploader tests. `owned-flock.c` and `build-native.mjs` remain byte-for-byte
+copies of the qualified temporary #304 packet, with SHA-256 identities:
+
+- `owned-flock.c`: `ac6ee84b387ff60b2d28f6dc8260f358f338eade17eaec207f27c05805d1ab47`
+- `build-native.mjs`: `ee5a282642f000e07d02f2848c3a73fde07902ef7b9c13876f95399f88f5014c`
+
+The copied `container-toolchain.mjs` initially had hash
+`ecff9a333a190a33c2e06c2b72d8e7f7d40360eafde20d5a1b4876c976b9a77b`.
+An actual DHI build then exposed missing `gzip` while extracting the pinned Node headers.
+The build-stage-only dependency is now pinned to `gzip=1.13-1+deb13u1`; the current driver
+hash is `ac0297367ee91dab539c485b39847f2637a62e93bd02732edaef10d567eb79f9`.
+
+Their historical qualification comments and `/proof` scratch path remain intentionally
+unchanged. The production Dockerfile retains the qualified DHI index digests and Debian
+snapshot, builds in a separate stage, and copies only the native artifact, ABI/build record,
+header/license provenance and license into the runtime. It removes the uploader native
+build driver and test tree before copying the uploader runtime.
+
+The temporary #304 workflow, frozen-source harness, proof workers, image inventory and
+diagnostic-export helpers have been removed from active source. Canonical private
+qualification artifacts and historical PR #470 remain unchanged. Necessary descriptor
+boundary/lifetime coverage now lives in `data-owner.integration.test.ts`: invalid arity,
+types/ranges, closed/non-file descriptors, live and stopped contention, clean close,
+SIGKILL, stable inode, ordinary-child noninheritance, explicit-inheritance last-close
+negative control and cleanup after PG admission refusal. Existing real PG-loss and
+main/offline-restore drain tests remain in the product suites. Forced ENOLCK and a
+deliberately non-CLOEXEC rejection probe remain unexercised, as in the inherited record.
+
+Permanent `owned flock · native amd64` and `owned flock · native arm64` jobs in `ci.yml`
+use the current checkout, standard public native Ubuntu runners and their own disposable
+Postgres service. They retain the public/same-repository guard, require no DHI credentials,
+and upload no fixtures/logs/artifacts. Existing required uploader/site job names remain
+unchanged. Host-runner results cannot qualify the packaged DHI runtime or a deployment
+mount; the actual-package jobs below exercise that separate image boundary.
+
+The combined parent wave must additionally exercise:
+
+1. Lost post-create, post-update and every registered page-key response (About, Contact,
+   Privacy, Legal); older late commits after a missing read; malformed/failed reconciliation;
+   normal acknowledgements arriving after newer text;
+   another writer's save; explicit compare/Use stored and recovery-storage failure.
+2. A→B in a second tab before sending and while a response is in flight; exact owner/receipt
+   envelopes, preserved A-scoped copies and late A acknowledgement evidence; logout/expiry,
+   two same-owner tabs, private legacy records and explicit same-owner resume.
+3. Real multipart Media, hero, body, About and title-image uploads: lost response, 120-second
+   no-progress/response watchdog, one receipt read, manual checks, retry generation, immutable
+   profile/year identity, queue-full drain, account deletion and media deletion. Keep an Unknown
+   file while switching accounts; no request may transfer it or persist its `File`.
+4. Receipt/media transaction failures and process kills before/after original rename, enqueue
+   and receipt commit; >100 pending receipts, blocked keyset continuation, coalesced wakeups,
+   shutdown during issued I/O, missing/corrupt originals and a complete ready image without its
+   original. GET must remain inert in every state.
+5. Folder ensure and bulk move lost responses while changing folder/search/status/page;
+   target/other/deleted/incomplete lookup outcomes and explicit-only retries.
+6. Build the **actual production image** on each already-qualified native DHI architecture;
+   rerun descriptor/inode/CLOEXEC/ordinary-child/SIGKILL/PG-loss/app-versus-offline-restore
+   exclusion using the packaged binding and real main/CLI entry points. Do not replace this
+   with a helper lease or infer deployment support from a successful local lock.
+
+The actual deployment mount is still unqualified until its separately authorized disposable
+directory passes that matrix. No release/deployment/enablement permission follows from these
+source changes, tests being present, or a green combined CI run. Containment and rollback are
+documented in `SECURITY.md` and `ARCHITECTURE.md`: stop writers first, keep backups and receipt
+evidence, never delete the stable lock inode, and do not roll back only one side of this
+fail-closed client/server protocol.
+
+### Observed integration and repeatable package qualification
+
+The parent exercised the actual native-arm64 DHI image from source `e7a5e78`, not a host
+test substitute: 22 main/offline-CLI steps passed on Linux arm64/ext4, Node 26.12.1,
+ABI 147 and glibc 2.41. Evidence records source and binary hashes, authenticated
+save/upload/backup, live/SIGSTOP exclusion, filesystem-before-PG admission, same-process
+descriptor cleanup after PG refusal, ordinary-child noninheritance, PG-loss mutation
+fencing while retaining the filesystem lock, death/close reacquisition, and real offline
+bootstrap/restores with undo backups. Synthetic fixtures and earlier failed attempts are
+retained in the private execution ledger; no owner data was used.
+
+Browser qualification exposed missing Media listing/folder refresh after a recovered write.
+The recovered observations now update those views without retransmitting or replacing dirty
+detail fields. Operation panels explicitly retain **last-check** observations rather than
+claiming current state indefinitely. A second keyboard finding was repaired at `949d06d`:
+when Check again disappears, focus follows the same named upload row through checking and
+completion, while an author who moved to another field keeps that focus. Real desktop and
+320px checks observed a visible focus indicator and preserved unsaved detail text. The full
+uploader/PG suite, types, Astro check, site suite and real build passed at that source.
+
+Independent review found a separate page-mode boundary: ordinary editing and inactive-locale
+preparation must not share a recovery resource, because a save sends only the mode's locales.
+The fix scopes preparation records by locale. The regression failed before the fix; actual
+`cffbe24` browser qualification then exercised all four page keys, both directions of exact
+record preservation, and genuine lost-response receipt recovery. Desktop and 320px keyboard
+restoration retained the intended title/body; stale bases still required explicit comparison.
+Private fixtures and exact records remain in the execution evidence, not in this repository.
+
+`.github/native-owner/package-qualify.py` is the exercised actual-package harness, retained
+outside runtime output. `packaged owner · native amd64/arm64` in `ci.yml` builds the actual
+Dockerfile and runs it on native public Ubuntu runners. It checks exact source/image/native
+architecture and provenance, rejects build/proof/header tooling in the runtime, and exports
+only bounded sanitized evidence. Private credentials, dumps, Docker auth and image layers
+are never artifacts. Automatic secret-bearing runs are limited to the owned #305 PR;
+future operator-requested runs use the explicit `qualify_native_package` workflow-dispatch
+input. The original required CI jobs and credential-free native host tests remain separate.
+Each run's artifact identifies its exact source SHA and measured outcome; adding the job is
+not itself a passing amd64 or arm64 qualification.
+
+Named-volume and development evidence still do **not** qualify the actual deployment mount.
+The approved pre-deployment/pre-enablement gate above remains mandatory and operational.
 ## Temporary qualification retirement (2026-10-30)
 
 The owner authorized preserving the qualification artifacts, migrating relevant coverage,
@@ -1042,3 +1212,43 @@ or enablement**, using an owner-authorized disposable target directory and the s
 binary with the complete process/descriptor/DB-loss/restore matrix. Successful acquisition
 does not enforce or satisfy that operational gate. No release, deployment, restore of
 owner data, or gate waiver follows from this retirement.
+
+## #305 current-dev integration (2026-11-01)
+
+Merged `origin/dev` at `9b80025` (after #288/#289, #297, #344, #345, #362, #365, the
+gallery-metadata warnings, AGPL notices and #492). Resolutions, keeping both intents:
+
+- **Editor writes.** dev's serialized write queue (#362: intent captured at the
+  click, one queue shared by Save, Publish and GPX, `loadPost` cancels older
+  intents) stays the outer layer; inside it `saveDraftNow` sends through
+  `WriteRecovery.save`, which binds identity, base, `saveId` and owner at send
+  time. A conflict, 5xx or lost response is one bounded probe and the
+  preserve-and-compare panel ("Use stored"), replacing dev's Reload dialog.
+- **Restored drafts (#345).** The base travels in the owner-scoped stash's
+  `recovery` state; dev's `restoredBaseFor`/`restoreBaseUnknown` and their five
+  copy strings were removed as superseded. Found by the adapted #345 tests: an
+  unjudgeable restored base left the freshly loaded token in place, so a later
+  re-stash recorded it as the draft's base and the next restore saved stale
+  content over the newer version. The failed-restore branch now clears
+  `loadedUpdatedAt` (failing-before tests in `editor-dom.test.ts`).
+- **Pages.** `about.html` saves only through WriteRecovery; gallery warnings are
+  rendered from this tab's own acknowledgement. `PUT /pages/:key` answers 200
+  with `{ saved, build, galleryWarnings, ownerUserId, saveId }`.
+- **Uploads.** `/upload` stays on `upload-service.ts`; a recovered
+  (failed/missing) photo now also fills an empty root folder from the drop,
+  matching dev's duplicate rule. Media completion keeps dev's debounced query
+  refresh.
+- **Bootstrap.** The onboarding catalog keeps the receipt columns and
+  `upload_receipts`, with dev's page columns and `pages_locale_slug_idx` once.
+- **Container.** The native-owner build stage and the legal-notice copy both
+  remain in the uploader stage.
+
+Verification: uploader `tsc` and full suite with isolated PostgreSQL 4252/4252
+(the SQL-recovery case through its scoped pg_dump wrapper); site suite 693/697
+(4 Postgres-only skipped), `astro check` 0/0/0, `npm run build`. Runtime on a fresh
+database: create with receipt (200), replay of the same `saveId` 409
+`already_exists`, probe shows `lastSaveId`, missing identity 400, foreign owner
+403; in the real editor a save whose response was dropped after the server
+committed it resolved to "Saved to the server" through the probe, without a
+second write. Residual: after a failed probe the GPX route write is not gated by
+WriteRecovery; the server's route base check (409) remains its safeguard.

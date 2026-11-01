@@ -421,7 +421,9 @@ maybe('restore rehearsal: app backup → fresh database → restore CLI → prod
     // Rescan: nothing missing, demoted, adopted or re-queued.
     const rescan = await fetch(`${restored.base}/media/rescan`, { method: 'POST', headers: { cookie: admin, origin: restored.base } });
     expect(rescan.status).toBe(200);
-    expect(await rescan.json()).toEqual({ scanned: 1, inserted: 0, altHarvested: 0, markedMissing: 0, demoted: 0, recovered: 0 });
+    // #305: the reconcile also reports upload receipts; a restore carries none.
+    expect(await rescan.json()).toEqual({ scanned: 1, inserted: 0, altHarvested: 0, markedMissing: 0, demoted: 0, recovered: 0,
+      receipts: { examined: 0, accepted: 0, retryable: 0, pending: 0, blocked: 0, continuationAvailable: false } });
 
     // Media library: folder, descriptions, tags, attribution and GPS — still redacted for authors.
     const item = `${restored.base}/media/items/${photoKey}`;

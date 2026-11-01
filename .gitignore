@@ -23,6 +23,8 @@ ai-youtube-channel/
 # .gitignore files).
 node_modules/
 
+# Platform-specific ownership addon and its generated provenance.
+/uploader/native/
 # Generated static legal assets; refreshed from source notices and installed dependencies.
 /site/public/legal/
 /uploader/public/legal/

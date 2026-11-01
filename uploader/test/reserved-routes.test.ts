@@ -1,3 +1,4 @@
+import { TEST_TRUST } from './trusted-proxy-fixture.js';
 import { idleBuildState } from './build-fixture.js';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -17,7 +18,6 @@ import type { GpxService } from '../src/gpx-service.js';
 import type { LanguageConfig } from '../src/language.js';
 import { LEGACY_REDIRECTS } from '../src/redirects.js';
 import { isSafeSlug } from '../src/posts.js';
-import { TEST_TRUST } from './trusted-proxy-fixture.js';
 
 const modes: LanguageConfig[] = [
   { primary: 'de', locales: ['de', 'en'] }, { primary: 'en', locales: ['en', 'de'] },
@@ -65,9 +65,9 @@ describe('reserved public namespaces', () => {
         sweepTempFiles: () => [], list: () => [], listImageArchives: () => [], listRouteArchives: () => [], quiesce: async () => {},
       },
       encodeQueue: {
+        withAdmission: unexpectedServiceCall, availableCapacity: () => 0, onCapacity: () => () => {},
         enqueue: () => {}, isActive: () => false, recover: async () => 0, drain: async () => {},
         quiesce: async () => {}, idle: async () => {}, stats: () => ({ pending: 0, running: 0 }),
-        withAdmission: (_key, operation) => operation(),
       },
       onRoute(route) {
         // Root wildcard static mounts serve content, not a fixed app namespace.

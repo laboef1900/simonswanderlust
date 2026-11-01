@@ -1,201 +1,129 @@
-// Shared draft-safety helpers for the admin editors: dirty tracking with a
-// beforeunload warning, a debounced localStorage stash of the FULL form (not
-// EasyMDE's body-only autosave), and a stash-then-redirect path for expired
-// sessions so typed work survives a re-login round-trip.
-//
-// @ai-note The stash holds form text and image URLs only (no credentials), but
-// it lives in localStorage, so on a shared machine an unsaved draft outlives
-// logout — acceptable for this single-author admin.
+// Local recovery is best-effort, owner-scoped and never an executable write queue.
+// Unknown-owner legacy records are deliberately neither read nor removed.
 window.DraftGuard = (function () {
-  // Validates a post-login return target (?next=…). Accepts only same-origin
-  // admin paths; rejects absolute URLs, protocol-relative '//' and backslashes
-  // (browsers normalize '\' to '/', enabling open redirects). Falls back to /admin/.
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
   function safeNextPath(raw) {
-    if (typeof raw !== 'string') return '/admin/';
-    if (!raw.startsWith('/admin/')) return '/admin/';
-    if (raw.includes('//') || raw.includes('\\')) return '/admin/';
-    return raw;
+    return typeof raw === 'string' && raw.startsWith('/admin/') && !raw.includes('//') && !raw.includes('\\') ? raw : '/admin/';
   }
-
-  // A key unique to THIS page load, so two "new post" tabs never share a stash
-  // (#138): before, both auto-stashed under `swl:draft:new`, the first save
-  // re-keyed and then deleted whatever was there, and the other tab's work was
-  // gone. Deliberately NOT persisted in sessionStorage: a tab opened from the
-  // admin (ctrl/middle-click, target=_blank, duplicate) gets a COPY of its
-  // opener's sessionStorage, which is exactly the two-tab case this must
-  // separate. A reload or a restored tab instead finds its previous stash
-  // through the orphan scan in tryRestore(), as the newest `new:*` entry.
-  function tabScopedKey(prefix) {
-    const nonce = (typeof crypto !== 'undefined' && crypto.randomUUID)
-      ? crypto.randomUUID()
-      : Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
-    return prefix + ':' + nonce;
-  }
-
-  // opts: { storageKey, collect, debounceMs?, orphanPrefix?, onChange? } — collect() returns
-  // the full form payload to stash; debounceMs is the idle time before an
-  // auto-stash. With orphanPrefix, tryRestore() falls back to the newest stash
-  // under that prefix (another tab's — closed, crashed, or still open) when this
-  // tab has none of its own, so a stash keyed to a tab that no longer exists is
-  // still offered somewhere.
   function createDraftGuard(opts) {
-    let key = opts.storageKey;
-    const collect = opts.collect;
-    const debounceMs = opts.debounceMs || 5000;
-    const orphanPrefix = opts.orphanPrefix || '';
+    let owner = null;
+    let resource = opts.resource;
+    let context = crypto.randomUUID();
+    let generation = 0;
     let dirty = false;
     let redirecting = false;
     let timer = null;
-    let generation = 0; // bumped on every edit; lets markClean detect mid-save edits
-    let adoptedFrom = null; // another tab's stash key this tab restored from
-
-    // All localStorage access is best-effort: quota errors / private mode
-    // degrade to warning-only behavior (the beforeunload prompt still works).
+    let own = null;
+    let adopted = null;
+    const prefix = () => owner ? 'swl:draft:u:' + owner + ':' + resource + ':' : null;
+    function cancelTimer() { if (timer !== null) clearTimeout(timer); timer = null; }
+    function removeExact(record) {
+      if (record && localStorage.getItem(record.key) === record.raw) localStorage.removeItem(record.key);
+    }
     function stashNow() {
+      if (!owner || !resource) return false;
       try {
-        localStorage.setItem(key, JSON.stringify({ savedAt: new Date().toISOString(), payload: collect() }));
-      } catch (e) { /* stash is best-effort */ }
+        const recordId = crypto.randomUUID();
+        const key = prefix() + context + ':record:' + recordId;
+        const raw = JSON.stringify({ version: 1, ownerUserId: owner, resource, context, recordId, generation,
+          savedAt: new Date().toISOString(), payload: opts.collect(), recovery: opts.recovery?.() || null });
+        localStorage.setItem(key, raw); // Destination first; a quota failure never destroys recovery.
+        const previous = own;
+        own = { key, raw, generation };
+        removeExact(previous);
+        return true;
+      } catch (_) { return false; }
     }
-
-    function cancelTimer() {
-      if (timer !== null) { clearTimeout(timer); timer = null; }
+    function initialize(userId) {
+      if (!uuid.test(userId) || (owner && owner !== userId)) return false;
+      owner = userId;
+      return true;
     }
-
     function markDirty() {
-      dirty = true;
-      redirecting = false;
-      generation += 1;
-      cancelTimer();
-      timer = setTimeout(() => { timer = null; stashNow(); }, debounceMs);
+      dirty = true; redirecting = false; generation += 1; cancelTimer();
+      timer = setTimeout(() => { timer = null; stashNow(); }, opts.debounceMs || 5000);
       opts.onChange?.(dirty);
     }
-
-    // Capture immediately before building a save payload; pass the token to
-    // markClean so edits typed while the request was in flight stay protected.
-    function snapshot() { return generation; }
-
-    // Saved to the server (or restore declined): drop the stash, disarm the
-    // warning. With a token from snapshot(), this is a no-op when edits landed
-    // after the snapshot — the save persisted an older payload, so the newer
-    // on-screen text must stay dirty (warning armed, debounced stash pending).
     function markClean(token) {
       if (token !== undefined && token !== generation) return;
-      dirty = false;
-      cancelTimer();
-      try {
-        localStorage.removeItem(key);
-        // The restored orphan is now saved server-side: drop it so it is not
-        // offered again. Deferred until here so a still-open source tab keeps
-        // its stash until its content has actually been persisted.
-        if (adoptedFrom !== null) { localStorage.removeItem(adoptedFrom); adoptedFrom = null; }
-      } catch (e) { /* best-effort */ }
+      dirty = false; cancelTimer();
+      try { removeExact(own); removeExact(adopted); } catch (_) { /* best effort */ }
+      own = null; adopted = null;
       opts.onChange?.(dirty);
     }
-
-    function parseStash(raw) {
-      if (!raw) return null;
-      const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== 'object') return null;
-      if (typeof parsed.savedAt !== 'string') return null;
-      if (!parsed.payload || typeof parsed.payload !== 'object') return null;
-      return parsed;
+    function parse(key, raw) {
+      if (!owner || !key.startsWith(prefix()) || !raw) return null;
+      const s = JSON.parse(raw);
+      if (s?.version !== 1 || s.ownerUserId !== owner || s.resource !== resource
+        || !uuid.test(s.context) || !uuid.test(s.recordId) || !Number.isSafeInteger(s.generation) || s.generation < 0
+        || key !== prefix() + s.context + ':record:' + s.recordId
+        || typeof s.savedAt !== 'string' || !Number.isFinite(Date.parse(s.savedAt))
+        || !s.payload || typeof s.payload !== 'object'
+        || (s.recovery && s.recovery.expectedOwnerId !== owner)) return null;
+      return { ...s, key, raw };
     }
-
-    // Returns { savedAt, payload, key } if a plausible stash exists, else null
-    // (absent, corrupt JSON, or an unexpected shape all degrade to null). This
-    // tab's own key wins; otherwise the newest orphan under orphanPrefix. The
-    // returned `key` names where it came from — pass the stash to adopt() on
-    // restore, or to dismissRestore() on decline.
     function tryRestore() {
+      if (!owner) return null;
       try {
-        const own = parseStash(localStorage.getItem(key));
-        if (own) return { ...own, key };
-        if (!orphanPrefix) return null;
         let best = null;
         for (let i = 0; i < localStorage.length; i++) {
-          const k = localStorage.key(i);
-          if (!k || k.indexOf(orphanPrefix) !== 0) continue;
-          let s;
-          try { s = parseStash(localStorage.getItem(k)); } catch (e) { continue; }
-          if (s && (best === null || s.savedAt > best.savedAt)) best = { ...s, key: k };
+          const key = localStorage.key(i);
+          if (!key?.startsWith(prefix())) continue;
+          try {
+            const s = parse(key, localStorage.getItem(key));
+            if (s && (!best || s.savedAt > best.savedAt)) best = s;
+          } catch (_) { /* corrupt records stay quarantined */ }
         }
         return best;
-      } catch (e) {
-        return null;
-      }
+      } catch (_) { return null; }
     }
-
-    // The author chose to restore `stash`: copy it under THIS tab's key, so
-    // this tab's later stash/markClean touch its own entry. The source is left
-    // in place until markClean — if it belongs to a tab that is still open,
-    // deleting it now would lose that tab's work should it crash before its
-    // next edit. Only on acceptance: a declined stash is never touched.
     function adopt(stash) {
-      if (!stash || typeof stash.key !== 'string' || stash.key === key) return;
       try {
-        const v = localStorage.getItem(stash.key);
-        if (v !== null) { localStorage.setItem(key, v); adoptedFrom = stash.key; }
-      } catch (e) { /* best-effort */ }
+        const s = parse(stash.key, localStorage.getItem(stash.key));
+        if (!s || s.raw !== stash.raw) return false;
+        adopted = { key: s.key, raw: s.raw, generation: s.generation };
+        generation = s.generation;
+        dirty = true;
+        return true;
+      } catch (_) { return false; }
     }
-
-    // Decline restoring a stash WITHOUT destroying it: disarm dirty tracking so
-    // the beforeunload prompt goes silent, but keep the stash in localStorage so
-    // a misclicked "Cancel" on the restore prompt can't lose unsaved work. Record
-    // the dismissal (by the stash's savedAt) in sessionStorage so the SAME stash
-    // isn't re-offered on every reload this session; a fresh session (new tab)
-    // offers it again, and a newer stash (different savedAt) is offered normally.
     function dismissRestore(stash) {
-      dirty = false;
-      cancelTimer();
-      try {
-        const at = stash && typeof stash.savedAt === 'string' ? stash.savedAt : '';
-        if (at) sessionStorage.setItem((stash.key || key) + ':dismissed', at);
-      } catch (e) { /* best-effort: sessionStorage may be unavailable */ }
+      dirty = false; cancelTimer();
+      try { if (stash) sessionStorage.setItem(stash.key + ':dismissed', stash.recordId); } catch (_) { /* best effort */ }
       opts.onChange?.(dirty);
     }
-
-    // True when this exact stash (same savedAt) was already dismissed this
-    // session, so the caller can skip re-prompting to restore it.
     function wasDismissed(stash) {
-      try {
-        return !!stash && typeof stash.savedAt === 'string'
-          && sessionStorage.getItem((stash.key || key) + ':dismissed') === stash.savedAt;
-      } catch (e) {
-        return false;
-      }
+      try { return !!stash && sessionStorage.getItem(stash.key + ':dismissed') === stash.recordId; }
+      catch (_) { return false; }
     }
-
-    // Re-keys the stash once a new post gains its real translationKey.
-    function setKey(newKey) {
-      try {
-        const v = localStorage.getItem(key);
-        if (v !== null) { localStorage.setItem(newKey, v); localStorage.removeItem(key); }
-      } catch (e) { /* best-effort */ }
-      key = newKey;
+    function setResource(next) {
+      if (next === resource) return;
+      const previous = own;
+      resource = next; own = null;
+      if (stashNow()) { try { removeExact(previous); } catch (_) { /* best effort */ } }
+      else own = previous;
     }
-
-    // Session expired mid-edit (401): stash typed work (only if any — a 401 on
-    // initial load has nothing worth restoring), suppress the beforeunload
-    // prompt for this intentional navigation, and round-trip through the login
-    // page back to the current URL (login.html honors ?next= via safeNextPath).
+    function freshContext() {
+      if (!stashNow()) throw new Error('draft_recovery_unavailable');
+      context = crypto.randomUUID(); own = null; adopted = null;
+      generation = 0; dirty = false; cancelTimer();
+    }
     function redirectToLogin() {
       if (dirty) stashNow();
       // Navigation consent is not a successful save: consumers still need
       // to distinguish the unsaved form from persisted content.
-      redirecting = true;
-      cancelTimer();
+      redirecting = true; cancelTimer();
       location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search);
     }
-
     window.addEventListener('beforeunload', (e) => {
       if (!dirty || redirecting) return;
-      stashNow(); // last-chance stash even if the user leaves anyway
-      e.preventDefault();
-      e.returnValue = ''; // legacy Chrome needs returnValue set to show the dialog
+      stashNow(); e.preventDefault(); e.returnValue = '';
     });
-
-    return { markDirty, markClean, snapshot, isDirty: () => dirty, stashNow, tryRestore, adopt, dismissRestore, wasDismissed, setKey, redirectToLogin };
+    window.addEventListener('pagehide', () => { if (dirty) stashNow(); });
+    return { initialize, ownerId: () => owner, markDirty, markClean, snapshot: () => generation,
+      restoreGeneration: (value) => { generation = value; dirty = true; },
+      isDirty: () => dirty, stashNow, tryRestore, adopt, dismissRestore, wasDismissed,
+      setResource, freshContext, redirectToLogin };
   }
-
-  return { safeNextPath, tabScopedKey, createDraftGuard };
+  return { safeNextPath, createDraftGuard };
 })();

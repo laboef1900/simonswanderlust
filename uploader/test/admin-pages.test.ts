@@ -1,3 +1,4 @@
+import { webcrypto } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { GALLERY_MODES } from '../../site/src/lib/gallery-layout.js';
 import { readFileSync } from 'node:fs';
@@ -15,6 +16,7 @@ interface Stash {
   key?: string;
 }
 interface Guard {
+  initialize(owner: string): boolean;
   markDirty(): void;
   markClean(token?: number): void;
   snapshot(): number;
@@ -24,13 +26,12 @@ interface Guard {
   adopt(stash: Stash | null): void;
   dismissRestore(stash: Stash | null): void;
   wasDismissed(stash: Stash | null): boolean;
-  setKey(newKey: string): void;
+  setResource(resource: string): void;
   redirectToLogin(): void;
 }
 interface DraftGuardApi {
   safeNextPath(raw: string | null): string;
-  tabScopedKey(prefix: string): string;
-  createDraftGuard(opts: { storageKey: string; collect: () => unknown; debounceMs?: number; orphanPrefix?: string }): Guard;
+  createDraftGuard(opts: { resource: string; collect: () => unknown; debounceMs?: number }): Guard;
 }
 interface StubEvent {
   defaultPrevented: boolean;
@@ -86,6 +87,7 @@ function makeSandbox(opts: { throwStorage?: boolean; store?: Map<string, string>
 
   vm.runInNewContext(guardSrc, {
     window: windowStub,
+    crypto: webcrypto,
     localStorage: localStorageStub,
     sessionStorage: sessionStorageStub,
     location,
@@ -95,6 +97,12 @@ function makeSandbox(opts: { throwStorage?: boolean; store?: Map<string, string>
 
   const api = windowStub.DraftGuard;
   if (!api) throw new Error('draft-guard.js did not assign window.DraftGuard');
+  const createGuard = api.createDraftGuard;
+  api.createDraftGuard = (options) => {
+    const guard = createGuard(options);
+    guard.initialize('11111111-1111-4111-8111-111111111111');
+    return guard;
+  };
 
   return {
     api,
@@ -146,7 +154,7 @@ describe('DraftGuard.createDraftGuard', () => {
 
   it('warns on beforeunload only while dirty, and takes a last-chance stash', () => {
     const sb = makeSandbox();
-    const guard = sb.api.createDraftGuard({ storageKey: KEY, collect: () => ({ a: 1 }) });
+    const guard = sb.api.createDraftGuard({ resource: KEY, collect: () => ({ a: 1 }) });
 
     expect(sb.fireBeforeUnload().defaultPrevented).toBe(false);
 
@@ -154,7 +162,7 @@ describe('DraftGuard.createDraftGuard', () => {
     const e = sb.fireBeforeUnload();
     expect(e.defaultPrevented).toBe(true);
     expect(e.returnValue).toBe('');
-    expect(sb.store.has(KEY)).toBe(true); // stashed even if the user leaves anyway
+    expect(guard.tryRestore()).not.toBeNull(); // stashed even if the user leaves anyway
 
     guard.markClean();
     expect(sb.fireBeforeUnload().defaultPrevented).toBe(false);
@@ -163,27 +171,24 @@ describe('DraftGuard.createDraftGuard', () => {
   it('markDirty schedules one debounced stash of the collected payload', () => {
     const sb = makeSandbox();
     let collectCalls = 0;
-    const guard = sb.api.createDraftGuard({
-      storageKey: KEY,
-      collect: () => { collectCalls += 1; return { title: 'Rhodos', de: { slug: 'rhodos' } }; },
-    });
+    const guard = sb.api.createDraftGuard({ resource: KEY, collect: () => { collectCalls += 1; return { title: 'Rhodos', de: { slug: 'rhodos' } }; }, });
 
     guard.markDirty();
     guard.markDirty();
     guard.markDirty();
     expect(sb.pendingTimers()).toBe(1); // debounced: earlier timers cancelled
-    expect(sb.store.has(KEY)).toBe(false);
+    expect(guard.tryRestore()).toBeNull();
 
     sb.flushTimers();
     expect(collectCalls).toBe(1);
-    const stash = JSON.parse(sb.store.get(KEY) ?? '') as Stash;
+    const stash = guard.tryRestore()!;
     expect(typeof stash.savedAt).toBe('string');
     expect(stash.payload).toEqual({ title: 'Rhodos', de: { slug: 'rhodos' } });
   });
 
   it('stashNow writes synchronously and tryRestore round-trips it', () => {
     const sb = makeSandbox();
-    const guard = sb.api.createDraftGuard({ storageKey: KEY, collect: () => ({ b: 2 }) });
+    const guard = sb.api.createDraftGuard({ resource: KEY, collect: () => ({ b: 2 }) });
     guard.stashNow();
     const restored = guard.tryRestore();
     expect(restored).not.toBeNull();
@@ -192,7 +197,7 @@ describe('DraftGuard.createDraftGuard', () => {
 
   it('tryRestore returns null for absent, corrupt, or misshapen stashes', () => {
     const sb = makeSandbox();
-    const guard = sb.api.createDraftGuard({ storageKey: KEY, collect: () => ({}) });
+    const guard = sb.api.createDraftGuard({ resource: KEY, collect: () => ({}) });
     expect(guard.tryRestore()).toBeNull();
 
     sb.store.set(KEY, '{not json');
@@ -209,27 +214,27 @@ describe('DraftGuard.createDraftGuard', () => {
   });
 
   it('tokenless markClean removes the stash and cancels a pending debounced stash', () => {
-    // Tokenless = unconditional: used by the restore-declined path, NOT by the
-    // save handlers (those must pass a snapshot() token — see the race tests).
+    // Tokenless cleanup is for an explicit stored-version adoption, never
+    // declining a restore; save handlers pass their captured generation.
     const sb = makeSandbox();
-    const guard = sb.api.createDraftGuard({ storageKey: KEY, collect: () => ({ c: 3 }) });
+    const guard = sb.api.createDraftGuard({ resource: KEY, collect: () => ({ c: 3 }) });
     guard.stashNow();
     guard.markDirty();
     guard.markClean();
-    expect(sb.store.has(KEY)).toBe(false);
+    expect(guard.tryRestore()).toBeNull();
     expect(sb.pendingTimers()).toBe(0);
     sb.flushTimers();
-    expect(sb.store.has(KEY)).toBe(false);
+    expect(guard.tryRestore()).toBeNull();
   });
 
   it('dismissRestore keeps the stash but disarms the warning (a misclicked Cancel loses nothing)', () => {
     const sb = makeSandbox();
-    const guard = sb.api.createDraftGuard({ storageKey: KEY, collect: () => ({ h: 8 }) });
+    const guard = sb.api.createDraftGuard({ resource: KEY, collect: () => ({ h: 8 }) });
     guard.stashNow();
     guard.markDirty();
     const stash = guard.tryRestore();
     guard.dismissRestore(stash);
-    expect(sb.store.has(KEY)).toBe(true);                       // stash preserved (recoverable)
+    expect(guard.tryRestore()).not.toBeNull(); // preserved and recoverable
     expect(sb.fireBeforeUnload().defaultPrevented).toBe(false); // dirty disarmed
     expect(sb.pendingTimers()).toBe(0);                         // debounced stash cancelled
     // Restoring the still-present stash on a later load round-trips the payload.
@@ -238,7 +243,7 @@ describe('DraftGuard.createDraftGuard', () => {
 
   it('wasDismissed suppresses a re-prompt for the same stash but not a newer one', () => {
     const sb = makeSandbox();
-    const guard = sb.api.createDraftGuard({ storageKey: KEY, collect: () => ({ i: 9 }) });
+    const guard = sb.api.createDraftGuard({ resource: KEY, collect: () => ({ i: 9 }) });
     guard.stashNow();
     const first = guard.tryRestore();
     expect(guard.wasDismissed(first)).toBe(false);
@@ -252,7 +257,7 @@ describe('DraftGuard.createDraftGuard', () => {
 
   it('dismissRestore degrades safely when sessionStorage throws', () => {
     const sb = makeSandbox({ throwStorage: true });
-    const guard = sb.api.createDraftGuard({ storageKey: KEY, collect: () => ({ j: 10 }) });
+    const guard = sb.api.createDraftGuard({ resource: KEY, collect: () => ({ j: 10 }) });
     const stash = { savedAt: 'now', payload: { j: 10 } };
     expect(() => guard.dismissRestore(stash)).not.toThrow();
     expect(guard.wasDismissed(stash)).toBe(false); // can't record → treated as not dismissed
@@ -260,13 +265,13 @@ describe('DraftGuard.createDraftGuard', () => {
 
   it('markClean with a current snapshot token cleans normally after a save', () => {
     const sb = makeSandbox();
-    const guard = sb.api.createDraftGuard({ storageKey: KEY, collect: () => ({ c: 3 }) });
+    const guard = sb.api.createDraftGuard({ resource: KEY, collect: () => ({ c: 3 }) });
     guard.markDirty();
     const snap = guard.snapshot(); // taken just before the save fetch
     guard.markClean(snap);         // response landed, nothing typed meanwhile
     expect(sb.fireBeforeUnload().defaultPrevented).toBe(false);
     expect(sb.pendingTimers()).toBe(0);
-    expect(sb.store.has(KEY)).toBe(false);
+    expect(guard.tryRestore()).toBeNull();
   });
 
   it('markClean with a stale token keeps mid-save edits dirty and stashed', () => {
@@ -274,7 +279,7 @@ describe('DraftGuard.createDraftGuard', () => {
     // the request is in flight (the About save runs a full astro rebuild), the
     // response lands and must NOT wipe the newer on-screen edits' protection.
     const sb = makeSandbox();
-    const guard = sb.api.createDraftGuard({ storageKey: KEY, collect: () => ({ c: 3 }) });
+    const guard = sb.api.createDraftGuard({ resource: KEY, collect: () => ({ c: 3 }) });
     guard.markDirty();
     const snap = guard.snapshot(); // save fetch starts here
     guard.markDirty();             // user typed while the save was in flight
@@ -282,28 +287,28 @@ describe('DraftGuard.createDraftGuard', () => {
     expect(sb.fireBeforeUnload().defaultPrevented).toBe(true); // warning still armed
     expect(sb.pendingTimers()).toBe(1);                        // debounced stash still pending
     sb.flushTimers();
-    expect(sb.store.has(KEY)).toBe(true);                      // newer edits get stashed
+    expect(guard.tryRestore()).not.toBeNull(); // newer edits get stashed
   });
 
-  it('setKey moves an existing stash to the new key', () => {
+  it('setResource moves only its own record to the saved resource', () => {
     const sb = makeSandbox();
-    const guard = sb.api.createDraftGuard({ storageKey: 'swl:draft:new', collect: () => ({ d: 4 }) });
+    const guard = sb.api.createDraftGuard({ resource: 'swl:draft:new', collect: () => ({ d: 4 }) });
     guard.stashNow();
-    guard.setKey('swl:draft:tk-123');
-    expect(sb.store.has('swl:draft:new')).toBe(false);
-    const moved = JSON.parse(sb.store.get('swl:draft:tk-123') ?? '') as Stash;
+    const previous = guard.tryRestore()!.key!;
+    guard.setResource('swl:draft:tk-123');
+    expect(sb.store.has(previous)).toBe(false);
+    const moved = guard.tryRestore()!;
     expect(moved.payload).toEqual({ d: 4 });
     guard.markClean(); // now operates on the new key
-    expect(sb.store.has('swl:draft:tk-123')).toBe(false);
+    expect(guard.tryRestore()).toBeNull();
   });
 
   it('redirectToLogin stashes dirty work, disarms the prompt, and carries ?next=', () => {
     const sb = makeSandbox();
-    const guard = sb.api.createDraftGuard({ storageKey: KEY, collect: () => ({ e: 5 }) });
+    const guard = sb.api.createDraftGuard({ resource: KEY, collect: () => ({ e: 5 }) });
     guard.markDirty();
     guard.redirectToLogin();
-    expect(guard.isDirty()).toBe(true);
-    expect(sb.store.has(KEY)).toBe(true);
+    expect(guard.tryRestore()).not.toBeNull();
     expect(sb.location.href).toBe('/login?next=%2Fadmin%2Feditor.html%3Ftk%3Dabc');
     // the intentional navigation must not trigger the leave-page dialog
     expect(sb.fireBeforeUnload().defaultPrevented).toBe(false);
@@ -313,19 +318,19 @@ describe('DraftGuard.createDraftGuard', () => {
 
   it('redirectToLogin does not stash a pristine form (nothing worth restoring)', () => {
     const sb = makeSandbox();
-    const guard = sb.api.createDraftGuard({ storageKey: KEY, collect: () => ({ f: 6 }) });
+    const guard = sb.api.createDraftGuard({ resource: KEY, collect: () => ({ f: 6 }) });
     guard.redirectToLogin();
-    expect(sb.store.has(KEY)).toBe(false);
+    expect(guard.tryRestore()).toBeNull();
     expect(sb.location.href).toBe('/login?next=%2Fadmin%2Feditor.html%3Ftk%3Dabc');
   });
 
   it('degrades to warning-only when localStorage throws (quota / private mode)', () => {
     const sb = makeSandbox({ throwStorage: true });
-    const guard = sb.api.createDraftGuard({ storageKey: KEY, collect: () => ({ g: 7 }) });
+    const guard = sb.api.createDraftGuard({ resource: KEY, collect: () => ({ g: 7 }) });
     expect(() => { guard.markDirty(); sb.flushTimers(); }).not.toThrow();
     expect(() => guard.stashNow()).not.toThrow();
     expect(guard.tryRestore()).toBeNull();
-    expect(() => guard.setKey('swl:draft:other')).not.toThrow();
+    expect(() => guard.setResource('swl:draft:other')).not.toThrow();
     // still dirty → the beforeunload warning must keep working
     expect(sb.fireBeforeUnload().defaultPrevented).toBe(true);
     expect(() => guard.markClean()).not.toThrow();
@@ -336,117 +341,56 @@ describe('DraftGuard.createDraftGuard', () => {
 // #138: two "new post" tabs used to stash under one key, so the first save
 // re-keyed and deleted the other tab's work. Model two tabs as two sandboxes
 // over ONE localStorage, each with its own sessionStorage.
-describe('DraftGuard per-tab stash keys (#138)', () => {
-  const PREFIX = 'swl:draft:new';
-  const newTab = (store: Map<string, string>) => {
+describe('DraftGuard owner/resource/context stash keys (#138/#305)', () => {
+  const tab = (store: Map<string, string>, resource = 'post:new') => {
     const sb = makeSandbox({ store });
-    const key = sb.api.tabScopedKey(PREFIX);
-    return { sb, key };
+    let title = 'draft';
+    const guard = sb.api.createDraftGuard({ resource, collect: () => ({ title }) });
+    return { sb, guard, edit(value: string) { title = value; guard.markDirty(); sb.flushTimers(); } };
   };
-
-  it('gives every page load its own key — a duplicated tab (copied sessionStorage) included', () => {
+  it.each(['post:new', 'post:existing', 'page:about'])('keeps duplicated-tab contexts independent for %s', resource => {
     const store = new Map<string, string>();
-    const session = new Map<string, string>();
-    const a = makeSandbox({ store, session }).api.tabScopedKey(PREFIX);
-    const b = makeSandbox({ store, session }).api.tabScopedKey(PREFIX);
-    expect(a).not.toBe(b);
-    expect(a.startsWith(PREFIX + ':')).toBe(true);
+    const a = tab(store, resource); const b = tab(store, resource);
+    a.edit('A'); b.edit('B');
+    expect(store.size).toBe(2);
+    a.guard.markClean();
+    expect(b.guard.tryRestore()?.payload).toEqual({ title: 'B' });
   });
-
-  it('a reloaded tab is offered its own previous stash through the orphan scan', () => {
+  it('offers scoped work after reload without overwriting its source on adoption', () => {
     const store = new Map<string, string>();
-    const first = newTab(store);
-    const g1 = first.sb.api.createDraftGuard({ storageKey: first.key, orphanPrefix: PREFIX, collect: () => ({ title: 'typed' }) });
-    g1.markDirty(); first.sb.flushTimers();
-    const reloaded = newTab(store);
-    const g2 = reloaded.sb.api.createDraftGuard({ storageKey: reloaded.key, orphanPrefix: PREFIX, collect: () => ({}) });
-    expect(g2.tryRestore()?.payload).toEqual({ title: 'typed' });
+    const first = tab(store); first.edit('typed');
+    const source = first.guard.tryRestore()!;
+    const reloaded = tab(store); expect(reloaded.guard.tryRestore()?.payload).toEqual({ title: 'typed' });
+    reloaded.guard.adopt(source); reloaded.edit('edited');
+    expect(store.get(source.key!)).toContain('typed');
+    expect(store.size).toBe(2);
+    reloaded.guard.markClean();
+    expect(store.size).toBe(0);
   });
-
-  it('tab A saving no longer destroys tab B\'s stash', () => {
-    const store = new Map<string, string>();
-    const a = newTab(store);
-    const b = newTab(store);
-    const guardA = a.sb.api.createDraftGuard({ storageKey: a.key, orphanPrefix: PREFIX, collect: () => ({ title: 'A' }) });
-    const guardB = b.sb.api.createDraftGuard({ storageKey: b.key, orphanPrefix: PREFIX, collect: () => ({ title: 'B' }) });
-    guardA.markDirty(); a.sb.flushTimers();
-    guardB.markDirty(); b.sb.flushTimers();
-    // A saves: re-key to the real translationKey, then markClean
-    guardA.setKey('swl:draft:tk-a');
-    guardA.markClean();
-    expect(store.has('swl:draft:tk-a')).toBe(false);
-    // B's work is untouched and still restorable by B
-    expect(guardB.tryRestore()?.payload).toEqual({ title: 'B' });
+  it('never offers unknown-owner legacy bytes and leaves them untouched', () => {
+    const store = new Map<string, string>([['swl:draft:new', '{"payload":{"title":"legacy"}}']]);
+    const fresh = tab(store);
+    expect(fresh.guard.tryRestore()).toBeNull();
+    fresh.guard.markClean();
+    expect(store.get('swl:draft:new')).toBe('{"payload":{"title":"legacy"}}');
   });
-
-  it('a fresh tab is offered the newest orphaned new-post stash and takes it over on restore', () => {
+  it('declining another context keeps its record and dismissal is exact', () => {
     const store = new Map<string, string>();
-    const crashed = newTab(store);
-    const older = newTab(store);
-    store.set(older.key, JSON.stringify({ savedAt: '2026-09-06T10:00:00.000Z', payload: { title: 'older' } }));
-    store.set(crashed.key, JSON.stringify({ savedAt: '2026-09-06T11:00:00.000Z', payload: { title: 'newest' } }));
-
-    const fresh = newTab(store);
-    const guard = fresh.sb.api.createDraftGuard({ storageKey: fresh.key, orphanPrefix: PREFIX, collect: () => ({ title: 'restored+edited' }) });
-    const stash = guard.tryRestore();
-    expect(stash?.payload).toEqual({ title: 'newest' });
-    expect(stash?.key).toBe(crashed.key);
-
-    guard.adopt(stash);
-    // copied under this tab's key: this tab's stash/markClean touch its own
-    // entry, and the source survives until this tab has saved (a still-open
-    // source tab must not lose its work should it crash before its next edit)
-    expect(JSON.parse(store.get(crashed.key) ?? '').payload).toEqual({ title: 'newest' });
-    expect(JSON.parse(store.get(fresh.key) ?? '').payload).toEqual({ title: 'newest' });
-    guard.markDirty(); fresh.sb.flushTimers();
-    expect(JSON.parse(store.get(fresh.key) ?? '').payload).toEqual({ title: 'restored+edited' });
-    expect(JSON.parse(store.get(crashed.key) ?? '').payload).toEqual({ title: 'newest' });
-    guard.markClean();
-    expect(store.has(fresh.key)).toBe(false);
-    expect(store.has(crashed.key)).toBe(false); // saved server-side — not offered again
-    expect(store.has(older.key)).toBe(true); // never touched
+    const a = tab(store); a.edit('theirs'); const source = a.guard.tryRestore()!;
+    const b = tab(store); b.guard.dismissRestore(source);
+    expect(b.guard.wasDismissed(source)).toBe(true);
+    b.edit('mine');
+    expect(store.get(source.key!)).toContain('theirs');
+    expect(store.size).toBe(2);
   });
-
-  it('still offers a pre-#138 stash left under the bare swl:draft:new key', () => {
+  it('never exposes a different resource and skips corrupt scoped records', () => {
     const store = new Map<string, string>();
-    store.set('swl:draft:new', JSON.stringify({ savedAt: '2026-09-06T11:00:00.000Z', payload: { title: 'legacy' } }));
-    const fresh = newTab(store);
-    const guard = fresh.sb.api.createDraftGuard({ storageKey: fresh.key, orphanPrefix: PREFIX, collect: () => ({}) });
-    expect(guard.tryRestore()?.payload).toEqual({ title: 'legacy' });
-  });
-
-  it('declining an orphan leaves it alone and is remembered for that stash only', () => {
-    const store = new Map<string, string>();
-    const other = newTab(store);
-    store.set(other.key, JSON.stringify({ savedAt: '2026-09-06T11:00:00.000Z', payload: { title: 'theirs' } }));
-    const fresh = newTab(store);
-    const guard = fresh.sb.api.createDraftGuard({ storageKey: fresh.key, orphanPrefix: PREFIX, collect: () => ({ title: 'mine' }) });
-    const stash = guard.tryRestore();
-    guard.dismissRestore(stash);
-    expect(guard.wasDismissed(guard.tryRestore())).toBe(true);
-    // this tab keeps writing under ITS key, not the declined one
-    guard.markDirty(); fresh.sb.flushTimers();
-    expect(JSON.parse(store.get(other.key) ?? '').payload).toEqual({ title: 'theirs' });
-    expect(JSON.parse(store.get(fresh.key) ?? '').payload).toEqual({ title: 'mine' });
-    // its own stash now wins over the orphan on the next load
-    expect(guard.tryRestore()?.key).toBe(fresh.key);
-  });
-
-  it('an existing post (no orphanPrefix) never sees new-post orphans', () => {
-    const store = new Map<string, string>();
-    store.set(PREFIX + ':zzz', JSON.stringify({ savedAt: '2026-09-06T11:00:00.000Z', payload: { title: 'x' } }));
-    const sb = makeSandbox({ store });
-    const guard = sb.api.createDraftGuard({ storageKey: 'swl:draft:tk-1', collect: () => ({}) });
-    expect(guard.tryRestore()).toBeNull();
-  });
-
-  it('skips a corrupt orphan and still offers a good one', () => {
-    const store = new Map<string, string>();
-    store.set(PREFIX + ':bad', '{not json');
-    store.set(PREFIX + ':good', JSON.stringify({ savedAt: '2026-09-06T11:00:00.000Z', payload: { title: 'ok' } }));
-    const fresh = newTab(store);
-    const guard = fresh.sb.api.createDraftGuard({ storageKey: fresh.key, orphanPrefix: PREFIX, collect: () => ({}) });
-    expect(guard.tryRestore()?.payload).toEqual({ title: 'ok' });
+    const a = tab(store); a.edit('good');
+    const source = a.guard.tryRestore()!;
+    const badKey = source.key!.replace(/record:[^:]+$/, 'record:22222222-2222-4222-8222-222222222222');
+    store.set(badKey, '{not json');
+    expect(tab(store).guard.tryRestore()?.payload).toEqual({ title: 'good' });
+    expect(tab(store, 'post:existing').guard.tryRestore()).toBeNull();
   });
 });
 
@@ -488,6 +432,7 @@ describe('admin page wiring', () => {
     expect(shell).not.toMatch(/\$\{pageLede/);
     expect(auth).toContain(".cms-user-name').textContent = s.username");
   });
+
 
   it('the desk is a publishing home, not a second uploader', () => {
     const index = readFileSync('public/index.html', 'utf8');

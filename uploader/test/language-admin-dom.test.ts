@@ -1,3 +1,4 @@
+import { webcrypto } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
@@ -148,7 +149,7 @@ describe('browser language URL mirror and tabs', () => {
   });
 });
 
-async function about(primary: Locale, prepareLocale?: Locale, updatedAt: string | null = stamp, route?: (url: string, init: RequestInit) => BrowserResponse | Promise<BrowserResponse>) {
+async function about(primary: Locale, prepareLocale?: Locale, route?: (url: string, init: RequestInit) => BrowserResponse | Promise<BrowserResponse>, updatedAt: string | null = stamp) {
   const html = readFileSync('public/about.html', 'utf8');
   const dom = editorDocument(html);
   const el = (id: string) => {
@@ -162,6 +163,7 @@ async function about(primary: Locale, prepareLocale?: Locale, updatedAt: string 
     en: { locale: 'en', title: 'Existing heading', bodyMarkdown: 'English text', images: {}, slug: '' },
   };
   const requests: { url: string; init: RequestInit }[] = [];
+  const owner = '11111111-1111-4111-8111-111111111111';
   const cleaned: unknown[] = [];
   class EasyMDE {
     private text = '';
@@ -172,21 +174,31 @@ async function about(primary: Locale, prepareLocale?: Locale, updatedAt: string 
     value(value?: string) { if (value !== undefined) this.text = value; return this.text; }
   }
   const context: Record<string, unknown> = {
-    document: dom.document, URLSearchParams, EasyMDE,
-    location: { origin: 'https://journal.test', search: prepareLocale ? '?prepareLocale=' + prepareLocale : '' },
-    Auth: { ensureAuthed: async () => ({ isAdmin: true }), renderHeader() {} },
+    document: dom.document, URLSearchParams, EasyMDE, crypto: webcrypto, structuredClone, AbortController,
+    setTimeout: () => 0, clearTimeout() {}, addEventListener: dom.document.addEventListener,
+    location: { origin: 'https://journal.test', pathname: '/admin/about.html', search: prepareLocale ? '?prepareLocale=' + prepareLocale : '' },
+    Auth: { ensureAuthed: async () => ({ userId: owner, isAdmin: true }), renderHeader() {} },
     AdminConfirm: { ask: async () => true },
     DraftGuard: { createDraftGuard: () => ({
-      markDirty() {}, snapshot: () => ({ title: el(primary + 'Title').value }), markClean: (snap: unknown) => cleaned.push(snap), tryRestore: () => null, isDirty: () => false,
+      initialize: () => true, stashNow() {}, isDirty: () => false, freshContext() {},
+      markDirty() {}, snapshot: () => ({ title: el(primary + 'Title').value }), markClean: (snap: unknown) => cleaned.push(snap), tryRestore: () => null,
     }) },
     fetch: async (url: string, init: RequestInit = {}) => {
       requests.push({ url, init });
-      if (route && url !== '/language') return route(url, init);
-      if (url === '/language') return response(state(primary, [primary]));
-      if (url === '/pages') return response({ pages: [{ key: 'about', known: true, defaults: { de: 'uber-mich', en: 'about-me' } }] });
-      if (url.endsWith('/revisions')) return response([]);
-      if (init.method === 'PUT') return response({ saved: { ...page, updatedAt: '2026-10-28T00:00:00.000Z' }, build: { ok: true }, galleryWarnings: [] });
-      return response(page);
+      let result;
+      if (url === '/pages') result = response({ pages: [{ key: 'about', known: true, defaults: { de: '', en: '' } }] });
+      else if (route && url !== '/language') result = await route(url, init);
+      else if (url === '/language') result = response(state(primary, [primary]));
+      else if (url.endsWith('/revisions')) result = response([]);
+      else if (init.method === 'PUT') result = response({ saved: { ...page, updatedAt: '2026-10-28T00:00:00.000Z' }, build: { ok: true }, galleryWarnings: [] });
+      else result = response(page);
+      if (result.ok && url === '/pages/about') {
+        const body = await result.json() as Record<string, unknown>;
+        const sent = init.body ? JSON.parse(String(init.body)) : null;
+        return response({ ...page, ownerUserId: owner, lastSaveId: null, ...body,
+          ...(sent ? { saveId: sent.saveId, saved: { ...page, ...sent, ...(body.saved as object) } } : {}) }, result.status);
+      }
+      return result;
     },
   };
   context.window = context;
@@ -194,7 +206,7 @@ async function about(primary: Locale, prepareLocale?: Locale, updatedAt: string 
   context.BuildCopy = buildCopy;
   vm.createContext(context);
   Object.assign(context, galleryCodecBindings);
-  for (const file of ['build-reporting.js', 'language.js', 'tabs.js', 'pages-ui.js', 'gallery-fence.js', 'gallery-metadata-warnings.js']) vm.runInContext(browserScript(file), context);
+  for (const file of ['build-reporting.js', 'language.js', 'tabs.js', 'pages-ui.js', 'write-recovery.js', 'gallery-fence.js', 'gallery-metadata-warnings.js']) vm.runInContext(browserScript(file), context);
   // The page script is a module (it imports the gallery fence); run its body.
   const start = html.lastIndexOf('<script type="module">');
   vm.runInContext(html.slice(html.indexOf("'use strict'", start), html.lastIndexOf('</script>')), context);
@@ -207,7 +219,7 @@ describe('About inactive translation preparation', () => {
     ['de', stamp], ['en', stamp], ['de', null], ['en', null],
   ] as const)('saves only the inactive translation for %s-primary at version %s without implying activation', async (primary, updatedAt) => {
     const secondary = primary === 'de' ? 'en' : 'de';
-    const h = await about(primary, secondary, updatedAt);
+    const h = await about(primary, secondary, undefined, updatedAt);
     expect(h.el('tab-' + secondary).hidden).toBe(false);
     expect(h.el('tab-' + primary).hidden).toBe(true);
     expect(h.el('preparationNotice').textContent).toContain('not public');
@@ -218,10 +230,12 @@ describe('About inactive translation preparation', () => {
     const payload = JSON.parse(String(request.init.body));
     expect(payload).toEqual({
       updatedAt, prepareLocale: secondary,
+      expectedOwnerId: expect.any(String), saveId: expect.any(String),
       [secondary]: { ...h.page[secondary], title: 'Prepared title' },
     });
     expect(payload[primary]).toBeUndefined();
-    expect(h.el('actionStatus').textContent).toContain('not public');
+    expect(h.el('preparationNotice').textContent).toContain('not public');
+    expect(h.el('actionStatus').textContent).toContain('Saved in the CMS');
     expect(h.requests.some(({ url, init }) => url === '/language' && init.method === 'PUT')).toBe(false);
   });
 
@@ -233,7 +247,7 @@ describe('About inactive translation preparation', () => {
     h.el('saveBtn').click();
     await settle();
     const payload = JSON.parse(String(h.requests.find(({ init }) => init.method === 'PUT')!.init.body));
-    expect(payload).toEqual({ updatedAt: stamp, [primary]: h.page[primary] });
+    expect(payload).toEqual({ updatedAt: stamp, [primary]: h.page[primary], expectedOwnerId: expect.any(String), saveId: expect.any(String) });
     expect(h.el('actionStatus').textContent).toContain('Saved in the CMS');
     expect(h.el('actionStatus').textContent).toContain('Live release status is unavailable');
     expect(h.el('actionStatus').textContent).not.toContain('Live:');
@@ -257,7 +271,7 @@ describe('About acknowledged save and failed rebuild', () => {
       en: { locale: 'en', title: 'Submitted', bodyMarkdown: 'English', images: {}, slug: '' }, de: { locale: 'de', title: '', bodyMarkdown: '', images: {}, slug: '' } });
     const pending = Promise.withResolvers<BrowserResponse>();
     let saves = 0;
-    const h = await about('en', undefined, stamp, async (url, init) => {
+    const h = await about('en', undefined, async (url, init) => {
       if (url === '/pages') return response({ pages: [{ key: 'about', known: true, defaults: { de: 'uber-mich', en: 'about-me' } }] });
       if (url.endsWith('/revisions')) throw new Error('optional list unavailable');
       if (init.method === 'PUT') {

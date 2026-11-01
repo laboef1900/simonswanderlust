@@ -3046,3 +3046,11 @@ dialog.media-ai { max-width: min(38rem, calc(100vw - 2rem)); }
 .media-ai__summary:empty { display: none; }
 .media-ai__failures { max-height: 12rem; margin: 0.75rem 0 0; padding-left: 1.25rem; overflow-y: auto; font-size: 0.8125rem; }
 .media-ai__failures li + li { margin-top: 0.25rem; }
+
+/* Recovery evidence stays in the workspace, never inside a sticky command bar. */
+.write-recovery { margin-block: 1rem; padding-block: 1rem; border-block: 1px solid var(--line-strong); min-width: 0; }
+.write-recovery .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; }
+.write-recovery details { margin-block-start: 1rem; }
+.write-recovery summary { cursor: pointer; font-weight: 600; }
+.write-recovery pre { white-space: pre-wrap; overflow-wrap: anywhere; max-inline-size: 100%; font-size: 0.875rem; }
+.write-recovery h3 { margin-block: 1.25rem 0.5rem; }

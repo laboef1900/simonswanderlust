@@ -1106,6 +1106,11 @@ async function restoreDatabaseContents(pool: DbPool, filePath: string, options: 
     await options.assertOwner?.();
     await client.query('BEGIN');
     await client.query('SELECT id FROM site_language WHERE id = true FOR UPDATE');
+    // Offline restore invalidates operational evidence in this same transaction,
+    // including pages a v1 dump deliberately preserves. Absence is not non-commit.
+    await client.query('UPDATE posts SET last_save_id=NULL, last_save_by=NULL');
+    await client.query('UPDATE pages SET last_save_id=NULL, last_save_by=NULL');
+    await client.query('DELETE FROM upload_receipts');
     // Read before replacing anything. Legacy recovery keeps the destination's
     // configured domain, but never its text or assets.
     const liveOrigin = dump.version < IDENTITY_DUMP_VERSION

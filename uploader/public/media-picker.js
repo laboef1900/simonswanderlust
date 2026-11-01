@@ -64,7 +64,9 @@ window.MediaPicker = (function () {
   function open(opts) {
     var o = opts || {};
     var multiple = !!o.multiple;
-    var client = api.makeClient({ onUnauthed: o.onUnauthed || function () { location.href = '/login'; } });
+    var client = api.makeClient({ onUnauthed: o.onUnauthed || function () {
+      location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search);
+    } });
     var copy = window.EditorCopy.en;
     var state = { items: [], total: 0, q: '', folder: '', page: 1, pageSize: 40, loading: false, failed: false, closed: false,
       resolving: false, resolveFailed: 0 };

@@ -2,22 +2,23 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { constants, statSync } from 'node:fs';
 import { open, readFile, type FileHandle } from 'node:fs/promises';
-import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply, type RouteOptions } from 'fastify';
+import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply, type FastifyRequest, type RouteOptions } from 'fastify';
 import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import cookie from '@fastify/cookie';
 import type { DbClient } from './db.js';
-import { encodeVariant, normalizeProcessOptions, outputFormatForExtension, probeImage, type ImageProbe } from './pipeline.js';
+import { encodeVariant, normalizeProcessOptions, probeImage, type ImageProbe } from './pipeline.js';
 import { WIDTHS } from './variants.js';
-import { contentHashKey, storeOriginal, heroSnippet, assertSafeKey } from './storage.js';
+import { assertSafeKey } from './storage.js';
 import { deleteMedia, imageUsage, VARIANT_FILE_RE } from './media-files.js';
 import {
-  libraryKey, redactForNonAdmin, MediaStoreError, assertSafeFolder,
+  redactForNonAdmin, MediaStoreError, assertSafeFolder,
   type MediaError, type MediaItem, type MediaQuery, type MediaStatus, type MediaStore,
 } from './media-store.js';
 import { BacklogFullError, type EncodeQueue } from './encode-queue.js';
+import type { UploadService } from './upload-service.js';
+import { UPLOAD_UUID_RE } from './upload-receipts.js';
 import type { WorkLock } from './work-lock.js';
-import { parseExif } from './exif.js';
 import { diskSpace, insufficientSpace, formatBytes } from './disk.js';
 import type { ReconcileReport } from './media-sync.js';
 import { verifyPassword, type UserStore, UserExistsError, DUMMY_STORED_HASH, MAX_PASSWORD_LENGTH, passwordPolicyViolation, usernamePolicyViolation } from './users.js';
@@ -32,7 +33,7 @@ import {
   isProviderId, isProviderKind, isRemoteKind, newProviderId, providerNameError, providerUrlError, resolveProvider, slotFor,
   type AiProvider, type AiProviderKind,
 } from './ai-providers.js';
-import { validateDraft, validateForPublish, PostError, type PostStore, type PostPair, type StoredPostPair, type PostUsageRow, assertNotStale, assertPublishTokens, type PublishTokens } from './posts.js';
+import { validateDraft, validateForPublish, PostError, type PostStore, type PostPair, type StoredPostPair, type PostUsageRow, type SaveReceipt, assertNotStale, assertPublishTokens, type PublishTokens } from './posts.js';
 import { GpxError } from './gpx-errors.js';
 import { analyzeBodyContent, bodyImageKey } from './publish-gate.js';
 import { auditAltText } from './alt-audit.js';
@@ -104,6 +105,7 @@ export interface ServerConfig {
   passwordLimiter?: AccountLimiter;
   media: MediaStore;
   encodeQueue: EncodeQueue;
+  uploads?: UploadService;
   /**
    * Disk↔database reconciliation + encode re-seed (`createReconciler`),
    * triggered by POST /media/rescan. The route MUST NOT call the sync alone —
@@ -153,7 +155,6 @@ export interface ServerConfig {
   commentGlobalLimiter?: RateLimiter;
 }
 
-const KEY_RE = /^[a-z0-9][a-z0-9/_-]*$/;
 
 /** IPv4 loopback block (127.0.0.0/8) — matched after WHATWG normalization, which
  *  canonicalizes shorthands (`127.1` → `127.0.0.1`) and rejects out-of-range octets. */
@@ -223,7 +224,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     if (!methods.some(isMutation)) return;
     const handler = route.handler;
     route.handler = async function (request, reply) {
-      if (!isMutation(request.method)) return handler.call(this, request, reply);
+      if (!isMutation(request.method) || route.url === '/media/lookup') return handler.call(this, request, reply);
       if (!isWritable()) return readOnly(reply);
       const completion = Promise.withResolvers<void>();
       activeMutations.add(completion.promise);
@@ -237,7 +238,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
       return reply.code(503).header('cache-control', 'no-store')
         .send({ ok: false, db: false, release: cfg.builder.hasRelease(), storageWritable: false });
     }
-    if (isMutation(request.method)) return readOnly(reply);
+    if (isMutation(request.method) && request.routeOptions.url !== '/media/lookup') return readOnly(reply);
   });
   const cleanupDeletedRoutes = async (): Promise<boolean> => {
     if (!cfg.gpx) return false;
@@ -262,8 +263,10 @@ export function buildServer(cfg: ServerConfig): AppServer {
     reply.header('X-Content-Type-Options', 'nosniff');
     const url = req.raw.url ?? '';
     const route = req.routeOptions.url;
-    if (route === '/auth/me' || route === '/onboarding' || route === '/language' || route === '/settings' || route === '/settings/navigation' || route?.startsWith('/settings/identity') || route === '/ai-config' || route?.startsWith('/ai-providers')
-      || route === '/posts/:tk/publish' || route === '/posts/bulk') reply.header('Cache-Control', 'no-store');
+    if (route === '/language' || route === '/auth/me' || route === '/onboarding' || route === '/settings' || route === '/settings/navigation' || route?.startsWith('/settings/identity') || route === '/ai-config' || route?.startsWith('/ai-providers')
+      || route === '/posts/:tk/publish' || route === '/posts/bulk' || route === '/posts' || route === '/posts/:tk'
+      || route === '/pages/:key' || route === '/upload' || route === '/upload/receipts/:uploadId' || route === '/media/lookup'
+      || route === '/media/folders') reply.header('Cache-Control', 'no-store');
     if (route !== undefined && !PUBLIC_ROUTES[route]) {
       reply.header('X-Frame-Options', 'DENY');
       reply.header('Referrer-Policy', 'no-referrer');
@@ -448,10 +451,9 @@ export function buildServer(cfg: ServerConfig): AppServer {
    * publish a post referencing a photo that is not `ready`.
    */
   app.post('/upload', { preHandler: requireAuth }, async (req, reply) => {
-    let key = '';
-    let alt = '';
-    let title = '';
-    let folder = '';
+    reply.header('Cache-Control', 'no-store');
+    if (!cfg.uploads) return reply.code(503).send({ error: 'upload receipts are unavailable' });
+    const fields: Record<string, string> = {};
     let filename = '';
     let buf: Buffer | undefined;
     let mimetype = '';
@@ -460,181 +462,56 @@ export function buildServer(cfg: ServerConfig): AppServer {
         mimetype = part.mimetype;
         filename = String(part.filename ?? '');
         buf = await part.toBuffer();
-      } else if (part.fieldname === 'key') {
-        key = String(part.value).trim();
-      } else if (part.fieldname === 'alt') {
-        alt = String(part.value).trim();
-      } else if (part.fieldname === 'title') {
-        title = String(part.value).trim();
-      } else if (part.fieldname === 'folder') {
-        folder = String(part.value).trim();
+      } else {
+        fields[part.fieldname] = String(part.value);
       }
     }
-    if (!buf || !mimetype.startsWith('image/')) {
-      return reply.code(400).send({ error: 'expected an image file' });
+    const uploadId = fields.uploadId ?? '';
+    const expectedOwnerId = fields.expectedOwnerId ?? '';
+    const generation = fields.retryGeneration ?? '0';
+    if (!UPLOAD_UUID_RE.test(uploadId) || !UPLOAD_UUID_RE.test(expectedOwnerId) || !/^(0|[1-9][0-9]*)$/.test(generation) || !Number.isSafeInteger(Number(generation))) {
+      return reply.code(400).send({ code: 'invalid_upload_identity', error: 'Valid uploadId, expectedOwnerId and retryGeneration are required.' });
     }
-    // Bulk library uploads have no post slug to derive a key from, and KEY_RE
-    // is lowercase-only — a Leica's `L1002345.JPG` would be a 400. So the
-    // server derives one when the client sends none. Editor uploads keep
-    // sending their `trips/<slug>/…` keys and are unaffected.
-    if (key === '') key = libraryKey(filename, new Date());
-    if (!KEY_RE.test(key)) {
-      return reply.code(400).send({ error: 'invalid key (use lowercase a-z, 0-9, / _ -)' });
-    }
-    // Snapshot the full encoding profile before deriving the identity. A
-    // settings change after this point cannot redirect the queued job.
-    const currentSettings = cfg.settings.get();
-    const encoding = normalizeProcessOptions({
-      convertJpeg: currentSettings.convertJpeg,
-      webpQuality: currentSettings.webpQuality,
-      avifQuality: currentSettings.avifQuality,
-    });
-    const versionedKey = contentHashKey(key, buf, encoding);
-    const src = `${imageBase}/${versionedKey}`;
-    // #133: every input check precedes every write. The store validates the
-    // folder again in upsert(), but that ran AFTER storeOriginal, so a bad
-    // folder left an orphan original for the reconcile to adopt; and KEY_RE
-    // alone admits a key too long or too deep for the filesystem.
-    try {
-      assertSafeFolder(folder);
-      assertSafeKey(versionedKey);
-    } catch (e) {
-      return reply.code(400).send({ error: (e as Error).message });
-    }
-
-    // #73: refuse before writing rather than failing mid-pipeline. A full
-    // /data takes out uploads, publishing AND backups at once, and a partial
-    // variant set with no complete record is worse than a rejected upload.
+    if (expectedOwnerId !== req.authUser!.id) return reply.code(403).send({ code: 'owner_changed', error: 'The authenticated account changed.' });
+    if (!buf || !mimetype.startsWith('image/')) return reply.code(400).send({ error: 'expected an image file' });
     try {
       const space = await diskSpace(storageDir);
       const problem = insufficientSpace(space, buf.length);
-      if (problem) {
-        console.error(`upload refused: ${formatBytes(space.free)} free on ${storageDir}`);
-        return reply.code(507).send({ error: problem });
-      }
-    } catch (e) {
-      // An unreadable statfs must not block uploads — log and continue.
-      console.error('could not read free disk space; accepting the upload anyway:', e);
+      if (problem) return reply.code(507).send({ error: problem });
+    } catch (error) {
+      console.error('could not read free disk space; accepting the upload anyway:', error);
     }
-
-    let probe;
-    try {
-      probe = await probeImage(buf);
-    } catch (e) {
-      console.error(`could not probe uploaded image for ${versionedKey}:`, e);
-      return reply.code(400).send({ error: 'could not read that image' });
-    }
-    if (!probe.width || !probe.height) {
-      return reply.code(400).send({ error: 'could not read that image' });
-    }
-    const format = outputFormatForExtension(probe.ext, encoding);
-
-    return cfg.encodeQueue.withAdmission(versionedKey, async () => {
-      // Read inside the same-key boundary: a preceding refusal may have changed
-      // processing to failed while this request was waiting.
-      const existing = await cfg.media.get(versionedKey);
-      if (existing && existing.status === 'ready') {
-        // Metadata the caller supplied still applies — it is not silently
-        // discarded — but the STORED values win: alt fills only a blank slot,
-        // and the folder only if the photo is still in the root (#135). The
-        // browser always sends the folder that is currently open, so a second
-        // drop of the same camera export must not relocate a curated photo.
-        const fillFolder = folder !== '' && existing.folder === '';
-        let stored = existing;
-        if (alt || title || fillFolder) {
-          // Best-effort on a duplicate — but the response reports what was
-          // PERSISTED, so a failed patch cannot claim a folder the photo is not in.
-          stored = await cfg.media.patch(versionedKey, {
-            ...(title ? { title } : {}), ...(fillFolder ? { folder } : {}),
-            ...(alt ? { alt: { de: existing.alt.de || alt, en: existing.alt.en || alt } } : {}),
-          }).catch(() => existing);
-        }
-        return reply.send({
-          src, key: versionedKey, width: existing.width, height: existing.height,
-          status: existing.status, duplicate: true, folder: stored.folder,
-          ...(existing.format ? { format: existing.format } : {}),
-          snippet: heroSnippet(src, existing.width, existing.height, existing.alt.de || alt, existing.format),
-        });
-      }
-      if (existing && (existing.status === 'processing' ||
-        (existing.status === 'failed' && existing.error === 'queue_full'))) {
-        // #348: processing alone does not prove a job exists. Restore the
-        // original before admitting an orphan left by a crash or old refusal.
-        if (!cfg.encodeQueue.isActive(versionedKey)) {
-          // A backlog refusal never invalidates this photo's curated metadata or
-          // immutable encoding profile. Recover it without a destructive upsert.
-          await cfg.media.setStatus(versionedKey, 'processing');
-          try {
-            await storeOriginal(versionedKey, buf, probe.ext, { storageDir, ...runtime });
-          } catch (e) {
-            await releaseUnqueued(versionedKey, 'failed', 'write_failed');
-            console.error(`could not store the original for ${versionedKey}:`, e);
-            return reply.code(500).send({ error: 'internal server error' });
-          }
-          try {
-            cfg.encodeQueue.enqueue(versionedKey);
-          } catch (e) {
-            if (!(e instanceof BacklogFullError)) throw e;
-            // Hold the boundary until the write lands; subsequent admissions
-            // must re-read this settled status, not a stale processing snapshot.
-            await releaseUnqueued(versionedKey, 'failed', 'queue_full');
-            return reply.code(429).send({ error: e.message });
-          }
-        }
-        return reply.send({
-          src, key: versionedKey, width: existing.width, height: existing.height,
-          status: 'processing', duplicate: true, folder: existing.folder,
-          ...(existing.format ? { format: existing.format } : {}),
-          snippet: heroSnippet(src, existing.width, existing.height, existing.alt.de || alt, existing.format),
-        });
-      }
-
-      const exif = parseExif(probe.exif);
-      // Persist the immutable profile before the original becomes recoverable
-      // from disk. A crash after this point leaves a deterministic processing
-      // row for boot recovery instead of an origin-only orphan that has lost the
-      // setting snapshot.
-      // Recovering identical bytes keeps a curated folder, just like ready duplicates.
-      const stored = await cfg.media.upsert({
-        key: versionedKey, folder: existing?.folder || folder, title,
-        alt: { de: alt, en: alt },
-        width: probe.width, height: probe.height, origBytes: buf.length,
-        status: 'processing', exif, uploadedBy: req.authUser?.id ?? null,
-        ...(format ? { format } : {}),
-        encoding,
-      });
-      try {
-        await storeOriginal(versionedKey, buf, probe.ext, { storageDir, ...runtime });
-      } catch (e) {
-        if (existing) await cfg.media.setStatus(versionedKey, 'failed', 'write_failed').catch(() => {});
-        else await cfg.media.remove(versionedKey).catch(() => {});
-        console.error(`could not store the original for ${versionedKey}:`, e);
-        return reply.code(500).send({ error: 'internal server error' });
-      }
-      // @ai-warning A refused enqueue MUST NOT leave an unqueued processing row
-      // (#348). Restore an existing failure; keep a new photo as failed/queue_full
-      // with its original so Retry, Delete and re-upload remain available.
-      try {
-        cfg.encodeQueue.enqueue(versionedKey);
-      } catch (e) {
-        if (!(e instanceof BacklogFullError)) throw e;
-        await releaseUnqueued(
-          versionedKey,
-          existing ? existing.status : 'failed',
-          existing ? existing.error ?? undefined : 'queue_full',
-        );
-        return reply.code(429).send({ error: e.message });
-      }
-      return reply.send({
-        src, key: versionedKey, width: probe.width, height: probe.height,
-        status: 'processing', folder: stored.folder,
-        ...(format ? { format } : {}),
-        snippet: heroSnippet(src, probe.width, probe.height, alt, format),
-      });
+    const result = await cfg.uploads.upload({
+      userId: req.authUser!.id, uploadId, retryGeneration: Number(generation), bytes: buf,
+      key: fields.key ?? '', title: fields.title ?? '', alt: fields.alt ?? '', folder: fields.folder ?? '', filename,
     });
+    return reply.code(result.statusCode).send(result.body);
+  });
+
+  app.get<{ Params: { uploadId: string } }>('/upload/receipts/:uploadId', { preHandler: requireAuth }, async (req, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    if (!UPLOAD_UUID_RE.test(req.params.uploadId)) return reply.code(404).send({ error: 'receipt not found' });
+    if (!cfg.uploads) return reply.code(503).send({ error: 'upload receipts are unavailable' });
+    const receipt = await cfg.uploads.get(req.authUser!.id, req.params.uploadId);
+    if (!receipt) return reply.code(404).send({ error: 'receipt not found' });
+    return reply.send(receipt);
   });
 
   // ---- media library ----
+  app.post('/media/lookup', { preHandler: requireAuth, bodyLimit: 32 * 1024 }, async (req, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    const body = req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body) || !('keys' in body)
+      || !Array.isArray(body.keys) || body.keys.length < 1 || body.keys.length > 100
+      || new Set(body.keys).size !== body.keys.length) return reply.code(400).send({ error: 'expected 1–100 distinct media keys' });
+    const keys: string[] = [];
+    for (const key of body.keys) {
+      if (typeof key !== 'string') return reply.code(400).send({ error: 'invalid media key' });
+      try { assertSafeKey(key); } catch { return reply.code(400).send({ error: 'invalid media key' }); }
+      keys.push(key);
+    }
+    return reply.send({ items: await cfg.media.lookup(keys) });
+  });
 
   // Everything (posts + pages) that could reference an image URL. Usage is
   // computed store-agnostically in TS so the memory and pg stores behave alike.
@@ -710,7 +587,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
   });
 
   app.get('/media/folders', { preHandler: requireAuth }, async (_req, reply) =>
-    reply.send(await cfg.media.folders()));
+    reply.header('Cache-Control', 'no-store').send(await cfg.media.folders()));
 
   app.post('/media/folders', { preHandler: requireAuth }, async (req, reply) => {
     const b = (req.body ?? {}) as { path?: unknown };
@@ -800,7 +677,9 @@ export function buildServer(cfg: ServerConfig): AppServer {
 
   app.post('/media/rescan', { preHandler: requireAdmin }, async (_req, reply) => {
     if (!cfg.reconciler) return reply.code(503).send({ error: 'reconciliation is not configured' });
-    return reply.send(await cfg.reconciler.run());
+    const report = await cfg.reconciler.run();
+    const receipts = cfg.uploads ? await cfg.uploads.recover() : undefined;
+    return reply.send({ ...report, ...(receipts ? { receipts } : {}) });
   });
 
   app.get('/media/queue', { preHandler: requireAuth }, async (_req, reply) =>
@@ -862,6 +741,8 @@ export function buildServer(cfg: ServerConfig): AppServer {
     } catch (e) {
       return reply.code(400).send({ error: (e as Error).message });
     }
+    if (!cfg.uploads) return reply.code(503).send({ error: 'upload receipts are unavailable' });
+    return cfg.encodeQueue.withAdmission(key, async () => {
     const corpus = await usageCorpus();
     const usedIn = imageUsage(`${imageBase}/${key}`, corpus.posts, corpus.pages);
     if (usedIn.length > 0) {
@@ -881,9 +762,10 @@ export function buildServer(cfg: ServerConfig): AppServer {
       return reply.code(409).send({ error: 'photo is still being encoded — wait for it to finish (or fail), then delete it' });
     }
     const deleted = await deleteMedia(storageDir, key, runtime);
-    await cfg.media.remove(key);
+    await cfg.uploads!.removeMedia(key, (client) => cfg.media.remove(key, client));
     if (deleted === 0 && item === null) return reply.code(404).send({ error: 'image not found' });
     return reply.send({ ok: true, deleted });
+    });
   });
 
   // Serialize config reads and writes: JSON settings and Postgres cannot commit
@@ -1697,9 +1579,10 @@ export function buildServer(cfg: ServerConfig): AppServer {
   app.get('/posts', { preHandler: requireAuth }, async () => posts.list());
 
   app.get('/posts/:tk', { preHandler: requireAuth }, async (req, reply) => {
-    const pair = await posts.get((req.params as { tk: string }).tk);
-    if (!pair) return reply.code(404).send({ error: 'post not found' });
-    return reply.send(pair);
+    reply.header('Cache-Control', 'no-store');
+    const read = await posts.getForSave((req.params as { tk: string }).tk, req.authUser!.id);
+    if (!read) return reply.code(404).send({ error: 'post not found' });
+    return reply.send({ ...read.content, ownerUserId: req.authUser!.id, lastSaveId: read.lastSaveId });
   });
 
   /**
@@ -1741,7 +1624,30 @@ export function buildServer(cfg: ServerConfig): AppServer {
       .send(await renderPreviewHtml(pair, locale, imageBase, galleryMetadata[locale]));
   });
 
-  const upsert = async (req: { body: unknown }, reply: FastifyReply, tk: string) => {
+  const SAVE_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+  function saveReceipt(req: FastifyRequest, reply: FastifyReply): { saveId: string; ownerUserId: string } | null {
+    reply.header('Cache-Control', 'no-store');
+    const body = req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      reply.code(400).send({ code: 'invalid_save', error: 'A save object is required.' });
+      return null;
+    }
+    const fields = body as Record<string, unknown>;
+    for (const field of ['saveId', 'expectedOwnerId'] as const) {
+      if (typeof fields[field] !== 'string' || !SAVE_UUID_RE.test(fields[field])) {
+        reply.code(400).send({ code: `invalid_${field}`, error: `${field} must be a canonical UUID.` });
+        return null;
+      }
+    }
+    if (fields.expectedOwnerId !== req.authUser!.id) {
+      reply.code(403).send({ code: 'owner_changed', error: 'The authenticated account changed. Local work must stay with its original owner.' });
+      return null;
+    }
+    return { saveId: fields.saveId as string, ownerUserId: req.authUser!.id };
+  }
+  const upsert = async (req: FastifyRequest, reply: FastifyReply, tk: string) => {
+    const receipt = saveReceipt(req, reply);
+    if (!receipt) return reply;
     try {
       // Shape first (issue #120): a non-object body, a missing `de`, a
       // non-string title etc. are 400s naming the field, never a TypeError or
@@ -1754,12 +1660,17 @@ export function buildServer(cfg: ServerConfig): AppServer {
       // optional: callers without it (new posts, WP importer) skip the check.
       // `confirmSlugChange` is the author's explicit consent to rename a draft
       // slug (issue #122) — likewise stripped.
-      const { updatedAt, confirmSlugChange, ...body } = raw as PostPair & { updatedAt?: unknown; confirmSlugChange?: boolean };
-      const pair: PostPair = { ...body, translationKey: tk };
-      // PUT must never create: a stale tab saving a post an admin deleted must get
-      // a 404, not resurrect it (issue #106). POST passes tk='' and skips this.
-      const existing = tk ? await posts.get(tk) : null;
-      if (tk && !existing) return reply.code(404).send({ error: 'post not found' });
+      const { updatedAt, confirmSlugChange, saveId: _saveId, expectedOwnerId: _expectedOwnerId, ...body } = raw as PostPair & {
+        updatedAt?: unknown; confirmSlugChange?: boolean; saveId: string; expectedOwnerId: string;
+      };
+      const createOnly = tk === '';
+      if (createOnly && !Object.hasOwn(body, 'translationKey')) return reply.code(400).send({ code: 'translation_key_required', error: 'translationKey is required.' });
+      if (createOnly && (typeof body.translationKey !== 'string' || !SAVE_UUID_RE.test(body.translationKey))) {
+        return reply.code(400).send({ code: 'invalid_translation_key', error: 'translationKey must be a canonical UUID.' });
+      }
+      const pair: PostPair = { ...body, translationKey: createOnly ? body.translationKey : tk };
+      const existing = createOnly ? null : await posts.get(tk);
+      if (!createOnly && !existing) return reply.code(404).send({ error: 'post not found' });
       let baseUpdatedAt: Date | undefined;
       if (updatedAt !== undefined && updatedAt !== null) {
         baseUpdatedAt = new Date(String(updatedAt));
@@ -1787,14 +1698,15 @@ export function buildServer(cfg: ServerConfig): AppServer {
           }
         }
       }
-      return reply.send(await posts.upsertDraft(pair, baseUpdatedAt ?? existing?.updatedAt, mode.updatedAt));
+      const saved = await posts.upsertDraft(pair, baseUpdatedAt ?? existing?.updatedAt, { createOnly, receipt, baseLanguageUpdatedAt: mode.updatedAt });
+      return reply.send({ ...saved, ownerUserId: receipt.ownerUserId, saveId: receipt.saveId });
     } catch (e) {
       if (e instanceof PostError) {
         if (e.code === 'storage_read_only') return readOnly(reply);
         // `code` lets the editor tell a stale-tab 409 ('conflict' → offer a
         // reload) apart from duplicate_slug/slug_locked 409s.
         const status = e.code === 'not_found' ? 404
-          : ['duplicate_slug', 'slug_locked', 'conflict', 'locale_published', 'reserved_slug'].includes(e.code ?? '') ? 409 : 400;
+          : ['already_exists', 'duplicate_slug', 'slug_locked', 'conflict', 'locale_published', 'reserved_slug'].includes(e.code ?? '') ? 409 : 400;
         return reply.code(status).send({ error: e.message, ...(e.code ? { code: e.code } : {}), ...(e.owner ? { owner: e.owner } : {}) });
       }
       throw e;
@@ -2248,14 +2160,17 @@ export function buildServer(cfg: ServerConfig): AppServer {
   app.get<PageRoute>('/pages/:key', { preHandler: requireAuth }, async (req, reply) => {
     const key = req.params.key;
     if (!isSafePageKey(key)) return reply.code(400).send({ error: 'Invalid page key.' });
-    return reply.header('cache-control', 'no-store').send(await cfg.pages.get(key));
+    const read = await cfg.pages.getForSave(key, req.authUser!.id);
+    return reply.header('cache-control', 'no-store').send({ ...read.content, ownerUserId: read.ownerUserId, lastSaveId: read.lastSaveId });
   });
   app.put<PageRoute>('/pages/:key', { preHandler: requireAdmin }, async (req, reply) => {
+    const receipt = saveReceipt(req, reply);
+    if (!receipt) return reply;
     try {
       const key = req.params.key;
       if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) throw new PageError('Invalid page payload.');
       const body = req.body as Record<string, unknown>;
-      if (Object.keys(body).some((key) => !['de', 'en', 'updatedAt', 'prepareLocale'].includes(key))) throw new PageError('Invalid page fields.');
+      if (Object.keys(body).some((key) => !['de', 'en', 'updatedAt', 'prepareLocale', 'saveId', 'expectedOwnerId'].includes(key))) throw new PageError('Invalid page fields.');
       const pair: PageUpdate = { key };
       for (const locale of ['de', 'en'] as const) if (body[locale] !== undefined) {
         const value = body[locale];
@@ -2267,8 +2182,13 @@ export function buildServer(cfg: ServerConfig): AppServer {
       }
       if (body.prepareLocale !== undefined && body.prepareLocale !== 'de' && body.prepareLocale !== 'en') throw new PageError('Invalid preparation locale.');
       if (body.prepareLocale !== undefined && !Object.hasOwn(body, 'updatedAt')) throw new PageError('Preparation requires the loaded updatedAt token.');
-      const { galleryWarnings, ...saved } = await cfg.pages.save(pair, pageToken(body.updatedAt), { prepareLocale: body.prepareLocale, validate: validatePageImages });
-      return pageRebuild(reply, saved, saved.status === 'published', { galleryWarnings });
+      const { galleryWarnings, ...saved } = await cfg.pages.save(pair, pageToken(body.updatedAt), {
+        prepareLocale: body.prepareLocale, receipt, expectAbsent: body.updatedAt === null, validate: validatePageImages,
+      });
+      // The writer-only receipt (#305) and this save's transient diagnostics ride beside it.
+      return pageRebuild(reply, saved, saved.status === 'published', {
+        galleryWarnings, ...(receipt ? { ownerUserId: receipt.ownerUserId, saveId: receipt.saveId } : {}),
+      });
     } catch (error) { return pageFailure(error, reply); }
   });
   for (const action of ['publish', 'unpublish'] as const) {
