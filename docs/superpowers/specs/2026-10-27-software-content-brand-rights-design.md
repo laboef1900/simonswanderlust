@@ -428,3 +428,58 @@ once even when no profiles are configured. The admin legal link coexists with th
 stored identity descriptor, not the removed hardcoded owner descriptor. Both locale
 dictionaries retain the identity and licensing keys. This source integration does
 not certify a new image or waive any of the artifact, source or release gates above.
+
+### Release-time artifact gate — prepared 2026-11-01
+
+Acceptance status against current `dev` (`976f31a`):
+
+| #291 acceptance item | Status | Evidence |
+| --- | --- | --- |
+| Decision record with approver and date | Done | This spec (owner approved 2026-10-27) |
+| Inventory from the lockfiles plus manual non-lockfile list | Done; **was stale** | `docs/third-party-inventory.json` recorded an older `site/package-lock.json` digest (package entries unchanged). Regenerated here; `uploader/test/legal-assets.test.ts` now fails whenever either lockfile or evidence file no longer matches the inventory |
+| Repository files match the decision; map attribution vs ODbL | Done | `LICENSE`, `NOTICE`, both `package.json` `license` fields, README section, OSM attribution (#455/#456) |
+| Outcome for `Wanderlust Studio` / `simonswanderlust-app` | Done; rename takes effect at the next release | §4 and the image-name cutover spec |
+| Content/brand statement distinct from the software license | Done | §3, `NOTICE` |
+| Notices verified in a **published** image (gates 1–3 above) | **Owner gate** | Needs an owner-authorized release; procedure below |
+
+Implemented now: OCI `licenses`/`source`/`title` labels in the `Dockerfile`, with the release
+workflow pinning `org.opencontainers.image.licenses=AGPL-3.0-only` (GitHub detects the SPDX id
+as the ambiguous `AGPL-3.0`, which `docker/metadata-action` would otherwise publish); and
+`uploader/scripts/check-image-legal.mjs`, a read-only check that never runs the image. It
+extracts files from a stopped container and verifies: the labels; `/app/LICENSE` (AGPL text
+digest) and `NOTICE` against the repository **at the recorded revision**; both `license`
+fields; `/app/source-release.json` (exact repository + revision for a release, `null` for a
+local build); inventory freshness against the image's lockfiles; every legal file in both
+`public/legal/` trees, byte-equal to the first-party sources, with resolving local links and
+exact archive/tree source links; supplemental and served-asset notices; every `notice-gaps.json`
+row either reviewed in `docs/third-party-evidence.json` or a platform build of a reviewed
+package (`@scope/<os>-<arch>` and `<name>-<os>-<arch>` both recognised); served fonts/vendor
+files byte-equal to their npm sources; glyph revision/OFL digest; basemap presence and build
+stamp. It is evidence for a release decision, not a legal clearance or corresponding-source
+verdict (gates 2 and 3 above keep their wording).
+
+Local dry run (2026-11-01, arm64 only, `docker build` from this branch at `0f31fa6` with the
+release's `SOURCE_REPOSITORY`/`SOURCE_REVISION` build arguments and a revision label standing in
+for `docker/metadata-action`): **62/62 checks passed** (image
+`sha256:58cccb7b…c5fee10e01e43b5dc754f9337fe5c08fd4`). Negative controls on the same image: run
+without `--revision` it fails 5 checks (provenance present where a local build must record
+`null`; source links present). The earlier local build of `976f31a` (no labels, before the
+platform-family fix) failed 3: both labels missing and `@esbuild/linux-arm64` unaccounted.
+Neither run certifies a published image, the amd64 build, or anything already on GHCR.
+
+**Owner procedure after an authorized release** (per platform; the tag's commit is `<sha>`):
+
+```bash
+git fetch origin && git rev-parse 'v<version>^{commit}'   # must equal <sha>
+docker pull --platform linux/amd64 ghcr.io/laboef1900/wanderlust-studio:<version>
+node uploader/scripts/check-image-legal.mjs ghcr.io/laboef1900/wanderlust-studio:<version> \
+  --platform linux/amd64 --revision <sha> --out release-legal-amd64.json
+docker pull --platform linux/arm64 ghcr.io/laboef1900/wanderlust-studio:<version>
+node uploader/scripts/check-image-legal.mjs ghcr.io/laboef1900/wanderlust-studio:<version> \
+  --platform linux/arm64 --revision <sha> --out release-legal-arm64.json
+```
+
+#291 closes when both reports say `PASS` (0 failed) for the first release under the new name,
+the GitHub release body carries the exact-version source directions (gate 3), and the reports'
+digests are recorded here. Any `FAIL` blocks announcing the release for third-party use; the
+fix lands through `feature/* → dev → main` and a new version, never by retagging.
