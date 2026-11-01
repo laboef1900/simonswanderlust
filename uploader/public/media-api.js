@@ -11,6 +11,24 @@ window.MediaApi = (function () {
    *  server's encode concurrency (2, which is CPU/memory-bound and enforced
    *  server-side because a client limit is advisory — a second tab bypasses it). */
   var UPLOAD_CONCURRENCY = 3;
+  /** The server's multipart `fileSize` cap (src/server.ts). The server stays
+   *  authoritative; this only spares a phone a 25 MB transfer it would refuse. */
+  var MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+
+  /**
+   * Why a picked file is not sent at all, or null to send it. Only what the
+   * browser can know for certain: size, a non-image type, and HEIC/HEIF, which
+   * the shipped sharp build cannot decode (it reads only the AV1 flavour of
+   * HEIF, i.e. AVIF — src/pipeline.ts). A missing type or size is never a
+   * reason: the server decides.
+   */
+  function uploadRefusal(file) {
+    var type = typeof file.type === 'string' ? file.type.toLowerCase() : '';
+    if (/^image\/hei[cf](-sequence)?$/.test(type) || /\.hei[cf]$/i.test(String(file.name || ''))) return 'heic';
+    if (type && type.indexOf('image/') !== 0) return 'not_image';
+    if (typeof file.size === 'number' && file.size > MAX_UPLOAD_BYTES) return 'too_large';
+    return null;
+  }
 
   // ---- pure helpers -------------------------------------------------------
 
@@ -370,7 +388,7 @@ window.MediaApi = (function () {
     var o = options || {};
     var frozen = Object.freeze(Object.assign({}, fields));
     var uploadId = (o.randomUUID || function () { return window.crypto.randomUUID(); })();
-    var item = { uploadId: uploadId, ownerUserId: ownerId, state: 'queued', progress: 0, result: null, error: null };
+    var item = { uploadId: uploadId, ownerUserId: ownerId, state: o.refusal ? 'refused' : 'queued', progress: 0, result: null, error: o.refusal || null };
     var retryGeneration = 0;
     var unresolved = false;
     var busy = false;
@@ -477,7 +495,8 @@ window.MediaApi = (function () {
         items: rows, total: rows.length, paused: paused, ownerUserId: owner, currentOwnerId: currentOwner,
         done: rows.filter(function (i) { return i.state === 'done'; }).length,
         failed: rows.filter(function (i) { return i.state === 'failed' || i.state === 'retryable'; }).length,
-        waiting: rows.filter(function (i) { return ['done', 'gone'].indexOf(i.state) === -1; }).length,
+        refused: rows.filter(function (i) { return i.state === 'refused'; }).length,
+        waiting: rows.filter(function (i) { return ['done', 'gone', 'refused'].indexOf(i.state) === -1; }).length,
         active: running,
         unsettled: rows.some(function (i) { return ['queued', 'uploading', 'needs-auth', 'unknown', 'checking', 'retryable'].indexOf(i.state) !== -1; }),
       };
@@ -503,9 +522,10 @@ window.MediaApi = (function () {
       add: function (files, fields) {
         if (!owner) return;
         Array.prototype.forEach.call(files, function (file) {
-          var item = { id: nextId++, name: file.name, waiting: true };
+          var refusal = uploadRefusal(file);
+          var item = { id: nextId++, name: file.name, waiting: !refusal };
           item.attempt = createUploadAttempt(client, file, fields || {}, owner, {
-            randomUUID: o.randomUUID, onChange: notify, onPause: pause,
+            randomUUID: o.randomUUID, onChange: notify, onPause: pause, refusal: refusal,
             canAdopt: function (id) { return id === currentOwner && !paused; },
           });
           items.push(item);
@@ -526,12 +546,12 @@ window.MediaApi = (function () {
       stopWaiting: function () {
         // Unknown/in-flight evidence and landed records are never discarded.
         items = items.filter(function (i) {
-          return ['queued', 'needs-auth', 'failed', 'retryable'].indexOf(i.attempt.snapshot().state) === -1;
+          return ['queued', 'needs-auth', 'failed', 'retryable', 'refused'].indexOf(i.attempt.snapshot().state) === -1;
         });
         notify();
       },
       clearFinished: function () {
-        items = items.filter(function (i) { return i.attempt.snapshot().state !== 'done'; });
+        items = items.filter(function (i) { return ['done', 'refused'].indexOf(i.attempt.snapshot().state) === -1; });
         notify();
       },
       snapshot: snapshot,
@@ -540,6 +560,8 @@ window.MediaApi = (function () {
 
   return {
     UPLOAD_CONCURRENCY: UPLOAD_CONCURRENCY,
+    MAX_UPLOAD_BYTES: MAX_UPLOAD_BYTES,
+    uploadRefusal: uploadRefusal,
     formatBytes: formatBytes,
     formatTakenAt: formatTakenAt,
     rangeBetween: rangeBetween,

@@ -1172,4 +1172,10 @@ blog/
   - **#98 `nameFromUrl` non-injectivity** — `foo.jpg`/`foo.png` collide on one key. Any fix must keep
     keys deterministic; #85's disk-derived resume depends on that.
 
+- **In review (#301, held for G5 devices):** Media refuses before transfer what the server
+  would refuse or cannot decode — over 25 MiB, HEIC/HEIF (shipped sharp decodes only AVIF-HEIF),
+  non-images — naming each reason; transferred rows never claim encoding; a keep-this-tab-open
+  note shows only while transfers are unsettled. See
+  `docs/superpowers/specs/2026-11-01-phone-media-upload-audit.md`.
+
 Architecture overview: `ARCHITECTURE.md` · security model: `SECURITY.md` · top-level guide: `README.md`.
