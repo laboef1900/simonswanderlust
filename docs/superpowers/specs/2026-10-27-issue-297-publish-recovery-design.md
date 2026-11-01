@@ -583,3 +583,31 @@ authorization observations and `cli-proof.json` are retained under the ledger's
 Actual-PR final review, exact-head GitHub CI, completion of prerequisite PRs and retargeted
 integration qualification remain separate readiness gates. This evidence does not claim
 #305 reconciliation or #316 content-manifest liveness before those dependent implementations.
+
+## Current-dev integration (2026-11-01)
+
+Merged `dev` after the language (#284/#285), identity (#275/#276), gallery-warning and
+promotion-commit (#397 cancellation) changes landed. Decisions:
+
+- `build.ts` keeps this change's attempt lifecycle (attempt id as release stamp, durable
+  start/finish records, `promoted` set at the `current` rename). Dev's separate
+  `onPromoted(stamp)` path for the same #397 rule is not carried twice; dev's `originRoles`
+  is passed to the build snapshot unchanged.
+- `pages.ts` keeps dev's in-transaction acknowledgement read (`saved` + `galleryWarnings`),
+  which already satisfies this change's "acknowledgement belongs to the commit" rule.
+- Page and unpublish routes project the build report and still return dev's
+  `galleryWarnings`; the About page keeps the 5xx-is-unknown handling and shows gallery
+  warnings for an acknowledged save before the build outcome.
+- Dev tests written against `{ ok, release }` / `{ ok, error }` builder stubs and
+  argument-less `build()` now use the attempt contract (`attemptId`, `code`, trigger).
+  DOM harnesses that drive publish/unpublish/page saves load `build-reporting.js`; their
+  mocked acknowledgements carry `published`/`unpublished: true`, and the 5xx unpublish case
+  now expects the generic unknown-outcome text instead of the raw server error.
+
+Verification at the merge: uploader `tsc` 0 and the PostgreSQL-enabled suite 3732/3732;
+site 689/689, `astro check` 0 errors, `astro build` OK. The real app from this worktree
+recorded a `boot` then a `publish` attempt (`no-store` status, matching live release);
+with the synthetic `releases/` made read-only, an About save returned 200 with the saved
+pair and `build: { ok: false, code: 'release_write_failed' }`, status recorded the failed
+`page` attempt and the previous live release kept serving; after restoring permissions an
+explicit rebuild succeeded and served the saved title. Logout ended the session (401).

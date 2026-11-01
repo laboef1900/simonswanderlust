@@ -976,3 +976,31 @@ was established through an owned PostgreSQL pages lock that made an actual app b
 at its normal deadline; the lock was released and a later deletion rebuilt successfully.
 The correct-origin thumbnail and public alias returned200. Sessions, tabs, cookies,
 interceptions, app and fixture rows were cleaned; database/data/evidence remain retained.
+
+## #317 current-dev integration (2026-11-01)
+
+Merged `origin/dev` at `5844e62` (after #305, #306, #288/#289, #297 and the gallery
+warnings landed). Resolutions, keeping both intents:
+
+- **Body rendering.** dev's async renderer (`transformBodyImages(html, images,
+  origin, options)`, `analyzeRenderedBody`, `foreignBodyImageSources`) is the base;
+  #317's image-use accounting (`transformBodyImagesWithUses`, now async,
+  `bodyImageUses`) runs through dev's deferred gallery loop in document order and
+  shares one `imageSources` walk. The trips loader still writes the release manifest.
+- **Editor.** dev's serialized write queue and #305 WriteRecovery stay; #317's
+  `publicationRefresh.beginAction/endAction` wrap the queued save and GPX writes,
+  `loadPost` keeps #317's bounded read with dev's `{ snapshot, deferRouteRefresh }`
+  and `writeEpoch` barrier; the load-time "published" status lines were replaced by
+  the publication line (copy removed).
+- **Settings.** Navigation (new on dev) joins Identity and Language as a
+  publication action: its save and Rebuild run inside `begin/end`.
+- **Server.** Bulk publish keeps dev's readiness gate and #317's per-result tokens
+  and projection. `APP_SEGMENTS` reserves both `gallery` and `publication`.
+
+Verification: uploader `tsc` and full suite with isolated PostgreSQL 4467/4467;
+site 795/795 with PostgreSQL, `astro check` 0/0/0, `npm run build`. Runtime on a
+fresh database: draft → `status: draft`, not live; publish → live in both
+locales; a newer DE-only save → `draftDiffers`; publish with a read-only
+`releases/` → 200 with `release_write_failed`, DE `older-version-live`, EN `live`,
+served HTML byte-identical; Rebuild site now → both `live` and the new title
+served; Posts list at 390px shows "Live" as text, no horizontal overflow.

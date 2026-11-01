@@ -438,8 +438,12 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
   // one transaction so a crash between DROP and CREATE cannot leave the slug
   // backstop missing. Idempotent: a partial index is left alone. Nothing to
   // reconcile — the old index already guaranteed at most one '' row per locale.
+  // @ai-warning Scope catalog reads to this schema: pg_indexes spans every schema
+  // in the database, and a same-named index elsewhere would decide this
+  // migration (or vanish mid-query when its schema is dropped concurrently).
   const slugIdx = await pool.query<{ indexdef: string }>(
-    `SELECT indexdef FROM pg_indexes WHERE tablename = 'posts' AND indexname = 'posts_locale_slug_idx'`,
+    `SELECT indexdef FROM pg_indexes
+      WHERE schemaname = current_schema() AND tablename = 'posts' AND indexname = 'posts_locale_slug_idx'`,
   );
   if (slugIdx.rows[0] && !/\bWHERE\b/i.test(slugIdx.rows[0].indexdef)) {
     await pool.query(

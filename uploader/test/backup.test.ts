@@ -177,6 +177,35 @@ describe('dumpDatabase', () => {
     expect(readDump(file).tables.site_language?.[0]).toMatchObject({ primary_locale: 'de', enabled_locales: ['de', 'en'] });
   });
 
+  it.each([true, false])('labels a pre-route database pre-v10 instead of failing boot (pre-identity=%s)', async preIdentity => {
+    // An owner database from before private routes (and identity) has neither table;
+    // the boot-time recovery set must still be written, honestly versioned and restorable.
+    const db = fakeDb([{ id: 'u1', username: 'retained' }]);
+    const connect = db.connect;
+    db.connect = async () => {
+      const client = await connect();
+      return { release: client.release, async query(sql, params) {
+        if (sql.includes("to_regclass('site_identity')")) return { rows: [{ absent: preIdentity }] };
+        if (sql.includes("to_regclass('post_routes')")) return { rows: [{ absent: true }] };
+        if (sql.includes("to_regclass('site_language')")) return { rows: [{ present: false }] };
+        if (sql.includes("to_regclass('site_nav')")) return { rows: [{ present: false }] };
+        if (sql.includes('FROM post_routes')) throw new Error('relation "post_routes" does not exist');
+        return client.query(sql, params);
+      } };
+    };
+    if (!preIdentity) {
+      await expect(dumpDatabase(db, dir, new Date(), { preLanguageMigration: true })).rejects.toThrow('without the private route schema');
+      expect(await readdir(dir)).toEqual([]);
+      return;
+    }
+    const file = join(dir, await dumpDatabase(db, dir, new Date(), { preLanguageMigration: true }));
+    const raw = JSON.parse(gunzipSync(await readFile(file)).toString('utf8'));
+    expect(raw.version).toBe(9);
+    expect(raw.tables).not.toHaveProperty('post_routes');
+    expect(raw.tables.users).toEqual([{ id: 'u1', username: 'retained' }]);
+    expect(readDump(file).version).toBe(9);
+  });
+
   it.each(['primary', 'single', 'omitted', 'lock'])('refuses pre-migration downgrade of active %s language metadata', async kind => {
     const db = fakeDb();
     const connect = db.connect;

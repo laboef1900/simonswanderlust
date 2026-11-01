@@ -2,9 +2,11 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { galleryFencesToMdx, rewriteOutsideGalleries, unescapeAltText } from './body-content.js';
 import { markdownImages } from './wp-content.js';
-import type { HeroImage, Locale, PostLocale, PostPair } from './posts.js';
+import { checkSlug, type HeroImage, type Locale, type PostLocale, type PostPair } from './posts.js';
 import { validatePublicTrack, type PublicTrack } from '../public/gpx-public-track.js';
 import type { PublishedTrackProjection } from './published-track.js';
+import { analyzeGallerySource } from '../../site/src/lib/gallery-source.js';
+import { galleryDiagnostics } from '../public/gallery-photo-line.js';
 
 // YAML single-quoted scalar: a literal quote is escaped by doubling it ('' ),
 // never with a backslash. Mirrors storage.ts so exported MDX re-parses cleanly.
@@ -33,13 +35,13 @@ function imageYaml(name: string, image: HeroImage): string[] {
  * a gallery line's text — a `caption-override` above all — may read like an
  * inline image and must reach the backup byte-for-byte.
  */
-function bodyToMdx(p: PostLocale): string {
-  return rewriteOutsideGalleries(galleryFencesToMdx(p.bodyMarkdown, p.images), (text) => {
+async function bodyToMdx(p: PostLocale): Promise<string> {
+  return rewriteOutsideGalleries(await galleryFencesToMdx(p.bodyMarkdown, p.images), async (text) => {
     let out = text;
     // `markdownImages` reads the label with its backslash escapes (posts.ts
     // writes `\[`/`\]` via `imageMarkdown`); a naive `[^\]]*` stopped at the
     // first escaped bracket and exported the photo without its dimensions.
-    for (const img of markdownImages(text)) {
+    for (const img of await markdownImages(text)) {
       const dims = p.images[img.url];
       if (!dims) continue;
       // Escape &, ", <, > (& first) so posts.ts normalizeBodyImages can decode the exact
@@ -54,7 +56,7 @@ function bodyToMdx(p: PostLocale): string {
   });
 }
 
-export function renderPostToMdx(pair: PostPair, locale: Locale, track?: PublicTrack): string {
+export async function renderPostToMdx(pair: PostPair, locale: Locale, track?: PublicTrack): Promise<string> {
   const p = locale === 'de' ? pair.de : pair.en;
   const s = pair.shared;
   const lines = [
@@ -81,21 +83,32 @@ export function renderPostToMdx(pair: PostPair, locale: Locale, track?: PublicTr
     lines.push('keyFacts:');
     for (const [k, v] of Object.entries(p.keyFacts)) lines.push(`  ${q(k)}: ${q(v)}`);
   }
-  lines.push('---', '', bodyToMdx(p).trim(), '');
+  const body = await bodyToMdx(p);
+  // Trimming an unterminated gallery's last invalid photo line would destroy
+  // retained whitespace. Invalid source is an opaque backup payload, not a
+  // candidate for export's otherwise unchanged outer-whitespace convention.
+  const invalid = galleryDiagnostics(await analyzeGallerySource(body)).length > 0;
+  lines.push('---', '', invalid ? body : body.trim());
+  if (!invalid) lines.push('');
   return lines.join('\n');
 }
 
 export async function exportPost(pair: PostPair, baseDir: string, projection: PublishedTrackProjection): Promise<string[]> {
-  // Resolve every artifact before the first filesystem write. In particular a
-  // newly requested translation must not inherit the primary's retained track.
+  // Resolve and validate every artifact before the first filesystem write. A
+  // legacy slug must not leave a partial backup behind, a later source-map
+  // failure must not export half a pair, and a newly requested translation must
+  // not inherit the primary's retained track.
   const track = projection.track === undefined ? undefined : validatePublicTrack(projection.track);
-  const artifacts = projection.language.locales
-    .filter(locale => !pair[locale].omitted && pair[locale].slug !== '')
-    .map(locale => ({
+  const locales = projection.language.locales.filter(locale => !pair[locale].omitted && pair[locale].slug !== '');
+  for (const locale of locales) checkSlug(pair[locale].slug, locale);
+  const artifacts: { locale: Locale; slug: string; content: string }[] = [];
+  for (const locale of locales) {
+    artifacts.push({
       locale,
       slug: pair[locale].slug,
-      content: renderPostToMdx(pair, locale, projection.locales.includes(locale) ? track : undefined),
-    }));
+      content: await renderPostToMdx(pair, locale, projection.locales.includes(locale) ? track : undefined),
+    });
+  }
   const out: string[] = [];
   for (const { locale, slug, content } of artifacts) {
     const dir = join(baseDir, 'trips', locale);

@@ -4,16 +4,19 @@ import { setImmediate as nextTurn } from 'node:timers/promises';
 import { afterEach, describe, expect, it } from 'vitest';
 import { editorDocument, type EditorElement } from './editor-dom-harness.js';
 import { ui } from '../../site/src/i18n/ui.js';
+import type { OnboardingLanguage } from '../src/onboarding.js';
 
 const deskWindows: EventTarget[] = [];
 afterEach(() => {
   for (const window of deskWindows.splice(0)) window.dispatchEvent(new Event('pagehide'));
 });
 
-const sources = ['desk.js', 'admin-confirm.js', 'onboarding.js'].map((name) => readFileSync('public/' + name, 'utf8'));
+// The Desk loads build-reporting.js before onboarding.js; failed-build wording comes from it.
+const sources = ['build-reporting.js', 'desk.js', 'language.js', 'admin-confirm.js', 'onboarding.js'].map((name) => readFileSync('public/' + name, 'utf8'));
 type StepState = 'done' | 'todo' | 'in_progress' | 'attention';
 type View = { status: 'retired' } | {
   status: 'open' | 'dismissed'; complete: boolean;
+  language: OnboardingLanguage;
   steps: { id: string; state: StepState; required: boolean; href: string | null }[];
 };
 type Request = { url: string; method: string; body?: string; cache?: string };
@@ -23,6 +26,7 @@ function view(options: { status?: 'open' | 'dismissed'; photo?: StepState; story
   const publish = options.publish ?? 'todo';
   return {
     status: options.status ?? 'open', complete: [photo, story, publish].every((state) => state === 'done'),
+    language: { primary: 'de', locales: ['de', 'en'], lockedAt: null, updatedAt: '2026-10-27T00:00:00.000Z' },
     steps: [
       { id: 'account', state: 'done', required: false, href: null },
       { id: 'identity', state: 'todo', required: false, href: '/admin/settings.html#identity' },
@@ -54,6 +58,10 @@ async function page(options: {
     EditorCopy: Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [locale,
       Object.fromEntries(Object.entries(strings).filter(([key]) => key.startsWith('editor.chrome.'))
         .map(([key, text]) => [key.slice('editor.chrome.'.length), text])),
+    ])),
+    BuildCopy: Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [locale,
+      Object.fromEntries(Object.entries(strings).filter(([key]) => key.startsWith('admin.build.'))
+        .map(([key, text]) => [key.slice('admin.build.'.length), text])),
     ])),
     fetch: async (url: string, init?: { method?: string; body?: string; cache?: string }) => {
       const request = { url, method: init?.method ?? 'GET', body: init?.body, cache: init?.cache };
@@ -95,7 +103,7 @@ describe('Desk onboarding interactions', () => {
 
   it('renders five real destinations with only three required steps and no automatic writes', async () => {
     const h = await page();
-    expect(h.root.querySelectorAll('li')).toHaveLength(5);
+    expect(h.root.querySelectorAll('[data-step]')).toHaveLength(5);
     expect(h.root.querySelectorAll('a').map((link) => link.href)).toEqual([
       '/admin/settings.html#identity', '/admin/media.html', '/admin/editor.html', '/admin/posts.html',
     ]);
@@ -201,7 +209,7 @@ describe('Desk onboarding interactions', () => {
     expect(h.root.querySelector('li')).toBeNull();
     expect(h.opener.hidden).toBe(true);
     await h.click('retry');
-    expect(h.root.querySelectorAll('li')).toHaveLength(5);
+    expect(h.root.querySelectorAll('[data-step]')).toHaveLength(5);
     expect(h.requests.map((request) => request.method)).toEqual(['GET', 'GET']);
   });
 
@@ -341,6 +349,7 @@ async function deskPage(options: {
       if (url === '/posts') return options.posts ? options.posts() : Response.json([]);
       if (url === '/media/queue') return Response.json({ pending: 0, running: 0 });
       if (url === '/health') return Response.json({ release: false });
+      // The Desk reads the language mode (#284) and, for admins, build status (#297) and the publication summary (#317).
       if (url === '/rebuild/status') return Response.json({ record: 'missing', running: null, last: null, live: null });
       if (url === '/publication/summary') return Response.json({ availability: 'available', release: 'none', posts: null, galleryDescriptions: null });
       throw new Error('Unexpected Desk request: ' + url);
@@ -403,7 +412,7 @@ describe('Actual Desk authenticated onboarding activation', () => {
     expect(h.document.querySelector('.cms-app-shell')).toBeNull();
     pending.resolve(Response.json({ authenticated: true, userId: '11111111-1111-4111-8111-111111111111', username: 'admin', isAdmin: true, needsSetup: false }));
     await h.flush();
-    expect(h.get('#onboardingChecklist').querySelectorAll('li')).toHaveLength(5);
+    expect(h.get('#onboardingChecklist').querySelectorAll('[data-step]')).toHaveLength(5);
     expect(h.get('#onboardingChecklist').hidden).toBe(false);
     expect(h.get('#onboardingOpener').parentElement).toBe(h.get('.cms-topbar-right'));
     expect(h.requests.filter((request) => request.url === '/auth/me')).toHaveLength(1);
@@ -482,7 +491,7 @@ describe('Actual Desk authenticated onboarding activation', () => {
     expect(h.get('#deskError').hidden).toBe(true);
     expect(h.get('#deskError').getAttribute('role')).toBe('alert');
     expect(h.get('#deskError').textContent).toBe('');
-    expect(h.get('#onboardingChecklist').querySelectorAll('li')).toHaveLength(5);
+    expect(h.get('#onboardingChecklist').querySelectorAll('[data-step]')).toHaveLength(5);
     expect(h.requests.filter((request) => request.url === '/auth/me')).toHaveLength(2);
     expect(h.requests.every((request) => request.method === 'GET')).toBe(true);
     expect(h.location.href).toBe('');
@@ -494,5 +503,252 @@ describe('Actual Desk authenticated onboarding activation', () => {
     expect(h.requests.map((request) => request.url)).toEqual(['/auth/me']);
     expect(h.get('#onboardingChecklist').hidden).toBe(true);
     expect(h.get('#deskError').hidden).toBe(true);
+  });
+});
+
+describe('Optional Desk language configuration', () => {
+  const modes: OnboardingLanguage[] = [
+    { primary: 'de', locales: ['de'], lockedAt: null, updatedAt: '2026-10-27T00:00:00.000Z' },
+    { primary: 'en', locales: ['en'], lockedAt: null, updatedAt: '2026-10-27T00:00:00.000Z' },
+    { primary: 'de', locales: ['de', 'en'], lockedAt: null, updatedAt: '2026-10-27T00:00:00.000Z' },
+    { primary: 'en', locales: ['en', 'de'], lockedAt: null, updatedAt: '2026-10-27T00:00:00.000Z' },
+  ];
+  function select(h: { root: EditorElement }, index: number) {
+    const radios = h.root.querySelectorAll('input[type="radio"]');
+    radios.forEach((radio, position) => { radio.checked = position === index; });
+    radios[index]!.focus();
+    radios[index]!.fire('change');
+  }
+  function selected(h: { root: EditorElement }) {
+    return h.root.querySelectorAll('input[type="radio"]').findIndex((radio) => radio.checked);
+  }
+
+  it.each(['de', 'en'] as const)('inserts an optional native group after Account, with associated descriptions in %s', async (locale) => {
+    const h = await page({ locale });
+    const rows = h.get('.onboarding-steps').children;
+    expect(rows.map((row) => row.dataset.step ?? 'language')).toEqual(['account', 'language', 'identity', 'photo', 'story', 'publish']);
+    expect(rows[1]!.getAttribute('data-state')).toBeNull();
+    expect(rows[1]!.querySelector('.onboarding-icon')).toBeNull();
+    expect(rows[1]!.querySelector('legend')?.textContent).not.toBe('');
+    const radios = h.root.querySelectorAll('input[type="radio"]');
+    expect(radios).toHaveLength(4);
+    expect(new Set(radios.map((radio) => radio.getAttribute('name')))).toEqual(new Set(['onboarding-language']));
+    for (const radio of radios) {
+      expect(radio.parentElement?.tagName.toLowerCase()).toBe('label');
+      expect(h.get('#' + radio.getAttribute('aria-describedby')).textContent).not.toBe('');
+    }
+    expect(selected(h)).toBe(2);
+    select(h, 1);
+    expect(h.requests).toHaveLength(1);
+    expect(h.root.querySelector('[data-onboarding-action="finish"]')).toBeNull();
+    await h.click('language-save');
+    expect(h.requests).toHaveLength(1);
+    expect(h.get('#adminConfirmBody').textContent).toContain('/');
+    await h.answer(false);
+    expect(h.requests).toHaveLength(1);
+    expect(selected(h)).toBe(1);
+    expect(h.document.activeElement).toBe(h.action('language-save'));
+  });
+
+  it.each(modes.map((mode, index) => ({ mode, index })))('submits only the confirmed $mode.primary / $mode.locales configuration and rereads progress', async ({ mode, index }) => {
+    let stored = modes[(index + 1) % modes.length]!;
+    const h = await page({ route: (request) => {
+      if (request.method === 'PUT') {
+        stored = { ...mode, updatedAt: '2026-10-29T00:00:00.000Z' };
+        // A committed change answers with its build attempt beside the configuration (#297).
+        return Response.json({ ...stored, build: { ok: true, attemptId: 'r1', release: 'r1' } });
+      }
+      return Response.json({ ...view(), language: stored });
+    } });
+    select(h, index);
+    await h.click('language-save');
+    expect(h.root.querySelector('fieldset')?.disabled).toBe(true);
+    const expectedPaths = mode.locales.map((locale) => locale === mode.primary ? '/' : `/${locale}/`);
+    expect(new Set(h.get('#adminConfirmBody').textContent.match(/\/(?:de\/|en\/)?/g))).toEqual(new Set(expectedPaths));
+    const selectedRadio = h.root.querySelectorAll('input[type="radio"]')[index]!;
+    const description = h.get('#' + selectedRadio.getAttribute('aria-describedby'));
+    expect(new Set(description.textContent.match(/\/(?:de\/|en\/)?/g))).toEqual(new Set(expectedPaths));
+    await h.answer(true);
+    expect(h.requests.map((request) => [request.url, request.method])).toEqual([
+      ['/onboarding', 'GET'], ['/language', 'PUT'], ['/onboarding', 'GET'],
+    ]);
+    expect(JSON.parse(h.requests[1]!.body!)).toEqual({ primary: mode.primary, locales: mode.locales });
+    expect(selected(h)).toBe(index);
+    expect(h.document.activeElement).toBe(h.action('language-save'));
+    expect(h.root.querySelectorAll('[data-step]')).toHaveLength(5);
+    expect(h.root.querySelector('[data-onboarding-action="finish"]')).toBeNull();
+    expect(h.get('.onboarding-language-status').textContent).toBe(ui.en['editor.chrome.onboardingLanguageSaved']);
+  });
+
+  it('acknowledges the same-mode request only for this page, without adding a completion state', async () => {
+    const h = await page({ route: (request) => Response.json(request.method === 'PUT' ? modes[2] : view()) });
+    await h.click('language-save');
+    await h.answer(true);
+    expect(JSON.parse(h.requests[1]!.body!)).toEqual({ primary: 'de', locales: ['de', 'en'] });
+    expect(h.get('.onboarding-language-status').textContent).not.toBe('');
+    expect(h.get('.onboarding-language').getAttribute('data-state')).toBeNull();
+    const reopened = await page();
+    expect(reopened.get('.onboarding-language-status').textContent).toBe('');
+    expect(reopened.requests.map((request) => request.method)).toEqual(['GET']);
+  });
+
+  it.each([400, 401, 403, 409, 500, 503])('retains the selection after HTTP %s, refreshes authoritative state and never replays', async (status) => {
+    const h = await page({ route: (request) => request.method === 'PUT'
+      ? Response.json({ code: status === 400 ? 'invalid_language' : 'language_pages_incomplete' }, { status })
+      : Response.json(view()) });
+    select(h, 1);
+    await h.click('language-save');
+    await h.answer(true);
+    expect(selected(h)).toBe(1);
+    expect(h.requests.map((request) => request.method)).toEqual(['GET', 'PUT', 'GET']);
+    expect(h.get('.onboarding-language-status').textContent).not.toBe('');
+    expect(h.document.activeElement).toBe(h.action('language-save'));
+    expect(h.get('.onboarding-language-current').textContent).toContain('/en/');
+  });
+
+  it.each(['network', 'json', 'wrong-mode', 'invalid-lock'] as const)('reconciles an ambiguous %s response without overwriting the candidate or claiming success', async (failure) => {
+    const h = await page({ route: (request) => {
+      if (request.method === 'GET') return Response.json(view());
+      if (failure === 'network') throw new TypeError('lost acknowledgement');
+      if (failure === 'json') return new Response('{');
+      return Response.json(failure === 'wrong-mode' ? modes[2] : { ...modes[1], lockedAt: false });
+    } });
+    select(h, 1);
+    await h.click('language-save');
+    await h.answer(true);
+    expect(selected(h)).toBe(1);
+    expect(h.requests.map((request) => request.method)).toEqual(['GET', 'PUT', 'GET']);
+    expect(h.action('language-save').disabled).toBe(false);
+    expect(h.get('.onboarding-language-status').textContent).not.toBe('');
+  });
+
+  it('shows the authoritative saved mode after a lost commit acknowledgement, retaining the request warning and never resending', async () => {
+    let committed = false;
+    const h = await page({ route: (request) => {
+      if (request.method === 'PUT') { committed = true; throw new TypeError('connection lost after commit'); }
+      return Response.json({ ...view(), language: committed ? modes[3] : modes[2] });
+    } });
+    select(h, 3);
+    await h.click('language-save');
+    await h.answer(true);
+    expect(selected(h)).toBe(3);
+    expect(h.get('.onboarding-language-current').textContent).toContain('/de/');
+    expect(h.get('.onboarding-language-current').textContent).not.toContain('/en/');
+    expect(h.get('.onboarding-language-status').textContent).not.toBe('');
+    expect(h.requests.map((request) => request.method)).toEqual(['GET', 'PUT', 'GET']);
+  });
+
+  it('keeps edits through a failed reconciliation read and explicit retry', async () => {
+    let reads = 0;
+    const h = await page({ route: (request) => {
+      if (request.method === 'PUT') throw new TypeError('lost response');
+      return ++reads === 2 ? Response.json({}, { status: 503 }) : Response.json(view());
+    } });
+    select(h, 3);
+    await h.click('language-save');
+    await h.answer(true);
+    expect(h.root.querySelector('input')).toBeNull();
+    expect(h.document.activeElement).toBe(h.action('retry'));
+    await h.click('retry');
+    expect(selected(h)).toBe(3);
+    expect(h.document.activeElement).toBe(h.action('language-save'));
+    expect(h.requests.map((request) => request.method)).toEqual(['GET', 'PUT', 'GET', 'GET']);
+  });
+
+  it('adopts a committed mode whose build failed and offers the existing saved-state rebuild without another write', async () => {
+    let persisted = false;
+    const h = await page({ route: (request) => {
+      if (request.method === 'PUT') {
+        persisted = true;
+        // #297: the committed configuration answers 200 beside its failed build attempt.
+        return Response.json({ ...modes[1], build: { ok: false, attemptId: 'failed', code: 'build_failed', error: 'The site generator stopped with an error.' } });
+      }
+      return Response.json({ ...view(), language: persisted ? modes[1] : modes[2] });
+    } });
+    select(h, 1);
+    await h.click('language-save');
+    await h.answer(true);
+    expect(selected(h)).toBe(1);
+    expect(h.get('.onboarding-language').querySelector('a')?.href).toBe('/admin/settings.html#site');
+    expect(h.get('.onboarding-language-status').textContent).toContain(ui.en['admin.build.failedChange'].replace('{error}', ui.en['admin.build.failure.build_failed']));
+    expect(h.requests.map((request) => request.method)).toEqual(['GET', 'PUT', 'GET']);
+    await h.click('refresh');
+    expect(selected(h)).toBe(1);
+    expect(h.get('.onboarding-language').querySelector('a')?.href).toBe('/admin/settings.html#site');
+    expect(h.requests.filter((request) => request.method !== 'GET')).toHaveLength(1);
+  });
+
+  it('renders seeded publication history read-only and directs secondary activation to Settings', async () => {
+    const h = await page({ initial: { ...view(), language: { ...modes[0]!, lockedAt: '2026-10-29T00:00:00.000Z' } } });
+    expect(h.root.querySelector('input')).toBeNull();
+    expect(h.root.querySelector('[data-onboarding-action="language-save"]')).toBeNull();
+    expect(h.get('.onboarding-language').querySelector('a')?.href).toBe('/admin/settings.html#language');
+    expect(h.requests.map((request) => request.method)).toEqual(['GET']);
+  });
+
+  it('handles a publication racing the confirmation by rendering the authoritative lock and moving focus', async () => {
+    let published = false;
+    const h = await page({ route: (request) => {
+      if (request.method === 'PUT') {
+        published = true;
+        return Response.json({ code: 'language_primary_locked' }, { status: 409 });
+      }
+      return Response.json({ ...view(), language: { ...modes[2]!, lockedAt: published ? '2026-10-29T00:00:00.000Z' : null } });
+    } });
+    select(h, 1);
+    await h.click('language-save');
+    await h.answer(true);
+    expect(h.root.querySelector('input')).toBeNull();
+    expect(h.document.activeElement).toBe(h.get('#onboardingLanguageHeading'));
+    expect(h.requests.map((request) => request.method)).toEqual(['GET', 'PUT', 'GET']);
+  });
+
+  it.each(['dismissed', 'retired'] as const)('does not keep language focus in a concurrently %s checklist', async (status) => {
+    let writes = 0;
+    const h = await page({ route: (request) => {
+      if (request.method === 'PUT') { writes++; return Response.json(modes[2]); }
+      return Response.json(writes ? (status === 'retired' ? { status } : view({ status })) : view());
+    } });
+    await h.click('language-save');
+    await h.answer(true);
+    expect(h.root.hidden).toBe(true);
+    expect(h.root.querySelector('input')).toBeNull();
+    expect(h.document.activeElement).toBe(status === 'retired' ? h.get('#desk') : h.action('resume'));
+  });
+
+  it('owns the form through confirmation, write and reread, preventing duplicate or checklist mutations', async () => {
+    const pending = Promise.withResolvers<Response>();
+    const h = await page({ route: (request) => request.method === 'PUT' ? pending.promise : Response.json(view()) });
+    await h.click('language-save');
+    await h.click('dismiss');
+    await h.controller.reload();
+    expect(h.requests).toHaveLength(1);
+    await h.answer(true);
+    await h.click('language-save');
+    await h.click('dismiss');
+    await h.controller.reload();
+    expect(h.requests).toHaveLength(2);
+    pending.resolve(Response.json(modes[2]));
+    await settle();
+    expect(h.requests.map((request) => request.method)).toEqual(['GET', 'PUT', 'GET']);
+    expect(h.root.getAttribute('aria-busy')).toBe('false');
+  });
+
+  it.each([
+    undefined, {}, { ...modes[2], lockedAt: undefined }, { ...modes[2], lockedAt: 'invalid' },
+    { ...modes[2], locales: ['de', 'de'] }, { ...modes[2], acknowledgement: true },
+  ])('fails closed for malformed language projection %j', async (language) => {
+    const initial = { ...view(), language } as View;
+    const h = await page({ initial });
+    expect(h.root.querySelector('input')).toBeNull();
+    expect(h.action('retry')).toBeDefined();
+    expect(h.requests.map((request) => request.method)).toEqual(['GET']);
+  });
+
+  it('rejects language information attached to a retired projection instead of inventing eligibility', async () => {
+    const h = await page({ route: () => Response.json({ status: 'retired', language: modes[2] }) });
+    expect(h.root.querySelector('input')).toBeNull();
+    expect(h.action('retry')).toBeDefined();
+    expect(h.requests.map((request) => request.method)).toEqual(['GET']);
   });
 });

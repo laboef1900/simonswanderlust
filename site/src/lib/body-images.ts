@@ -1,21 +1,24 @@
 import { unified } from 'unified';
-import rehypeParse from 'rehype-parse';
 import rehypeStringify from 'rehype-stringify';
-import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
+import rehypeParse from 'rehype-parse';
 import { visit, SKIP } from 'unist-util-visit';
 import { h } from 'hastscript';
-import type { Root } from 'hast';
+import { useTranslations, type Locale } from '../i18n/ui.js';
+import type { Element, Root } from 'hast';
+import { galleryCode, sanitizedBodyTree, textOf } from './gallery-identity.js';
 import { srcset, fallbackSrc, largestVariant, sourceFormats, type RemoteHeroImage } from './images.js';
 import {
   BREAKOUT_WIDTH,
+  COLUMN_WIDTH,
   ROW_GAP,
   containerWidthFor,
-  partitionRows,
-  readCaptionOverride,
+  partitionRowsAsync,
+  type PartitionOptions,
   readCaptionsVisible,
   readLayoutMode,
   type GalleryMode,
 } from './gallery-layout.js';
+import { readCaptionOverride } from '../../../uploader/public/gallery-photo-line.js';
 
 /**
  * One entry of a post/page `images` map: the intrinsic dimensions plus the
@@ -37,13 +40,31 @@ export interface ImageDims { width: number; height: number; alt?: string; captio
 /** Current localized library descriptions, keyed by the photo's full base URL. */
 export type GalleryMetadata = ReadonlyMap<string, { alt: string; caption: string }>;
 
+/** One accepted gallery occurrence, as the renderer resolved it (#317 publication observations). */
 export interface GalleryUse {
   src: string;
   alt: string;
   caption: string | null;
   captionFollowsLibrary: boolean;
 }
-const SIZES = '(min-width: 768px) 720px, 100vw';
+
+/** Callers own the layout policy; requests may also yield partition work. */
+export interface BodyRenderOptions extends PartitionOptions {
+  locale: Locale;
+  inlineSizes: string;
+}
+
+// CSS uses rem geometry; COLUMN_WIDTH is the same story measure in default-root px.
+// Keep these envelopes in step with StoryPage/AboutPage and preview's main.
+const storyWidthRem = COLUMN_WIDTH / 16;
+const storyLockRem = storyWidthRem + 2.5;
+export const STORY_BODY_SIZES = `(min-width: ${storyLockRem}rem) ${storyWidthRem}rem, (min-width: 64rem) calc(100vw - 2.5rem), (min-width: 48rem) 45.5rem, calc(100vw - 2.5rem)`;
+export const STORY_OPENING_SIZES = `(min-width: ${storyLockRem}rem) ${storyWidthRem - 21}rem, (min-width: 64rem) calc(100vw - 23.5rem), (min-width: 48rem) 45.5rem, calc(100vw - 2.5rem)`;
+// 2.2 / 3.2 of the grid after its 2.5rem padding and 3rem gap.
+export const ABOUT_BODY_SIZES = '(min-width: 72rem) 45.71875rem, (min-width: 64rem) calc(68.75vw - 3.78125rem), calc(100vw - 2.5rem)';
+/** BasicPage's `max-w-3xl px-5` reading column (#289 contact/privacy/legal pages). */
+export const BASIC_PAGE_BODY_SIZES = '(min-width: 48rem) 45.5rem, calc(100vw - 2.5rem)';
+export const PREVIEW_BODY_SIZES = '(min-width: 46rem) 43.5rem, calc(100vw - 2.5rem)';
 
 /**
  * Viewport below which the CSS container query stacks a justified row to one
@@ -82,34 +103,6 @@ const SLIDER_SIZES =
   `(min-width: ${BREAKOUT_WIDTH}px) ${Math.round((BREAKOUT_WIDTH - 2 * ROW_GAP) / 3)}px, ` +
   '(min-width: 900px) 33vw, (min-width: 600px) 50vw, 100vw';
 
-// Tuned from the GitHub-safe default: it still strips <script>, inline event
-// handlers, javascript: URLs and iframe/object/svg, but preserves the benign
-// markup Astro emits so the page doesn't visibly regress —
-//  • clobberPrefix:'' keeps heading `id`s un-prefixed so <Toc> #slug anchors resolve
-//  • `id`/`className` are allowed so heading anchors and code classes survive
-//
-// @ai-warning No element may allow `style` (#124). The sanitizer cannot tell
-// Shiki's `<span style>` from an author-typed one, and an author-typed
-// `style="position:fixed;inset:0;background:url(https://evil/…)"` would reach
-// every reader page (defacement + a third-party request per view) and the
-// draft preview, which is same-origin with /admin/*. Shiki's colours therefore
-// arrive as classes instead (`shiki-classes.ts`), backed by SHIKI_CSS — do not
-// re-add `style` "for one element"; extend the class mapping.
-const baseAttrs = defaultSchema.attributes ?? {};
-const BODY_SCHEMA = {
-  ...defaultSchema,
-  clobberPrefix: '',
-  attributes: {
-    ...baseAttrs,
-    '*': [...(baseAttrs['*'] ?? []), 'id', 'className'],
-  },
-};
-
-/** One sanitizer for rendering, classification and the publish gate. */
-function sanitizedBody(html: string) {
-  const parser = unified().use(rehypeParse, { fragment: true }).use(rehypeSanitize, BODY_SCHEMA);
-  return parser.runSync(parser.parse(html));
-}
 
 /** `<source>` nodes for exactly the formats recorded on this image. */
 function sourceNodes(image: RemoteHeroImage, sizes: string) {
@@ -118,48 +111,45 @@ function sourceNodes(image: RemoteHeroImage, sizes: string) {
   );
 }
 
-/** hast <figure><picture>…</figure> mirroring BodyImage → RemoteImage output. */
-function pictureNode(image: RemoteHeroImage) {
-  return h('figure', { class: 'my-8' }, [
-    h('picture', [
-      ...sourceNodes(image, SIZES),
-      h('img', {
-        src: fallbackSrc(image),
-        alt: image.alt,
-        width: image.width,
-        height: image.height,
-        loading: 'lazy',
-        decoding: 'async',
-        class: 'block w-full rounded-lg',
-      }),
-    ]),
+/** Responsive phrasing content, shared by standalone figures and inline images. */
+function pictureNode(image: RemoteHeroImage, sizes: string) {
+  return h('picture', { 'data-body-image': '' }, [
+    ...sourceNodes(image, sizes),
+    h('img', {
+      src: fallbackSrc(image),
+      alt: image.alt,
+      width: image.width,
+      height: image.height,
+      loading: 'lazy',
+      decoding: 'async',
+      class: 'block w-full rounded-lg',
+    }),
   ]);
 }
 
-/**
- * Is this the `<pre><code class="language-gallery">` a ```gallery fence
- * survives sanitize as? (See MARKDOWN_OPTIONS in render-markdown.ts for why
- * the class is still there.)
- */
-function galleryCode(node: { tagName: string; children: unknown[] }): { children: unknown[] } | null {
-  if (node.tagName !== 'pre') return null;
-  const kids = (node.children as { type: string; value?: string }[])
-    .filter((c) => !(c.type === 'text' && /^\s*$/.test(c.value ?? '')));
-  const only = kids.length === 1 ? kids[0] : undefined;
-  if (!only || only.type !== 'element') return null;
-  const code = only as unknown as { tagName: string; properties?: { className?: unknown }; children: unknown[] };
-  if (code.tagName !== 'code') return null;
-  const cls = code.properties?.className;
-  const names = Array.isArray(cls) ? cls.map(String) : typeof cls === 'string' ? cls.split(/\s+/) : [];
-  return names.includes('language-gallery') ? code : null;
+function resolvedPicture(node: Element, images: Record<string, ImageDims>, sizes: string): Element | null {
+  if (node.tagName !== 'img') return null;
+  const src = node.properties.src;
+  if (typeof src !== 'string' || !src || !images[src]) return null;
+  const d = images[src];
+  if (d.format !== undefined && d.format !== 'jpeg') return null;
+  const alt = (node.properties.alt as string) ?? '';
+  return pictureNode({
+    src, alt, width: d.width, height: d.height,
+    ...(d.format === 'jpeg' ? { format: d.format } : {}),
+  }, sizes);
 }
 
-/** Concatenated text of a hast subtree — the fence's raw lines. */
-function textOf(node: unknown): string {
-  const n = node as { type?: string; value?: string; children?: unknown[] };
-  if (n.type === 'text') return n.value ?? '';
-  return (n.children ?? []).map(textOf).join('');
+function onlyMeaningfulChild(node: Element): Element | null {
+  let only: Element | null = null;
+  for (const child of node.children) {
+    if (child.type === 'text' && /^\s*$/.test(child.value)) continue;
+    if (child.type !== 'element' || only) return null;
+    only = child;
+  }
+  return only;
 }
+
 
 /**
  * Build the photo grid for one ```gallery fence.
@@ -182,8 +172,8 @@ function textOf(node: unknown): string {
  *     and hastscript treats a node-shaped object in a children array AS A NODE
  *     — `{type:'raw', value:'<script>…'}` would emit a live script tag,
  *     because the stringifier runs with allowDangerousHtml. A gallery-local
- *     `caption-override` is fence TEXT the sanitizer never saw; it only ever
- *     becomes a hast text node, so HTML or fence syntax in it stays text.
+ *     `caption-override` is fence TEXT the sanitizer never saw; it only becomes
+ *     hast text or a serialized accessible-name property, never raw markup.
  *  3. Dimensions are checked before any arithmetic reaches markup.
  *
  * Nothing disappears silently: a URL with no `images` entry is skipped, and if
@@ -255,10 +245,19 @@ function galleryUse({ image, caption, captionFollowsLibrary }: GalleryPhoto): Ga
 function itemNode(
   { image, caption }: GalleryPhoto,
   sizes: string,
+  positionTemplate: string,
+  position: number,
   style?: string,
 ): ReturnType<typeof h> {
   return h('figure', { class: 'jgal__item', ...(style ? { style } : {}) }, [
-    h('a', { href: largestVariant(image) }, [
+    h('a', {
+      href: largestVariant(image),
+      // The picture supplies a nonblank alt natively. Captions are siblings,
+      // so otherwise name the link explicitly without changing decorative alt.
+      ...(image.alt.trim() ? {} : {
+        'aria-label': caption.trim() || positionTemplate.replace('{current}', String(position)),
+      }),
+    }, [
       h('picture', [
         ...sourceNodes(image, sizes),
         h('img', {
@@ -275,10 +274,11 @@ function itemNode(
   ]);
 }
 
-/** `breakout` / `column`: photos partitioned into justified rows that stack to a square, at build time. */
-function justifiedRows(photos: GalleryPhoto[], mode: Exclude<GalleryMode, 'slider'>) {
+/** `breakout` / `column`: photos partitioned into justified rows that stack to a square, at render time. */
+async function justifiedRows(photos: GalleryPhoto[], mode: Exclude<GalleryMode, 'slider'>, options: BodyRenderOptions) {
   const width = containerWidthFor(mode);
-  const rows = partitionRows(photos.map((p) => p.image.width / p.image.height), width);
+  const positionTemplate = useTranslations(options.locale)('gallery.open').replace('{total}', String(photos.length));
+  const rows = await partitionRowsAsync(photos.map((p) => p.image.width / p.image.height), width, options);
   // @ai-note Photos are re-associated with their ratios BY POSITION, which is
   // only sound because partitionRows cannot drop one here: galleryPhotos has
   // already rejected any photo whose width/height are not positive integers, so
@@ -288,6 +288,7 @@ function justifiedRows(photos: GalleryPhoto[], mode: Exclude<GalleryMode, 'slide
   let taken = 0;
   return rows.map((row) => {
     const slice = photos.slice(taken, taken + row.ratios.length);
+    const first = taken;
     taken += row.ratios.length;
     const rowWidth = (row.maxWidthFraction ?? 1) * width;
     const gaps = (row.ratios.length - 1) * ROW_GAP;
@@ -303,7 +304,9 @@ function justifiedRows(photos: GalleryPhoto[], mode: Exclude<GalleryMode, 'slide
         // `--r` drives `flex: calc(var(--r) * 100) 1 0`. The `* 100` is in the
         // CSS, not here: flex-grow values summing below 1 leave part of the row
         // unfilled (a lone portrait rendered 808px instead of 1112px).
-        return itemNode(photo, rowSizes(ratio * height, width), `--r:${ratio.toFixed(4)}`);
+        return itemNode(photo, rowSizes(ratio * height, width),
+          positionTemplate, first + i + 1,
+          `--r:${ratio.toFixed(4)}`);
       }),
     );
   });
@@ -323,31 +326,35 @@ function justifiedRows(photos: GalleryPhoto[], mode: Exclude<GalleryMode, 'slide
  * revealed — and named — by the island, which is also why they are absolutely
  * positioned: neither state may move the layout, or CLS comes back.
  */
-function sliderNode(photos: GalleryPhoto[]) {
+function sliderNode(photos: GalleryPhoto[], locale: Locale) {
+  const positionTemplate = useTranslations(locale)('gallery.open').replace('{total}', String(photos.length));
   return [
-    h('div', { class: 'jgal__track', tabindex: '0' }, photos.map((p) => itemNode(p, SLIDER_SIZES))),
+    h('div', { class: 'jgal__track', tabindex: '0' }, photos.map((p, i) =>
+      itemNode(p, SLIDER_SIZES, positionTemplate, i + 1))),
     h('button', { type: 'button', class: 'jgal__nav jgal__nav--prev', hidden: true, 'data-jgal-nav': 'prev' }, '‹'),
     h('button', { type: 'button', class: 'jgal__nav jgal__nav--next', hidden: true, 'data-jgal-nav': 'next' }, '›'),
   ];
 }
 
-function galleryNode(
+async function galleryNode(
   fenceText: string,
   images: Record<string, ImageDims>,
   imageOrigin: string,
-  metadata?: GalleryMetadata,
+  metadata: GalleryMetadata | undefined,
+  options: BodyRenderOptions,
   uses?: GalleryUse[],
-): ReturnType<typeof h> | null {
+): Promise<ReturnType<typeof h> | null> {
   const photos = galleryPhotos(fenceText, images, imageOrigin, metadata);
   if (photos.length === 0) return null;
   if (uses) for (const photo of photos) uses.push(galleryUse(photo));
   const mode = readLayoutMode(fenceText);
-  const children = mode === 'slider' ? sliderNode(photos) : justifiedRows(photos, mode);
+  const children = mode === 'slider' ? sliderNode(photos, options.locale) : await justifiedRows(photos, mode, options);
   // `not-prose` opts the gallery out of @tailwindcss/typography, which would
   // otherwise apply its own figure/figcaption margins inside StoryPage's
   // `prose` article and fight the row arithmetic.
   return h('div', { class: `jgal jgal--${mode} not-prose` }, children);
 }
+
 
 /**
  * @param imageOrigin the ONLY origin a gallery may reference — passed in
@@ -355,84 +362,87 @@ function galleryNode(
  *   runs both under `astro build` (where `import.meta.env` exists) and under
  *   the uploader's tsx runtime via `preview.ts` (where it does not). Keep it
  *   pure and env-free.
+ * @param options explicit content locale and trusted inline layout sizes;
+ *   request callers may inject a real event-loop scheduler. Builds drain the
+ *   identical optimizer synchronously. Completion must always be awaited.
  * @param galleryMetadata current library alt/caption; only galleries consult it.
  */
-export function transformBodyImages(
+export async function transformBodyImages(
   html: string,
   images: Record<string, ImageDims>,
   imageOrigin: string,
+  options: BodyRenderOptions,
   galleryMetadata?: GalleryMetadata,
-): string {
-  return transformBody(html, images, imageOrigin, galleryMetadata);
+): Promise<string> {
+  return transformBody(html, images, imageOrigin, options, galleryMetadata);
 }
 
 /** Capture occurrences from the very photo reader that produces this render. */
-export function transformBodyImagesWithUses(
+export async function transformBodyImagesWithUses(
   html: string,
   images: Record<string, ImageDims>,
   imageOrigin: string,
+  options: BodyRenderOptions,
   galleryMetadata?: GalleryMetadata,
-): { html: string; gallery: GalleryUse[] } {
+): Promise<{ html: string; gallery: GalleryUse[] }> {
   const gallery: GalleryUse[] = [];
-  return { html: transformBody(html, images, imageOrigin, galleryMetadata, gallery), gallery };
+  return { html: await transformBody(html, images, imageOrigin, options, galleryMetadata, gallery), gallery };
 }
 
-function transformBody(
+async function transformBody(
   html: string,
   images: Record<string, ImageDims>,
   imageOrigin: string,
+  options: BodyRenderOptions,
   galleryMetadata?: GalleryMetadata,
   galleryUses?: GalleryUse[],
-): string {
+): Promise<string> {
   // @ai-warning: post body HTML is rendered from DB-stored Markdown authored
   // through the admin editor (untrusted-ish). Sanitize it FIRST — stripping
   // <script>, inline event handlers, and javascript: URLs — then inject our own
   // trusted <picture> nodes, so the injected nodes keep their srcset/loading
   // attributes while the body itself can't carry stored XSS to the public site.
-  const tree = sanitizedBody(html);
+  const tree = sanitizedBodyTree(html);
+  // The visitor is synchronous. Collect replacements, then await each gallery
+  // before serializing this request-local tree; never give visit an async callback.
+  const galleries: Array<() => Promise<void>> = [];
   visit(tree, 'element', (node, index, parent) => {
     if (index === null || index === undefined || !parent) return;
     if (node.tagName === 'pre') {
       const code = galleryCode(node);
       if (!code) return;
-      const gallery = galleryNode(textOf(code), images, imageOrigin, galleryMetadata, galleryUses);
-      // No resolvable photo ⇒ keep the sanitized <pre> so the URLs stay
-      // visible rather than the block vanishing without a trace.
-      if (!gallery) return SKIP;
-      parent.children[index] = gallery;
+      galleries.push(async () => {
+        const gallery = await galleryNode(textOf(code), images, imageOrigin, galleryMetadata, options, galleryUses);
+        // No resolvable photo ⇒ retain the sanitized fence and its visible URLs.
+        if (gallery) parent.children[index] = gallery;
+      });
       return SKIP;
     }
-    if (node.tagName === 'p') {
-      const kids = node.children.filter((c) => !(c.type === 'text' && /^\s*$/.test((c as { value: string }).value)));
-      const only = kids.length === 1 ? kids[0] : undefined;
-      if (only && only.type === 'element' && (only as { tagName: string }).tagName === 'img') {
-        const imgNode = only as typeof node;
-        const src = imgNode.properties?.src as string | undefined;
-        if (src && images[src]) {
-          const d = images[src];
-          if (d.format !== undefined && d.format !== 'jpeg') return;
-          const alt = (imgNode.properties?.alt as string) ?? '';
-          parent.children[index] = pictureNode({
-            src, alt, width: d.width, height: d.height,
-            ...(d.format === 'jpeg' ? { format: d.format } : {}),
-          });
-          return SKIP;
-        }
+    // An authored picture's explicit sources and fallback are one unit. Neither
+    // it nor generated pictures should acquire a second responsive wrapper.
+    if (node.tagName === 'picture') return SKIP;
+    if (node.tagName === 'p' && parent.type === 'root') {
+      const only = onlyMeaningfulChild(node);
+      const imageParent = only?.tagName === 'a' ? only : node;
+      const image = only?.tagName === 'a' ? onlyMeaningfulChild(only) : only;
+      const picture = image && resolvedPicture(image, images, options.inlineSizes);
+      if (image && picture) {
+        imageParent.children[imageParent.children.indexOf(image)] = picture;
+        // Move the sanitized anchor itself, never clone it or create a new link.
+        // Retain whitespace on both sides of the image/anchor as authored.
+        parent.children[index] = h('figure', { class: 'my-8' }, node.children);
+        return SKIP;
       }
-      return;
     }
     if (node.tagName === 'img') {
-      const src = node.properties?.src as string | undefined;
-      if (!src || !images[src]) return;
-      const d = images[src];
-      if (d.format !== undefined && d.format !== 'jpeg') return;
-      const alt = (node.properties?.alt as string) ?? '';
-      parent.children[index] = pictureNode({
-        src, alt, width: d.width, height: d.height,
-        ...(d.format === 'jpeg' ? { format: d.format } : {}),
-      });
+      const picture = resolvedPicture(node, images, options.inlineSizes);
+      if (picture) {
+        parent.children[index] = picture;
+        return SKIP;
+      }
     }
   });
+  for (const render of galleries) await render();
   return unified().use(rehypeStringify, { allowDangerousHtml: true }).stringify(tree);
 }
 
@@ -443,7 +453,7 @@ export function bodyImageUses(
   imageOrigin: string,
   galleryMetadata?: GalleryMetadata,
 ): { gallery: GalleryUse[]; inline: string[] } {
-  const tree = sanitizedBody(html);
+  const tree = sanitizedBodyTree(html);
   const gallery: GalleryUse[] = [];
   visit(tree, 'element', (node) => {
     const code = galleryCode(node);
@@ -456,6 +466,27 @@ export function bodyImageUses(
   return { gallery, inline: imageSources(tree).sources };
 }
 
+/**
+ * Apply a section's trusted layout hint AFTER splitting sanitized/transformed HTML.
+ * The reserved marker is injected only after sanitization, never author-preserved.
+ * Do not sanitize again: galleries carry trusted post-sanitize attributes too.
+ */
+export function resizeBodyImages(html: string, sizes: string): string {
+  if (!html.includes('data-body-image')) return html;
+  const processor = unified().use(rehypeParse, { fragment: true }).use(rehypeStringify);
+  const tree = processor.parse(html);
+  visit(tree, 'element', (node) => {
+    if (node.tagName !== 'picture') return;
+    if (Object.hasOwn(node.properties, 'dataBodyImage')) {
+      for (const child of node.children) {
+        if (child.type === 'element' && child.tagName === 'source') child.properties.sizes = sizes;
+      }
+    }
+    return SKIP;
+  });
+  return processor.stringify(tree);
+}
+
 /** Candidate URLs of a `srcset` (hast gives a comma-list as an array or a string). */
 function srcsetUrls(value: unknown): string[] {
   const parts = Array.isArray(value) ? value.map(String) : typeof value === 'string' ? value.split(',') : [];
@@ -463,8 +494,8 @@ function srcsetUrls(value: unknown): string[] {
 }
 
 /**
- * Every image source the SANITIZED body would load, read from the same hast
- * tree `transformBodyImages` starts from, BEFORE any `images` resolution:
+ * Heading semantics and every image source the SANITIZED body would load,
+ * read from the same hast tree `transformBodyImages` starts from, BEFORE resolution:
  * the `src`/`srcset` of every `<img>` and `<source>` (a raw `<picture>` is
  * allowed through by the schema), plus the raw photo lines of every gallery
  * fence exactly as `galleryPhotos` would read them.
@@ -476,10 +507,18 @@ function srcsetUrls(value: unknown): string[] {
  * the serialized HTML did (attribute values keep a raw `>`, `<pre>` may carry
  * `id`/whitespace) and a Markdown text scanner did worse.
  */
-export function bodyImageSources(html: string): { sources: string[]; galleryLines: string[] } {
-  return imageSources(sanitizedBody(html));
+export function analyzeRenderedBody(html: string): { hasH1: boolean; sources: string[]; galleryLines: string[] } {
+  const tree = sanitizedBodyTree(html);
+  let hasH1 = false;
+  // Separate from the source walk's gallery SKIP: even raw HTML inside a code
+  // container counts if it survives sanitation as a real heading element.
+  visit(tree, 'element', (node) => {
+    if (node.tagName === 'h1') hasH1 = true;
+  });
+  return { hasH1, ...imageSources(tree) };
 }
 
+/** The source walk over an already sanitized tree, shared with `bodyImageUses`. */
 function imageSources(tree: Root): { sources: string[]; galleryLines: string[] } {
   const sources: string[] = [];
   const galleryLines: string[] = [];
@@ -500,4 +539,25 @@ function imageSources(tree: Root): { sources: string[]; galleryLines: string[] }
     }
   });
   return { sources, galleryLines };
+}
+
+/** Shared publish/build origin gate, before image-map resolution can hide a foreign URL. */
+export function foreignBodyImageSources(html: string, imageOrigin: string): string[] {
+  const allowed = new URL(imageOrigin).origin;
+  const { sources, galleryLines } = analyzeRenderedBody(html);
+  const foreign = new Set<string>();
+  for (const raw of [...sources, ...galleryLines]) {
+    let url: URL;
+    // Resolved against the image host — which in this deployment is the origin
+    // that serves the blog too — because that is what the reader's browser
+    // does with a reference that carries no origin of its own. Parsing without
+    // a base disagreed with it in both directions: `//old.example/a.jpg`
+    // (also its `&#47;&#47;` and `\\` spellings, which WHATWG resolves the same
+    // way) failed to parse and was passed as harmless while the page hot-linked
+    // old.example, and `https:old.example/a.jpg` parsed as a foreign origin
+    // while the browser reads it as a path on our own host — a false refusal.
+    try { url = new URL(raw, allowed); } catch { continue; }
+    if ((url.protocol === 'https:' || url.protocol === 'http:') && url.origin !== allowed) foreign.add(raw);
+  }
+  return [...foreign];
 }

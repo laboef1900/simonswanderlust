@@ -11,10 +11,12 @@ see [SECURITY.md](SECURITY.md).
 
 | Service (compose) | Image | Role | Exposure |
 | :-- | :-- | :-- | :-- |
-| `app` | `ghcr.io/laboef1900/simonswanderlust-app` (built from the repo-root `Dockerfile`, DHI node base) | Single Fastify 5 process: admin CMS (editor, WordPress import), image service (sharp, host-routed on the img subdomain), public blog static serving, in-process `astro build` on Publish/boot/manual rebuild, `/map/` PMTiles basemap, and DB backups | Public (via host port → reverse proxy / TLS) |
+| `app` | `ghcr.io/laboef1900/wanderlust-studio` (built from the repo-root `Dockerfile`, DHI node base; first release under this name pending) | Single Fastify 5 process: admin CMS (editor, WordPress import), image service (sharp, host-routed on the img subdomain), public blog static serving, in-process `astro build` on Publish/boot/manual rebuild, `/map/` PMTiles basemap, and DB backups | Public (via host port → reverse proxy / TLS) |
 | `db` | `postgres:18-alpine` | Source of truth for posts, users, and sessions | Internal only (`:5432`) |
 
-The `app` image is **released to GHCR** by CI and pulled on the server (pinned via `IMAGE_TAG`).
+The `app` image is released to GHCR by CI and pulled on the server (pinned via required
+`IMAGE_TAG`, with no default). The first `wanderlust-studio` release is a future owner
+action; this source cutover does not publish it. See the release prerequisites below.
 `docker-compose.yml` has no `build:` key, so `docker compose up -d --build` is a no-op — to build
 the image locally, run `docker build .` from the repo root instead. See [Packaging & release
 pipeline](#packaging--release-pipeline). Note: rebuilding the image does not regenerate the
@@ -115,6 +117,10 @@ are in the specification.
    is Markdown; hero and body photos are uploaded inline and optimized by the app's image pipeline.
 2. **Store** — drafts and published posts live in the Postgres `posts` table (one row per locale).
    Postgres is the source of truth; git holds no content.
+   Pasted `<BodyImage … />` tags in posts remain supported export/import syntax:
+   `normalizeBodyImages` in `uploader/src/posts.ts` converts them to Markdown images and
+   per-locale image metadata before storage. They are not globally registered MDX components;
+   public and preview rendering use `site/src/lib/body-images.ts`.
 3. **Publish** — the editor calls `POST /posts/:tk/publish` (admin-only). The app validates the
    post, flips its status to `published`, exports an MDX backup to `/data/backup` (best-effort),
    and **awaits the in-process build** (`buildSite()`) before responding — no HTTP hop, no shared
@@ -125,10 +131,12 @@ are in the specification.
    `ASTRO_TELEMETRY_DISABLED=1`. Astro's Content Layer loader (`site/src/lib/postgres-loader.ts`)
    `SELECT`s the published rows and turns each into a content entry. Post bodies are rendered
    Markdown → HTML, **sanitized**, and body images become responsive `<picture>`
-   (`site/src/lib/body-images.ts`). A ` ```gallery ` fence (one image URL per line) becomes a
+   (`site/src/lib/body-images.ts`). Generated inline pictures receive context-specific
+   `sizes`; `StoryPage.astro` applies opening/remainder hints after splitting the body.
+   A ` ```gallery ` fence (one image URL per line) becomes a
    photo gallery in the same pass, in one of three layout modes selected by a `#layout:` line
-   inside the fence — `column` (default; justified rows at the 960px story width), `breakout`
-   (the same rows in a 1112px break-out — centred below `lg`, the whole 960px story spread above it)
+   inside the fence — `column` (default; justified rows at the 1056px story width), `breakout`
+   (the same rows in a 1112px break-out — centred below `lg`, the whole 1056px story spread above it)
    or `slider` (a scroll-snap carousel). The row partition is computed at build time by
    `site/src/lib/gallery-layout.ts`, which is kept pure and dependency-free because draft
    preview runs it under `tsx` too. An unknown or missing mode falls back to `column` (it was
@@ -140,6 +148,15 @@ are in the specification.
    fence's per-line `| WIDTHxHEIGHT | alt="…" | caption="…"` metadata is lifted into the row's
    `images` map at save time by `uploader/src/body-content.ts`, and re-attached by the MDX
    exporter so a backup round-trips.
+   Gallery identity now lives in the shared sanitized render predicate
+   (`gallery-identity.ts`). Satteri-backed `gallery-source.ts` supplies UTF-16
+   provenance and logical lines to save/import/export/audit and to the authenticated,
+   nonpersisting `POST /gallery/analyze` browser bridge. Nested/tilde/info-argument
+   fences and raw HTML galleries retain the renderer's existing semantics; there is
+   no second browser block parser. Source edits are batched, preserve wrappers and
+   prefixes, and refuse on missing provenance. The browser applies results only to
+   their exact unsaved snapshot. The #356 asynchronous layout/scheduling path remains
+   separate and unchanged.
    For **article galleries**, current localized Media alt/caption override those saved
    copies at render time, even when blank; missing library rows retain the saved copy.
    The trips loader selects only media keys and the four description columns once per
@@ -233,7 +250,7 @@ attempt. `GET /health` reports `release: false` meanwhile (information, not a ve
 `SECURITY.md`). Restarts against an existing `/data` volume skip all of this and serve
 immediately — no rebuild on every boot.
 
-### Site identity (#274)
+### Site identity (#274–#275)
 
 The [approved identity contract](docs/superpowers/specs/2026-10-27-issue-273-site-identity-design.md)
 puts identity in Postgres, not `settings.json`. `ensureSchema` creates the two tables; the
@@ -247,6 +264,23 @@ descriptor and ordered social links. `GET`/`PUT /settings/identity` are admin-on
 Public text changes at the next Publish/Rebuild; admin chrome at the next page load; new
 author replies use the configured name immediately (empty becomes `Author`). Existing
 replies retain their stored names. The About body remains separate page content.
+
+Logo and favicon have separate save/remove actions in the same tab. Admin-only
+`PUT /settings/identity/assets/:role` accepts multipart `revision` plus one `file`;
+`DELETE` accepts JSON `{ revision }`. Roles are `logo` and `favicon`. Responses include
+`revision`, `savedAt`, `takesEffect: 'next_build'` and saved asset-presence flags, also returned
+by the identity GET. Asset and text mutations share one revision: the UI adopts a successful
+asset write's revision without overwriting unsaved text. Conflicts require explicit reload.
+
+`site-identity-assets.ts` normalizes PNG/JPEG/static WebP under the shared work lock, refuses
+SVG/animation, limits input to 2 MiB and 4096² pixels and strips all metadata. One transaction
+replaces a logo row or all three favicon rows with bounded PNGs (≤256 KiB per row). No
+originals, remote fetches, media-library rows or separate asset directory are involved.
+The existing build capture writes those exact bytes into each release at content-hashed
+`/_identity/` paths. Nav uses the logo and its intrinsic dimensions; Base emits the three
+favicon links. With no saved assets, the text name and bundled `/favicon.svg` remain.
+Save/remove waits until the next Publish/Rebuild to affect public output; an older release
+keeps its own assets. Recovery uses the existing v11 dump codec and restore transaction.
 
 Runtime reads use a cache loaded before listening and refreshed after successful writes.
 The public copy script exposes only the name, localized studio descriptor and reserved
@@ -268,10 +302,9 @@ Standalone commands with no snapshot retain ordinary reads.
 
 The shared validator checks all stored DE/EN maps before projection; missing locale values
 use that field's fallback, never another language's text. The v1 build projection excludes
-the admin-only descriptor and reserves `canonicalOrigin` and `assets`.
-**Scope boundary:** #274 does not implement logo/favicon upload or display (#275), canonical
-editing/SEO/robots/noindex, comment-origin switching or outbound headers (#276). Asset rows,
-if recovered, are validated and captured with the release, but no asset API is introduced.
+the admin-only descriptor, reserves `canonicalOrigin` and carries captured asset paths.
+**Scope boundary:** canonical editing/SEO/robots/noindex, comment-origin switching and
+outbound headers remain #276.
 The present fixed DE/EN projection is extended by #283's language contract, not by identity.
 Remaining branding exceptions are recorded in [the scoped allow-list](docs/site-identity-branding-allowlist.md).
 
@@ -371,11 +404,24 @@ body links are not removed or rewritten. Unknown legacy page keys remain readabl
 for recovery and deletable, but cannot be authored as new kinds.
 
 `site/src/lib/navigation.ts` defines the version-1 typed navigation document,
-validation, defaults and exact page-reference removal. `site_nav` is introduced
-for backup/deletion integrity now. Configurable navigation editing, public generic
-page rendering, emitted-path resolution and build collision guards belong to #289;
-this change does not add a second renderer or pretend those surfaces are present.
-The precise #289/#309 hand-off is in the approved #287 spec's implementation appendix.
+validation, defaults and exact page-reference removal. Admin-only
+`GET/PUT /settings/navigation` edit the `site_nav` singleton with its optimistic
+`updatedAt` token, holding the language row before the navigation row. Save commits
+before rebuilding; a failed rebuild acknowledges the saved document/token without
+replacing the last successful release. Settings → Navigation authors the same
+document; social links remain in Site identity.
+
+The Content Layer pages/navigation/trips loaders import the same exported PostgreSQL
+snapshot as identity/language. Published registry pages are Zod-validated and rendered
+through the shared sanitized Markdown and guarded responsive-image pipeline; drafts,
+unknown keys and inactive rows never enter the public collection. `[...path].astro`
+adds generic Contact/Privacy/Legal routes to the existing localized catalogue.
+About remains the incumbent resource and fixed URL, registered once per locale.
+`public-routes.ts` refuses competing page/story/static owners before emission.
+Navigation resolves per enabled locale against that emitted catalogue: unpublished
+page targets disappear and non-emitted relative paths are warned/dropped. Generic
+pages inherit canonical/sitemap/hreflang behavior but do not enter story feeds.
+See the approved #287 spec's implementation and public-output evidence appendices.
 
 ## Image pipeline
 
@@ -422,10 +468,10 @@ standing between a lost encode job and a published page full of broken images. A
 `media` row never blocks (WordPress-imported and legacy files predate the library). The same gate
 also refuses (409, with a count and up to five example URLs) while the rendered body of either
 locale would emit an `<img>`, or holds a ` ```gallery ` line, whose **origin is not the image
-host** (#91; both readings come from one render per locale in `analyzeBodyImages`,
+host** (#91; both readings come from one render per locale in `analyzeBodyContent`,
 `uploader/src/publish-gate.ts`): that is what a failed WXR re-host leaves behind, and the render
 path would hot-link the old domain or drop the photo silently. The body is judged from the
-renderer's own sanitized tree (`renderMarkdown` + `bodyImageSources`), so code fences, code spans
+renderer's own sanitized tree (`renderMarkdown` + `analyzeRenderedBody`), so code fences, code spans
 and every other Markdown/HTML subtlety are decided by the renderer itself, not a second parser.
 
 The queue runs at concurrency **2** (the measured throughput plateau) and shares a lock with the
@@ -480,6 +526,16 @@ Host-based routing keeps the two domains on one process: the image-variant stati
 registered with a Fastify **host constraint** for the hostname of `PUBLIC_BASE_URL` (overridable
 via `IMG_HOST`), so on the img host the constrained `/` wildcard wins and image URLs behave exactly
 as before the merge. All other routes (admin, blog, map) are unconstrained.
+
+Reader comments use the **canonical blog origin** when configured, not `PUBLIC_BASE_URL`
+(#319/#276). A supplied `ServerConfig.commentsOrigin` override takes precedence and fails
+closed if invalid; otherwise the current validated canonical identity precedes the fallback.
+Only an unset canonical origin uses the trusted request protocol plus verbatim `Host`;
+`X-Forwarded-Host`, Origin and Referer never supply that authority. The image authority
+from `PUBLIC_BASE_URL` and actual `IMG_HOST` are excluded, even under another scheme;
+the existing single-origin loopback development topology is the exception. Origin equality
+remains a CSRF check, not authentication or a domain allow-list: the reverse proxy must
+reject unintended public hostnames.
 
 Legacy WordPress URLs are 301-redirected by the not-found handler (blog host only, before the
 404/503 fallbacks): the `/feed/` family (`/feed/`, its `/feed/{atom,rss2,rss,rdf}/` aliases,
@@ -593,8 +649,9 @@ Created idempotently by `uploader/src/db.ts` (`ensureSchema`):
 - **`site_identity`** — singleton `id = true`, revision, seed provenance, nullable `saved_at`,
   `updated_at`, site/author names, reserved canonical origin, localized text maps and ordered
   social links. Only an explicit admin save marks it configured.
-- **`site_identity_assets`** — reserved logo/favicon role rows, SHA-256, dimensions, PNG bytes
-  (≤256 KiB each) and creation time. Included in dumps now; upload/rendering is #275.
+- **`site_identity_assets`** — logo and favicon role rows, SHA-256, dimensions, normalized PNG
+  bytes (≤256 KiB each) and creation time. Included in DB dumps and copied into build releases;
+  favicon writes/removals are atomic across `favicon-32`, `favicon-192` and `apple-touch-180`.
 - **`onboarding_state`** — install-wide operational singleton (`singleton = true`,
   `schema_version = 1`, `state`, `reason`, `evaluated_at`, `dismissed_at`, `retired_at`).
   Only guarded boot can insert `eligible/fresh`; actions can dismiss/resume eligibility or
@@ -693,9 +750,14 @@ Only 401 redirects to login; other failures stay unavailable with read-only retr
 `/setup`, `/login`, `/auth/status`, session issuance, setup locking and auth rate limits
 are unchanged. Client roles only gate presentation; `GET`/`POST /onboarding` require admin.
 Both onboarding routes are `no-store`. GET returns `{ status: 'retired' }` or
-`{ status: 'open' | 'dismissed', complete, steps: [{ id, state, required, href }] }`;
-internal reasons, timestamps and content counts are not exposed. Progress is derived in one
-read-only REPEATABLE READ snapshot. POST accepts only `{ action: 'dismiss' | 'resume' | 'finish' }`
+`{ status: 'open' | 'dismissed', complete, steps: [{ id, state, required, href }], language }`.
+The eligible-only language projection is `{ primary, locales, lockedAt, updatedAt }`, read
+with progress through the same read-only REPEATABLE READ client. Internal onboarding reasons,
+timestamps and content counts are not exposed. Language is optional configuration after Account,
+not a completion step: no acknowledgement is stored and the three Finish predicates are unchanged.
+Its explicit Save uses the existing admin-only `PUT /language`; publication-locked onboarding is
+read-only, while Settings retains allowed secondary activation. POST onboarding accepts only
+`{ action: 'dismiss' | 'resume' | 'finish' }`
 (1 KiB limit); invalid actions return 400, retired/incomplete actions 409 and owner loss
 503 `storage_read_only`. Finish locks/rechecks the singleton and required predicates in one
 transaction; it never trusts the browser. Metadata actions do not create content or publish.
@@ -712,10 +774,15 @@ and the [approved contract](docs/superpowers/specs/2026-10-27-issue-278-first-ru
 
 ## Backups & disaster recovery
 
-Full recovery needs **two things**: the Postgres content (`users`/`posts`/`pages`) and the
-**`/data` volume** (image originals + variants, private GPX originals, site releases, MDX exports
-and the in-app backup files themselves). Everything the app writes, including database dumps,
-image archives and private route archives under `/data/backup/db/`, lives on the **same server disk** (`/data`
+Full recovery needs the **Postgres content** (`users`, `posts`, `pages`, `media`,
+`media_folders`, `app_secrets`, `comments`, `post_routes`, `site_identity` and
+`site_identity_assets` in current v11 dumps), the
+**`/data` files** (image originals + variants, private GPX originals, settings, site releases,
+MDX exports and backups), and **separately escrowed configuration/key material**. A logical
+dump is not a copy of `/data`: retain its manifest-paired private route archive, the complete
+image archive chain, matching settings.json and original encryption key. Everything the app
+writes, including database dumps, image archives and private route archives under
+`/data/backup/db/`, lives on the **same server disk** (`/data`
 is bind-mounted from `./uploader/data`; `pgdata`, the live database, is a named volume on the
 same host). The in-app backups therefore protect against application-level mistakes (bad edit,
 botched restore, accidental delete), **not** against disk failure or host loss.
@@ -725,6 +792,12 @@ botched restore, accidental delete), **not** against disk failure or host loss.
 > archives, private GPX originals/archives, image originals, and settings.json. Encrypted AI credentials additionally require
 > **separate offsite master-key escrow**; `/data` and a DB dump cannot recover a lost master key.
 > The manual download buttons on the settings page are an escape hatch, not a strategy.
+
+The [isolated restore rehearsal runbook and dated evidence](docs/2026-10-29-restore-rehearsal.md)
+cover a disposable fresh target, not a production restore or upgrade qualification. A different
+Compose project alone is insufficient: the default `./uploader/data` bind and port 3000 remain
+shared. Before answering the restore CLI's `yes`, independently confirm both the resolved
+disposable `/data` host path and the credential-free database target printed by the CLI.
 
 ### Database dumps
 
@@ -879,8 +952,12 @@ botched restore, accidental delete), **not** against disk failure or host loss.
   Lost content COMMIT acknowledgement retains both source sets; do not manually delete them
   while the outcome is unresolved.
   Deleting users invalidates every login. Only after successful CLI exit and inspection of
-  the result, run `docker compose up -d app`; reconcile settings.json and the matching master
-  key before remote AI use, then sign in and explicitly rebuild the site through Settings.
+  the result, complete any required file recovery and reconcile settings.json and the matching
+  master key before `docker compose up -d app`. For a fresh target, restore the image chain
+  oldest-first into its empty `images/`; never empty an existing installation as a shortcut.
+  Boot reconciliation would otherwise mark restored media missing.
+  Sign in and explicitly rebuild the site through Settings, then run admin `POST /media/rescan`
+  and verify counts, comments, galleries and private originals as described in the rehearsal runbook.
   The prior static release remains unchanged until that rebuild. The CLI prints the verified
   undo dump path. On failure or ambiguous completion leave the app stopped, retain input,
   undo and staged recovery sets, and investigate; do not blindly retry or erase recovery files.
@@ -1036,6 +1113,143 @@ selected root before rolling forward. Dependency-owned dump compatibility limits
   into an empty staged `images/` (later duplicates overwrite earlier ones), then verify and
   activate the fenced destination without deleting the prior recovery material.
 
+### App upgrades and supported recovery
+
+This is the canonical app-version runbook ([approved #298 contract](docs/superpowers/specs/2026-10-27-issue-298-supported-upgrade-recovery.md),
+owner decision 2026-10-28). It is not authorization to deploy, restore production or discard
+data. Keep app upgrades separate from [Postgres-major migration](#upgrading-a-postgres-major-eg-17--18).
+
+**Recovery policy: roll forward by default.** Backward recovery is eligible only to the
+immediately preceding published release, when **both exact images meet current security
+floors** and that exact pair has release-specific instructions and successful disposable
+rehearsal evidence. Unknown compatibility is unsupported. There is no arbitrary-version,
+automatic or time-based rollback promise, and no Postgres-major downgrade promise.
+**No eligible backward pair is currently established. #347 is roll-forward only; no supported
+downgrade.** Retaining an old digest is evidence, not permission to run vulnerable codecs:
+boot/rescan can decode originals even when uploads are disabled.
+
+#### Before startup: capture one recovery generation
+
+1. Read the target release's notes and the [release checklist](#release-recovery-checklist).
+   Record source and target app tags, immutable digests and platform, Postgres major,
+   schema/settings changes, source dump writer and target reader versions, required capacity
+   and rebuild policy. A dump-format allow-list is not a tested compatibility matrix.
+   `ensureSchema` does forward/idempotent work; a content restore does **not** reverse DDL.
+2. Establish an **operator-maintained write freeze before taking the backup**. Block new
+   author/admin/public mutations (including comments) and scheduled/storage writers; drain
+   admitted publishes, encodes, imports and backups, and resolve known partial provider saves.
+   Leave only the designated existing backup control available for capture. This is not a
+   built-in maintenance mode or atomic cross-filesystem snapshot. If the freeze cannot be
+   maintained, do not declare a coherent generation or proceed with the upgrade.
+3. On the **old app**, use **Settings → Back up now** (or authenticated `POST /backups`);
+   the default schedule is `off`. Wait for completion and inspect success, errors and degraded
+   private-route status. Validate the dump and its manifest-referenced route archive, not
+   merely their filenames or timestamps. An incomplete/degraded set is not full recovery.
+   Allow space for the backup, complete image chain, restore undo set/staging and any newly
+   required full image archive. Never delete history blindly to make an upgrade fit.
+4. While the freeze remains in force, capture the following as **one generation**:
+
+   | Material | Required association |
+   | :-- | :-- |
+   | Old-app database dump | Exact writer/version, timestamp, counts and integrity evidence; v10 includes private route rows, while v1–v9 cannot recover them |
+   | Private GPX recovery | The dump's manifest-paired `routes-*.tar` and required retained originals; public simplified tracks and image tars are not substitutes |
+   | Images | Configured image storage with originals/variants, or the complete required archive chain replayed oldest-first into an empty isolated destination |
+   | Settings | A fresh copy of the actual configured `SETTINGS_PATH` and any `settings.json.pre-ai-registry`; the migration copy alone is not a current pre-upgrade snapshot |
+   | Bootstrap/deployment | Restricted recovery copy of Compose, required bootstrap values, overrides, image digests/platform and any custom map assets |
+   | Keys | Non-secret association to the matching, separately escrowed AI master-key generation and independently recoverable offsite credentials |
+
+   The #296 owner decision is **operator-managed settings/configuration coverage**: there
+   is no app-native settings snapshot. Configured paths may be outside the default `/data`.
+   Never pair a dump taken before a provider change with settings taken afterward: it could
+   bind an old credential to a new destination. Do not place an escrowed master key inside
+   the data backup merely because a bootstrap file contains it. Protect dumps, image originals
+   and GPX archives as private data; retain an encrypted offsite copy and independent escrow.
+5. Stop every app instance/maintenance writer sharing storage and wait for exit and drained
+   database sessions before stopped-app filesystem copying. Keep the freeze until copying
+   finishes; preserve all earlier valid generations on failure. Do not bypass storage
+   ownership or use a concurrent writer to complete capture.
+
+#### Deploy and distinguish health from publication
+
+1. Apply the target release's **actual Compose/bootstrap changes**, not just its image tag,
+   retaining the old configuration with the recovery generation. Pin the reviewed app image
+   by digest: the existing `IMAGE_TAG` interpolation also accepts a `tag@sha256:…` value, yielding
+   `ghcr.io/laboef1900/wanderlust-studio:tag@sha256:…` (historical releases remain under the old
+   image name; see Release flow). Substitute the real verified tag/digest
+   privately; do not use the ellipsis literally. Preserve the selected platform and Postgres
+   major. Do not print expanded Compose configuration containing credentials into evidence.
+2. **Host-proxy prerequisite for releases carrying #369:** deploy the matching proxy-trust
+   runtime and Compose contract together. The approved topology is a TLS proxy on the host,
+   the loopback-only published app port and the Compose bridge, with the literal
+   `TRUSTED_PROXY: docker-gateway` in `services.app.environment`. Omitting that mode in the
+   new runtime intentionally trusts only loopback; it is not a compatible host-proxy upgrade.
+   The older Compose/hop-count setup does not establish this prerequisite. Require fail-closed
+   gateway discovery; do not substitute an `.env` workaround, a trusted subnet, arbitrary hop
+   count or `trustProxy: true`. Keep Postgres internal and have the proxy replace forwarded
+   headers and preserve the original Host. If the release lacks the matching runtime/configuration
+   or the topology is different, stop and obtain the release-specific supported procedure.
+3. With the recovery set retained and ingress still controlled, pull and start **only the
+   app**, leaving the existing database service/major unchanged:
+
+   ```sh
+   docker compose pull app
+   docker compose up -d --no-deps app
+   ```
+
+   Confirm the running image matches the recorded digest/platform, successful schema/startup,
+   and `/health` database and storage-owner status. Verify admin login and a known story/image.
+   Through the actual approved TLS proxy, verify Secure cookies, independent client-IP rate
+   limit isolation, rejection of spoofed forwarded headers and GPX Origin enforcement before
+   reopening ingress. These are release qualification requirements, not checks claimed here.
+4. `/health`'s `release` boolean only says a static release exists. It does not prove that a
+   new build succeeded, new content is live or the app still has write ownership.
+   **Deploying an image is not publishing.** Existing `/data/site` output persists. Rebuild only
+   if release notes require it or the owner deliberately requests it; a rebuild can render
+   pending changes to already-published content. Use **Settings → Rebuild site now** (or
+   authenticated `POST /rebuild`), inspect the actual response/logs and expected rendered page,
+   and use the #297 outcome record when available in the selected release. Distinguish
+   promotion from subsequent cleanup warnings under #397's promotion contract when included;
+   neither a health boolean nor an HTTP error alone proves what is serving.
+5. Resume writers/ingress only after the required verification and explicit resolution of
+   failures. If startup or recovery fails, preserve all source and undo material and repair
+   forward on a security-supported image; do not try older tags until one appears to work.
+
+#### Release-specific backward recovery admission
+
+**This section describes the requirements for a future eligible pair, not a runnable downgrade
+for today's releases.** The pair's notes must identify source/target tags, digests/platform,
+schema/settings changes, old writer/target reader versions, private-route/image coverage,
+key/settings association, recovery direction, expected data-loss window and rehearsal evidence.
+Matching dump versions or parseable JSON alone never grants admission.
+
+For an admitted pair, block ingress and stop/drain **all** app/storage writers. Follow the
+[one-shot offline restore procedure](#database-dumps), never `compose exec` into the live app.
+Restore the **old-version pre-upgrade dump**, matching old settings/bootstrap and separately
+escrowed key into the **precise target schema specified by the pair's notes**. When old code
+cannot safely use the migrated schema, use a separately initialized target database/data copy
+and preserve the original. No reverse DDL is inferred and no volume deletion is authorized.
+Keep ingress blocked during any zero-user initialization window; the CLI needs an initialized
+schema for counts and its verified pre-restore undo set.
+
+Before confirmation, name exactly which post-backup edits will be lost. Newer regions,
+encoding profiles or private-route state may be unrepresentable in older code. No automatic
+region reassignment, slug change, content rewriting or preservation of post-upgrade writes
+is promised. If the data cannot be represented, stay on a compatible secure image and repair
+forward unless the owner approves a specific data/recovery decision.
+
+Require source validation, exclusive ownership, literal confirmation and the verified undo
+set; `--yes` bypasses only the prompt. Restart only after confirmed restore success with
+settings/key association reconciled, then explicitly rebuild under the admitted target.
+Verify counts, byte-identical settings (record equality, never contents), supported regions,
+private routes, image rescan and rendered content. Failure or unknown commit outcome means
+leave the app stopped, preserve input/undo/staged sets and diagnose before another attempt.
+
+**Evidence status:** this runbook and policy approval are not an upgrade drill. #295's isolated
+restore foundation alone cannot qualify an app-version pair. A supported upgrade/roll-forward
+rehearsal must still record exact images/platforms, dump metadata and pre/post counts,
+settings equality, route/archive integrity, supported regions, rescan, rendered pages and
+the actual proxy checks above. No historical downgrade or eligible backward pair is claimed.
+
 ### Upgrading a Postgres major (e.g. 17 → 18)
 
 A Postgres major cannot read the previous major's cluster files, and `postgres:18+` images also
@@ -1047,6 +1261,8 @@ the entrypoint finds its versioned PGDATA empty and silently `initdb`s a fresh, 
 Preserve the old cluster and prepare an **isolated new volume/database** for the new major;
 never use `docker volume rm` as a migration step. Removing any legacy volume requires separate
 explicit owner approval, verified recovery material and a successful, verified cutover.
+Every future major (18 → 19, …) needs its own reviewed dump-and-restore plan; an app-version
+recovery never implies a cluster downgrade.
 
 1. On the old version, take and verify a full `pg_dump --no-owner` plus matching image/private
    files, settings and separate key escrow. Stop all app/maintenance writers for the final
@@ -1086,10 +1302,11 @@ explicit owner approval, verified recovery material and a successful, verified c
 
    Inspect the credential-free target and row counts before typing literal `yes`. The same
    exclusive-owner, source validation and verified pre-restore backup safeguards apply.
-4. Only after confirmed success, run `docker compose up -d app`, reconcile settings/key escrow,
-   sign in again and explicitly rebuild (**Settings → Rebuild site now**, or `POST /rebuild`).
-   Verify restored content before reopening ingress. On failure keep the app stopped and
-   preserve recovery evidence.
+4. Only after confirmed success, recover the image files and matching settings/key material
+   before restarting the app (see the [isolated rehearsal](docs/2026-10-29-restore-rehearsal.md)).
+   Run `docker compose up -d app`, sign in again and explicitly rebuild
+   (**Settings → Rebuild site now**, or `POST /rebuild`), then rescan and verify restored content
+   before reopening ingress. On failure keep the app stopped and preserve recovery evidence.
 
 Current v11 dumps cover `users`, `posts`, `pages`, `media`, `media_folders`, `app_secrets`,
 `comments`, `post_routes`, `site_identity` and `site_identity_assets`, plus manifest-paired private
@@ -1122,12 +1339,53 @@ warns about.
 1. logs in to GHCR (`GITHUB_TOKEN`) and to `dhi.io` (repo variable `DHI_USERNAME` + secret
    `DHI_TOKEN`) to pull the DHI bases,
 2. `buildx` multi-arch (**amd64 + arm64**) with the DHI build-args, pushed to
-   `ghcr.io/laboef1900/simonswanderlust-app` tagged `{version}`, `{major}.{minor}`, and `latest`,
+   `ghcr.io/laboef1900/wanderlust-studio` tagged `{version}`, `{major}.{minor}`, and `latest`,
 3. creates the GitHub Release with generated notes.
 
-On the server: pull the GHCR image directly (no `dhi.io` login needed there — that's CI-only), set
-`IMAGE_TAG` in `.env`, then `docker compose pull && docker compose up -d`. Cutting a release = bump
-the `IMAGE_TAG` defaults (`docker-compose.yml`, `uploader/.env.example`), commit, tag, push the tag.
+The first release under this name requires a future owner-authorized **new** version tag on
+merged `main`, a successful multi-architecture workflow run, and confirmation of the published
+version/digest and GHCR package access. Only after that may the operator set `IMAGE_TAG` in
+their private `.env` to that published version and run
+`docker compose pull && docker compose up -d` (no `dhi.io` login needed there — that's CI-only).
+Compose requires an explicit tag; the example leaves it empty instead of inventing a release.
+Until publication, build locally with the new name and `IMAGE_TAG=local` as described in README.
+
+Historical images remain at `ghcr.io/laboef1900/simonswanderlust-app`, including `:0.17.1`.
+Old tags are not available under the new name merely because this source changed.
+Keep existing deployment configuration until an authorized upgrade; do not reuse an old
+private `IMAGE_TAG` with the new Compose file. No republishing, alias, dual push, image deletion,
+data migration or operator-secret change is part of this cutover. Product, repository and npm
+package names stay unchanged. See the
+[separate image-name cutover record](docs/superpowers/specs/2026-10-27-issue-291-image-name-cutover.md).
+
+Server upgrades follow [App upgrades and supported recovery](#app-upgrades-and-supported-recovery),
+including the coherent pre-upgrade recovery point, reviewed Compose/bootstrap changes and
+immutable app image selection.
+Cut releases through the protected-branch flow in [README](README.md#cutting-a-release);
+generated GitHub notes do not replace the mandatory recovery notes below.
+
+### Release recovery checklist
+
+A release is **not ready to tag** until its notes state:
+
+- Schema/constraint/data migrations (including an explicit “none”), settings migrations and
+  the meaning/retention of any migration copies.
+- Dump writer version, accepted reader versions and fidelity exclusions; especially the
+  inability of v1–v9 to supply private-route recovery, regardless of format admission.
+- Required generation-coherent dump, settings, bootstrap/key escrow, image chain and private
+  route companions, plus capacity for capture, restore staging/undo and new full archives.
+- Actual Compose/bootstrap/proxy prerequisites and the supported platform/image identities.
+- Whether an explicit rebuild is required and why; deployment alone does not publish.
+- The exact eligible immediately previous secure image and **release-specific** recovery
+  steps, target schema and data-loss window, or **“roll-forward only; no supported downgrade.”**
+- Actual disposable upgrade/recovery evidence and its scope, or an explicit unsupported
+  direction. The historical v0.14.1 → v0.15.0 → v0.14.1 downgrade criterion was amended by the
+  owner on 2026-10-28: exercise supported upgrade/roll-forward recovery; backward qualification
+  remains unsupported/pending until an eligible pair exists. Approval is not rehearsal evidence.
+
+Link the [Postgres-major procedure](#upgrading-a-postgres-major-eg-17--18) rather than silently
+combining it with an app upgrade. Neither “previous tag + dump + settings” nor an unchanged dump
+version is a sufficient per-release recovery instruction.
 
 **Native codec updates (#347):** record the current image digest before an owner-controlled
 upgrade, then release and deploy a newly built image; changing `package-lock.json` or running
@@ -1145,8 +1403,8 @@ separate owner action, not part of the dependency PR.
 | `DATABASE_URL` | app | Postgres connection (content + auth) |
 | `ENCRYPTION_KEY` | app | Optional 64-hex master key for encrypted AI credentials; unset permits local workflows, malformed values refuse boot; escrow separately |
 | `TRUSTED_PROXY` | app / compose literal | Unset or `loopback`: loopback peers only. Compose sets `docker-gateway`: also trust the single discovered IPv4 default gateway, at hop zero only. Empty/unknown values or failed gateway discovery refuse boot. Not an `.env` setting; changing bridge/proxy topology requires a new trust spec. |
-| `PUBLIC_BASE_URL` | app | Public base for image URLs (e.g. `https://img.simonswanderlust.com`) |
-| `IMG_HOST` | app | Hostname routed to the image-variant static handler (defaults to the host of `PUBLIC_BASE_URL`) |
+| `PUBLIC_BASE_URL` | app | Public base for image URLs (e.g. `https://img.simonswanderlust.com`); not the allowed blog-comment origin. Its image authority is excluded from the temporary comment-origin fallback except in single-origin loopback development. |
+| `IMG_HOST` | app | Hostname routed to the image-variant static handler (defaults to the host of `PUBLIC_BASE_URL`); also excluded from the comment-origin fallback, with the same loopback exception. |
 | `SITE_APP_DIR` | app | Path to the Astro project the builder spawns (`/app/site`) |
 | `SITE_DIR` | app | Release root for the built blog (`/data/site`) — `current` is served from here |
 | `SITE_IDENTITY_JSON` | build child only | **Internal**, set for every spawn by `build.ts`; not operator-configurable, overrides inherited values |
@@ -1162,9 +1420,13 @@ separate owner action, not part of the dependency PR.
 
 Origin roles remain distinct: `PUBLIC_BASE_URL` supplies image URLs and the body/gallery
 allow-list; `IMG_HOST` controls actual image-host routing; the request scheme/forwarded
-`Host` describes the serving/admin origin. The stored canonical blog origin is reserved
-in #274. #276 will connect it to SEO, comments and outbound identification, with the
-topology validation in the approved spec. This table does not introduce an operator env knob.
+`Host` describes the serving/admin origin. The stored canonical blog origin drives SEO,
+feeds/sitemaps, comment-Origin equality and outbound identification, with the approved
+image-topology validation. Static output uses the exported build snapshot; comment checks
+use the current cached identity immediately after a successful save. Unconfigured static
+output retains absolute metadata under `https://unconfigured.invalid`, adds `noindex`,
+and emits `Disallow: /` without a `Sitemap:` line. Editing identity does not rebuild,
+rename paths or change image configuration. This introduces no operator env knob.
 
 ## Trust boundaries
 
@@ -1175,7 +1437,8 @@ topology validation in the approved spec. This table does not introduce an opera
 - **Immediate proxy peer:** the shipped bridge topology permits one host TLS proxy. The app
   validates the socket address before accepting forwarded IP/protocol and stops at hop zero;
   it never trusts the whole bridge network. The host must preserve `Host`, overwrite the
-  forwarded scheme, and put its accepted client at the rightmost XFF position. See
+  forwarded scheme, reject unintended public hostnames, and put its accepted client at the
+  rightmost XFF position. These rules also protect the temporary comment-origin fallback. See
   [Transport, headers & proxy](SECURITY.md#transport-headers--proxy) for the accepted
   host-process residual, measured Docker Desktop TCP evidence and the remaining target-VPS
   loopback/real-client verification gate.

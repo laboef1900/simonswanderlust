@@ -69,6 +69,7 @@
       <div class="editor-workspace" id="editorWorkspace">
         <div class="editor-canvas editor-writing-surface" id="editorWritingSurface">
           <!-- Advisory checks stay with the manuscript and never gate Publish. -->
+          <div id="galleryMetadataWarnings" class="notice-warn" hidden></div>
           <details id="altAudit" class="notice-warn alt-audit" hidden>
             <summary><span id="altAuditSummary" role="status"></span></summary>
             <p id="altAuditHelp"></p>
@@ -510,7 +511,6 @@
     <script src="/admin/upload-recovery.js"></script>
     <script src="/admin/picker-selection.js"></script>
     <script src="/admin/media-picker.js"></script>
-    <script src="/admin/gallery-fence.js"></script>
     <script src="/admin/editor-linter.js"></script>
     <script src="/admin/editor-review.js"></script>
     <script src="/admin/editor-excerpt.js"></script>
@@ -527,7 +527,9 @@
     <script src="/admin/waypoint-lookup.js"></script>
     <script src="/admin/gallery-library.js"></script>
     <script src="/admin/editor-galleries.js"></script>
-    <script>
+    <script src="/admin/gallery-metadata-warnings.js"></script>
+    <script type="module">
+      import './gallery-fence.js';
       'use strict';
       const $ = (id) => document.getElementById(id);
       const editorCopy = EditorCopy.en;
@@ -540,12 +542,29 @@
       let loadedUpdatedAt = null;
       let loadBlocked = true;
       let recoveryDraft = null; // immutable pre-reload form while population is unsafe
+      // A restored stash that records no usable base version (#345): its content
+      // cannot be checked against what is stored, so it is never saved.
       let storyReview = null;
       let excerptAssist = null;
       let reviewIsAdmin = false;
       let pendingSaves = 0;
       let confirmingSave = false;
       let writeRecovery = null;
+      let writeTail = Promise.resolve();
+      let writeEpoch = 0;
+      function enqueueWrite(write) {
+        if (loadBlocked) return Promise.resolve(false);
+        const epoch = writeEpoch;
+        pendingSaves += 1;
+        renderDraftState();
+        const result = writeTail.then(() => epoch === writeEpoch && !loadBlocked ? write() : false).finally(() => {
+          pendingSaves -= 1;
+          renderDraftState();
+        });
+        // A rejected request must not poison later explicit user actions.
+        writeTail = result.catch(() => {});
+        return result;
+      }
       let populatingBody = false;
       let publication = { availability: 'unavailable' };
       let publicationRefresh;
@@ -559,6 +578,7 @@
         publicationRetry.hidden = !(currentTk || initialTk);
         updateLocaleChip();
       }
+      let formVersion = 0;
       const deImages = {};        // src → {width, height}
       const enImages = {};
       const galleryEditors = {};
@@ -580,6 +600,7 @@
       }
 
       // ---- slugify ----
+      const MAX_SLUG_BYTES = 251; // ASCII only; parity tested against posts.ts.
       function slugify(str) {
         return str
           .toLowerCase()
@@ -589,6 +610,8 @@
           .replace(/[^a-z0-9]+/g, '-')
           .replace(/^-+|-+$/g, '')
           .replace(/-{2,}/g, '-')
+          .slice(0, MAX_SLUG_BYTES)
+          .replace(/-+$/, '')
           || 'untitled';
       }
 
@@ -630,7 +653,7 @@
       const guard = DraftGuard.createDraftGuard({
         resource: initialTk ? 'post:' + initialTk : 'new',
         recovery: () => writeRecovery?.exportState(),
-        collect: () => recoveryDraft || buildPayload(),
+        collect: () => recoveryDraft || collectDraft(),
         onChange: (dirty) => {
           if (dirty && !pendingSaves) setStatus('');
           renderDraftState();
@@ -642,7 +665,9 @@
         collect: () => recoveryDraft || buildPayload(),
         restoreBase: (value) => { loadedUpdatedAt = value; },
         error: (body, status) => showErr(SiteLanguage.error(body) || (editorCopy.writeRefused + ' ' + status)),
-        adopt: async (body) => {
+        adopt: async (body, attempt, acknowledgement) => {
+          // Gallery diagnostics ride only on this tab's own acknowledgement, never a probe.
+          if (acknowledgement) galleryMetadataWarnings.saved(acknowledgement.galleryWarnings, attempt.sentPayload);
           if (!currentTk) {
             storyReview?.invalidate();
             currentTk = body.translationKey;
@@ -677,7 +702,7 @@
           renderDraftState();
         },
         useStored: async (body) => {
-          await loadPost(body.translationKey, body);
+          await loadPost(body.translationKey, { snapshot: body });
           if (loadBlocked || !writeRecovery.canAdopt(body.ownerUserId)) throw new Error(editorCopy.reloadFailed);
           guard.setResource('post:' + currentTk);
           gpxEditor.noteCreated(currentTk);
@@ -859,6 +884,13 @@
           updateLocaleChip();
         });
       }
+      const galleryMetadataWarnings = GalleryMetadataWarnings.create({
+        root: $('galleryMetadataWarnings'),
+        editors: { de: deMDE.codemirror, en: enMDE.codemirror },
+        activate: (locale) => { tabsApi.select(locale); activateLocale(locale); },
+        reveal: (locale, line) => galleryEditors[locale].revealLine(line),
+        onUnauthed: () => guard.redirectToLogin(),
+      });
 
       // ---- slug derivation from locale titles ----
       // @ai-warning Golden Rule 2 (SEO slug contract). A slug is derived from
@@ -916,7 +948,7 @@
             inspectorApi.close();
             const cm = (locale === 'en' ? enMDE : deMDE).codemirror;
             galleryEditors[locale].revealLine(finding.line - 1);
-            cm.setCursor({ line: finding.line - 1, ch: 0 });
+            cm.setCursor({ line: finding.line - 1, ch: (finding.column || 1) - 1 });
             cm.focus();
           }
         },
@@ -1280,13 +1312,35 @@
       // The picker writes the same line format an author would type by hand;
       // normalizeGalleryFences lifts it into `images` at save. Nothing here
       // touches the images map directly — see public/gallery-fence.js.
+      let galleryRequest = 0;
+      const galleryRevision = { de: 0, en: 0 };
+      deMDE.codemirror.on('changes', () => { galleryRevision.de++; });
+      enMDE.codemirror.on('changes', () => { galleryRevision.en++; });
+      function galleryFailure(locale, error, retry) {
+        if (error?.status === 401) { guard.redirectToLogin(); return; }
+        const status = $(locale + 'BodyImgStatus');
+        status.textContent = EditorGalleryCopy[locale].analysisFailed;
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'btn-secondary';
+        button.textContent = EditorGalleryCopy[locale].retry;
+        button.addEventListener('click', retry);
+        status.appendChild(button);
+      }
       function galleryFor(locale, galleryCursor) {
+        galleryForSnapshot(locale, galleryCursor).catch((error) =>
+          galleryFailure(locale, error, () => galleryFor(locale)));
+      }
+      async function galleryForSnapshot(locale, galleryCursor) {
+        const ticket = ++galleryRequest;
+        const revision = galleryRevision[locale];
         const mde = locale === 'de' ? deMDE : enMDE;
         const cm = mde.codemirror;
         const body = mde.value();
         const cursor = galleryCursor ?? cm.indexFromPos(cm.getCursor());
-        const existing = GalleryFence.fenceAt(body, cursor);
-        const current = existing ? GalleryFence.parse(existing.text) : { directives: [], lines: [] };
+        const existing = await GalleryFence.fenceAt(body, cursor, { fresh: true });
+        if (ticket !== galleryRequest || galleryRevision[locale] !== revision || cm.getValue() !== body) return;
+        const current = existing ? GalleryFence.parse(existing.content) : { directives: [], lines: [] };
 
         // What this post already says about each photo: the fence's own
         // metadata if the author typed some and has not saved yet, otherwise
@@ -1296,6 +1350,17 @@
         // so the save cannot fall back to this older copy (gallery-fence.js).
         const images = locale === 'de' ? deImages : enImages;
         const status = $(locale + 'BodyImgStatus');
+        if (current.lines.some((line) => line.valid === false)) {
+          status.textContent = EditorGalleryCopy[locale].metadataBlocked + ' ' + EditorGalleryCopy[locale].metadataSyntax;
+          galleryEditors[locale].revealLine(cm.posFromIndex(existing.start).line);
+          const raw = document.createElement('code');
+          raw.style.display = 'block';
+          raw.style.whiteSpace = 'pre-wrap';
+          raw.textContent = body.slice(existing.start, existing.end);
+          status.appendChild(raw);
+          await galleryMetadataWarnings.reopen(locale);
+          return;
+        }
         const postMeta = {};
         current.lines.forEach((line) => {
           const stored = images[line.src] || {};
@@ -1317,7 +1382,7 @@
         // An unterminated fence's extent runs to end-of-post, so there is no
         // safe range to replace. Say so instead of eating the rest of the body.
         if (existing && existing.unterminated) {
-          status.textContent = 'This gallery block has no closing ``` — close it, then try again.';
+          status.textContent = EditorGalleryCopy[locale].unterminated;
           return;
         }
 
@@ -1371,7 +1436,14 @@
             ? 'Nothing selected — confirming now removes this gallery.'
             : 'Nothing selected yet — click photos above.',
           onUnauthed: () => guard.redirectToLogin(),
-          onPick: (items, opts) => {
+          onPick: async (items, opts) => {
+            try {
+            const fresh = cm.getValue();
+            if (ticket !== galleryRequest || galleryRevision[locale] !== revision || fresh !== body || cm.getValue() !== fresh) {
+              await GalleryFence.analyze(fresh, { fresh: true });
+              status.textContent = EditorGalleryCopy[locale].stale;
+              return;
+            }
             // Rewrite only our controls, retaining unrelated author directives.
             const captions = opts.captions;
             const directives = GalleryFence.withCaptions(
@@ -1380,9 +1452,18 @@
             const fence = items.length
               ? GalleryFence.serialize(items, locale, directives, postMeta, captions.overrides)
               : '';
-            const out = GalleryFence.replaceFenceAt(body, cursor, fence);
+            const out = await GalleryFence.replaceFenceAt(fresh, cursor, fence);
+            if (ticket !== galleryRequest || galleryRevision[locale] !== revision || cm.getValue() !== fresh) {
+              status.textContent = EditorGalleryCopy[locale].stale;
+              return;
+            }
             if (out.blocked === 'unterminated') {
-              status.textContent = 'The block around the cursor has no closing ``` — close it, then try again.';
+              status.textContent = EditorGalleryCopy[locale].unterminated;
+              return;
+            }
+            if (out.blocked === 'invalid_metadata') {
+              status.textContent = EditorGalleryCopy[locale].metadataBlocked;
+              await galleryMetadataWarnings.reopen(locale);
               return;
             }
             if (out.start === out.end && out.text === '') return;
@@ -1395,11 +1476,12 @@
             guard.markDirty();
             // Count the lines actually written, not the photos picked: serialize
             // drops a newly picked photo whose dimensions are unusable.
-            const written = GalleryFence.parse(fence).lines.length;
+            const written = fence ? GalleryFence.parse(fence.slice(fence.indexOf('\n') + 1, fence.lastIndexOf('\n'))).lines.length : 0;
             status.textContent = !items.length
               ? 'Gallery removed'
               : (out.replaced ? 'Gallery updated: ' : 'Gallery inserted: ') + written + ' photo(s)'
                 + (written < items.length ? ` (${items.length - written} skipped — no usable dimensions)` : '');
+            } catch (error) { galleryFailure(locale, error, () => galleryFor(locale)); }
           },
         });
       }
@@ -1480,14 +1562,6 @@
           });
           if (!body || !writeRecovery.canAdopt(ownerId)) return;
 
-          // Record dims into the locale-specific images map
-          const imagesMap = locale === 'de' ? deImages : enImages;
-          imagesMap[body.src] = {
-            width: body.width,
-            height: body.height,
-            ...(body.format === 'jpeg' ? { format: body.format } : {}),
-          };
-
           // Insert markdown at the cursor in the matching EasyMDE instance —
           // but never into a fence (#333): on a gallery's closing line the
           // image turns the ``` into text and the gallery swallows the rest of
@@ -1496,20 +1570,42 @@
           // (Both edits fire a CodeMirror change → marks the guard dirty.)
           const cm = (locale === 'de' ? deMDE : enMDE).codemirror;
           const md = ImageMarkdown.image(alt, body.src);
-          const spot = GalleryFence.insertBlockAt(cm.getValue(), cm.indexFromPos(cm.getCursor()), md);
-          if (spot.blocked === 'unterminated') {
-            statusEl.textContent = 'Uploaded ' + body.src + ' but not inserted: the block around the cursor has no closing ``` — close it, then paste: ' + md;
-          } else {
-            if (spot.relocated) {
-              const from = cm.posFromIndex(spot.start);
-              cm.replaceRange(spot.text, from, from);
-              cm.setCursor(cm.posFromIndex(spot.cursor));
-            } else {
-              cm.replaceSelection(md);
+          async function insertUploaded() {
+            const revision = galleryRevision[locale];
+            const snapshot = cm.getValue();
+            const selection = cm.listSelections();
+            let spot;
+            try { spot = await GalleryFence.insertBlockAt(snapshot, cm.indexFromPos(cm.getCursor()), md); }
+            catch (error) {
+              galleryFailure(locale, error, () => { void insertUploaded(); });
+              statusEl.appendChild(document.createTextNode(' ' + md));
+              return;
             }
-            statusEl.textContent = (spot.relocated ? 'Inserted after the ``` block: ' : 'Inserted: ') + body.src
-              + (body.status === 'processing' ? ' — still processing (Publish waits for it)' : '');
+            if (galleryRevision[locale] !== revision || cm.getValue() !== snapshot || JSON.stringify(cm.listSelections()) !== JSON.stringify(selection)) {
+              statusEl.textContent = EditorGalleryCopy[locale].stale + ' ' + md;
+              return;
+            }
+            if (spot.blocked === 'unterminated') {
+              statusEl.textContent = EditorGalleryCopy[locale].unterminated + ' ' + md;
+            } else {
+              const imagesMap = locale === 'de' ? deImages : enImages;
+              imagesMap[body.src] = {
+                width: body.width, height: body.height,
+                ...(body.format === 'jpeg' ? { format: body.format } : {}),
+              };
+              if (spot.relocated) {
+                const from = cm.posFromIndex(spot.start);
+                cm.replaceRange(spot.text, from, from);
+                cm.setCursor(cm.posFromIndex(spot.cursor));
+              } else {
+                cm.replaceSelection(md);
+              }
+              statusEl.textContent = (spot.relocated ? 'Inserted after the ``` block: ' : 'Inserted: ') + body.src
+                + (body.status === 'processing' ? ' — still processing (Publish waits for it)' : '');
+            }
           }
+          await insertUploaded();
+          // Clear only what this upload consumed; a newer pick or alt stays.
           if (fileInput.files[0] === file) fileInput.value = '';
           if (altInput.value === alt) altInput.value = '';
         } catch (e) {
@@ -1524,10 +1620,11 @@
       // on401 routes a session-expiry through DraftGuard (stash draft + ?next=) instead
       // of a raw redirect, matching every other 401 handler in this editor.
       const suggestOn401 = () => guard.redirectToLogin();
-      AltSuggest.wire({ button: $('deHeroSuggest'), fileInput: $('deHeroFile'), altInput: $('deHeroAlt'), statusEl: $('deHeroStatus'), lang: 'de', on401: suggestOn401 });
-      AltSuggest.wire({ button: $('enHeroSuggest'), fileInput: $('enHeroFile'), altInput: $('enHeroAlt'), statusEl: $('enHeroStatus'), lang: 'en', on401: suggestOn401 });
-      AltSuggest.wire({ button: $('deBodyImgSuggest'), fileInput: $('deBodyImgFile'), altInput: $('deBodyImgAlt'), statusEl: $('deBodyImgStatus'), lang: 'de', on401: suggestOn401 });
-      AltSuggest.wire({ button: $('enBodyImgSuggest'), fileInput: $('enBodyImgFile'), altInput: $('enBodyImgAlt'), statusEl: $('enBodyImgStatus'), lang: 'en', on401: suggestOn401 });
+      const truncatedText = editorCopy.altSuggestTruncated;
+      AltSuggest.wire({ button: $('deHeroSuggest'), fileInput: $('deHeroFile'), altInput: $('deHeroAlt'), statusEl: $('deHeroStatus'), lang: 'de', on401: suggestOn401, truncatedText });
+      AltSuggest.wire({ button: $('enHeroSuggest'), fileInput: $('enHeroFile'), altInput: $('enHeroAlt'), statusEl: $('enHeroStatus'), lang: 'en', on401: suggestOn401, truncatedText });
+      AltSuggest.wire({ button: $('deBodyImgSuggest'), fileInput: $('deBodyImgFile'), altInput: $('deBodyImgAlt'), statusEl: $('deBodyImgStatus'), lang: 'de', on401: suggestOn401, truncatedText });
+      AltSuggest.wire({ button: $('enBodyImgSuggest'), fileInput: $('enBodyImgFile'), altInput: $('enBodyImgAlt'), statusEl: $('enBodyImgStatus'), lang: 'en', on401: suggestOn401, truncatedText });
 
       // ---- assemble PostPair payload ----
       // Deliberately no `status` or `scheduledAt`: the store decides status
@@ -1607,11 +1704,25 @@
         return {
           translationKey: currentTk || undefined,
           // Concurrency echo — JSON.stringify drops it when undefined (new post).
+          // Never the loaded token for an unknown-base restore: a re-stash would
+          // turn it into a base that matches, and the next restore would save.
           updatedAt: loadedUpdatedAt || undefined,
           shared,
           de,
           en,
         };
+      }
+
+      function collectDraft() {
+        const payload = buildPayload();
+        for (const locale of ['de', 'en']) {
+          const pending = galleryEditors[locale]?.snapshotAlts() || [];
+          if (pending.length) {
+            payload.galleryAlts ||= {};
+            payload.galleryAlts[locale] = pending;
+          }
+        }
+        return payload;
       }
 
       // ---- error helpers ----
@@ -1741,7 +1852,7 @@
       }
 
       // Reachability: each kind is fixed in a different control.
-      function jumpToPhoto(locale, kind, src) {
+      async function jumpToPhoto(locale, kind, src) {
         const feedback = $('altAuditFeedback');
         feedback.hidden = true;
         if (kind === 'hero' && $(locale + 'HeroSrc').value === src) {
@@ -1751,10 +1862,14 @@
         if (tabsApi && tabsApi.select) tabsApi.select(locale);
         activateLocale(locale);
         inspectorApi.close();
-        if (kind === 'gallery' && galleryEditors[locale].focusPhoto(src)) return;
+        if (kind === 'gallery' && await galleryEditors[locale].focusPhoto(src)) return;
         if (kind === 'body') {
           const cm = (locale === 'de' ? deMDE : enMDE).codemirror;
-          const image = EditorLinter.findImage(cm.getValue(), src);
+          const snapshot = cm.getValue();
+          let image;
+          try { image = await EditorLinter.findImage(snapshot, src); }
+          catch (error) { galleryFailure(locale, error, () => jumpToPhoto(locale, kind, src)); return; }
+          if (cm.getValue() !== snapshot || activeTab !== locale) return;
           if (image) {
             const from = cm.posFromIndex(image.start);
             const to = cm.posFromIndex(image.end);
@@ -1832,19 +1947,56 @@
       }
 
       // ---- save draft ----
-      // Persists the current on-screen form. Returns true on success so Publish
-      // can save first and validate exactly what's on screen.
-      async function doSaveDraft({ gpxAttach = false } = {}) {
-        if (pendingSaves || confirmingSave) return false;
+      // Capture each explicit intent before queuing, but bind identity/version
+      // only when it runs. Later typing remains dirty; no save is coalesced.
+      // Gallery alt edits reach the body asynchronously (#354). Settle them
+      // before capturing, so the click's payload includes what was typed.
+      async function flushGalleryEdits() {
+        const version = formVersion;
+        try {
+          let before;
+          do {
+            before = guard.snapshot();
+            await Promise.all(Object.values(galleryEditors).map((editor) => editor.flush()));
+            if (version !== formVersion) return false;
+            // Another locale can receive a new edit after its flush returned
+            // while this round still waits for the first locale.
+          } while (before !== guard.snapshot());
+          return true;
+        } catch (error) {
+          if (version === formVersion) showErr(error.message);
+          return false;
+        }
+      }
+      function snapshotIntent() {
+        return { snap: guard.snapshot(), payload: structuredClone(buildPayload()), skipped: partialStopCount() };
+      }
+      // Synchronous at the click unless a gallery edit is still settling, so
+      // typing after the click stays out of this intent (#362).
+      function captureSaveIntent() {
+        if (!Object.values(galleryEditors).some((editor) => editor.snapshotAlts().length)) return snapshotIntent();
+        return flushGalleryEdits().then((ok) => ok ? snapshotIntent() : null);
+      }
+      async function doSaveDraft() {
         if (loadBlocked) {
           showErr(editorCopy.reloadFailed);
           return false;
         }
-        if (!gpxAttach && !gpxEditor.guardAction()) return false;
+        if (!gpxEditor.guardAction()) return false;
+        const intent = await captureSaveIntent();
+        if (!intent) return false;
+        return enqueueWrite(() => saveDraftNow(intent));
+      }
+      // Called only while holding the editor write queue (also by Publish/GPX).
+      // Identity, version and the save receipt are bound by WriteRecovery when it runs (#305).
+      async function saveDraftNow({ snap, payload, skipped }) {
+        if (loadBlocked) {
+          showErr(editorCopy.reloadFailed);
+          return false;
+        }
         showErr('');
         setStatus('');
-        const snap = guard.snapshot(); // edits typed after this point must survive markClean
-        const payload = buildPayload();
+        // translationKey/updatedAt are bound by WriteRecovery at send time, not at the click.
         // A slug change on an existing draft is deliberate or it does not happen
         // (#122): name the locale and both slugs, and only send the consent flag
         // the server requires (409 slug_change_unconfirmed otherwise) after OK.
@@ -1870,16 +2022,20 @@
           }
           payload.confirmSlugChange = true;
         }
-        pendingSaves += 1;
         publicationRefresh.beginAction();
-        renderDraftState();
+        let saved;
         try {
-          return await writeRecovery.save(payload, snap);
+          saved = await writeRecovery.save(payload, snap);
         } finally {
-          pendingSaves -= 1;
           publicationRefresh.endAction();
-          renderDraftState();
         }
+        if (saved) {
+          const savedMsg = guard.isDirty() ? editorCopy.saveNewer : isPublished ? editorCopy.saveLiveUnchanged : '';
+          if (skipped || savedMsg) setStatus(skipped
+            ? savedMsg + ' Note: ' + skipped + ' incomplete stop row(s) were skipped (each needs a name, latitude and longitude).'
+            : savedMsg);
+        }
+        return saved;
       }
       $('saveDraft').addEventListener('click', () => { doSaveDraft(); });
 
@@ -1890,6 +2046,10 @@
       });
 
       $('publishBtn').addEventListener('click', async () => {
+        if (loadBlocked) {
+          showErr(editorCopy.reloadFailed);
+          return;
+        }
         if (!gpxEditor.guardAction()) return;
         let reviewedRouteVersion;
         try { reviewedRouteVersion = gpxEditor.publishVersion(); }
@@ -1903,6 +2063,11 @@
         const titles = requestedLocales().map((locale) => $(locale + 'Title').value.trim() || '(untitled)');
         const slugs = Object.fromEntries(requestedLocales().map((locale) => [locale, slugFieldFor(locale).value.trim()]));
         const urlBlock = AdminConfirm.urlsPlain(slugs);
+        const intent = await captureSaveIntent();
+        if (!intent) return;
+        await enqueueWrite(() => publishNow(intent, reviewedRouteVersion, slugs, titles, urlBlock));
+      });
+      async function publishNow(intent, reviewedRouteVersion, slugs, titles, urlBlock) {
         const ok = await AdminConfirm.ask({
           title: 'Publish to the live site?',
           body: titles.join(' / ') + '\n\n'
@@ -1911,7 +2076,7 @@
           confirmLabel: 'Publish',
         });
         if (!ok) return;
-        const saved = await doSaveDraft();
+        const saved = await saveDraftNow(intent);
         if (!saved) return;
         const btn = $('publishBtn');
         const publishingLocales = [...savedRequestedLocales];
@@ -1961,10 +2126,13 @@
           btn.disabled = false;
           updateLocaleChip();
         }
-      });
+      }
 
       $('unpublishBtn').addEventListener('click', async () => {
         const title = $(language.primary + 'Title').value.trim() || '(untitled)';
+        await enqueueWrite(() => unpublishNow(title));
+      });
+      async function unpublishNow(title) {
         const ok = await AdminConfirm.ask({
           title: 'Unpublish this trip?',
           body: '"' + title + '" will leave the live site on the next build and revert to a draft.',
@@ -1998,7 +2166,7 @@
           btn.disabled = false;
           publicationRefresh.endAction();
         }
-      });
+      }
 
       document.addEventListener('keydown', (e) => {
         if ((e.metaKey || e.ctrlKey) && (e.key === 's' || e.key === 'S')) {
@@ -2060,6 +2228,7 @@
         try { mde.value(data.bodyMarkdown || ''); }
         finally { populatingBody = false; }
         galleryEditors[loc].refresh();
+        void galleryMetadataWarnings.reopen(loc);
       }
 
       // Fills the whole form from a PostPair-shaped object (or a {shared,de,en}
@@ -2067,8 +2236,10 @@
       // restored revision. Every field is overwritten (with '' when absent) so it
       // never merges with what was already on screen.
       function populateForm(post) {
+        ++formVersion;
         storyReview?.invalidate();
         excerptAssist?.invalidate();
+        Object.values(galleryEditors).forEach((editor) => editor.reset());
         // A (re)loaded post shows what Media says now, not what an earlier
         // load of this page saw — the author may have just edited it there.
         galleryLibrary.forget();
@@ -2114,21 +2285,25 @@
         syncCoverage();
         countryCoords.reset();
         updateLocaleChip();
+        for (const locale of ['de', 'en']) galleryEditors[locale]?.restoreAlts(post.galleryAlts?.[locale]);
       }
 
       // Returns false only when it redirected to /login (callers must stop);
       // true otherwise — even on a failed load, so a local stash can still be offered.
-      async function loadPost(tk, snapshot) {
+      async function loadPost(tk, { snapshot, deferRouteRefresh = false } = {}) {
         publicationRefresh.beginAction();
         const controller = new AbortController();
         const deadline = setTimeout(() => controller.abort(), 10000);
-        try { return await readPostIntoEditor(tk, snapshot, controller.signal); }
+        try { return await readPostIntoEditor(tk, snapshot, deferRouteRefresh, controller.signal); }
         finally {
           clearTimeout(deadline);
           publicationRefresh.endAction();
         }
       }
-      async function readPostIntoEditor(tk, snapshot, signal) {
+      async function readPostIntoEditor(tk, snapshot, deferRouteRefresh, signal) {
+        // Reload explicitly replaces the editing base; older queued intents
+        // must never be replayed against that newly accepted foreign version.
+        const reloadEpoch = ++writeEpoch;
         loadBlocked = true;
         installPublication({ publication: { availability: 'unavailable' } });
         setStatus('Loading…');
@@ -2156,10 +2331,11 @@
           setStatus('');
           return true;
         }
+        if (reloadEpoch !== writeEpoch) return true;
         // Never pair a partly populated bilingual form with a fresh concurrency
         // token. Retain the pre-reload payload independently of the live form:
         // even a second failure while rolling back cannot corrupt its stash.
-        if (currentTk && !recoveryDraft) recoveryDraft = structuredClone(buildPayload());
+        if (currentTk && !recoveryDraft) recoveryDraft = structuredClone(collectDraft());
         if (recoveryDraft) guard.stashNow();
         const wasPublished = isPublished;
         try {
@@ -2183,7 +2359,6 @@
         loadedSlugs.de = post.de?.slug || '';
         loadedSlugs.en = post.en?.slug || '';
         recoveryDraft = null;
-        loadBlocked = false;
         updateLocaleChip();
         $('pageTitle').textContent = 'Edit post';
         showErr('');
@@ -2200,6 +2375,12 @@
         publicationRefresh.invalidate();
         installPublication({ publication: post.publication });
         setStatus('');
+        // Initialization alone defers this read until after local stash recovery.
+        // Explicit Reload holds the write queue closed across both reads.
+        const routeReady = deferRouteRefresh || await gpxEditor.refresh();
+        if (reloadEpoch === writeEpoch) loadBlocked = !routeReady;
+        // Publish availability follows the barrier (#284 disables it while blocked).
+        updateLocaleChip();
         return true;
       }
 
@@ -2235,11 +2416,24 @@
       // gets its own revision) — there is no direct server-side restore.
       async function restoreRevision(id) {
         if (!gpxEditor.guardAction()) return;
-        showErr('');
         const res = await fetch('/posts/' + encodeURIComponent(currentTk) + '/revisions/' + encodeURIComponent(id));
         if (res.status === 401) { guard.redirectToLogin(); return; }
         if (!res.ok) { showErr('Could not load revision: ' + res.status); return; }
         const rev = await res.json();
+        // Check after the fetch: edits made while it loads still need consent.
+        if (guard.isDirty()) {
+          const restore = await AdminConfirm.ask({
+            title: editorCopy.revisionRestoreTitle,
+            body: editorCopy.revisionRestoreBody
+              .replace('{time}', () => new Date(rev.savedAt).toLocaleString())
+              .replace('{title}', () => rev.snapshot.de?.title || rev.snapshot.en?.title || editorCopy.revisionUntitled),
+            confirmLabel: editorCopy.revisionRestoreConfirm,
+          });
+          if (!restore) return;
+        }
+        showErr('');
+        // This replaces content, not the save base. Keep loadedUpdatedAt and
+        // any #345 unknown-base block; savedAt is only the revision's label.
         // On a published post the slug fields are disabled (slug locked for
         // SEO), but buildPayload still reads their .value — restoring a
         // snapshot from before a slug change would make every Save 409
@@ -2262,7 +2456,13 @@
         getPost: () => ({ tk: currentTk, baseUpdatedAt: loadedUpdatedAt }),
         beginAction: () => publicationRefresh.beginAction(),
         endAction: () => publicationRefresh.endAction(),
-        saveDraft: () => doSaveDraft({ gpxAttach: true }),
+        runWrite: async (write) => {
+          const intent = await captureSaveIntent();
+          if (!intent) return false;
+          // Save-and-attach owns one queue slot; its requested draft save must
+          // use the click's form snapshot without trying to reacquire the slot.
+          return enqueueWrite(() => write(() => saveDraftNow(intent)));
+        },
         saveError: () => $('actionError').textContent,
         setBaseUpdatedAt: (value) => { loadedUpdatedAt = value; },
         adoptStops: (stops) => {
@@ -2307,7 +2507,8 @@
           activateLocale(language.primary);
           for (const locale of language.locales) {
             $(locale === 'de' ? 'slugBaseDe' : 'slugBaseEn').textContent =
-              location.host + SiteLanguage.publicPath(language, locale, 'home');
+              (window.SiteIdentity?.canonicalOrigin ? new URL(window.SiteIdentity.canonicalOrigin).host : '')
+              + SiteLanguage.publicPath(language, locale, 'home');
           }
           syncCoverage();
         } catch (error) {
@@ -2321,7 +2522,7 @@
         const params = new URLSearchParams(location.search);
         const tk = params.get('tk');
         if (tk) {
-          const proceed = await loadPost(tk);
+          const proceed = await loadPost(tk, { deferRouteRefresh: true });
           if (!proceed) return; // redirecting to /login
         } else {
           setStatus('New post. Fill in the fields and Save draft.');
@@ -2333,22 +2534,55 @@
         const stash = guard.tryRestore();
         if (stash && !guard.wasDismissed(stash)) {
           const restore = await AdminConfirm.ask({
-            title: 'Restore unsaved draft?',
-            body: 'Found an unsaved local draft from ' + new Date(stash.savedAt).toLocaleString() + '.',
-            confirmLabel: 'Restore',
+            title: editorCopy.restoreTitle,
+            body: editorCopy.restoreBody.replace('{time}', new Date(stash.savedAt).toLocaleString()),
+            confirmLabel: editorCopy.restoreConfirm,
           });
           if (restore) {
             if (!guard.adopt(stash)) return;
             storyReview?.invalidate();
-            populateForm(stash.payload);
-            guard.restoreGeneration(stash.generation);
-            if (!writeRecovery.restore(stash.recovery)) {
+            let populated = true;
+            try {
+              populateForm(stash.payload);
+            } catch (error) {
+              // #332: never offer a mixed server/stash form for saving, and keep
+              // the untouched stash (not the mixed form) as what gets re-stashed.
+              populated = false;
+              console.error('Local draft restoration failed', error);
+              recoveryDraft = structuredClone(stash.payload);
               loadBlocked = true;
-              showErr(editorCopy.writeUnsafeBase);
+              guard.markDirty();
+              guard.stashNow();
+              showErr(editorCopy.reloadFailed);
+              setStatus('');
             }
-            await writeRecovery.probe();
-            renderDraftState();
-            setStatus(editorCopy.writeRestored);
+            if (populated) {
+              // A published post's slug fields are disabled and its URL is
+              // locked: keep the live slugs (as restoreRevision does) rather
+              // than a stash slug the author could neither see nor correct.
+              const keptLiveSlugs = isPublished
+                && ['de', 'en'].some((l) => loadedSlugs[l] && slugFieldFor(l).value !== loadedSlugs[l]);
+              if (isPublished) {
+                for (const l of ['de', 'en']) if (loadedSlugs[l]) slugFieldFor(l).value = loadedSlugs[l];
+              }
+              // #306: continue the stash's own generation so a late acknowledgement
+              // of an earlier attempt cannot mark this restored copy clean.
+              guard.restoreGeneration(stash.generation);
+              // The stash's version and unresolved attempts come back with it (#305,
+              // #345): a base that cannot be judged blocks saving instead of guessing.
+              if (!writeRecovery.restore(stash.recovery)) {
+                // @ai-warning #345: drop the freshly loaded token too. Otherwise a later
+                // re-stash records it as this draft's base, and the next restore would
+                // save stale content over the newer version without a conflict.
+                loadedUpdatedAt = null;
+                loadBlocked = true;
+                showErr(editorCopy.writeUnsafeBase);
+              } else {
+                await writeRecovery.probe();
+              }
+              renderDraftState();
+              setStatus(editorCopy.writeRestored + (keptLiveSlugs ? ' ' + editorCopy.restoreSlugsKept : ''));
+            }
           } else {
             guard.dismissRestore(stash);
           }
@@ -2358,7 +2592,9 @@
           guard.markClean();
         }
         publicationRefresh.start();
-        await gpxEditor.refresh();
+        // A failed post load is not a reconciled baseline, even if a stash was
+        // recovered. Do not promote a route-only read to a reviewed token.
+        if (!loadBlocked && !await gpxEditor.refresh()) loadBlocked = true;
         document.querySelector('main').addEventListener('input', updateLocaleChip);
         updateLocaleChip();
       })();
