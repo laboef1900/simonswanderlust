@@ -205,54 +205,26 @@ the images directory. See [write ownership](../ARCHITECTURE.md#write-reconciliat
 
 ## Deploy to your server
 
-1. Copy the repo to the server.
-2. From the monorepo root: `cp uploader/.env.example .env`, set a strong `POSTGRES_PASSWORD`, the
-   matching `DATABASE_URL`, and `PUBLIC_BASE_URL=https://img.simonswanderlust.com`.
-3. Build and run: `docker build -t ghcr.io/laboef1900/wanderlust-studio:local .` then
-   `IMAGE_TAG=local docker compose up -d` (compose has no `build:` key, so plain
-   `docker compose up -d --build` is a no-op). To pull instead, first wait for the
-   owner-authorized initial release under `ghcr.io/laboef1900/wanderlust-studio`,
-   set `IMAGE_TAG` in `.env` to its published version, then run
-   `docker compose pull && docker compose up -d`. No release under the new name
-   is created by this source change. Historical `simonswanderlust-app` releases
-   stay under their original name; never substitute an old tag into the new name.
-4. Because the container runs non-root (uid 1000), make its data bind-mount writable once — this
-   now covers image variants *and* the built blog output, since both live under the same `/data`
-   volume: `mkdir -p uploader/data && sudo chown -R 1000:1000 uploader/data` (run from the
-   monorepo root).
-5. Run **one host-level TLS proxy** (nginx/Caddy/Traefik), without a CDN or additional proxy
-   hop: **both** `https://simonswanderlust.com` **and** `https://img.simonswanderlust.com`
-   → `127.0.0.1:3000`. One Fastify process serves both domains; its raw `Host` check
-   (`IMG_HOST`) selects image variants versus blog/admin.
-   Preserve the verbatim `Host`, overwrite `X-Forwarded-Proto` with the proxy's scheme,
-   and append or overwrite XFF so the rightmost address is the client the proxy accepted.
-   nginx: `proxy_set_header Host $http_host;`,
-   `proxy_set_header X-Forwarded-Proto $scheme;`,
-   `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`.
-   Never rely on an upstream-name `Host` rewrite: it sends image requests to blog/admin.
-   Compose's literal `TRUSTED_PROXY: docker-gateway` trusts only loopback and the discovered
-   bridge gateway at hop zero. Do not put it in `.env`; a different network/proxy topology
-   requires a new spec. Failed gateway discovery refuses boot rather than losing `Secure`
-   cookies or collapsing every reader into one limiter bucket.
-   Reject unintended public hostnames at the proxy. Reader comments compare Origin (or Referer
-   only when Origin is absent/empty) with the trusted scheme plus raw `Host`, **not**
-   `PUBLIC_BASE_URL` and never `X-Forwarded-Host`. This is #319's temporary request-authority
-   fallback, not a domain allow-list. The image authority and `IMG_HOST` cannot receive
-   same-origin comments, even under another scheme; single-origin loopback development remains
-   supported. No new blog-origin env setting is required. #276 will give validated canonical
-   identity precedence over this fallback; the explicit server override remains highest.
-6. Open `https://simonswanderlust.com/login` to create the first admin account, then follow
-   the Desk checklist above (or use the ordinary Media/editor workflow on an existing install).
-   Before public cutover, inspect the target server's observed proxy peer, confirm `Secure`
-   on an HTTPS login, and verify independent login-limit buckets from two external networks.
-   The #369 Docker Desktop production-image TCP probe covers the Linux VM host-network
-   proxy → app bridge path, not the target VPS's published-loopback/NAT configuration.
-   Also submit a synthetic comment from the blog origin: expect 201, a pending moderation row,
-   and no public entry until approval. The image origin, a third party and hostname-prefix or
-   userinfo lookalikes must receive 403. The local #319 proof used real `main.ts`/Postgres,
-   split `.localhost` hosts and a loopback proxy; it does not replace this target-server check.
+Follow the [installation guide](../docs/install.md). It is the single supported path:
+`.env` secrets and the required `PUBLIC_BASE_URL`/`IMG_HOST`, the uid-1000 data directory,
+pulling or building the image, the one-hop TLS proxy (`Host` preserved,
+`X-Forwarded-Proto`/`X-Forwarded-For` overwritten, 25 MiB bodies, read timeout above the
+900-second build deadline), the blog domain in **Settings → Site identity**, and first run.
+Compose's literal `TRUSTED_PROXY: docker-gateway` trusts only loopback and the discovered
+bridge gateway at hop zero; do not put it in `.env`.
 
-The admin panel is reachable directly at `https://simonswanderlust.com/admin/` — the same process
+Reader comments compare `Origin` (or `Referer` when `Origin` is absent) with the saved
+public domain by exact origin equality. Without a saved domain they fall back to the trusted
+scheme plus raw `Host`, never `PUBLIC_BASE_URL`, `IMG_HOST` or `X-Forwarded-Host`; the
+explicit server override, used by tests, stays highest. See
+[SECURITY.md — Public comments](../SECURITY.md#public-comments).
+
+Before a public cutover, check on the target server: the observed proxy peer, `Secure` on an
+HTTPS login, independent login-limit buckets from two external networks, and a synthetic
+comment from the blog origin (201, pending until approved; the image origin, third parties
+and lookalike hosts get 403).
+
+The admin panel is reachable directly at `https://blog.example.com/admin/` — the same process
 serves it, so there's nothing to proxy to separately anymore.
 
 The landing page is the publishing **Desk**: it features the most recently edited draft pair,
@@ -909,7 +881,7 @@ ownership and refuses active app sessions, just like restore; it does not bypass
 
 ```bash
 DATABASE_URL=postgres://images:YOUR_PASSWORD@127.0.0.1:5432/images \
-  STORAGE_DIR=./data/images PUBLIC_BASE_URL=https://img.simonswanderlust.com \
+  STORAGE_DIR=./data/images PUBLIC_BASE_URL=https://img.example.com \
   npm run upload -- ./photo.jpg trips/bucharest-2024/hero "Old town at dusk"
 ```
 

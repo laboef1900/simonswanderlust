@@ -1405,6 +1405,11 @@ preview even though the live site would load it.
 
 - `DATABASE_URL` is provided via environment (compose `.env`), never committed. `.env`,
   credentials, and binaries are git-ignored.
+- Recovery escrow is independent of the data repository: retain every still-needed AI
+  master-key generation and repository access/decryption credentials with private recovery
+  instructions. If `.env` contains a master key, separate that value into escrow rather than
+  copying it into the data repository. Keep non-secret generation associations; never expose
+  environment values or probe key presence in the Settings recovery inventory.
 - The rebuild trigger/status (`POST /rebuild`, `GET /rebuild/status`) and the DB backup routes (`GET`/`POST /backups`,
   `GET /backups/:name`) are gated by `requireAdmin` — no separate shared secret; the retired
   `BUILD_SECRET` / `x-build-secret` mechanism no longer exists.
@@ -1594,6 +1599,17 @@ this documentation records no production migration or recovery operation.
   `omitted = false` everywhere and `locked_at` derived from the restored publication history;
   a v12+ dump with missing or malformed language metadata is refused before any deletion.
   See [Language modes](#language-modes--reconfirmation-and-leakage-review-282285).
+- **Coherent recovery generations (#296):** freeze new author/admin/public mutations and
+  scheduled/storage writers, drain admitted operations and resolve partial provider updates
+  before capturing the dump and operator-managed settings/bootstrap files. Hold the freeze
+  until every live-file reader has finished or a complete private staged set exists.
+  Provider registry URLs/assignments and encrypted credential rows must match: mixing
+  pre-change keys with post-change destinations can disclose credentials. `settings.json`
+  and its existing migration copy remain outside app dumps; capture their configured paths,
+  deployment/Compose configuration, pinned image and custom overrides without master keys.
+  Losing a master key does not block content/photo recovery or local AI, but requires a
+  privately configured replacement key and re-entered/reissued remote credentials. It never
+  permits weaker encryption or reassignment of old ciphertext.
 - Image archives (`/data/backup/db/images-*.tar`) contain public variants **and private
   full-resolution originals**. Originals may retain EXIF/GPS and other source metadata:
   handle these archives as sensitive recovery material, like database dumps. Downloads remain
@@ -1687,9 +1703,25 @@ this documentation records no production migration or recovery operation.
   current retirement CLI/procedure and recheck before rolling forward. No web/CLI reset,
   metadata deletion or owner-data wipe is authorized. Password/account-only recovery leaves
   onboarding unchanged and is not a content restore.
-- In-app backups live on the **same disk** as the live data; disaster recovery requires an
-  offsite host-level backup of `./uploader/data` — see
-  [ARCHITECTURE.md](ARCHITECTURE.md#backups--disaster-recovery).
+- In-app backups live on the **same disk** as live data. Operator-managed offsite recovery
+  must cover all configured source locations, validated dumps, complete required image
+  chains and each dump's GPX companion. Full private GPX locations/times, including removed
+  or detached source points, remain sensitive in archives; public tracks cannot replace them.
+  Protect password hashes, comments, photo metadata and route originals with restricted
+  access and encryption in transit and at rest, even when AI keys are escrowed elsewhere.
+  The approved policy is **14 completed daily offsite generations**, preserving older
+  chain dependencies and the last-known-restorable generation after failed copies. It is
+  not an app pruner; local dump retention and image-archive nonpruning are unchanged.
+  Releases/public tracks are rebuildable; MDX, scheduling state, sessions and temporary work
+  do not substitute for the recovery inventory.
+- The existing admin-only `/backups` metadata/download boundaries are unchanged; no new
+  API, environment/key probe, settings download or offsite status claim is introduced.
+  The chosen encrypted system's tool, non-secret destination and independent escrow/recovery
+  method remain prerequisites for #296's offsite-only drill; #295's independent restore
+  evidence is also required. Recover in isolated paths/project/database with ingress blocked.
+  Failed/ambiguous recovery leaves that target stopped and preserves input/undo/staged sets;
+  never delete live data, recovery history or bypass ownership controls.
+  See [the complete inventory and procedure](ARCHITECTURE.md#backups--disaster-recovery).
 
 ## Known limitations
 

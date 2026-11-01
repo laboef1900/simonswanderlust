@@ -32,11 +32,11 @@ identification and license obligations, not the site's configurable identity.
 | `SimonsWanderlust` | Product token in `uploader/src/geocoding.ts`'s Nominatim User-Agent (an outbound request header, never page output) | #291 product token |
 | `simonswanderlust-images` | `uploader/package.json` package name (not page output) | #291: npm names unchanged |
 
-## Bootstrap host defaults — owned by #293
+## Bootstrap host defaults — retired by #293
 
-| Remaining match | Source (not page output) | Owner |
-| --- | --- | --- |
-| `https://img.simonswanderlust.com`, `img.simonswanderlust.com` | `PUBLIC_BASE_URL` / `IMG_HOST` fallbacks in `docker-compose.yml` and the examples in `uploader/.env.example` | #293 (required `:?` variables and placeholders) |
+`docker-compose.yml` no longer falls back to the owner's image host: `PUBLIC_BASE_URL` and
+`IMG_HOST` are required (`:?`), and `uploader/.env.example` leaves both empty with
+`example.com` hints. No owner host remains in any install default or example.
 
 The temporary #276 origin exceptions recorded on 2026-10-28 (canonical base, `robots.txt`
 sitemap, editor `.slug-base` spans, image-origin fallbacks, outbound `HTTP-Referer`/User-Agent

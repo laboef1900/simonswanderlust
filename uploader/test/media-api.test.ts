@@ -259,6 +259,33 @@ describe('MediaApi upload queue', () => {
     expect(q.snapshot().items.map((i) => i.state)).toEqual(['failed']);
   });
 
+  it('never transmits a file it can already refuse, and retry/clear treat refusals as final', async () => {
+    const api = load();
+    const { FakeXhr, instances } = fakeXhrClass([{ status: 200, body: {} }]);
+    const client = api.makeClient({ XMLHttpRequest: FakeXhr, fetch: async () => ({ status: 200, ok: true, json: async () => ({}) }) });
+    const q = api.createUploadQueue(client, { concurrency: 3 });
+    q.initialize(randomUUID());
+    q.add([
+      { name: 'a.heic', size: 10 }, { name: 'b.jpg', type: 'image/heif', size: 10 },
+      { name: 'c.jpg', type: 'image/jpeg', size: 25 * 1024 * 1024 + 1 }, { name: 'd.txt', type: 'text/plain', size: 10 },
+      // At the limit, or with nothing known about it, the server decides.
+      { name: 'e.jpg', type: 'image/jpeg', size: 25 * 1024 * 1024 }, { name: 'f.jpg' },
+      // A browser-transcoded JPEG that kept its HEIC name is sent: the type decides.
+      { name: 'IMG_7.HEIC', type: 'image/jpeg', size: 10 },
+    ]);
+    expect(q.snapshot().items.map((i) => [i.state, i.error])).toEqual([
+      ['refused', 'heic'], ['refused', 'heic'], ['refused', 'too_large'], ['refused', 'not_image'],
+      ['uploading', null], ['uploading', null], ['uploading', null],
+    ]);
+    expect(instances).toHaveLength(3);
+    instances.forEach((x) => x.resolve());
+    await flush();
+    q.retryFailed();
+    expect(instances).toHaveLength(3);
+    q.clearFinished();
+    expect(q.snapshot().items.filter((i) => i.state === 'refused')).toEqual([]);
+  });
+
   it('pauses a mid-batch 401 in place and resumes only explicitly as its captured owner', async () => {
     const owner = randomUUID(); let signedIn = owner; let refused = false;
     const calls: { name: string; fields: Record<string, unknown> }[] = [];
