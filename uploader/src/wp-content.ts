@@ -1,9 +1,6 @@
 import TurndownService from 'turndown';
-import { escapeMeta } from '../../site/src/lib/gallery-layout.js';
+import { escapeMeta } from '../public/gallery-photo-line.js';
 import { rewriteOutsideGalleries } from './body-content.js';
-
-const td = new TurndownService({ headingStyle: 'atx', bulletListMarker: '-', codeBlockStyle: 'fenced' });
-td.remove(['script', 'style', 'noscript', 'iframe']);
 
 /**
  * Elementor renders a gallery as bare `<a href="photo.jpg">` anchors carrying
@@ -34,7 +31,7 @@ interface GalleryItem { group: string; href: string; title: string }
  */
 const lineSafe = (s: string): string => s.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim();
 
-td.addRule('elementorLightboxGallery', {
+const elementorLightboxGallery: TurndownService.Rule = {
   filter: (node) =>
     node.nodeName === 'A' &&
     node.getAttribute('data-elementor-lightbox-slideshow') !== null &&
@@ -46,14 +43,14 @@ td.addRule('elementorLightboxGallery', {
     const title = lineSafe(el.getAttribute('data-elementor-lightbox-title') ?? '');
     return `\n${MARK}${group}${MARK}${href}${MARK}${title}${MARK}\n`;
   },
-});
+};
 
 /**
- * A marker that did not stand on its own line — Turndown prefixes every line of
- * a blockquote with `> ` and of a list item with `- ` — cannot become a fence
- * (a fence inside a blockquote is not a gallery to `rewriteFences`). Degrade it
- * to the inline image it stands for, so the photo survives, the re-host pass
- * still finds it (`markdownImages`), and no marker byte reaches the store.
+ * A marker that did not stand on its own line belongs to a Turndown container.
+ * Keep the importer's existing inline-image representation there, rather than
+ * synthesizing container markup while grouping standalone slideshow markers.
+ * The photo survives, the re-host pass still finds it (`markdownImages`), and
+ * no marker byte reaches the store.
  */
 function inlineImage(href: string, title: string): string {
   const alt = title.replace(/[\\[\]]/g, '\\$&');
@@ -167,9 +164,9 @@ const IMAGE_RE = /!\[((?:\\.|[^\]\\])*)\]\(\s*(?:<([^<>\n]*)>|((?:\\.|[^\s()\\]|
  * misread that caption as a photo. Gallery photos are read from the fence
  * lines themselves (`rewriteFences`), never from here.
  */
-export function markdownImages(md: string): MarkdownImage[] {
+export async function markdownImages(md: string): Promise<MarkdownImage[]> {
   const out: MarkdownImage[] = [];
-  rewriteOutsideGalleries(md, (text) => {
+  await rewriteOutsideGalleries(md, (text) => {
     for (const m of text.matchAll(IMAGE_RE)) {
       // Backslash escapes apply to ASCII punctuation only (CommonMark §2.4); a
       // backslash before anything else is literal.
@@ -183,7 +180,54 @@ export function markdownImages(md: string): MarkdownImage[] {
 }
 
 const EMPTY_TOC_HEADING = /^#{2,4}\s+(?:inhalt|contents|table of contents)\s*$/i;
-const FACTS_HEADING = /^#{2,4}\s+(?:eckdaten|key data|key facts)\b/i;
+const FACTS_HEADING = /^(?:eckdaten|key data|key facts)\b/i;
+
+/**
+ * Use Turndown's own DOM once per conversion. Only wrapper divs are transparent:
+ * paragraphs in lists, quotes, tables, figures and code are not opening prose.
+ * A later facts section cannot authorize rewriting an earlier, unrelated section.
+ */
+function openingParagraphs(node: HTMLElement): Set<HTMLElement> {
+  let root = node;
+  while (root.parentElement) root = root.parentElement;
+  const paragraphs = new Set<HTMLElement>();
+  let hasContent = false;
+  let hasFacts = false;
+  const visit = (parent: HTMLElement): boolean => {
+    for (let child = parent.firstChild; child; child = child.nextSibling) {
+      if (child.nodeType === 3) {
+        if (child.textContent?.trim()) hasContent = true;
+        continue;
+      }
+      if (child.nodeType !== 1) continue;
+      const element = child as HTMLElement;
+      const name = element.nodeName;
+      if (['SCRIPT', 'STYLE', 'NOSCRIPT', 'IFRAME', 'HEAD'].includes(name)) continue;
+      if (/^H[2-4]$/.test(name)) {
+        hasFacts = FACTS_HEADING.test(element.textContent?.trim() ?? '');
+        if (hasFacts || hasContent) return true;
+      } else if (
+        ['HTML', 'BODY', 'X-TURNDOWN', 'DIV'].includes(name) &&
+        !element.classList.contains('elementor-widget-gallery') &&
+        !element.classList.contains('elementor-image-gallery')
+      ) {
+        if (visit(element)) return true;
+      } else {
+        if (name === 'P' && element.textContent?.trim() &&
+            !element.querySelector('[data-elementor-lightbox-slideshow]')) {
+          paragraphs.add(element);
+        }
+        if (element.textContent?.trim() || element.querySelector('img, [data-elementor-lightbox-slideshow]')) {
+          hasContent = true;
+        }
+      }
+    }
+    return false;
+  };
+  visit(root);
+  if (!hasFacts) paragraphs.clear();
+  return paragraphs;
+}
 
 /**
  * Repair the two structural artefacts produced by the Elementor story template:
@@ -192,19 +236,14 @@ const FACTS_HEADING = /^#{2,4}\s+(?:eckdaten|key data|key facts)\b/i;
  *    a colon-ended heading followed by an orphan paragraph;
  *  • the empty WordPress TOC slot disappears when the next real node is media
  *    or another heading (a real authored contents section is preserved).
- *
- * Before the facts block, hard breaks came from one Elementor intro paragraph.
- * They are paragraph boundaries, not line-break typography.
  */
 function cleanImportedSemantics(md: string): string {
   const lines = md.split('\n');
   const out: string[] = [];
-  let beforeFacts = true;
 
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i] ?? '';
     const trimmed = line.trim();
-    if (FACTS_HEADING.test(trimmed)) beforeFacts = false;
 
     const heading = /^(##\s+)(.+?):\s{2,}$/.exec(line);
     const subtitle = lines[i + 1]?.trim() ?? '';
@@ -223,10 +262,6 @@ function cleanImportedSemantics(md: string): string {
       if (next === '' || /^(?:!\[|```gallery\b|#{1,6}\s)/.test(next)) continue;
     }
 
-    if (beforeFacts && !trimmed.startsWith('#') && / {2,}$/.test(line)) {
-      out.push(line.replace(/ {2,}$/, ''), '');
-      continue;
-    }
     out.push(line);
   }
 
@@ -238,6 +273,22 @@ function cleanImportedSemantics(md: string): string {
  *  (headings/paragraphs/lists/links/images) and drops wrapper divs/styles.
  *  `attachments` (WXR attachment id → URL) enables classic-shortcode expansion. */
 export function htmlToMarkdown(html: string, attachments?: ReadonlyMap<string, string>): string {
+  const td = new TurndownService({ headingStyle: 'atx', bulletListMarker: '-', codeBlockStyle: 'fenced' });
+  td.remove(['script', 'style', 'noscript', 'iframe']);
+  td.addRule('elementorLightboxGallery', elementorLightboxGallery);
+  let opening: Set<HTMLElement> | undefined;
+  td.addRule('openingParagraphBreak', {
+    filter: (node) => {
+      if (node.nodeName !== 'BR') return false;
+      opening ??= openingParagraphs(node);
+      for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+        if (parent.nodeName === 'CODE' || parent.nodeName === 'PRE') return false;
+        if (parent.nodeName === 'P') return opening.has(parent);
+      }
+      return false;
+    },
+    replacement: () => '\n\n',
+  });
   const markdown = foldGalleries(
     td
       .turndown(attachments ? expandShortcodes(html, attachments) : html)

@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { setImmediate } from 'node:timers/promises';
 import { ui } from '../../site/src/i18n/ui.js';
 import { memoryMediaStore, type MediaQuery, type MediaStore, type NewMediaItem } from '../src/media-store.js';
 import { normalizeGalleryFences, type ImageMeta } from '../src/body-content.js';
 import { editorDocument } from './editor-dom-harness.js';
+import { browserScript, galleryCodecBindings } from './gallery-browser-module.js';
 
 const scripts = ['media-api', 'picker-selection', 'media-picker', 'gallery-library', 'gallery-fence']
-  .map((name) => readFileSync('public/' + name + '.js', 'utf8'));
+  .map((name) => browserScript(name + '.js'));
 const copy = Object.fromEntries(Object.entries(ui.en)
   .filter(([key]) => key.startsWith('editor.chrome.'))
   .map(([key, value]) => [key.slice('editor.chrome.'.length), value]));
@@ -97,6 +97,7 @@ function openPicker(store: MediaStore, options: PageOptions = {}) {
     return options.list ? options.list(url, result) : result;
   };
   const ctx: Record<string, unknown> = {
+    ...galleryCodecBindings,
     document: dom.document, EditorCopy: { en: copy }, fetch: fetcher, URL,
     matchMedia: () => ({ matches: options.compact ?? false }),
     location: { href: '' },
@@ -121,10 +122,11 @@ function openPicker(store: MediaStore, options: PageOptions = {}) {
       return { rows, failed };
     })
     : undefined;
-  mediaPicker.open({
+  const reopen = () => mediaPicker.open({
     multiple: options.multiple, preselect: options.preselect, resolve, captions: options.captions,
     onPick: (item, picks) => { picked.push(item); pickedOptions.push(picks); },
   });
+  reopen();
   const dialog = dom.document.querySelector('dialog')!;
   const required = (selector: string) => {
     const element = dialog.querySelector(selector);
@@ -143,6 +145,16 @@ function openPicker(store: MediaStore, options: PageOptions = {}) {
   return {
     dom, dialog, trigger, picked, pickedOptions, methods, required, galleryFence, rows, captionFields,
     next: buttons[1]!, prev: buttons[0]!, cancel: buttons[2]!, choose: buttons[3]!,
+    reopen,
+    pageLabel: () => required('.admin-modal__foot').querySelector('span')!.textContent,
+    pressEnter() {
+      // Model the native button default action without refocusing the pager.
+      // The harness does not blur on disabled: tests also assert it never becomes disabled.
+      const active = dom.document.activeElement;
+      if (!active) throw new Error('No focused control');
+      const event = active.fire('keydown', { key: 'Enter' });
+      if (!event.defaultPrevented && active.tagName === 'BUTTON') active.click();
+    },
     captions: () => captionFields().map((field) => field.value),
     typeCaption(index: number, value: string) {
       const field = captionFields()[index]!;
@@ -327,6 +339,225 @@ describe('media picker folders', () => {
   });
 });
 
+describe('media picker keyboard pagination', () => {
+  async function pagedStore() {
+    const store = memoryMediaStore({ baseUrl });
+    for (let i = 0; i < 81; i++) await add(store, 'photo-' + i, '', 'Photo ' + i);
+    return store;
+  }
+
+  it('keeps Next focused for two Enter presses and retains focus at both bounds', async () => {
+    const requests: number[] = [];
+    const page = openPicker(await pagedStore(), {
+      multiple: true,
+      list: async (url, result) => { requests.push(Number(url.searchParams.get('page'))); return result; },
+    });
+    await page.settle();
+    expect(page.prev.getAttribute('aria-disabled')).toBe('true');
+    expect(page.next.getAttribute('aria-disabled')).toBe('false');
+    page.next.focus();
+    for (const destination of [2, 3]) {
+      page.pressEnter();
+      expect(page.next.disabled).toBe(false);
+      expect(page.next.getAttribute('aria-disabled')).toBe('true');
+      expect(page.dom.document.activeElement).toBe(page.next);
+      await page.settle();
+      expect(page.pageLabel()).toBe('Page ' + destination);
+      expect(page.dom.document.activeElement).toBe(page.next);
+      expect(page.next.disabled).toBe(false);
+      expect(page.next.getAttribute('aria-disabled')).toBe(destination === 3 ? 'true' : 'false');
+    }
+    page.pressEnter(); // Last page: still focused, but no out-of-range request.
+    await page.settle();
+    expect(requests).toEqual([1, 2, 3]);
+    expect(page.dom.document.activeElement).toBe(page.next);
+    page.prev.focus();
+    for (const destination of [2, 1]) {
+      page.pressEnter();
+      expect(page.prev.disabled).toBe(false);
+      expect(page.prev.getAttribute('aria-disabled')).toBe('true');
+      await page.settle();
+      expect(page.pageLabel()).toBe('Page ' + destination);
+      expect(page.dom.document.activeElement).toBe(page.prev);
+      expect(page.prev.disabled).toBe(false);
+    }
+    expect(page.prev.getAttribute('aria-disabled')).toBe('true');
+    page.pressEnter();
+    await page.settle();
+    expect(requests).toEqual([1, 2, 3, 2, 1]);
+    expect(page.dom.document.activeElement).toBe(page.prev);
+  });
+
+  it('ignores repeated keyboard and pointer activations while the next page is pending', async () => {
+    const pending = Promise.withResolvers<Response>();
+    let nextResponse: Response | undefined;
+    const requests: number[] = [];
+    const page = openPicker(await pagedStore(), {
+      list: async (url, result) => {
+        const number = Number(url.searchParams.get('page'));
+        requests.push(number);
+        if (number === 2) { nextResponse = result; return pending.promise; }
+        return result;
+      },
+    });
+    await page.settle();
+    page.next.focus();
+    page.pressEnter();
+    await page.settle();
+    page.pressEnter();
+    page.next.click();
+    page.prev.click();
+    await page.settle();
+    expect(requests).toEqual([1, 2]);
+    expect(page.pageLabel()).toBe('Page 2');
+    expect(page.required('.media-grid').getAttribute('aria-busy')).toBe('true');
+    expect(page.prev.getAttribute('aria-disabled')).toBe('true');
+    expect(page.next.getAttribute('aria-disabled')).toBe('true');
+    expect(page.prev.disabled).toBe(false);
+    expect(page.next.disabled).toBe(false);
+    expect(page.dom.document.activeElement).toBe(page.next);
+    pending.resolve(nextResponse!);
+    await page.settle();
+    expect(page.required('.media-grid').getAttribute('aria-busy')).toBe('false');
+    expect(page.next.getAttribute('aria-disabled')).toBe('false');
+    page.pressEnter();
+    await page.settle();
+    expect(requests).toEqual([1, 2, 3]);
+    expect(page.pageLabel()).toBe('Page 3');
+    expect(page.dom.document.activeElement).toBe(page.next);
+  });
+
+  it('retains focus on a failed page, blocks onward paging and allows returning to the previous page', async () => {
+    const requests: number[] = [];
+    const page = openPicker(await pagedStore(), {
+      list: async (url, result) => {
+        const number = Number(url.searchParams.get('page'));
+        requests.push(number);
+        return number === 2 ? response({}, 500) : result;
+      },
+    });
+    await page.settle();
+    page.next.focus();
+    page.pressEnter();
+    await page.settle();
+    expect(page.required('.media-picker__empty').textContent).toBe(copy.pickerPhotosFailed);
+    expect(page.required('.media-grid').getAttribute('aria-busy')).toBe('false');
+    expect(page.dom.document.activeElement).toBe(page.next);
+    expect(page.next.disabled).toBe(false);
+    expect(page.next.getAttribute('aria-disabled')).toBe('true');
+    page.pressEnter();
+    await page.settle();
+    expect(requests).toEqual([1, 2]);
+    expect(page.prev.getAttribute('aria-disabled')).toBe('false');
+    page.prev.focus();
+    page.pressEnter();
+    await page.settle();
+    expect(page.pageLabel()).toBe('Page 1');
+    expect(page.titles()).toHaveLength(40);
+    expect(page.dom.document.activeElement).toBe(page.prev);
+    expect(requests).toEqual([1, 2, 1]);
+  });
+
+  it('keeps both pagers unavailable without native disabling for empty results', async () => {
+    const requests: number[] = [];
+    const page = openPicker(memoryMediaStore({ baseUrl }), {
+      list: async (url, result) => { requests.push(Number(url.searchParams.get('page'))); return result; },
+    });
+    await page.settle();
+    for (const button of [page.prev, page.next]) {
+      expect(button.disabled).toBe(false);
+      expect(button.getAttribute('aria-disabled')).toBe('true');
+      button.focus();
+      page.pressEnter();
+      expect(page.dom.document.activeElement).toBe(button);
+    }
+    await page.settle();
+    expect(requests).toEqual([1]);
+    expect(page.pageLabel()).toBe('Page 1');
+    expect(page.required('.media-picker__empty').textContent).toBe(copy.pickerPhotosEmpty);
+  });
+
+  it.each(['search', 'cancel'] as const)('does not steal focus from %s when a pending page lands', async (destination) => {
+    const pending = Promise.withResolvers<Response>();
+    let nextResponse: Response | undefined;
+    const page = openPicker(await pagedStore(), {
+      list: async (url, result) => {
+        if (url.searchParams.get('page') === '2') { nextResponse = result; return pending.promise; }
+        return result;
+      },
+    });
+    await page.settle();
+    page.next.focus();
+    page.pressEnter();
+    await page.settle();
+    const target = destination === 'search' ? page.required('input') : page.cancel;
+    target.focus();
+    pending.resolve(nextResponse!);
+    await page.settle();
+    expect(page.pageLabel()).toBe('Page 2');
+    expect(page.dom.document.activeElement).toBe(target);
+  });
+
+  it.each(['success', 'failure'] as const)('ignores a superseded page %s after a new search settles', async (outcome) => {
+    const pending = Promise.withResolvers<Response>();
+    let nextResponse: Response | undefined;
+    const page = openPicker(await pagedStore(), {
+      list: async (url, result) => {
+        if (url.searchParams.get('page') === '2') { nextResponse = result; return pending.promise; }
+        return result;
+      },
+    });
+    await page.settle();
+    page.next.focus();
+    page.pressEnter();
+    await page.settle();
+    const search = page.required('input');
+    search.focus();
+    page.search('Photo 80');
+    page.flushSearch();
+    await page.settle();
+    if (outcome === 'success') pending.resolve(nextResponse!);
+    else pending.reject(new Error('stale page failure'));
+    await page.settle();
+    expect(page.titles()).toEqual(['Photo 80']);
+    expect(page.pageLabel()).toBe('Page 1');
+    expect(page.prev.getAttribute('aria-disabled')).toBe('true');
+    expect(page.next.getAttribute('aria-disabled')).toBe('true');
+    expect(page.required('.media-grid').getAttribute('aria-busy')).toBe('false');
+    expect(page.dom.document.activeElement).toBe(search);
+  });
+
+  it.each(['success', 'failure'] as const)('does not restore stale pager focus after close and reopen (%s)', async (outcome) => {
+    const pending = Promise.withResolvers<Response>();
+    let nextResponse: Response | undefined;
+    const page = openPicker(await pagedStore(), {
+      list: async (url, result) => {
+        if (url.searchParams.get('page') === '2') { nextResponse = result; return pending.promise; }
+        return result;
+      },
+    });
+    await page.settle();
+    page.next.focus();
+    page.pressEnter();
+    await page.settle();
+    page.dialog.fire('keydown', { key: 'Escape' });
+    expect(page.dom.document.activeElement).toBe(page.trigger);
+    page.reopen();
+    await page.settle();
+    const reopened = page.dom.document.querySelector('dialog')!;
+    const search = reopened.querySelector('input')!;
+    search.focus();
+    if (outcome === 'success') pending.resolve(nextResponse!);
+    else pending.reject(new Error('closed page failure'));
+    await page.settle();
+    expect(page.dialog.isConnected).toBe(false);
+    expect(page.dom.document.querySelector('dialog')).toBe(reopened);
+    expect(reopened.querySelector('.admin-modal__foot')!.querySelector('span')!.textContent).toBe('Page 1');
+    expect(page.dom.document.activeElement).toBe(search);
+    expect(page.picked).toEqual([]);
+  });
+});
+
 describe('gallery picker sources the gallery’s own photos from Media', () => {
   const athens = baseUrl + '/athens';
   const gone = baseUrl + '/imported/gone';
@@ -370,10 +601,10 @@ describe('gallery picker sources the gallery’s own photos from Media', () => {
     page.choose.click();
     const items = pickedGallery(page);
     expect(items.map((item) => item.src)).toEqual([athens, gone]);
-    const de = normalizeGalleryFences(page.galleryFence.serialize(items, 'de', [], postMeta), copied).images;
+    const de = (await normalizeGalleryFences(page.galleryFence.serialize(items, 'de', [], postMeta), copied)).images;
     expect(de[athens]).toEqual({ width: 640, height: 480, alt: 'Markt in Athen', caption: '', format: 'jpeg' });
     expect(de[gone]).toEqual(copied[gone]);
-    const en = normalizeGalleryFences(page.galleryFence.serialize(items, 'en', [], postMeta), copied).images;
+    const en = (await normalizeGalleryFences(page.galleryFence.serialize(items, 'en', [], postMeta), copied)).images;
     expect(en[athens]).toEqual({ width: 640, height: 480, alt: 'Athens market stalls', caption: 'Morning', format: 'jpeg' });
   });
 
@@ -385,7 +616,7 @@ describe('gallery picker sources the gallery’s own photos from Media', () => {
     await settleAll(page);
     expect(page.choose.disabled).toBe(false);
     page.choose.click();
-    const de = normalizeGalleryFences(page.galleryFence.serialize(pickedGallery(page), 'de', [], postMeta), copied).images;
+    const de = (await normalizeGalleryFences(page.galleryFence.serialize(pickedGallery(page), 'de', [], postMeta), copied)).images;
     expect(de).toEqual(copied);
   });
 });
@@ -475,11 +706,11 @@ describe('gallery-local caption controls in the picker', () => {
     const items = page.picked[0] as PickedItem[];
     const fence = page.galleryFence.serialize(items, 'en', [], {}, picks.overrides);
     expect(fence.split('\n')).toHaveLength(items.length + 2); // fence, one line per photo, fence
-    expect(page.galleryFence.parse(fence).lines.map((line) => [line.src, line.captionOverride]))
+    expect(page.galleryFence.parse(fence.slice(fence.indexOf('\n') + 1, fence.lastIndexOf('\n'))).lines.map((line) => [line.src, line.captionOverride]))
       .toEqual([[athens, hostile], [rhodes, undefined], [gone, '']]);
     // The URL-keyed images map still holds Media's caption, so another gallery
     // using the same photo cannot pick up this gallery's edit.
-    const saved = normalizeGalleryFences(fence, {});
+    const saved = (await normalizeGalleryFences(fence, {}));
     expect(saved.images[athens]?.caption).toBe('Morning');
     expect(JSON.stringify(saved.images)).not.toContain('Local');
   });

@@ -1,4 +1,8 @@
 import { safeFetch } from './safe-fetch.js';
+import { readFileSync } from 'node:fs';
+import { normalizeCanonicalOrigin } from '../../site/src/lib/site-identity.js';
+
+const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
 
 export interface LocationResult { label: string; lat: number; lng: number }
 export class GeocodingError extends Error {
@@ -10,10 +14,12 @@ export class GeocodingError extends Error {
 /** One instance per app: the provider's limit is shared by all users and tabs. */
 export function createGeocoder({
   endpoint,
+  canonicalOrigin = () => null,
   now = Date.now,
   request = safeFetch,
 }: {
   endpoint: () => string;
+  canonicalOrigin?: () => string | null;
   now?: () => number;
   request?: typeof safeFetch;
 }) {
@@ -36,13 +42,14 @@ export function createGeocoder({
     try {
       const url = new URL(base);
       url.search = new URLSearchParams({ q: query, format: 'jsonv2', limit: '5', 'accept-language': 'en' }).toString();
+      const origin = normalizeCanonicalOrigin(canonicalOrigin());
       const response = await request(url.href, {
         timeoutMs: 10_000,
         maxBytes: 256 * 1024,
         maxRedirects: 0,
         fetchImpl: (target, init) => fetch(target, {
           ...init,
-          headers: { ...init?.headers, 'User-Agent': 'SimonsWanderlust/1.0 (https://simonswanderlust.com; editor location lookup)' },
+          headers: { ...init?.headers, 'User-Agent': `SimonsWanderlust/${version} (${origin ? `+${origin}; ` : ''}editor location lookup)` },
         }),
       });
       const data: unknown = JSON.parse(response.buffer.toString('utf8'));

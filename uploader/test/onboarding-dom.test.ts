@@ -6,7 +6,8 @@ import { editorDocument, type EditorElement } from './editor-dom-harness.js';
 import { ui } from '../../site/src/i18n/ui.js';
 import type { OnboardingLanguage } from '../src/onboarding.js';
 
-const sources = ['desk.js', 'language.js', 'admin-confirm.js', 'onboarding.js'].map((name) => readFileSync('public/' + name, 'utf8'));
+// The Desk loads build-reporting.js before onboarding.js; failed-build wording comes from it.
+const sources = ['build-reporting.js', 'desk.js', 'language.js', 'admin-confirm.js', 'onboarding.js'].map((name) => readFileSync('public/' + name, 'utf8'));
 type StepState = 'done' | 'todo' | 'in_progress' | 'attention';
 type View = { status: 'retired' } | {
   status: 'open' | 'dismissed'; complete: boolean;
@@ -52,6 +53,10 @@ async function page(options: {
     EditorCopy: Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [locale,
       Object.fromEntries(Object.entries(strings).filter(([key]) => key.startsWith('editor.chrome.'))
         .map(([key, text]) => [key.slice('editor.chrome.'.length), text])),
+    ])),
+    BuildCopy: Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [locale,
+      Object.fromEntries(Object.entries(strings).filter(([key]) => key.startsWith('admin.build.'))
+        .map(([key, text]) => [key.slice('admin.build.'.length), text])),
     ])),
     fetch: async (url: string, init?: { method?: string; body?: string; cache?: string }) => {
       const request = { url, method: init?.method ?? 'GET', body: init?.body, cache: init?.cache };
@@ -316,6 +321,10 @@ async function deskPage(options: {
     EditorCopy: { en: Object.fromEntries(Object.entries(ui.en)
       .filter(([key]) => key.startsWith('editor.chrome.'))
       .map(([key, text]) => [key.slice('editor.chrome.'.length), text])) },
+    // The dynamic copy endpoint also serves build-status copy (#297).
+    BuildCopy: { en: Object.fromEntries(Object.entries(ui.en)
+      .filter(([key]) => key.startsWith('admin.build.'))
+      .map(([key, text]) => [key.slice('admin.build.'.length), text])) },
     matchMedia: () => ({ matches: false, addEventListener() {} }),
     fetch: async (url: string, init?: { method?: string; body?: string; cache?: string }) => {
       const request = { url, method: init?.method ?? 'GET', body: init?.body, cache: init?.cache };
@@ -330,6 +339,9 @@ async function deskPage(options: {
       if (url === '/posts') return options.posts ? options.posts() : Response.json([]);
       if (url === '/media/queue') return Response.json({ pending: 0, running: 0 });
       if (url === '/health') return Response.json({ release: false });
+      // The Desk reads the language mode (#284) and, for admins, build status (#297).
+      if (url === '/language') return Response.json({ primary: 'de', locales: ['de', 'en'], lockedAt: null, updatedAt: '2026-10-27T00:00:00.000Z' });
+      if (url === '/rebuild/status') return Response.json({ live: null, running: null, last: null, record: 'missing' });
       throw new Error('Unexpected Desk request: ' + url);
     },
   };
@@ -535,7 +547,8 @@ describe('Optional Desk language configuration', () => {
     const h = await page({ route: (request) => {
       if (request.method === 'PUT') {
         stored = { ...mode, updatedAt: '2026-10-29T00:00:00.000Z' };
-        return Response.json(stored);
+        // A committed change answers with its build attempt beside the configuration (#297).
+        return Response.json({ ...stored, build: { ok: true, attemptId: 'r1', release: 'r1' } });
       }
       return Response.json({ ...view(), language: stored });
     } });
@@ -556,6 +569,7 @@ describe('Optional Desk language configuration', () => {
     expect(h.document.activeElement).toBe(h.action('language-save'));
     expect(h.root.querySelectorAll('[data-step]')).toHaveLength(5);
     expect(h.root.querySelector('[data-onboarding-action="finish"]')).toBeNull();
+    expect(h.get('.onboarding-language-status').textContent).toBe(ui.en['editor.chrome.onboardingLanguageSaved']);
   });
 
   it('acknowledges the same-mode request only for this page, without adding a completion state', async () => {
@@ -633,12 +647,13 @@ describe('Optional Desk language configuration', () => {
     expect(h.requests.map((request) => request.method)).toEqual(['GET', 'PUT', 'GET', 'GET']);
   });
 
-  it('adopts persisted 502 state and offers the existing saved-state rebuild without another write', async () => {
+  it('adopts a committed mode whose build failed and offers the existing saved-state rebuild without another write', async () => {
     let persisted = false;
     const h = await page({ route: (request) => {
       if (request.method === 'PUT') {
         persisted = true;
-        return Response.json({ code: 'language_build_failed', persisted: true, language: modes[1] }, { status: 502 });
+        // #297: the committed configuration answers 200 beside its failed build attempt.
+        return Response.json({ ...modes[1], build: { ok: false, attemptId: 'failed', code: 'build_failed', error: 'The site generator stopped with an error.' } });
       }
       return Response.json({ ...view(), language: persisted ? modes[1] : modes[2] });
     } });
@@ -647,6 +662,7 @@ describe('Optional Desk language configuration', () => {
     await h.answer(true);
     expect(selected(h)).toBe(1);
     expect(h.get('.onboarding-language').querySelector('a')?.href).toBe('/admin/settings.html#site');
+    expect(h.get('.onboarding-language-status').textContent).toContain(ui.en['admin.build.failedChange'].replace('{error}', ui.en['admin.build.failure.build_failed']));
     expect(h.requests.map((request) => request.method)).toEqual(['GET', 'PUT', 'GET']);
     await h.click('refresh');
     expect(selected(h)).toBe(1);

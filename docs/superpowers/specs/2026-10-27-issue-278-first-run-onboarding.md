@@ -822,3 +822,52 @@ Evidence lives in the worktree's ignored
 qualification. Parent review, exact-head CI and eventual stack integration remain
 separate gates; no owner content, production data or restore policy changed.
 
+## #279 current-dev integration (2026-11-01)
+
+Merged `dev` after the language (#284/#285), identity (#275/#276) and publish-recovery
+(#297) changes landed. Decisions:
+
+- **Boot order.** `captureBootEvidence` still runs first (read-only, before any sweep), then
+  dev's pre-language-migration recovery dump (only when `posts` exists, so that install is
+  already retired by schema evidence), then `initializeApplicationSchema` and onboarding
+  classification. `ensureSchema` creates `site_language` before `onboarding_state`.
+- **Bootstrap-only target catalog.** `assertBootstrapOnlyTarget` admits dev's schema exactly:
+  `posts.omitted` (additive, `NOT NULL DEFAULT false`, with the `posts_omitted_unpublished`
+  CHECK), and the `site_language` singleton (columns, defaults, primary key and its three
+  CHECKs). `site_language` counts as prior-schema evidence, may hold its boot seed in an
+  otherwise empty target, and preparation refuses any non-seed language row (a chosen or
+  locked mode is owner configuration, like a non-default identity).
+- **Restore.** `restoreWithOnboarding` forwards #276's `originRoles`, so the fenced native
+  restore keeps the canonical-origin topology check.
+- **Routes.** `/onboarding` joins `APP_SEGMENTS` (#287). The read-only reverse-collision check
+  of 2026-10-31 covered `onboarding` against the owner database: no story or page uses it.
+- **Desk.** The authenticated-context loader keeps onboarding activation and adds dev's
+  admin-only build status and the language-mode read before the first Desk paint.
+
+Verification at the merge: uploader `tsc` 0 and the PostgreSQL-enabled suite 3996/3996
+(one earlier run had a single load-sensitive failure that passed alone and on the rerun),
+including the real `pg_dump`/`psql` SQL-recovery test against an owned fixture database;
+site 689/689, `astro check` 0 errors, `astro build` OK. The real app from this worktree
+classified a fresh install as eligible, refused anonymous reads (401), dismissed/resumed,
+refused an early finish (409), advanced photo/story/publish from real upload, draft and
+publish requests, finished to `retired` and then refused resume (409). The Desk in managed
+Chromium at 1280 px showed the checklist, build status and unset-domain notice without
+horizontal overflow.
+
+## #280 current-dev integration (2026-11-01)
+
+Merged `dev` after #279 landed. #280 had carried its own copy of the bootstrap catalog's
+`site_language`/`posts.omitted` admission; the merge keeps one copy of each entry and #280's
+stricter language-row check (validated dates, `DEFAULT_LANGUAGE`). Desk keeps #280's loader,
+which reads the language mode inside the authenticated-context load so its failure is
+retryable, plus dev's admin build status. The map page keeps #280's empty state (no "0 pins"
+badge, no map island) together with dev's singular/plural pin label; dev's count-label test
+now asserts the empty state for zero trips. MapPage's lazy `await import()` of the map
+module is resolved to the module under test by the WebGL fallback test harness.
+
+Verification at the merge: uploader `tsc` 0 and the PostgreSQL-enabled suite 4028/4028
+(including the real `pg_dump`/`psql` recovery test); site 693/693 plus the four-mode
+`empty-build` PostgreSQL integration 4/4; `astro check` 0 errors; `astro build` OK. The real
+app built an empty install whose DE/EN map pages showed the empty state with no map island;
+after one real publish, managed Chromium loaded the lazily imported map module, rendered the
+canvas and pin and labelled it "1 Pin-Standort".

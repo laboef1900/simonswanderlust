@@ -1,3 +1,5 @@
+import { idleBuildState } from './build-fixture.js';
+import { TEST_TRUST } from './trusted-proxy-fixture.js';
 import { describe, expect, it, beforeEach } from 'vitest';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -31,7 +33,8 @@ function fakeStore(init: Settings = { ...defaultSettings(), importDelayMs: 0, im
 function stubBuilder() {
   const calls: number[] = [];
   const builder: SiteBuilder = {
-    build: async () => { calls.push(1); return { ok: true, release: 'r1' }; },
+    ...idleBuildState,
+    build: async () => { calls.push(1); return { ok: true, attemptId: 'r1', release: 'r1' }; },
     hasRelease: () => true,
     quiesce: async () => {},
   };
@@ -53,6 +56,7 @@ function stubBackup(): DbBackup {
 }
 
 const queue: EncodeQueue = {
+  withAdmission: (_key, operation) => operation(),
   enqueue: () => { throw new BacklogFullError(); },
   isActive: () => false,
   recover: async () => 0,
@@ -69,6 +73,7 @@ function build(extra: Partial<ServerConfig> = {}) {
   const settings = extra.settings ?? fakeStore();
   const b = stubBuilder();
   const app = buildServer({
+    trustProxy: TEST_TRUST,
     storageDir: dir, baseUrl: 'https://img.simonswanderlust.com',
     users, sessions, settings, secrets: memorySecretsStore(),
     posts, pages: memoryPageStore(),

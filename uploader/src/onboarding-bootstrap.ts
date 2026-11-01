@@ -180,14 +180,13 @@ const NULLABLE_COLUMNS: Record<string, readonly string[]> = {
   posts: ['title_image','stops','route','key_facts','published_snapshot','published_at','scheduled_at'],
   post_routes: ['geometry'], media: ['error','taken_at','camera','lens','lat','lng','format','encoding','uploaded_by'],
   import_jobs: ['finished_at','summary','error'], site_identity: ['saved_at','canonical_origin'],
-  comments: ['email','sender_hash'], onboarding_state: ['dismissed_at','retired_at'],
-  site_language: ['locked_at'],
+  comments: ['email','sender_hash'], site_language: ['locked_at'], onboarding_state: ['dismissed_at','retired_at'],
 };
 const PRIMARY_KEYS: Record<string, readonly string[]> = {
   users: ['id'], sessions: ['id'], posts: ['id'], post_revisions: ['id'], post_routes: ['translation_key'],
   route_cleanup: ['source_id'], pages: ['key','locale'], page_revisions: ['id'], media: ['key'], media_folders: ['path'],
-  import_jobs: ['id'], app_secrets: ['key'], site_identity: ['id'], site_identity_assets: ['role'], site_language: ['id'],
-  comments: ['id'], onboarding_state: ['singleton'],
+  import_jobs: ['id'], app_secrets: ['key'], site_identity: ['id'], site_identity_assets: ['role'],
+  comments: ['id'], site_language: ['id'], onboarding_state: ['singleton'],
 };
 const BOOTSTRAP_DEFAULTS: Record<string, Record<string, string>> = {
   users: { is_admin: 'false', created_at: 'now()' }, sessions: { created_at: 'now()' },

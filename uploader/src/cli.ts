@@ -15,6 +15,8 @@ import { createPool, type DbPool } from './db.js';
 import { readLanguage, type LanguageConfig } from './language.js';
 import { prepareNativeRestore, restoreWithOnboarding } from './onboarding-restore.js';
 import { publishRestoreFence } from './onboarding-fence.js';
+import { buildFailureMessage, type BuildFailureCode } from './build-state.js';
+import { configuredOriginRoles, validateCanonicalRoles, type OriginRoles } from './canonical-origin.js';
 
 /** Reusable: process an in-memory image and store its variants.
  * Keys are content-hash versioned like POST /upload, so a re-upload mints a
@@ -108,8 +110,11 @@ async function restoreMain(args: string[]): Promise<void> {
     process.exit(1);
   }
   let dump: Dump;
+  let originRoles: OriginRoles;
   try {
     dump = readDump(file);
+    originRoles = configuredOriginRoles();
+    if (dump.version >= IDENTITY_DUMP_VERSION) validateCanonicalRoles(dump.tables.site_identity![0]!.canonical_origin, originRoles);
     await validateIdentityAssets(dump);
     await verifyRouteArchive(file, dump.routeArchive, dump.tables.post_routes ?? []);
   } catch (e) {
@@ -199,7 +204,7 @@ async function restoreMain(args: string[]): Promise<void> {
     }
     console.log(`pre-restore recovery set verified: ${preDump}`);
     const counts = await restoreWithOnboarding(pool, file, {
-      storageDir: process.env.STORAGE_DIR ?? '/data/images', routeFiles, assertOwner,
+      storageDir: process.env.STORAGE_DIR ?? '/data/images', routeFiles, assertOwner, originRoles,
     });
     console.log(`restored ${counts.users} users, ${counts.posts} posts, ${counts.pages} pages, ${counts.media} media rows, ${counts.comments} comments, and ${counts.routes} private routes (all sessions invalidated).`);
     console.log(counts.appSecrets === null ? 'app_secrets preserved.' : `restored ${counts.appSecrets} encrypted app_secrets rows.`);
@@ -385,13 +390,19 @@ export async function triggerRebuild(
     // /rebuild answers 200 with `{ ok: false, error }` for a FAILED build — a
     // status check alone would report a schema error as success.
     if (status !== 200) throw new Error(`the app answered ${status}: ${body.slice(0, 300)}`);
-    let outcome: { ok?: boolean; release?: string; error?: string };
+    let outcome: { ok?: boolean; release?: string; code?: unknown };
     try {
       outcome = JSON.parse(body) as typeof outcome;
     } catch {
       throw new Error(`the app answered 200 with a non-JSON body: ${body.slice(0, 300)}`);
     }
-    if (!outcome.ok) throw new Error(outcome.error ?? 'the build failed without a message');
+    if (!outcome.ok) {
+      const code: BuildFailureCode = outcome.code === 'build_timeout' || outcome.code === 'build_failed'
+        || outcome.code === 'build_unavailable' || outcome.code === 'no_space'
+        || outcome.code === 'release_write_failed' || outcome.code === 'build_stopped'
+        ? outcome.code : 'internal';
+      throw new Error(`rebuild failed (${code}): ${buildFailureMessage(code)} — details: docker compose logs app`);
+    }
     return outcome.release ?? '(unnamed release)';
   } finally {
     await sessions.destroy(token);
@@ -446,7 +457,7 @@ async function rebuildMain(): Promise<void> {
         ? `nothing is listening on 127.0.0.1:${port}. A rebuild runs INSIDE the app process, which holds ` +
           'the build/encode lock, so the app has to be up. Start it (`docker compose up -d app`); if there ' +
           'is no release at all yet, boot builds one by itself.'
-        : `rebuild failed: ${msg}`,
+        : msg,
     );
     process.exitCode = 1;
   } finally {
@@ -483,7 +494,7 @@ async function main(): Promise<void> {
   }
   const opts: StorageOptions = {
     storageDir: process.env.STORAGE_DIR ?? './data/images',
-    baseUrl: process.env.PUBLIC_BASE_URL ?? 'https://img.simonswanderlust.com',
+    baseUrl: process.env.PUBLIC_BASE_URL ?? 'http://localhost:3000',
   };
   const settingsPath = process.env.SETTINGS_PATH ?? join(dirname(opts.storageDir), 'settings.json');
   const current = createSettingsStore({ path: settingsPath, defaults: defaultSettings() }).get();

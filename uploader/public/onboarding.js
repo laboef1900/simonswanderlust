@@ -336,15 +336,18 @@ window.Onboarding = (function () {
           body: JSON.stringify(next),
         });
         const result = await response.json();
-        if (response.ok || (response.status === 502 && result.code === 'language_build_failed' && result.persisted === true)) {
-          const saved = languageFrom(response.ok ? result : result.language);
+        if (response.ok) {
+          // #297: a committed change answers 200 with its build attempt beside the
+          // stored configuration; a same-mode save is a no-op without a build.
+          const { build, ...stored } = result;
+          const saved = languageFrom(stored);
           if (!sameMode(saved, next)) throw new Error('unavailable');
           selection = saved;
           selectionDirty = false;
-          languageRecovery = !response.ok;
-          languageNotice = response.ok
-            ? (sameMode(current.language, next) ? copy.onboardingLanguageAccepted : copy.onboardingLanguageSaved)
-            : copy.languageBuildFailed;
+          languageRecovery = build !== undefined && build !== null && build.ok === false;
+          // A failed attempt is reported with the shared build wording (#297), never as unsaved.
+          languageNotice = languageRecovery ? window.BuildReporting.describeOutcome('language', { build })
+            : (sameMode(current.language, next) ? copy.onboardingLanguageAccepted : copy.onboardingLanguageSaved);
         } else {
           const key = (response.status === 400 || response.status === 409) && {
             language_primary_locked: 'languagePrimaryLocked', language_locale_published: 'languageLocaleLocked',

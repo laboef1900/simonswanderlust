@@ -3,7 +3,7 @@ import Fastify from 'fastify';
 import pg from 'pg';
 import { describe, expect, it } from 'vitest';
 import { ensureSchema } from '../src/db.js';
-import { pgPostStore, type PostLocale } from '../src/posts.js';
+import { pgPostStore, type PostLocale, type StoredPostPair } from '../src/posts.js';
 import { pgLanguageStore } from '../src/language.js';
 import { pgCommentStore } from '../src/comments.js';
 import { pgCommentAdminStore, withPublicLocaleMetadata } from '../src/comments-admin.js';
@@ -30,7 +30,7 @@ maybe('committed comment locale projection (PostgreSQL)', () => {
       const comments = pgCommentStore(pool);
       const moderation = pgCommentAdminStore(pool);
       registerPublicComments(app, {
-        posts, comments, allowedOrigin: 'https://example.test', commentsEnabled: () => true,
+        posts, comments, allowedOrigin: () => 'https://example.test', commentsEnabled: () => true,
         ipLimiter: fixedWindowLimiter({ max: 1000, windowMs: 60_000 }),
         globalLimiter: fixedWindowLimiter({ max: 1000, windowMs: 60_000 }),
       });
@@ -39,7 +39,7 @@ maybe('committed comment locale projection (PostgreSQL)', () => {
         heroImage: { src: 'https://example.test/hero', width: 640, height: 480, alt: 'Landscape' },
         bodyMarkdown: 'Story body', images: {}, omitted: locale === secondary,
       });
-      let saved = await posts.upsertDraft({ translationKey: '', status: 'draft',
+      let saved: StoredPostPair = await posts.upsertDraft({ translationKey: '', status: 'draft',
         shared: { date: '2026-01-01', countryCode: 'DE', region: 'europe', coordinates: { lat: 1, lng: 2 } },
         de: locale('de'), en: locale('en'),
       });
@@ -58,7 +58,7 @@ maybe('committed comment locale projection (PostgreSQL)', () => {
         expect((await submit()).statusCode).toBe(400);
         const response = await app.inject({ method: 'GET', url: `/comments?tk=${tk}` });
         expect(response.json().comments.map((row: { id: string }) => row.id)).toEqual([reply.id]);
-        const admin = await withPublicLocaleMetadata(await moderation.list('approved'), posts);
+        const admin = await withPublicLocaleMetadata((await moderation.list('approved')).comments, posts);
         expect(admin.find((row) => row.id === legacy.id)?.publicLocale).toBe(false);
         expect(admin.find((row) => row.id === reply.id)?.publicLocale).toBe(true);
       };
@@ -83,7 +83,7 @@ maybe('committed comment locale projection (PostgreSQL)', () => {
       expect(await posts.getPublishedLocales(tk)).toEqual([]);
       expect((await submit()).statusCode).toBe(404);
       expect((await app.inject({ method: 'GET', url: `/comments?tk=${tk}` })).statusCode).toBe(404);
-      const retained = await moderation.list('approved');
+      const retained = (await moderation.list('approved')).comments;
       expect(retained).toHaveLength(2);
       expect((await withPublicLocaleMetadata(retained, posts)).every((row) => !row.publicLocale)).toBe(true);
       const snapshots = await pool.query('SELECT published_snapshot FROM posts WHERE translation_key=$1', [tk]);
