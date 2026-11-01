@@ -1124,6 +1124,15 @@ blog/
   private-original, EXIF-free preview and rescan checks. Formats and EXIF privacy stay unchanged.
   Recovery is roll-forward only; a new image release/deployment is still required.
   See `docs/superpowers/specs/2026-10-27-issue-347-sharp-codec-upgrade.md`.
+- **Done:** Configurable site identity, epic #272 (#273 design, #274 text identity, #275 logo /
+  favicon, #276 canonical domain). Closing evidence 2026-11-01: a fresh-install runtime scan on
+  `dev` `976f31a` found zero unclassified `Simon|simonswanderlust|Wanderlust` matches in the
+  release or the served admin; the remaining ones are #291 software name/copyright/notice texts
+  and #293 compose host defaults. The allow-list is data
+  (`docs/site-identity-branding-allowlist.json`) read by two regression scans —
+  `site/test/empty-build.integration.test.ts` (every file of the zero-content build, all four
+  language modes) and `uploader/test/branding-scan.test.ts` (every served admin page/script) —
+  so a newly hardcoded owner name fails CI. See `docs/site-identity-branding-allowlist.md`.
 - **In progress:** Reader comments (epic #202, spec #203) — design spec landed 2026-09-14
   (`docs/superpowers/specs/2026-09-14-comments-design.md`, incl. an ASVS L1 exception record).
   #205 admin moderation queue landed: `uploader/public/comments.html` (served at
@@ -1144,6 +1153,14 @@ blog/
   deployed container answered 503 on every comment route while every suite (which injects stores
   directly) stayed green. `uploader/test/main-boot.integration.test.ts` now boots the real
   `src/main.ts` against Postgres and walks a comment from `POST` to moderation to public list.
+- **Implemented, release pending:** #291 software license (AGPL-3.0-only), content/brand
+  rights and the `wanderlust-studio` image name (owner-approved 2026-10-27). The committed
+  third-party inventory must match both lockfiles (`uploader/test/legal-assets.test.ts`
+  fails otherwise — regenerate with `node uploader/scripts/generate-third-party-inventory.mjs`).
+  Before a release is announced for third-party installs, run
+  `uploader/scripts/check-image-legal.mjs` against each published platform image with
+  `--revision <tag commit>`; see the spec's *Release-time artifact gate*
+  (`docs/superpowers/specs/2026-10-27-software-content-brand-rights-design.md`).
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details. Not
   started, deliberately: #67 (AI authoring — design spec landed 2026-07-28, implementation not
   started), #72 (Traefik timeouts). #68 (production EXIF audit) was **closed as obsolete**
