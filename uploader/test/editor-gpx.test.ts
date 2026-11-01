@@ -277,13 +277,14 @@ function fullEditor(candidate: typeof preview, fetchOverride?: SetupOptions['fet
     EditorImageCopy: copy('editor.titleImage.'),
     EditorGalleryCopy: copy('editor.gallery.'),
     EditorCopy: copy('editor.chrome.'),
+    BuildCopy: copy('admin.build.'),
     GpxCopy: copy('gpx.'),
     GpxMap: { create: async () => ({ render() {}, destroy() {}, resize() {} }) },
     EditorGalleryImageOrigin: 'https://img',
   };
   context.window = context;
   vm.createContext(context);
-  for (const file of ['language.js', 'draft-guard.js', 'waypoint-lookup.js', 'posts-filter.js', 'editor-title-image.js',
+  for (const file of ['build-reporting.js', 'language.js', 'draft-guard.js', 'waypoint-lookup.js', 'posts-filter.js', 'editor-title-image.js',
     'gallery-fence.js', 'gallery-metadata-warnings.js', 'media-api.js', 'gallery-library.js', 'editor-galleries.js', 'editor-linter.js',
     'llm.js', 'editor-excerpt.js', 'country-centers.js', 'country-coordinates.js', 'tabs.js',
     'editor-review.js', 'editor-inspector.js', 'editor-gpx.js']) {
@@ -1173,7 +1174,7 @@ describe('explicit conflict Reload reconciles the real editor and GPX controller
         return response({ ...stored, updatedAt: savedAt });
       }
       if (url === '/posts/pair-1') return response(stored);
-      if (url.endsWith('/publish')) return response({ updatedAt: '2026-10-28T10:03:00.000Z', build: { ok: true } });
+      if (url.endsWith('/publish')) return response({ published: true, updatedAt: '2026-10-28T10:03:00.000Z', build: { ok: true, attemptId: 'r1', release: 'r1' } });
       return undefined;
     });
     await h.editor.loadPost('pair-1');

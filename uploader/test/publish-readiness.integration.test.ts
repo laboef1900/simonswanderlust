@@ -1,3 +1,4 @@
+import { idleBuildState } from './build-fixture.js';
 import { TEST_TRUST } from './trusted-proxy-fixture.js';
 import { randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
@@ -45,7 +46,7 @@ maybe('renderer-based publication readiness (real PostgreSQL, #334)', () => {
       settings: createSettingsStore({ path: join(root, 'settings.json'), defaults: defaultSettings() }),
       dbBackup: createDbBackup({ db: pool, dir: join(root, 'backup'), retention: () => 10 }),
       dbCheck: async () => { await pool.query('SELECT 1'); },
-      builder: { hasRelease: () => true, quiesce: async () => {}, build: async () => { builds++; return { ok: true, release: 'test' }; } },
+      builder: { ...idleBuildState, hasRelease: () => true, quiesce: async () => {}, build: async () => { builds++; return { ok: true, attemptId: 'test', release: 'test' }; } },
     });
     try {
       await ensureSchema(pool);

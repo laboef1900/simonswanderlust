@@ -61,6 +61,10 @@ async function loadPage(save: (payload: PagePayload) => Promise<Response>) {
     Auth: { ensureAuthed: async () => ({ isAdmin: true }), renderHeader() {} },
     EditorCopy: { en: Object.fromEntries(Object.entries(ui.en).filter(([key]) => key.startsWith('editor.chrome.')).map(([key, value]) => [key.slice('editor.chrome.'.length), value])) },
     AdminConfirm: { ask: async () => true },
+    BuildCopy: Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [locale,
+      Object.fromEntries(Object.entries(strings).filter(([key]) => key.startsWith('admin.build.'))
+        .map(([key, value]) => [key.slice('admin.build.'.length), value])),
+    ])),
     DraftGuard: { createDraftGuard: () => ({ snapshot: () => 'snapshot', markDirty() {}, markClean() {}, redirectToLogin() {}, tryRestore: () => null }) },
     EditorGalleryCopy: Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [locale,
       Object.fromEntries(Object.entries(strings).filter(([key]) => key.startsWith('editor.gallery.'))
@@ -78,7 +82,7 @@ async function loadPage(save: (payload: PagePayload) => Promise<Response>) {
   };
   context.window = context;
   vm.createContext(context);
-  for (const file of ['language.js', 'tabs.js', 'gallery-fence.js', 'gallery-metadata-warnings.js']) vm.runInContext(browserScript(file), context);
+  for (const file of ['build-reporting.js', 'language.js', 'tabs.js', 'gallery-fence.js', 'gallery-metadata-warnings.js']) vm.runInContext(browserScript(file), context);
   vm.runInContext(script, context);
   const api = vm.runInContext('({ fill })', context) as { fill(locale: string, data: { title: string; bodyMarkdown: string }): void };
   // Let initialization (language + stored page) settle before the test edits.
@@ -87,7 +91,7 @@ async function loadPage(save: (payload: PagePayload) => Promise<Response>) {
 }
 
 async function successful(payload: PagePayload, buildOk = true) {
-  return response({ saved: { updatedAt: '2026-10-28T12:00:00Z' }, build: { ok: buildOk, error: buildOk ? undefined : 'failed build' }, galleryWarnings: [
+  return response({ saved: { updatedAt: '2026-10-28T12:00:00Z' }, build: buildOk ? { ok: true, attemptId: 'r1', release: 'r1' } : { ok: false, attemptId: 'failed', code: 'build_failed', error: 'failed build' }, galleryWarnings: [
     ...galleryWarnings(await analyzeGallerySource(payload.de.bodyMarkdown), 'de'),
     ...galleryWarnings(await analyzeGallerySource(payload.en.bodyMarkdown), 'en'),
   ] });
@@ -108,7 +112,8 @@ describe('About page saved gallery warnings', () => {
     await drain();
     expect(root.textContent).toContain(ui.de['editor.gallery.metadataSaved']);
     expect(root.textContent).toContain(ui.en['editor.gallery.metadataSaved']);
-    expect(h.el('actionError').textContent).toContain('Build error');
+    // #297: a failed rebuild after an acknowledged save is reported beside the saved state.
+    expect(h.el('actionStatus').textContent).toContain(ui.en['admin.build.failedChange'].replace('{error}', ui.en['admin.build.failure.build_failed']));
     expect(root.querySelectorAll('script')).toEqual([]);
     const saved = root.textContent;
     failWrite = true;

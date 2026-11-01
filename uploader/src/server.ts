@@ -42,6 +42,7 @@ import { analyzeGallerySource } from '../../site/src/lib/gallery-source.js';
 import { type PageStore, type PagePair, type PageUpdate, type PageContent, type ImageDims, PageError } from './pages.js';
 import { exportPost, exportAll } from './export.js';
 import type { SiteBuilder } from './build.js';
+import { projectBuildReport } from './build-state.js';
 import { prepareImport, ImportTooLargeError, ImportInsufficientSpaceError, type ImportDeps, type PreparedImport } from './wp-import.js';
 import { WxrParseError } from './wxr-parse.js';
 import { createImportRunner, memoryImportJobStore, ImportBusyError, type ImportRunner, type ImportJob } from './import-jobs.js';
@@ -1016,11 +1017,8 @@ export function buildServer(cfg: ServerConfig): AppServer {
         if (blockers.length) throw new LanguageError('Prepare the page images before activating this language.', 'language_pages_incomplete', blockers);
       });
       if (!changed) return reply.send(saved);
-      let built = false;
-      try { built = (await cfg.builder.build()).ok; }
-      catch (error) { console.error('Language settings persisted; rebuild failed:', error); }
-      if (!built) return reply.code(502).send({ code: 'language_build_failed', error: 'Language settings were saved, but the rebuild failed. Retry Rebuild site now.', language: saved, persisted: true });
-      return reply.send(saved);
+      const build = projectBuildReport(await cfg.builder.build('rebuild'));
+      return reply.send({ ...saved, build });
     } catch (error) {
       if (error instanceof LanguageError) return reply.code(error.code === 'invalid_language' ? 400 : 409).send({
         code: error.code, error: error.message, ...(error.blockers ? { blockers: error.blockers } : {}),
@@ -1523,12 +1521,18 @@ export function buildServer(cfg: ServerConfig): AppServer {
         .filter(([key]) => key.startsWith('editor.chrome.'))
         .map(([key, value]) => [key.slice('editor.chrome.'.length), value])) },
     ]));
+    const buildCopy = Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [
+      locale, Object.fromEntries(Object.entries(strings)
+        .filter(([key]) => key.startsWith('admin.build.'))
+        .map(([key, value]) => [key.slice('admin.build.'.length), value])),
+    ]));
     const { siteName, studioDescriptor, canonicalOrigin } = cfg.identityStore?.get().identity ?? neutralIdentity();
     reply.header('Cache-Control', 'no-store');
     return reply.type('application/javascript').send(
       `window.EditorImageCopy = ${JSON.stringify(copy)};\n` +
       `window.EditorGalleryCopy = ${JSON.stringify(galleryCopy)};\n` +
       `window.EditorCopy = ${JSON.stringify(editorCopy)};\n` +
+      `window.BuildCopy = ${JSON.stringify(buildCopy)};\n` +
       `window.SiteIdentity = ${JSON.stringify({ siteName, studioDescriptor, canonicalOrigin })};\n` +
       `window.EditorGalleryImageOrigin = ${JSON.stringify(new URL(cfg.baseUrl).origin)};`,
     );
@@ -1840,7 +1844,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
       if (e instanceof PostError) return reply.code(e.code === 'storage_read_only' ? 503 : e.code === 'not_found' ? 404 : 409).send({ error: e.message, code: e.code });
       throw e;
     }
-    const build = await cfg.builder.build();
+    const build = projectBuildReport(await cfg.builder.build('publish'));
     // Best-effort: a failed MDX backup must not undo a publish that is already
     // live, but it must not be silent either (#145) — a bare-dev BACKUP_DIR
     // pointing at /data used to fail every publish's export without a trace.
@@ -1952,7 +1956,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
       }
     }
     const succeeded = results.filter((r) => r.ok).length;
-    const build = liveChanged ? await cfg.builder.build() : undefined;
+    const build = liveChanged ? projectBuildReport(await cfg.builder.build('bulk')) : undefined;
     return reply.send({ action, succeeded, failed: results.length - succeeded, results, ...(build ? { build } : {}), ...(cleanupPending ? { cleanupPending: true } : {}) });
   });
 
@@ -1973,7 +1977,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
       }
       throw e;
     }
-    const build = await cfg.builder.build();
+    const build = projectBuildReport(await cfg.builder.build('unpublish'));
     // Both tokens belong to this transaction, not a later writer during the build.
     return reply.send({
       unpublished: true, build,
@@ -2002,7 +2006,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     }
     const cleanupPending = await cleanupDeletedRoutes();
     if (wasPublished) {
-      const build = await cfg.builder.build();
+      const build = projectBuildReport(await cfg.builder.build('delete'));
       return reply.send({ deleted: true, build, ...(cleanupPending ? { cleanupPending: true } : {}) });
     }
     return reply.send({ deleted: true, ...(cleanupPending ? { cleanupPending: true } : {}) });
@@ -2150,7 +2154,12 @@ export function buildServer(cfg: ServerConfig): AppServer {
   });
 
   // Replaces the old secret-gated POST /build on the builder container.
-  app.post('/rebuild', { preHandler: requireAdmin }, async () => cfg.builder.build());
+  app.post('/rebuild', { preHandler: requireAdmin }, async () => projectBuildReport(await cfg.builder.build('rebuild')));
+
+  app.get('/rebuild/status', { preHandler: requireAdmin }, async (_req, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    return reply.send(await cfg.builder.status());
+  });
 
   app.get('/pages/:key', { preHandler: requireAuth }, async (req, reply) => {
     const key = (req.params as { key: string }).key;
@@ -2194,7 +2203,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
           }
         },
       });
-      const build = await cfg.builder.build();
+      const build = projectBuildReport(await cfg.builder.build('page'));
       return reply.send({ saved, build, galleryWarnings });
     } catch (e) {
       if (e instanceof PageError) {

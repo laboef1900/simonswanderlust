@@ -1,3 +1,4 @@
+import { idleBuildState } from './build-fixture.js';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -44,7 +45,7 @@ describe('reserved public namespaces', () => {
       users: memoryUserStore(), sessions: memorySessionStore(), posts, pages: memoryPageStore(posts.language),
       media: memoryMediaStore({ baseUrl: 'https://images.example' }), secrets: memorySecretsStore(), gpx,
       settings: { get: () => settings, update: patch => { settings = validate({ ...settings, ...patch }); return settings; } },
-      builder: { build: async () => ({ ok: true, release: 'unused' }), hasRelease: () => false, quiesce: async () => {} },
+      builder: { ...idleBuildState, build: async () => ({ ok: true, attemptId: 'unused', release: 'unused' }), hasRelease: () => false, quiesce: async () => {} },
       dbCheck: async () => {},
       dbBackup: {
         dir: join(root, 'backup'), runNow: async () => ({}), running: () => false, state: () => ({}),

@@ -28,6 +28,7 @@ Shared state, all under the **`/data`** volume (bind-mounted from `./uploader/da
   (`{key}-orig.<ext>`) (`STORAGE_DIR`).
 - `routes/` — private GPX originals and expiring import staging; never a static root.
 - `site/releases/<stamp>` + `site/current` (symlink) — built static output (`SITE_DIR`).
+- `site/build-state.json` — bounded latest-build-attempt metadata; never served as a public file.
 - `backup/` — MDX export backups; `backup/db/` — gzipped Postgres dumps, incremental
   image archives and manifest-matched private GPX original archives.
 - `settings.json` — admin-configurable settings, including backup scheduling, image conversion/quality, and the AI provider registry (no secrets).
@@ -183,11 +184,24 @@ are in the specification.
 
 The child is bounded (#110): it is SIGKILLed after `BUILD_TIMEOUT_MS` (15 min) and the build
 reports `timed out`, releasing the shared build/encode lock instead of holding every later
-publish, rebuild and encode until a manual restart. Its stderr is streamed to the container log
-**and** its last 4 KiB is appended to the build error the admin sees, so a schema failure names
-the post. The loaders' pool (`site/src/lib/loader-pool.ts`) carries connection and query
-timeouts, so a silently hung Postgres fails the build within about a minute rather than running
-into the deadline.
+publish, rebuild and encode until a manual restart. Its stderr remains in the container log;
+browser/CLI failures use a fixed classified code and safe copy, with an operator log hint.
+The loaders' pool (`site/src/lib/loader-pool.ts`) carries connection and query timeouts, so a
+silently hung Postgres fails the build within about a minute rather than running into the
+deadline. The exported-snapshot deadline is classified as `build_timeout` as well.
+
+**Build reporting (#297):** the builder durably records the latest running/completed attempt
+in `site/build-state.json`, outside the public `current` tree. Restart turns a previous
+running attempt into `interrupted`; missing, unreadable and unpersisted records remain
+distinct. Admin-only/no-store `GET /rebuild/status` pairs this record with an independent
+observation of the live release. Desk and Settings show both facts and link to explicit
+Rebuild recovery. Best-effort record writes cannot reverse a successful promotion.
+
+Mutation responses separately acknowledge what the CMS committed and whether the build
+succeeded. Editor and About adopt their own acknowledged timestamp even when generation
+fails, so the next save uses the correct concurrency token. Publish/unpublish/delete/bulk
+messages never infer per-story liveness from a generic build failure. Fix the reported
+cause, then explicitly rebuild; do not resubmit an already acknowledged mutation.
 
 The Astro entry `id`s (`de/<slug>` / `en/<slug>`) and the Zod schema are unchanged from the original
 MDX era, so the SEO slug contract (`site/src/lib/paths.ts`, `trips.ts`) holds: **DE at root, EN under

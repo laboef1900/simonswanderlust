@@ -741,6 +741,15 @@ The **Publish** button in the editor triggers a rebuild automatically and waits 
 before confirming — you don't need to run anything manually under normal authoring conditions.
 This section explains what happens under the hood and how to trigger a rebuild manually if needed.
 
+If the response says a change was saved/published/deleted in the CMS but the rebuild failed,
+that mutation is already committed. Editor and About retain its acknowledged save token;
+you may continue editing without reloading or resubmitting the completed action. The live
+site can still be serving an earlier release. Admin Desk and Settings show the last build
+attempt separately from that observed live release, including interrupted, missing or
+unavailable records. Fix the named failure, inspect `docker compose logs app` for generator
+details, then explicitly choose **Rebuild site now**. Restart alone is not proof of recovery,
+and an interrupted attempt is not evidence that nothing was saved.
+
 The blog is a **static site**, but there's no separate build server or web server anymore: the
 same `app` container that runs the admin/CMS also builds and serves the blog. Content lives in
 **Postgres** — not in the Docker image. `uploader/src/build.ts` spawns `astro build` **in-process**

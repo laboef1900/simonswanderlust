@@ -1,3 +1,4 @@
+import { idleBuildState } from './build-fixture.js';
 import { TEST_TRUST } from './trusted-proxy-fixture.js';
 import { describe, expect, it, beforeEach } from 'vitest';
 import { mkdtemp } from 'node:fs/promises';
@@ -32,7 +33,8 @@ function fakeStore(init: Settings = { ...defaultSettings(), importDelayMs: 0, im
 function stubBuilder() {
   const calls: number[] = [];
   const builder: SiteBuilder = {
-    build: async () => { calls.push(1); return { ok: true, release: 'r1' }; },
+    ...idleBuildState,
+    build: async () => { calls.push(1); return { ok: true, attemptId: 'r1', release: 'r1' }; },
     hasRelease: () => true,
     quiesce: async () => {},
   };

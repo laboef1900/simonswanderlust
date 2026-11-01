@@ -64,6 +64,7 @@
     </main>
 
     <script src="/admin/editor-image-copy.js"></script>
+    <script src="/admin/build-reporting.js"></script>
     <script src="/admin/auth.js"></script>
     <script src="/admin/language.js"></script>
     <script src="/admin/admin-confirm.js"></script>
@@ -194,18 +195,17 @@
             if (reload) { await loadPage(); guard.markClean(guard.snapshot()); showErr(''); }
             return;
           }
-          if (!res.ok) { showErr(body.error || ('Save failed: ' + res.status)); setStatus(''); return; }
+          if (!res.ok) { showErr(res.status >= 500 ? BuildReporting.text('unknown') : (body.error || res.status)); setStatus(''); return; }
+          if (!body.saved?.updatedAt) { showErr(BuildReporting.text('unknown')); setStatus(''); return; }
           // The page write succeeded even when its subsequent rebuild failed.
           galleryMetadataWarnings.saved(body.galleryWarnings, payload);
-          if (body.build && !body.build.ok) { showErr('Build error: ' + (body.build.error || 'unknown')); setStatus(''); return; }
-          const release = (body.build && body.build.release) ? ' (release ' + body.build.release + ')' : '';
           guard.markClean(snap);
           if (body.saved && body.saved.updatedAt) loadedUpdatedAt = body.saved.updatedAt;
           loadRevisions().catch(() => {});
-          setStatus(prepareLocale ? SiteLanguage.text('PrepSaved')
-            : 'Saved & rebuilt. Live: ' + language.locales.map((locale) => location.origin + SiteLanguage.publicPath(language, locale, 'about')).join(' · ') + release);
+          if (prepareLocale) setStatus(SiteLanguage.text('PrepSaved'));
+          else BuildReporting.renderOutcome($('actionStatus'), 'page', body);
         } catch (e) {
-          showErr('Save failed: ' + e);
+          showErr(BuildReporting.text('unknown'));
           setStatus('');
         } finally {
           btn.disabled = false;

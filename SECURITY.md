@@ -149,7 +149,8 @@ an owner-authorized safe rebuild/release switch and cache assessment. No safety 
 
 - `requireAuth` gates all CMS/editor/upload endpoints.
 - `requireAdmin` gates **user management**, **settings** (`/settings` — backup schedule and
-  retention), **backups**, **rebuild**, **page edits**, the **WordPress import** (`POST /import`,
+  retention), **backups**, **rebuild and its status** (`POST /rebuild`, `GET /rebuild/status`),
+  **page edits**, the **WordPress import** (`POST /import`,
   since #97 — it creates/overwrites drafts, writes gigabytes under `/data`, and makes hundreds of
   outbound fetches to a host chosen by the export, governed by admin-only settings knobs), and,
   importantly, everything that
@@ -1106,7 +1107,7 @@ preview even though the live site would load it.
 
 - `DATABASE_URL` is provided via environment (compose `.env`), never committed. `.env`,
   credentials, and binaries are git-ignored.
-- The rebuild trigger (`POST /rebuild`) and the DB backup routes (`GET`/`POST /backups`,
+- The rebuild trigger/status (`POST /rebuild`, `GET /rebuild/status`) and the DB backup routes (`GET`/`POST /backups`,
   `GET /backups/:name`) are gated by `requireAdmin` — no separate shared secret; the retired
   `BUILD_SECRET` / `x-build-secret` mechanism no longer exists.
 - **AI provider credentials (#214, registry 2026-10-19):** one `app_secrets` row per remote
@@ -1199,10 +1200,17 @@ deliberate trade-off, not an oversight:
   `site/src/lib/loader-pool.ts`, whose connection and query timeouts turn a silently hung
   Postgres into a build error within about a minute. The deadline is not request-controlled, and
   every route that starts a build is admin-only, so an author cannot hold the lock by crafting
-  content. The last 4 KiB of the child's **stderr** (ANSI-stripped) is appended to the build error
-  returned to the authenticated caller so the admin learns which post failed the schema; it is
-  build diagnostics (entry ids, schema paths, library file paths), never `DATABASE_URL` — the
-  child reads that from the environment and neither astro nor pg echoes it on a query error.
+  content. Child stderr remains in server logs, not browser/CLI response bodies. Responses
+  carry a fixed failure code and localized safe copy; the pool-backed snapshot deadline is
+  also classified as `build_timeout`. Operators use `docker compose logs app` for details.
+- **Build reporting (#297):** `GET /rebuild/status` is admin-only and `no-store`; authors'
+  Desk does not request it. `/data/site/build-state.json` is unserved operational metadata,
+  bounded and validated on read, containing no stderr, stack trace or content body. A prior
+  running record becomes `interrupted` after restart; missing/unreadable/unpersisted records
+  remain explicit. The independently observed `current` release is not inferred from the
+  attempt outcome. Status persistence is best-effort and cannot undo a CMS commit or demote
+  a promoted release; ownership loss stops further writes. `/health` carries no attempt
+  history. A failed rebuild acknowledgement does not mean the preceding CMS mutation failed.
 - **Promotion commit point (#397):** a successful atomic `current` rename is final for the
   build outcome. Post-promotion cleanup failures cannot reverse that success or change CMS
   content. Unreadable release/current state or a current target different from the promoted

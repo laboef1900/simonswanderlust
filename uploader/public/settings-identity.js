@@ -306,7 +306,7 @@ window.SettingsIdentity = (function () {
           // Field paths come from the server's fixed validation contract, not its supplied value.
           status(copy.identityInvalid + ' ' + (result.field || ''), true);
         } else if (!response.ok) {
-          status(copy.identityFailed, true);
+          status(BuildReporting.text('unknown'), true);
         } else {
           revision = result.revision;
           // The server accepted the full input; display its WHATWG origin serialization.
@@ -314,7 +314,7 @@ window.SettingsIdentity = (function () {
           dirty = false;
           status(copy.identitySaved);
         }
-      } catch { status(copy.identityFailed, true); }
+      } catch { status(BuildReporting.text('unknown'), true); }
       finally { lock(false); }
     });
     $('identityRebuild').addEventListener('click', async () => {
@@ -325,9 +325,13 @@ window.SettingsIdentity = (function () {
         const response = await fetch('/rebuild', { method: 'POST' });
         if (response.status === 401) { location.href = '/login'; return; }
         const result = await response.json();
-        status(response.ok && result.ok ? copy.identityRebuilt : copy.identityRebuildFailed, !response.ok || !result.ok);
-      } catch { status(copy.identityRebuildFailed, true); }
-      finally { lock(false); }
+        if (response.ok && typeof result.ok === 'boolean') BuildReporting.renderOutcome($('identityStatus'), 'rebuild', result);
+        else status(BuildReporting.text('unknown'), true);
+      } catch { status(BuildReporting.text('unknown'), true); }
+      finally {
+        lock(false);
+        await BuildReporting.loadStatus($('buildStatus'));
+      }
     });
     return load();
   }

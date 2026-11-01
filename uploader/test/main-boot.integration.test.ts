@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { randomBytes } from 'node:crypto';
-import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { request } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -81,6 +81,9 @@ maybe.each(['split', 'loopback'] as const)('production boot (src/main.ts, Postgr
   const encryptionKey = randomBytes(32);
   let settingsPath: string;
   let bootLog = '';
+  const previousRelease = '1760000000000-1-0000';
+  const interruptedAttempt = '1760000001000-1-0001';
+  const interruptedStartedAt = new Date(1760000001000).toISOString();
 
   beforeAll(async () => {
     owner = createPool(url!);
@@ -111,6 +114,14 @@ maybe.each(['split', 'loopback'] as const)('production boot (src/main.ts, Postgr
 
     dir = await mkdtemp(join(await realpath(tmpdir()), 'main-boot-'));
     settingsPath = join(dir, 'settings.json');
+    // An existing release suppresses boot rebuilding; the newly acquired owner
+    // must still initialize the durable record before accepting HTTP requests.
+    await mkdir(join(dir, 'site', 'releases', previousRelease), { recursive: true });
+    await writeFile(join(dir, 'site', 'releases', previousRelease, 'index.html'), 'Previous release');
+    await symlink(join('releases', previousRelease), join(dir, 'site', 'current'));
+    await writeFile(join(dir, 'site', 'build-state.json'), JSON.stringify({
+      schema: 1, running: { attemptId: interruptedAttempt, startedAt: interruptedStartedAt, triggers: ['publish'] }, last: null,
+    }));
     // A pre-registry install: review on OpenRouter, captions local, and the one
     // shared key in the legacy slot. Boot must migrate both before listen().
     await pool.query("DELETE FROM app_secrets WHERE key IN ('ai_api_key', 'ai_provider_key:openrouter')");
@@ -330,6 +341,25 @@ maybe.each(['split', 'loopback'] as const)('production boot (src/main.ts, Postgr
     }
   });
 
+  it('initializes interrupted history after storage ownership even when a live release already exists', async () => {
+    const login = await fetch(`${base}/login`, {
+      method: 'POST', headers: { 'content-type': 'application/json', origin: base },
+      body: JSON.stringify({ username, password }),
+    });
+    expect(login.status).toBe(200);
+    const cookie = (login.headers.get('set-cookie') ?? '').split(';')[0]!;
+    const response = await fetch(`${base}/rebuild/status`, { headers: { cookie } });
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(await response.json()).toMatchObject({
+      live: { release: previousRelease }, running: null, record: 'ok',
+      last: { attemptId: interruptedAttempt, startedAt: interruptedStartedAt, result: 'interrupted',
+        finishedAt: null, release: null, failure: null, beforeBoot: true, triggers: ['publish'] },
+    });
+    // Boot observation is read-only; only a later build may supersede this record.
+    expect(JSON.parse(await readFile(join(dir, 'site', 'build-state.json'), 'utf8')).running.attemptId).toBe(interruptedAttempt);
+  });
+
   it('keeps author projection and paginated moderation aligned beyond 500 older comments', async () => {
     const olderKey = `${tk}-older`;
     const createdIds: string[] = [];
@@ -383,7 +413,6 @@ maybe.each(['split', 'loopback'] as const)('production boot (src/main.ts, Postgr
       await pool.query('DELETE FROM comments WHERE id = ANY($1::uuid[])', [createdIds]);
     }
   });
-
   it('migrated a legacy settings file and the shared key to the provider registry before listening', async () => {
     expect(bootLog).toContain('settings: migrated AI settings to the provider registry (2 providers)');
     expect(bootLog).not.toContain('boot-legacy-fixture');

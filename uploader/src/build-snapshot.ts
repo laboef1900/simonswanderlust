@@ -24,6 +24,13 @@ export interface BuildSnapshot {
 }
 interface AssetRow { role: string; sha256: string; width: number; height: number; bytes: Buffer }
 
+export class BuildSnapshotTimeoutError extends Error {
+  constructor(readonly timeoutMs: number) {
+    super('Build snapshot deadline exceeded');
+    this.name = 'BuildSnapshotTimeoutError';
+  }
+}
+
 /** One immutable view for configuration AND every child content loader. Future
  * configuration reads belong on this exporter client, never on another pool query.
  * The read transaction holds no writer lock; saves and live lease checks remain current.
@@ -35,7 +42,7 @@ export async function withBuildSnapshot<T>(
 ): Promise<T> {
   const deadline = new AbortController();
   const signal = options.signal ? AbortSignal.any([options.signal, deadline.signal]) : deadline.signal;
-  const timer = setTimeout(() => deadline.abort(new Error('Build snapshot deadline exceeded')), options.timeoutMs);
+  const timer = setTimeout(() => deadline.abort(new BuildSnapshotTimeoutError(options.timeoutMs)), options.timeoutMs);
   let client: pg.PoolClient | undefined;
   let released = false;
   let consuming: Promise<T> | undefined;

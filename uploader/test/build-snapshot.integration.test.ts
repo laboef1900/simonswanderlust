@@ -207,9 +207,10 @@ suite('one PostgreSQL view for the complete build', () => {
       },
     });
     try {
-      expect((await builder.build()).ok).toBe(true);
+      await builder.initialize();
+      expect((await builder.build('rebuild')).ok).toBe(true);
       await pool.query(`UPDATE site_identity SET localized='{"tagline":{"xx":"invalid"}}'`);
-      expect((await builder.build()).ok).toBe(false);
+      expect((await builder.build('rebuild')).ok).toBe(false);
       expect(calls).toBe(1);
       expect(await readFile(join(root, 'site', 'current', 'index.html'), 'utf8')).toBe('previous release');
     } finally {
@@ -233,11 +234,11 @@ suite('one PostgreSQL view for the complete build', () => {
     });
     try {
       await pool.query("UPDATE site_identity SET canonical_origin='https://blog.example'");
-      expect((await builder.build()).ok).toBe(true);
+      expect((await builder.build('rebuild')).ok).toBe(true);
       if (kind === 'invalid-authority') originRoles.imgHost = 'user@images.example';
       else await pool.query('UPDATE site_identity SET canonical_origin=$1',
         [kind === 'public-image' ? 'https://cdn.example' : 'https://IMAGES.example:443/']);
-      const outcome = await builder.build();
+      const outcome = await builder.build('rebuild');
       expect(outcome.ok).toBe(false);
       expect(calls).toBe(1);
       expect(await readFile(join(root, 'site', 'current', 'index.html'), 'utf8')).toBe('previous release');
@@ -268,13 +269,55 @@ suite('one PostgreSQL view for the complete build', () => {
       },
     });
     try {
-      const outcome = await builder.build();
+      const outcome = await builder.build('rebuild');
       expect(outcome).toMatchObject({ ok: true });
       expect(await readFile(join(releasesRoot, 'current', 'index.html'), 'utf8')).toBe('new release');
       expect(realpathSync(join(releasesRoot, 'current'))).toBe(realpathSync(join(releasesRoot, 'releases', outcome.release!)));
       // No cleanup write after the lease was lost.
       expect(existsSync(join(releasesRoot, 'releases', '0-old'))).toBe(true);
     } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reports the pool-backed snapshot deadline as a timeout and retains the live release', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'snapshot-timeout-release-'));
+    const siteAppDir = join(root, 'app');
+    const releasesRoot = join(root, 'site');
+    const entered = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    await mkdir(siteAppDir);
+    try {
+      const previous = await createSiteBuilder({
+        pool, siteAppDir, releasesRoot,
+        runBuild: async outDir => {
+          await mkdir(outDir, { recursive: true });
+          await writeFile(join(outDir, 'index.html'), 'previous release');
+        },
+      }).build('rebuild');
+      expect(previous.ok).toBe(true);
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const builder = createSiteBuilder({
+        pool, siteAppDir, releasesRoot, timeoutMs: 1000,
+        // Advance only after real PostgreSQL capture has reached the consumer.
+        runBuild: async () => { entered.resolve(); await finish.promise; },
+      });
+      const pending = builder.build('rebuild');
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(1000);
+      finish.resolve();
+      const result = await pending;
+      expect(result).toMatchObject({ ok: false, code: 'build_timeout', liveRelease: previous.release });
+      expect(await builder.status()).toMatchObject({
+        running: null, last: { attemptId: result.attemptId, result: 'failed', failure: { code: 'build_timeout' } },
+        live: { release: previous.release },
+      });
+      const persisted = JSON.parse(await readFile(join(releasesRoot, 'build-state.json'), 'utf8'));
+      expect(persisted.last.failure.code).toBe('build_timeout');
+      expect(await readFile(join(releasesRoot, 'current', 'index.html'), 'utf8')).toBe('previous release');
+    } finally {
+      finish.resolve();
+      vi.useRealTimers();
       await rm(root, { recursive: true, force: true });
     }
   });

@@ -1,3 +1,4 @@
+import { idleBuildState } from './build-fixture.js';
 import { TEST_TRUST } from './trusted-proxy-fixture.js';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
@@ -95,7 +96,7 @@ maybe('slug length at real PostgreSQL boundaries (#353)', () => {
       settings: createSettingsStore({ path: join(root, 'settings.json'), defaults: defaultSettings() }),
       dbBackup: createDbBackup({ db: pool, dir: join(root, 'backup'), retention: () => 10 }),
       dbCheck: async () => { await pool.query('SELECT 1'); },
-      builder: { hasRelease: () => true, quiesce: async () => {}, build: async () => { builds++; return { ok: true, release: 'synthetic' }; } },
+      builder: { ...idleBuildState, hasRelease: () => true, quiesce: async () => {}, build: async () => { builds++; return { ok: true, attemptId: 'synthetic', release: 'synthetic' }; } },
     });
     try {
       const admin = await users.create({ username: 'slug-admin', password: 'synthetic-password', isAdmin: true });

@@ -17,6 +17,7 @@ import { pgSessionStore, type SessionStore } from '../src/sessions.js';
 import { createSettingsStore, defaultSettings } from '../src/settings.js';
 import { pgUserStore } from '../src/users.js';
 import { createWorkLock } from '../src/work-lock.js';
+import { idleBuildState } from './build-fixture.js';
 import { TEST_TRUST } from './trusted-proxy-fixture.js';
 
 const url = process.env.TEST_DATABASE_URL;
@@ -81,7 +82,7 @@ maybe('atomic last-administrator removal (#368, real Postgres)', () => {
       users: pgUserStore(pool), sessions, posts: memoryPostStore(), pages: memoryPageStore(),
       media, encodeQueue: queue, secrets: memorySecretsStore(),
       settings: createSettingsStore({ path: join(root, 'settings.json'), defaults: defaultSettings() }),
-      builder: { build: async () => ({ ok: true, release: 'synthetic' }), hasRelease: () => true, quiesce: async () => {} },
+      builder: { ...idleBuildState, build: async () => ({ ok: true, attemptId: 'synthetic', release: 'synthetic' }), hasRelease: () => true, quiesce: async () => {} },
       backupDir: join(root, 'backup'), dbCheck: async () => { await pool.query('SELECT 1'); },
       dbBackup: createDbBackup({ db: pool, dir: join(root, 'backup'), retention: () => 10 }),
     });

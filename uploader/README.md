@@ -789,7 +789,19 @@ It asks the **running** app over loopback (minting and immediately revoking a on
 session) rather than spawning its own `astro build`. That is deliberate: `work-lock.ts` makes a
 build and image encoding mutually exclusive within one process, and `docker-compose.yml` sizes
 `mem_limit` as `max(build, encode) + baseline` on exactly that assumption — a second, unlocked
-builder could OOM the container. It exits non-zero on a failed build and prints the reason.
+builder could OOM the container. It exits non-zero on a failed build and prints a fixed
+failure code/reason plus `docker compose logs app`; raw generator diagnostics stay in
+server logs. Its temporary admin session is removed on both success and failure.
+
+Admins can inspect the latest attempt and the independently observed live release on
+Desk or Settings (`GET /rebuild/status`, admin-only and `no-store`). The latest record
+survives restart in unserved `SITE_DIR/build-state.json`; a previously running attempt
+becomes interrupted, not successful merely because an older release exists. After fixing
+the cause, use **Rebuild site now** or this CLI command explicitly.
+
+A failed rebuild can follow a successful CMS mutation. Follow the saved/published/deleted
+acknowledgement; do not repeat that mutation to repair generation. The previous release
+remains served until another build promotes a replacement.
 
 ## CLI password reset (recovery)
 

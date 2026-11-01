@@ -1,3 +1,4 @@
+import { idleBuildState } from './build-fixture.js';
 import { TEST_TRUST, GATEWAY_TRUST } from './trusted-proxy-fixture.js';
 import { publishTokens } from './publish-tokens.js';
 import { describe, expect, it, beforeEach, vi } from 'vitest';
@@ -73,7 +74,7 @@ function build(extra: Partial<ServerConfig> = {}) {
     posts, pages: memoryPageStore(),
     media: memoryMediaStore({ baseUrl: 'https://img.simonswanderlust.com' }), encodeQueue: queue,
     imgHost: 'img.simonswanderlust.com', siteDir: join(dir, 'site'),
-    builder: { build: async () => ({ ok: true, release: 'r1' }), hasRelease: () => true, quiesce: async () => {} },
+    builder: { ...idleBuildState, build: async () => ({ ok: true, attemptId: 'r1', release: 'r1' }), hasRelease: () => true, quiesce: async () => {} },
     backupDir: join(dir, 'backup'), dbBackup: backup, dbCheck: async () => {},
     comments,
     // Generous limiter so multi-POST tests never 429 spuriously.

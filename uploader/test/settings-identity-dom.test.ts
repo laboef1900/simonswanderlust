@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { editorDocument } from './editor-dom-harness.js';
 import { ui } from '../../site/src/i18n/ui.js';
 
@@ -47,6 +47,7 @@ async function page(options: {
       de: Object.fromEntries(Object.entries(ui.de).filter(([key]) => key.startsWith('editor.chrome.'))
         .map(([key, value]) => [key.slice('editor.chrome.'.length), value])),
     }, URL, location: { href: '', origin: 'https://admin.example:8443' },
+    BuildCopy: { en: Object.fromEntries(Object.entries(ui.en).filter(([key]) => key.startsWith('admin.build.')).map(([key, value]) => [key.slice('admin.build.'.length), value])) },
     AdminConfirm: { ask: async (question: unknown) => { confirms.push(question); return options.confirm ?? true; } },
     fetch: async (url: string, init?: { method?: string; body?: string | FormData }) => {
       const request: Request = {
@@ -54,6 +55,7 @@ async function page(options: {
         ...(init?.body instanceof FormData ? { form: init.body } : {}),
       };
       requests.push(request);
+      if (url === '/rebuild/status') return Response.json({ running: null, last: null, live: null, record: 'missing' });
       if (request.method === 'GET') {
         const data = initial(options.locales);
         return Response.json({ ...data, ...(options.assets ? { assets: options.assets } : {}), identity: { ...data.identity,
@@ -64,6 +66,7 @@ async function page(options: {
   };
   context.window = context;
   vm.createContext(context);
+  vm.runInContext(readFileSync('public/build-reporting.js', 'utf8'), context);
   vm.runInContext(source, context);
   // The production script's public entry point, invoked after the auth gate.
   const controller = context.SettingsIdentity as { init(): Promise<void> };
@@ -182,7 +185,7 @@ describe('Site identity settings form', () => {
     expect(h.el('identitySiteName').value).toBe('Retained');
     expect(h.el('identityCanonicalOrigin').value).toBe('https://BÜCHER.example/');
     expect(h.el('identityFields').disabled).toBe(false);
-    expect(h.el('identityStatus').textContent).toBe(copy.identityFailed);
+    expect(h.el('identityStatus').textContent).toBe(ui.en['admin.build.unknown']);
   });
 
   it('caps ordered social links at six and confirms removal', async () => {
@@ -198,14 +201,29 @@ describe('Site identity settings form', () => {
   });
 
   it('rebuilds only on explicit confirmation and preserves unsaved inputs', async () => {
-    const h = await page({ route: () => Response.json({ ok: true }) });
+    const h = await page({ route: () => Response.json({ ok: true, release: '1793000000000-1-0001', liveRelease: null }) });
     h.edit('identitySiteName', 'Not saved');
     h.el('identityRebuild').click();
-    await settle();
+    await vi.waitFor(() => {
+      expect(h.el('buildStatus').textContent).toContain(ui.en['admin.build.missing']);
+    });
     expect(h.requests[1]).toEqual({ url: '/rebuild', method: 'POST', body: undefined });
     expect(h.confirms).toHaveLength(1);
     expect(h.el('identitySiteName').value).toBe('Not saved');
-    expect(h.el('identityStatus').textContent).toBe(copy.identityRebuilt);
+    expect(h.el('identityStatus').textContent).toContain('Release 1793000000000-1-0001 was promoted');
+    expect(h.el('identityStatus').textContent).toContain('No live release yet');
+    expect(h.requests[2]?.url).toBe('/rebuild/status');
+  });
+
+  it('reports a stopped rebuild without exposing diagnostics or urging an unsafe retry', async () => {
+    const h = await page({ route: () => Response.json({ ok: false, code: 'build_stopped', error: 'SECRET', liveRelease: null }) });
+    h.edit('identitySiteName', 'Unsaved local name');
+    h.el('identityRebuild').click();
+    await settle();
+    expect(h.el('identityStatus').textContent).toContain('storage ownership/shutdown recovery');
+    expect(h.el('identityStatus').textContent).not.toContain('SECRET');
+    expect(h.el('identityStatus').textContent).not.toContain('Retry with Rebuild');
+    expect(h.el('identitySiteName').value).toBe('Unsaved local name');
   });
 
   it('warns about stored Punycode on load and preserves the exact saved bytes', async () => {

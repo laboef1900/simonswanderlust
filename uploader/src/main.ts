@@ -130,6 +130,9 @@ const builder = createSiteBuilder({
   ...runtime,
   applicationName: owner.applicationName + ':build',
 });
+// Ownership is acquired above; only this owner may interpret a persisted run as interrupted.
+owner.assertWritable();
+await builder.initialize();
 const media = pgMediaStore(pool, { baseUrl });
 const encodeQueue = createEncodeQueue({ store: media, storageDir, lock: workLock, ...runtime });
 const reconciler = createReconciler({

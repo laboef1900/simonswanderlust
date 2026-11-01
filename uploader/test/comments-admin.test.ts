@@ -1,3 +1,4 @@
+import { idleBuildState } from './build-fixture.js';
 import { TEST_TRUST } from './trusted-proxy-fixture.js';
 import { describe, expect, it, beforeEach, beforeAll, afterAll, vi } from 'vitest';
 import { mkdtemp } from 'node:fs/promises';
@@ -60,7 +61,7 @@ function build(extra: Partial<ServerConfig> = {}) {
     posts: memoryPostStore(), pages: memoryPageStore(),
     media: memoryMediaStore({ baseUrl: 'https://img.simonswanderlust.com' }), encodeQueue: queue,
     imgHost: 'img.simonswanderlust.com', siteDir: join(dir, 'site'),
-    builder: { build: async () => ({ ok: true, release: 'r1' }), hasRelease: () => true, quiesce: async () => {} },
+    builder: { ...idleBuildState, build: async () => ({ ok: true, attemptId: 'r1', release: 'r1' }), hasRelease: () => true, quiesce: async () => {} },
     backupDir: join(dir, 'backup'), dbBackup: backup, dbCheck: async () => {},
     commentsAdmin: store,
     ...extra,
@@ -365,11 +366,11 @@ for (const kind of ['memory', 'postgres'] as const) {
           });
           await posts.publish(tk, await publishTokens(posts, tk));
         }
-        const rebuild = vi.fn(async () => ({ ok: true, release: 'unused' }));
+        const rebuild = vi.fn(async () => ({ ok: true, attemptId: 'unused', release: 'unused' }));
         const settings = fakeSettings();
         settings.update({ commentsEnabled: true });
         const b = build({ posts, settings, comments: pgCommentStore(pool), commentsAdmin: store,
-          builder: { build: rebuild, hasRelease: () => true, quiesce: async () => {} } });
+          builder: { ...idleBuildState, build: rebuild, hasRelease: () => true, quiesce: async () => {} } });
         const admin = await authed(b, true);
         try {
           const first = (await b.app.inject({ method: 'GET', url: '/moderation/comments?status=approved', cookies: admin })).json();
@@ -425,7 +426,7 @@ describe('site identity administration', () => {
   it('requires admin authorization, returns no-store even on refusals, and never builds on save', async () => {
     let builds = 0;
     const identityStore = memorySiteIdentityStore({ ...neutralIdentity(), canonicalOrigin: 'https://blog.example' });
-    const b = build({ identityStore, builder: { build: async () => { builds++; return { ok: true, release: 'r' }; }, hasRelease: () => true, quiesce: async () => {} } });
+    const b = build({ identityStore, builder: { ...idleBuildState, build: async () => { builds++; return { ok: true, attemptId: 'r', release: 'r' }; }, hasRelease: () => true, quiesce: async () => {} } });
     const author = await authed(b, false);
     const admin = await authed(b, true);
     const edit = identityStore.get().identity;

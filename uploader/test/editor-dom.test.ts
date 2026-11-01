@@ -278,6 +278,10 @@ function loadEditor(options: EditorOptions = {}) {
         .filter(([key]) => key.startsWith('editor.chrome.'))
         .map(([key, value]) => [key.slice('editor.chrome.'.length), value])),
     ])),
+    BuildCopy: Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [
+      locale, Object.fromEntries(Object.entries(strings).filter(([key]) => key.startsWith('admin.build.'))
+        .map(([key, value]) => [key.slice('admin.build.'.length), value])),
+    ])),
     GpxCopy: { en: new Proxy({}, { get: (_target, key) => String(key) }) },
     GpxMap: { create: async () => ({ render() {}, destroy() {}, resize() {} }) },
     GpxEditor: { wire: () => ({ refresh: async () => true, publishVersion: options.publishVersion ?? (() => null), publishError: () => null, noteCreated() {}, hasPreview: () => false, discard() {}, revisionNotice() {}, guardAction: () => true }) },
@@ -287,6 +291,7 @@ function loadEditor(options: EditorOptions = {}) {
   ctx.window = ctx;
   ctx.languageFixture = { primary: 'de', locales: ['de', 'en'], ...options.language, lockedAt: null, updatedAt: '2026-10-27T00:00:00.000Z' };
   vm.createContext(ctx);
+  vm.runInContext(readFileSync('public/build-reporting.js', 'utf8'), ctx);
   vm.runInContext(readFileSync('public/language.js', 'utf8'), ctx, { filename: 'language.js' });
   vm.runInContext('SiteLanguage.accept(languageFixture)', ctx);
   vm.runInContext(readFileSync('public/draft-guard.js', 'utf8'), ctx, { filename: 'draft-guard.js' });
@@ -457,9 +462,10 @@ describe('serialized writes in the real editor', () => {
           // store's current one here. Language-token refusal is pinned in posts/server tests.
           expect(tokens.baseLanguageUpdatedAt).toBe('2026-10-27T00:00:00.000Z');
           const baseLanguageUpdatedAt = (await posts.language.get()).updatedAt;
-          return response({ ...await posts.publish('tk1', { ...tokens, baseUpdatedAt: new Date(tokens.baseUpdatedAt), baseLanguageUpdatedAt }), build: { ok: true } });
+          // The real route's acknowledgement shape (#297): published + updatedAt + build attempt.
+          return response({ published: true, ...await posts.publish('tk1', { ...tokens, baseUpdatedAt: new Date(tokens.baseUpdatedAt), baseLanguageUpdatedAt }), build: { ok: true, attemptId: 'r1', release: 'r1' } });
         }
-        if (url === '/posts/tk1/unpublish') return response(await posts.unpublish('tk1'));
+        if (url === '/posts/tk1/unpublish') return response({ unpublished: true, ...await posts.unpublish('tk1'), build: { ok: true, attemptId: 'r1', release: 'r1' } });
         return response(url === '/posts/tk1' ? await posts.get('tk1') : []);
       } catch (error) {
         if (error instanceof PostError) return response({ error: error.message, code: error.code }, 409);
@@ -525,7 +531,7 @@ describe('serialized writes in the real editor', () => {
       if (url === '/posts/tk1/' + action) {
         actionToken = (await posts.get('tk1'))!.updatedAt.toISOString();
         await held.promise;
-        if (!buildOk) return response({ updatedAt: actionToken, build: { ok: false, error: 'build failed' } });
+        if (!buildOk) return response({ [action === 'publish' ? 'published' : 'unpublished']: true, updatedAt: actionToken, build: { ok: false, attemptId: 'failed', code: 'build_failed', error: 'build failed' } });
       }
       return res;
     } });
@@ -744,7 +750,8 @@ describe('unpublish concurrency token in the real editor', () => {
     expect(h.api.buildPayload().updatedAt).toBe(post.updatedAt);
     expect(h.el('slugFieldDe').disabled).toBe(true);
     expect(h.el('unpublishBtn').disabled).toBe(false);
-    expect(h.el('actionError').textContent).toContain('storage_read_only');
+    // #297: a 5xx is an unknown outcome; the raw server error is never shown.
+    expect(h.el('actionError').textContent).toBe(ui.en['admin.build.unknown']);
   });
 });
 
@@ -825,7 +832,7 @@ describe('explicit editor publish tokens', () => {
       fetch: async (url, options) => {
         if (url === '/posts/tk1' && options?.method === 'PUT') return response({ ...fullPair(), updatedAt: saved });
         if (url === '/posts/tk1') return response({ ...fullPair(), updatedAt: initial });
-        if (url === '/posts/tk1/publish') return response({ updatedAt: '2026-10-24T09:02:00.000Z', build: { ok: true }, altAudit: { images: [] } });
+        if (url === '/posts/tk1/publish') return response({ published: true, updatedAt: '2026-10-24T09:02:00.000Z', build: { ok: true }, altAudit: { images: [] } });
         if (url.endsWith('/revisions')) return response([]);
         if (url.endsWith('/alt-audit')) return response({ images: [] });
         throw new Error('Unexpected publish request: ' + url);
@@ -850,6 +857,117 @@ describe('explicit editor publish tokens', () => {
     await settle();
     expect(h.requests).toEqual([]);
     expect(h.el('actionError').textContent).toBe('route not loaded');
+  });
+});
+
+describe('acknowledged publication survives failed rebuilds', () => {
+  it('adopts publish and unpublish tokens, locks only published locales, and never claims story liveness', async () => {
+    let token = '2026-10-24T09:00:00.000Z';
+    let writes = 0;
+    const pair = fullPair();
+    pair.en.omitted = true;
+    pair.en.publishedAt = null;
+    pair.de.publishedAt = null;
+    pair.status = 'draft';
+    const build = { ok: false, attemptId: '1793000000000-1-0001', code: 'build_failed', error: 'SECRET /data/path', liveRelease: null };
+    const h = loadEditor({
+      isAdmin: true, search: '?tk=tk1', confirm: true,
+      fetch: async (url, options) => {
+        if (url === '/posts/tk1' && options?.method === 'PUT') {
+          const payload = JSON.parse(String(options.body));
+          if (payload.updatedAt !== token) return response({ code: 'conflict' }, 409);
+          writes++;
+          token = `2026-10-24T09:0${writes}:00.000Z`;
+          return response({ ...pair, updatedAt: token });
+        }
+        if (url === '/posts/tk1/publish' || url === '/posts/tk1/unpublish') {
+          const previousUpdatedAt = token;
+          token = url.endsWith('/unpublish') ? '2026-10-24T10:00:00.000Z' : '2026-10-24T09:30:00.000Z';
+          return response({ [url.endsWith('/unpublish') ? 'unpublished' : 'published']: true, previousUpdatedAt, updatedAt: token, build, altAudit: { images: [] } });
+        }
+        if (url === '/posts/tk1') return response({ ...pair, updatedAt: token });
+        if (url.endsWith('/revisions')) throw new Error('optional refresh unavailable');
+        if (url.endsWith('/alt-audit')) return response({ images: [] });
+        throw new Error('Unexpected request ' + url);
+      },
+    });
+    for (let i = 0; i < 8; i++) await settle();
+    h.el('publishBtn').click();
+    for (let i = 0; i < 8; i++) await settle();
+    expect(h.api.buildPayload().updatedAt).toBe(token);
+    expect(h.el('slugFieldDe').disabled).toBe(true);
+    expect(h.el('slugFieldEn').disabled).toBe(false);
+    expect(h.el('actionStatus').textContent).toContain('Publish saved in the CMS');
+    expect(h.el('actionStatus').textContent).toContain('No live release yet');
+    expect(h.el('actionStatus').textContent).not.toContain('SECRET');
+    expect(h.el('actionStatus').querySelector('a')?.href).toBe('/admin/settings.html#site');
+    h.el('unpublishBtn').click();
+    for (let i = 0; i < 8; i++) await settle();
+    expect(h.api.buildPayload().updatedAt).toBe(token);
+    expect(h.el('slugFieldDe').disabled).toBe(true);
+    expect(h.el('slugFieldEn').disabled).toBe(false);
+    expect(h.el('actionStatus').textContent).toContain('Unpublish saved');
+    expect(await h.api.doSaveDraft()).toBe(true);
+    expect(writes).toBe(2);
+  });
+
+  it('keeps the saved token when publish acknowledgement is lost, without replaying', async () => {
+    const token = '2026-10-24T09:00:00.000Z';
+    const h = loadEditor({
+      isAdmin: true, search: '?tk=tk1', confirm: true,
+      fetch: async (url) => {
+        if (url === '/posts/tk1/publish') return response({ error: 'commit acknowledgement lost' }, 500);
+        if (url === '/posts/tk1') return response({ ...fullPair(), updatedAt: token });
+        return response([]);
+      },
+    });
+    for (let i = 0; i < 8; i++) await settle();
+    h.el('publishBtn').click();
+    for (let i = 0; i < 8; i++) await settle();
+    expect(h.el('actionError').textContent).toContain('Outcome unknown');
+    expect(h.api.buildPayload().updatedAt).toBe(token);
+    expect(h.requests.filter(({ url }) => url.endsWith('/publish'))).toHaveLength(1);
+  });
+
+  it.each(['none', 'before', 'after'] as const)('preserves unpublish version ownership despite rebuild failure (other writer: %s)', async (otherWriter) => {
+    const loaded = '2026-10-24T09:00:00.000Z';
+    const committed = '2026-10-24T10:00:00.000Z';
+    let token = loaded;
+    let storedTitle = 'Bukarest';
+    const h = loadEditor({
+      isAdmin: true, search: '?tk=tk1', confirm: true,
+      fetch: async (url, options) => {
+        if (url === '/posts/tk1/unpublish') {
+          const previousUpdatedAt = token;
+          token = committed;
+          if (otherWriter === 'after') { token = '2026-10-24T11:00:00.000Z'; storedTitle = 'Another writer'; }
+          return response({ unpublished: true, previousUpdatedAt, updatedAt: committed, build: { ok: false, code: 'build_failed', liveRelease: null } });
+        }
+        if (url === '/posts/tk1' && options?.method === 'PUT') {
+          const body = JSON.parse(String(options.body));
+          if (body.updatedAt !== token) return response({ code: 'conflict' }, 409);
+          storedTitle = body.de.title;
+          return response({ ...fullPair(), updatedAt: token });
+        }
+        if (url === '/posts/tk1') {
+          const pair = fullPair();
+          pair.de.title = storedTitle;
+          pair.de.publishedAt = new Date(loaded);
+          return response({ ...pair, status: 'published', updatedAt: token });
+        }
+        return response([]);
+      },
+    });
+    for (let i = 0; i < 8; i++) await settle();
+    if (otherWriter === 'before') { token = '2026-10-24T09:30:00.000Z'; storedTitle = 'Another writer'; }
+    h.el('unpublishBtn').click();
+    for (let i = 0; i < 8; i++) await settle();
+    expect(h.api.buildPayload().updatedAt).toBe(otherWriter === 'before' ? loaded : committed);
+    expect(h.el('actionStatus').textContent).toContain('Unpublish saved');
+    h.el('deTitle').value = 'My edit';
+    h.el('deTitle').fire('input');
+    expect(await h.api.doSaveDraft()).toBe(otherWriter === 'none');
+    expect(storedTitle).toBe(otherWriter === 'none' ? 'My edit' : 'Another writer');
   });
 });
 
