@@ -69,6 +69,7 @@ import { OnboardingError, type OnboardingStore } from './onboarding.js';
 import type { TrustPolicy } from './trusted-proxy.js';
 import { LanguageError, validateLanguage, type LanguageConfig, type LanguageStore, type LanguageLocale, type LanguageBlocker } from './language.js';
 import { publicPath } from './public-paths.js';
+import { NavigationError, type NavigationStore } from './navigation.js';
 import { validateCanonicalRoles } from './canonical-origin.js';
 import { registerIdentityAssetRoutes } from './site-identity-routes.js';
 
@@ -87,6 +88,7 @@ export interface ServerConfig {
   onRoute?: (route: RouteOptions) => void;
   posts: PostStore;
   pages: PageStore;
+  navigation?: NavigationStore;
   imgHost: string;   // Host header that serves image variants (img subdomain)
   siteDir: string;   // release root; the blog is served from `${siteDir}/current`
   mapDir?: string;   // PMTiles/glyph assets; omit to disable /map/
@@ -261,7 +263,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     reply.header('X-Content-Type-Options', 'nosniff');
     const url = req.raw.url ?? '';
     const route = req.routeOptions.url;
-    if (route === '/language' || route === '/auth/me' || route === '/onboarding' || route === '/settings' || route?.startsWith('/settings/identity') || route === '/ai-config' || route?.startsWith('/ai-providers')
+    if (route === '/language' || route === '/auth/me' || route === '/onboarding' || route === '/settings' || route === '/settings/navigation' || route?.startsWith('/settings/identity') || route === '/ai-config' || route?.startsWith('/ai-providers')
       || route === '/posts/:tk/publish' || route === '/posts/bulk' || route === '/posts' || route === '/posts/:tk'
       || route === '/pages/:key' || route === '/upload' || route === '/upload/receipts/:uploadId' || route === '/media/lookup'
       || route === '/media/folders') reply.header('Cache-Control', 'no-store');
@@ -915,6 +917,28 @@ export function buildServer(cfg: ServerConfig): AppServer {
         code: error.code, error: error.message, ...(error.blockers ? { blockers: error.blockers } : {}),
         ...(error.owner ? { owner: error.owner } : {}),
       });
+      throw error;
+    }
+  });
+  // Navigation is content in the existing Postgres site_nav singleton, not settings.json.
+  app.get('/settings/navigation', { preHandler: requireAdmin }, async (_req, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    if (!cfg.navigation) return reply.code(503).send({ error: 'Navigation unavailable.' });
+    return { ...await cfg.navigation.get(), socialLinks: cfg.identityStore?.get().identity.socialLinks ?? [] };
+  });
+  app.put('/settings/navigation', { preHandler: requireAdmin }, async (req, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    if (!cfg.navigation) return reply.code(503).send({ error: 'Navigation unavailable.' });
+    try {
+      if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) throw new NavigationError('invalid_navigation');
+      const body = req.body as Record<string, unknown>;
+      if (Object.keys(body).some((key) => key !== 'config' && key !== 'updatedAt')) throw new NavigationError('invalid_navigation');
+      const saved = await cfg.navigation.save(body.config, body.updatedAt);
+      // Locks are released. The save is acknowledged with its own build evidence (#297),
+      // so a failed rebuild never reads as a failed save.
+      return { saved, build: projectBuildReport(await cfg.builder.build('rebuild')) };
+    } catch (error) {
+      if (error instanceof NavigationError) return reply.code(error.code === 'conflict' ? 409 : 400).send({ code: error.code, error: error.message });
       throw error;
     }
   });

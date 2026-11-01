@@ -54,6 +54,8 @@ export const STORY_BODY_SIZES = `(min-width: ${storyLockRem}rem) ${storyWidthRem
 export const STORY_OPENING_SIZES = `(min-width: ${storyLockRem}rem) ${storyWidthRem - 21}rem, (min-width: 64rem) calc(100vw - 23.5rem), (min-width: 48rem) 45.5rem, calc(100vw - 2.5rem)`;
 // 2.2 / 3.2 of the grid after its 2.5rem padding and 3rem gap.
 export const ABOUT_BODY_SIZES = '(min-width: 72rem) 45.71875rem, (min-width: 64rem) calc(68.75vw - 3.78125rem), calc(100vw - 2.5rem)';
+/** BasicPage's `max-w-3xl px-5` reading column (#289 contact/privacy/legal pages). */
+export const BASIC_PAGE_BODY_SIZES = '(min-width: 48rem) 45.5rem, calc(100vw - 2.5rem)';
 export const PREVIEW_BODY_SIZES = '(min-width: 46rem) 43.5rem, calc(100vw - 2.5rem)';
 
 /**
@@ -478,4 +480,25 @@ export function analyzeRenderedBody(html: string): { hasH1: boolean; sources: st
     }
   });
   return { hasH1, sources, galleryLines };
+}
+
+/** Shared publish/build origin gate, before image-map resolution can hide a foreign URL. */
+export function foreignBodyImageSources(html: string, imageOrigin: string): string[] {
+  const allowed = new URL(imageOrigin).origin;
+  const { sources, galleryLines } = analyzeRenderedBody(html);
+  const foreign = new Set<string>();
+  for (const raw of [...sources, ...galleryLines]) {
+    let url: URL;
+    // Resolved against the image host — which in this deployment is the origin
+    // that serves the blog too — because that is what the reader's browser
+    // does with a reference that carries no origin of its own. Parsing without
+    // a base disagreed with it in both directions: `//old.example/a.jpg`
+    // (also its `&#47;&#47;` and `\\` spellings, which WHATWG resolves the same
+    // way) failed to parse and was passed as harmless while the page hot-linked
+    // old.example, and `https:old.example/a.jpg` parsed as a foreign origin
+    // while the browser reads it as a path on our own host — a false refusal.
+    try { url = new URL(raw, allowed); } catch { continue; }
+    if ((url.protocol === 'https:' || url.protocol === 'http:') && url.origin !== allowed) foreign.add(raw);
+  }
+  return [...foreign];
 }

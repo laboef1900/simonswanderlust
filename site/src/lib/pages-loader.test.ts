@@ -21,7 +21,7 @@ vi.mock('pg', () => ({ default: { Pool: class {
         db.sql.push(sql);
         if (sql.includes('FROM site_language')) return { rows: [db.language] };
         if (sql.includes('FROM pages')) return { rows: db.rows ?? ['de', 'en'].map((locale) => ({
-          key: 'about', locale, title: locale, body_markdown: `${locale} private draft if inactive`, images: {},
+          key: 'about', slug: '', status: 'published', locale, title: locale, body_markdown: `${locale} private draft if inactive`, images: {},
         })) };
         return { rows: [] };
       },
@@ -40,26 +40,26 @@ afterEach(() => {
 describe('rowToPageEntry', () => {
   it('maps a page row to a content entry input', () => {
     const out = rowToPageEntry({
-      key: 'about', locale: 'de', title: 'Über mich',
+      key: 'about', slug: '', locale: 'de', title: 'Über mich',
       body_markdown: 'Hallo', images: { 'https://img/x': { width: 800, height: 600 } },
     }, 'https://img');
     expect(out).toEqual({
       id: 'about/de',
       body: 'Hallo',
       images: { 'https://img/x': { width: 800, height: 600 } },
-      data: { title: 'Über mich' },
+      data: { key: 'about', slug: '', locale: 'de', title: 'Über mich' },
     });
   });
 
   it('defaults images to {} when null', () => {
-    const out = rowToPageEntry({ key: 'about', locale: 'en', title: 'About me', body_markdown: 'Hi', images: null }, 'https://img');
+    const out = rowToPageEntry({ key: 'about', slug: '', locale: 'en', title: 'About me', body_markdown: 'Hi', images: null }, 'https://img');
     expect(out.images).toEqual({});
     expect(out.id).toBe('about/en');
   });
   it('re-points the page\'s image URLs at the configured host, so one row renders anywhere', () => {
     const out = rowToPageEntry(
       {
-        key: 'about', locale: 'de', title: 'Über mich',
+        key: 'about', slug: '', locale: 'de', title: 'Über mich',
         body_markdown: '```gallery\nhttp://localhost:3000/pages/about/a\n```',
         images: { 'http://localhost:3000/pages/about/a': { width: 8, height: 6, format: 'jpeg' as const } },
       },
@@ -101,6 +101,42 @@ describe('enabled About projection', () => {
   });
 });
 
+describe('published page renderer trust boundary', () => {
+  async function load(body: string, images: unknown = {}) {
+    vi.stubEnv('DATABASE_URL', 'postgres://mocked/never-dialed');
+    vi.stubEnv('PUBLIC_BASE_URL', 'https://img.example');
+    vi.stubEnv('SITE_LANGUAGE_JSON', '{"primary":"de","locales":["de"]}');
+    db.language = { primary_locale: 'de', enabled_locales: ['de'] };
+    db.rows = [{ key: 'contact', locale: 'de', status: 'published', slug: 'kontakt', title: 'Contact', body_markdown: body, images }];
+    const set = vi.fn();
+    await postgresPagesLoader().load({
+      store: { clear: vi.fn(), set }, parseData: async ({ data }: { data: unknown }) => data,
+      renderMarkdown: async (markdown: string) => ({ html: await renderMarkdown(markdown) }), logger: { info: vi.fn() },
+    } as unknown as Parameters<Loader['load']>[0]);
+    return set.mock.calls[0]![0];
+  }
+  it.each(['![x](https://foreign.example/x)', '```gallery\nhttps://foreign.example/x\n```',
+    '<picture><source srcset="https://foreign.example/a 1x"><img src="https://img.example/photo"></picture>',
+    '![x](//foreign.example/x)'])('refuses restored foreign image markup %s', async (body) => {
+    await expect(load(body)).rejects.toThrow('Unsafe published page images: contact/de');
+  });
+  it('re-points a registered image at this host instead of loading its stored origin', async () => {
+    // The stored origin is advisory (retargetImageOrigins): portability can only move a
+    // registered image onto this host, never introduce a foreign load.
+    const entry = await load('![x](https://foreign.example/x)', { 'https://foreign.example/x': { width: 640, height: 480 } });
+    expect(entry.rendered.html).not.toContain('foreign.example');
+    expect(entry.rendered.html).toContain('https://img.example/x-640.webp');
+  });
+  it('renders through sanitizer and guarded responsive pictures, not untrusted HTML', async () => {
+    const entry = await load('<script>alert(1)</script>\n\n[bad](javascript:alert(1))\n\n![Photo](https://img.example/photo)',
+      { 'https://img.example/photo': { width: 640, height: 480 } });
+    expect(entry.rendered.html).not.toContain('<script');
+    expect(entry.rendered.html).not.toContain('javascript:');
+    expect(entry.rendered.html).toContain('<picture data-body-image');
+    expect(entry.rendered.html).toContain('https://img.example/photo-640.webp');
+  });
+});
+
 describe('page prose metadata', () => {
   it.each([
     {
@@ -117,7 +153,7 @@ describe('page prose metadata', () => {
     vi.stubEnv('PUBLIC_BASE_URL', 'https://img.example');
     vi.stubEnv('SITE_LANGUAGE_JSON', '{"primary":"de","locales":["de","en"]}');
     db.rows = [{
-      key: 'about', locale: 'de', title: 'About',
+      key: 'about', slug: '', status: 'published', locale: 'de', title: 'About',
       body_markdown: body,
       images: { 'https://img.example/portrait': { width: 1600, height: 1000 } },
     }];
@@ -137,7 +173,7 @@ describe('page prose metadata', () => {
     expect(db.sql).toEqual([
       'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY',
       'SELECT primary_locale, enabled_locales FROM site_language WHERE id = true',
-      'SELECT key, locale, title, body_markdown, images FROM pages',
+      'SELECT key, locale, slug, status, title, body_markdown, images FROM pages WHERE status = $1 AND key = ANY($2::text[]) AND locale = ANY($3::text[])',
       'COMMIT',
     ]);
     expect(db.released).toBe(true);
@@ -151,7 +187,7 @@ describe('postgresPagesLoader load()', () => {
     vi.stubEnv('SITE_LANGUAGE_JSON', '{"primary":"de","locales":["de","en"]}');
     const src = 'http://localhost:3000/pages/about/photo';
     db.rows = ['de', 'en'].map((locale) => ({
-      key: 'about', locale, title: 'About',
+      key: 'about', slug: '', status: 'published', locale, title: 'About',
       body_markdown: `![About photo](${src})\n\n\`\`\`gallery\n${src}\n${src}\n\`\`\``,
       images: { [src]: { width: 1600, height: 1000, alt: '', caption: '' } },
     }));

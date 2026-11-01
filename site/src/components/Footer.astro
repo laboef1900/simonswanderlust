@@ -2,15 +2,17 @@
 import { getCollection } from 'astro:content';
 import Contours from './Contours.astro';
 import { useTranslations, type Locale } from '../i18n/ui';
-import { aboutPath } from '../lib/paths';
+import type { ResolvedNavItem } from '../lib/resolve-navigation';
 import { byLocale, pathOf } from '../lib/trips';
 import { identity, identitySiteName, identityTagline } from '../lib/build-identity';
 
 interface Props {
   locale: Locale;
+  items: ResolvedNavItem[];
+  legal: ResolvedNavItem[];
 }
 
-const { locale } = Astro.props;
+const { locale, items, legal } = Astro.props;
 const t = useTranslations(locale);
 const latest = byLocale(await getCollection('trips'), locale).slice(0, 3);
 
@@ -89,13 +91,14 @@ const latest = byLocale(await getCollection('trips'), locale).slice(0, 3);
         {t('footer.about')}
       </p>
       <ul role="list" class="mt-1 text-sm text-white/80">
-        <li>
-          <a
-            href={aboutPath(locale)}
-            class="inline-flex min-h-[44px] items-center rounded transition-[color] hover:text-brand-red-light focus-visible:outline-brand-red-light"
-            >{t('nav.about')}</a
-          >
-        </li>
+        {items.map((item) => <li>
+          <a href={item.href} aria-current={item.current ? 'page' : undefined}
+            target={item.external ? '_blank' : undefined} rel={item.external ? 'noopener noreferrer' : undefined}
+            class="inline-flex min-h-[44px] items-center rounded transition-[color] hover:text-brand-red-light active:text-brand-red-light focus-visible:outline-brand-red-light"
+          ><span>{item.label}{item.external && <> ↗<span class="sr-only"> {t('nav.newTab')}</span></>}</span></a>
+        </li>)}
+      </ul>
+      <ul role="list" class="text-sm text-white/80">
         {identity.socialLinks.map(({ label, url }) => <li>
           <a
             href={url}
@@ -114,4 +117,14 @@ const latest = byLocale(await getCollection('trips'), locale).slice(0, 3);
       </ul>
     </div>
   </div>
+  {legal.length > 0 && <nav aria-label={t('footer.legal')} class="relative mx-auto max-w-6xl px-5 pb-8">
+    <ul role="list" class="flex flex-wrap gap-x-6 border-t border-white/30 pt-3 text-sm text-white/80 [overflow-wrap:anywhere]">
+      {legal.map((item) => <li class="min-w-0 max-w-full">
+        <a href={item.href} aria-current={item.current ? 'page' : undefined}
+          target={item.external ? '_blank' : undefined} rel={item.external ? 'noopener noreferrer' : undefined}
+          class="inline-flex min-h-[44px] items-center rounded transition-[color] hover:text-brand-red-light active:text-brand-red-light focus-visible:outline-brand-red-light"
+        ><span>{item.label}{item.external && <> ↗<span class="sr-only"> {t('nav.newTab')}</span></>}</span></a>
+      </li>)}
+    </ul>
+  </nav>}
 </footer>
