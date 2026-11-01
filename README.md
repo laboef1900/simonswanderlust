@@ -118,7 +118,7 @@ features shipped in their release.
 
 ### Start with a released image
 
-**Image name:** releases from **v0.18.0** on are published as
+**Image name:** releases from **v0.18.1** on are published as
 `ghcr.io/laboef1900/wanderlust-studio` (see the
 [releases](https://github.com/laboef1900/simonswanderlust/releases)). Releases up to
 v0.17.1 remain at `ghcr.io/laboef1900/simonswanderlust-app`; they are not copied or
@@ -296,10 +296,12 @@ limitations, then check correspondence and delivery in the final rebuilt release
 
 ### Cutting a release
 
-**v0.18.0 — first release as `ghcr.io/laboef1900/wanderlust-studio`** (linux/amd64 and
-linux/arm64). The product is now **Wanderlust Studio**; the software is AGPL-3.0-only and
-stories, photos and the blog's brand are excluded (`NOTICE`). Changes since v0.17.1
-(PRs #401–#505; the GitHub release lists each one):
+**v0.18.1 — first release as `ghcr.io/laboef1900/wanderlust-studio`** (linux/amd64 and
+linux/arm64). The `v0.18.0` tag's release workflow failed before publishing (it overrode the
+Dockerfile's digest-pinned DHI bases with floating tags, which the native-build stage
+refuses): there is no v0.18.0 image or GitHub Release. The product is now **Wanderlust
+Studio**; the software is AGPL-3.0-only and stories, photos and the blog's brand are
+excluded (`NOTICE`). Changes since v0.17.1 (PRs #401–#508; the GitHub release lists each one):
 
 - **Site identity** in Settings: site and author name, canonical blog origin, taglines,
   social links, logo and favicons (#433, #454, #478).
@@ -322,7 +324,7 @@ stories, photos and the blog's brand are excluded (`NOTICE`). Changes since v0.1
 - Fixes across the editor, galleries, media library, comments moderation, WordPress import,
   backups, maps and public-page contrast (WCAG AA).
 
-Upgrade notes for v0.17.1 → v0.18.0 (the [release recovery checklist](ARCHITECTURE.md#release-recovery-checklist)):
+Upgrade notes for v0.17.1 → v0.18.1 (the [release recovery checklist](ARCHITECTURE.md#release-recovery-checklist)):
 
 - **Image, Compose and bootstrap.** Apply this release's `docker-compose.yml` together with
   the image. `IMAGE_TAG` (no default), `PUBLIC_BASE_URL` and `IMG_HOST` are now required in
@@ -355,7 +357,7 @@ Upgrade notes for v0.17.1 → v0.18.0 (the [release recovery checklist](ARCHITEC
   attribution and rendering fixes.
 - **Recovery direction: roll-forward only; no supported downgrade.** v0.17.1 lacks #347's
   codec floor and cannot read v11+ dumps or the new tables.
-- **Evidence:** no v0.17.1 → v0.18.0 upgrade rehearsal was run for this release. Existing
+- **Evidence:** no v0.17.1 → v0.18.1 upgrade rehearsal was run for this release. Existing
   evidence covers a DHI candidate pair at dump v10 (#298, 2026-10-29), the native v0.17.1
   clean install ([record](docs/2026-10-29-clean-install-rehearsal.md)) and N13 → N14 restores
   during the journeys work. Treat this upgrade as unrehearsed and capture recovery first.
