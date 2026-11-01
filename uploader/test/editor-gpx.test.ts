@@ -1458,6 +1458,11 @@ describe('explicitly adopting the stored version reconciles the real editor and 
     expect(routeReads(h)).toHaveLength(1);
     expect(publicationWrites(h)).toEqual([]);
     expect(routeWrites(h)).toEqual([]);
+    // A route write carries the unconfirmed version token: Detach is refused locally too.
+    h.element('gpxDetach').click();
+    await settle();
+    expect(routeWrites(h)).toEqual([]);
+    expect(h.element('gpxRouteFeedback').textContent).toBe(ui.en['gpx.saveUnresolved']);
     expect(stashedPayloads(h)).toContain(JSON.stringify(before));
     expect(h.editor.guard.isDirty()).toBe(true);
     expect(h.locationHref).toBe('http://localhost/admin/editor.html');
