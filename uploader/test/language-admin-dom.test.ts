@@ -2,6 +2,7 @@ import { webcrypto } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { browserScript, galleryCodecBindings } from './gallery-browser-module.js';
 import { editorDocument } from './editor-dom-harness.js';
 import { ui } from '../../site/src/i18n/ui.js';
 
@@ -166,7 +167,10 @@ async function about(primary: Locale, prepareLocale?: Locale, route?: (url: stri
   const cleaned: unknown[] = [];
   class EasyMDE {
     private text = '';
-    codemirror = { getInputField: () => dom.document.createElement('textarea'), on() {}, refresh() {} };
+    codemirror = {
+      getInputField: () => dom.document.createElement('textarea'), on() {}, refresh() {},
+      getValue: () => this.text, getLine: (line: number) => this.text.split('\n')[line] ?? '',
+    };
     value(value?: string) { if (value !== undefined) this.text = value; return this.text; }
   }
   const context: Record<string, unknown> = {
@@ -186,7 +190,7 @@ async function about(primary: Locale, prepareLocale?: Locale, route?: (url: stri
       else if (route && url !== '/language') result = await route(url, init);
       else if (url === '/language') result = response(state(primary, [primary]));
       else if (url.endsWith('/revisions')) result = response([]);
-      else if (init.method === 'PUT') result = response({ saved: { ...page, updatedAt: '2026-10-28T00:00:00.000Z' }, build: { ok: true } });
+      else if (init.method === 'PUT') result = response({ saved: { ...page, updatedAt: '2026-10-28T00:00:00.000Z' }, build: { ok: true }, galleryWarnings: [] });
       else result = response(page);
       if (result.ok && url === '/pages/about') {
         const body = await result.json() as Record<string, unknown>;
@@ -201,9 +205,11 @@ async function about(primary: Locale, prepareLocale?: Locale, route?: (url: stri
   context.EditorCopy = editorCopy;
   context.BuildCopy = buildCopy;
   vm.createContext(context);
-  for (const file of ['build-reporting.js', 'language.js', 'tabs.js', 'pages-ui.js', 'write-recovery.js']) vm.runInContext(readFileSync('public/' + file, 'utf8'), context);
-  const start = html.lastIndexOf('<script>') + '<script>'.length;
-  vm.runInContext(html.slice(start, html.lastIndexOf('</script>')), context);
+  Object.assign(context, galleryCodecBindings);
+  for (const file of ['build-reporting.js', 'language.js', 'tabs.js', 'pages-ui.js', 'write-recovery.js', 'gallery-fence.js', 'gallery-metadata-warnings.js']) vm.runInContext(browserScript(file), context);
+  // The page script is a module (it imports the gallery fence); run its body.
+  const start = html.lastIndexOf('<script type="module">');
+  vm.runInContext(html.slice(html.indexOf("'use strict'", start), html.lastIndexOf('</script>')), context);
   await settle();
   return { el, requests, page, context, cleaned };
 }
@@ -260,25 +266,29 @@ describe('About inactive translation preparation', () => {
 describe('About acknowledged save and failed rebuild', () => {
   it('keeps the submitted clean snapshot and mutation token despite newer edits and a failed revisions refresh', async () => {
     let token = stamp;
+    // The real route acknowledges the complete stored page (#288) beside its build attempt.
+    const stored = (updatedAt: string) => ({ key: 'about', status: 'published', updatedAt,
+      en: { locale: 'en', title: 'Submitted', bodyMarkdown: 'English', images: {}, slug: '' }, de: { locale: 'de', title: '', bodyMarkdown: '', images: {}, slug: '' } });
     const pending = Promise.withResolvers<BrowserResponse>();
     let saves = 0;
     const h = await about('en', undefined, async (url, init) => {
+      if (url === '/pages') return response({ pages: [{ key: 'about', known: true, defaults: { de: 'uber-mich', en: 'about-me' } }] });
       if (url.endsWith('/revisions')) throw new Error('optional list unavailable');
       if (init.method === 'PUT') {
         const payload = JSON.parse(String(init.body));
         if (payload.updatedAt !== token) return response({ code: 'conflict' }, 409);
         saves++;
         if (saves === 1) return pending.promise;
-        return response({ saved: { updatedAt: token }, build: { ok: true, release: '1793000000000-1-0002' } });
+        return response({ saved: { ...stored(token), en: { locale: 'en', title: 'Newer local edit', bodyMarkdown: 'English', images: {}, slug: '' } }, build: { ok: true, release: '1793000000000-1-0002' }, galleryWarnings: [] });
       }
-      return response({ updatedAt: token, en: { title: 'Initial', bodyMarkdown: 'English', images: {} }, de: { title: '', bodyMarkdown: '', images: {} } });
+      return response({ key: 'about', status: 'published', updatedAt: token, en: { locale: 'en', title: 'Initial', bodyMarkdown: 'English', images: {}, slug: '' }, de: { locale: 'de', title: '', bodyMarkdown: '', images: {}, slug: '' } });
     });
     h.el('enTitle').value = 'Submitted';
     h.el('saveBtn').click();
     await settle();
     h.el('enTitle').value = 'Newer local edit';
     token = '2026-10-28T00:00:00.000Z';
-    pending.resolve(response({ saved: { updatedAt: token }, build: { ok: false, code: 'no_space', error: 'SECRET', liveRelease: null } }));
+    pending.resolve(response({ saved: stored(token), build: { ok: false, code: 'no_space', error: 'SECRET', liveRelease: null }, galleryWarnings: [] }));
     await settle();
     expect(h.cleaned.at(-1)).toEqual({ title: 'Submitted' });
     expect(h.el('enTitle').value).toBe('Newer local edit');

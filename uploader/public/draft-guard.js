@@ -11,6 +11,7 @@ window.DraftGuard = (function () {
     let context = crypto.randomUUID();
     let generation = 0;
     let dirty = false;
+    let redirecting = false;
     let timer = null;
     let own = null;
     let adopted = null;
@@ -39,7 +40,7 @@ window.DraftGuard = (function () {
       return true;
     }
     function markDirty() {
-      dirty = true; generation += 1; cancelTimer();
+      dirty = true; redirecting = false; generation += 1; cancelTimer();
       timer = setTimeout(() => { timer = null; stashNow(); }, opts.debounceMs || 5000);
       opts.onChange?.(dirty);
     }
@@ -109,11 +110,13 @@ window.DraftGuard = (function () {
     }
     function redirectToLogin() {
       if (dirty) stashNow();
-      dirty = false; cancelTimer();
+      // Navigation consent is not a successful save: consumers still need
+      // to distinguish the unsaved form from persisted content.
+      redirecting = true; cancelTimer();
       location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search);
     }
     window.addEventListener('beforeunload', (e) => {
-      if (!dirty) return;
+      if (!dirty || redirecting) return;
       stashNow(); e.preventDefault(); e.returnValue = '';
     });
     window.addEventListener('pagehide', () => { if (dirty) stashNow(); });

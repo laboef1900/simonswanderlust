@@ -1,6 +1,6 @@
 import type { Loader } from 'astro/loaders';
 import { loaderPool, withLoaderSnapshot } from './loader-pool.js';
-import { transformBodyImages, type ImageDims } from './body-images.js';
+import { STORY_BODY_SIZES, transformBodyImages, type ImageDims } from './body-images.js';
 import { imageOrigin, retargetImageOrigins, type RemoteHeroImage } from './images.js';
 import { siteLanguage } from './site-language.js';
 import { assertLoaderLanguage } from './build-language.js';
@@ -95,10 +95,9 @@ export function postgresTripsLoader(): Loader {
       // runs in Node, same as DATABASE_URL above) and passed down explicitly,
       // so transformBodyImages stays pure and env-free for the uploader's
       // draft preview.
-      // @ai-note: with PUBLIC_BASE_URL unset this falls back to the production
-      // origin, so a local/CI build renders localhost gallery URLs as the bare
-      // <pre> instead of a grid. That is the fail-safe direction — set
-      // PUBLIC_BASE_URL (repo-root .env already does) to preview galleries.
+      // Standalone dev / CI builds without PUBLIC_BASE_URL use localhost:3000.
+      // Production supplies its independent image origin; canonical blog-domain
+      // changes never retarget these images.
       const galleryOrigin = imageOrigin(process.env.PUBLIC_BASE_URL);
       const pool = loaderPool(url);
       const language = siteLanguage();
@@ -133,7 +132,7 @@ export function postgresTripsLoader(): Loader {
           const input = rowToEntryInput(row, galleryOrigin);
           const data = await parseData({ id: input.id, data: input.data });
           const rendered = await renderMarkdown(input.body);
-          rendered.html = transformBodyImages(rendered.html, input.images, galleryOrigin, descriptions[row.locale]);
+          rendered.html = await transformBodyImages(rendered.html, input.images, galleryOrigin, { locale: row.locale, inlineSizes: STORY_BODY_SIZES }, descriptions[row.locale]);
           store.set({ id: input.id, data, body: input.body, rendered });
         }
         logger.info(`postgres-trips: loaded ${enabledRows.length} published entries`);

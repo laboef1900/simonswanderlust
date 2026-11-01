@@ -124,7 +124,8 @@ export interface UserStore {
   create(u: NewUser): Promise<User>;
   /** Replaces the stored hash. Throws a plain Error for an unknown id. */
   setPassword(id: string, password: string): Promise<void>;
-  remove(id: string): Promise<void>;
+  /** Atomically preserves at least one administrator when removing an account. */
+  remove(id: string): Promise<'removed' | 'not_found' | 'last_admin'>;
 }
 
 export function memoryUserStore(): UserStore {
@@ -154,7 +155,20 @@ export function memoryUserStore(): UserStore {
       if (!user) throw new Error('user not found');
       user.passwordHash = hashPassword(password);
     },
-    async remove(id) { byId.delete(id); },
+    async remove(id) {
+      const target = byId.get(id);
+      if (!target) return 'not_found';
+      // Keep lookup/count/delete synchronous: concurrent removals must see each other.
+      if (target.isAdmin) {
+        let admins = 0;
+        for (const user of byId.values()) {
+          if (user.isAdmin) admins++;
+        }
+        if (admins <= 1) return 'last_admin';
+      }
+      byId.delete(id);
+      return 'removed';
+    },
   };
 }
 
@@ -182,9 +196,7 @@ export function pgUserStore(pool: DbPool): UserStore {
       return rows[0] ? rowToUser(rows[0]) : null;
     },
     async findById(id) {
-      // Reject non-UUID ids before querying: `DELETE /users/:id` passes the raw
-      // route param through here, and a malformed uuid parameter raises
-      // Postgres 22P02 (a logged 500) instead of the 404 the route wants.
+      // Reject malformed ids before querying rather than raising Postgres 22P02.
       if (!UUID_RE.test(id)) return null;
       const { rows } = await pool.query<UserRow>('SELECT * FROM users WHERE id = $1', [id]);
       return rows[0] ? rowToUser(rows[0]) : null;
@@ -214,7 +226,32 @@ export function pgUserStore(pool: DbPool): UserStore {
       if (!rowCount) throw new Error('user not found');
     },
     async remove(id) {
-      await pool.query('DELETE FROM users WHERE id = $1', [id]);
+      if (!UUID_RE.test(id)) return 'not_found';
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        // Lock before any reads so a waiting removal sees the previous commit.
+        // Ordinary authentication SELECTs remain available while account writes serialize.
+        await client.query('LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE');
+        const { rows } = await client.query<{ is_admin: boolean }>('SELECT is_admin FROM users WHERE id = $1', [id]);
+        let outcome: 'removed' | 'not_found' | 'last_admin' = 'not_found';
+        if (rows[0]) {
+          outcome = 'removed';
+          if (rows[0].is_admin) {
+            const count = await client.query<{ n: string }>('SELECT count(*)::text AS n FROM users WHERE is_admin');
+            if (!count.rows[0]) throw new Error('COUNT query returned no rows');
+            if (Number(count.rows[0].n) <= 1) outcome = 'last_admin';
+          }
+          if (outcome === 'removed') await client.query('DELETE FROM users WHERE id = $1', [id]);
+        }
+        await client.query('COMMIT');
+        return outcome;
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
     },
   };
 }

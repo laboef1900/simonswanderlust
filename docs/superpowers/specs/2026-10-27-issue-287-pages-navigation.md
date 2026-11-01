@@ -1046,3 +1046,40 @@ enabled-opener focus at 1440px and 320px without page/history mutations.
 Independent re-review found no remaining findings; both required CI jobs passed
 on `c18f516`. Final documentation CI and eventual stack qualification remain
 separate from this exact-source evidence.
+
+## #288 current-dev integration (2026-11-01)
+
+Merged `origin/dev` at `b51a25d` (after #276, #279, #280, #281, #284, #285, #297,
+#344 and the gallery-metadata warnings landed). Resolutions, keeping both intents:
+
+- **Build outcome (#297).** Page save/publish/unpublish/delete answer 200 with the
+  stored pair and the projected build report, never the earlier 502 `persisted`
+  envelope; `about.html` and `pages.html` render failed builds through
+  `BuildReporting` while keeping the stored state.
+- **Gallery warnings.** `mergePageUpdate` normalizes both locales with the async
+  `normalizeGalleryFences`; saves return transient `galleryWarnings` that are never
+  stored or snapshotted. Preview uses the async `transformBodyImages`.
+- **#344 serialization.** `transaction` already holds `site_language` FOR UPDATE
+  before `readPage`, which serializes every page mutation including two creations
+  of a never-saved key; no extra advisory lock was added. #344's suite now uses
+  the `contact` kind (only known kinds are writable) and expresses #288's token
+  contract: a supplied `updatedAt` for an absent page is `not_found` for both
+  racers, so creation is always token-less.
+- **Boot order.** `initializeApplicationSchema` → read-only
+  `reportNamespaceCollisions` → `initializeOnboarding`; the onboarding bootstrap
+  catalog accepts the additive page columns, `site_nav` (seed must equal
+  `DEFAULT_NAVIGATION`) and `pages_locale_slug_idx`.
+
+Verification on the merge: uploader `tsc` and full suite 4155/4155 with isolated
+PostgreSQL; site `astro check` 0/0, `npm run build`, and the zero-content build
+integration 4/4. Runtime on a fresh database: page catalogue, contact draft
+(200, no build), publish (200, build ok), reserved slug `karte` refused 409,
+About save returns `de:unknown_field` gallery warning; with a read-only
+`releases/`, unpublish and an editor Publish both answered 200 with
+`release_write_failed` and the editor showed the saved state with the Settings
+retry link; delete (200, build ok) and the Pages list rendered. The managed
+headless browser does not deliver native `<dialog>` close events, so the
+confirmation was stubbed in-page for the editor click. Public rendering of
+non-About pages remains #289 (`/kontakt/` is 404 at this head by design). The
+G1 read-only owner inventory found no reserved-route collisions, matching a
+silent boot report.

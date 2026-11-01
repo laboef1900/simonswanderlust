@@ -981,6 +981,13 @@ dialog.media-picker {
 .media-picker__empty { grid-column: 1 / -1; margin: 0; padding: 1.5rem 0; }
 .media-picker .admin-modal__foot { flex-wrap: wrap; align-items: center; }
 .media-picker .admin-modal__foot > span { margin-right: auto; }
+.media-picker .admin-modal__foot button[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+  border-color: var(--line-control);
+  background-color: var(--surface);
+  color: var(--ink);
+}
 
 @media (max-width: 640px) {
   .media-picker__browse { grid-template-columns: 1fr; gap: 0.75rem; }
@@ -1842,7 +1849,12 @@ body.settings-page .muted { max-width: 70ch; overflow-wrap: anywhere; }
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 0 1rem;
 }
-#identityFields { min-width: 0; margin: 0; padding: 0; border: 0; }
+#identityFields, .identity-asset-fields { min-width: 0; margin: 0; padding: 0; border: 0; }
+.identity-assets { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--line); }
+.identity-asset-fields { margin-bottom: 1rem; }
+.identity-asset-fields legend { font-weight: 600; }
+.identity-asset-fields input[type='file'] { max-width: 100%; }
+.identity-asset-fields .form-actions { flex-wrap: wrap; }
 #identityLocalized { margin-top: 1rem; }
 .identity-social-links { margin: 1rem 0; padding-left: 1.5rem; }
 .identity-social-links > li { padding: 0.75rem 0; border-top: 1px solid var(--line); }

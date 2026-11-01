@@ -1,16 +1,18 @@
 import { publishTokens } from './publish-tokens.js';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
-import { importWxr, prepareImport, rehostKey, ImportTooLargeError, ImportInsufficientSpaceError, DEFAULT_MAX_IMAGES, type ImportDeps } from '../src/wp-import.js';
+import { importWxr, prepareImport, rehostKey, ImportTooLargeError, ImportInsufficientSpaceError, DEFAULT_MAX_IMAGES, WARNING_CAP, type ImportDeps } from '../src/wp-import.js';
 import { memoryPostStore, PostError, type PostStore } from '../src/posts.js';
 import { createRehostResume, rehostImage, type RehostResult } from '../src/wp-images.js';
 import { FetchError, type LookupFn } from '../src/safe-fetch.js';
 import { memoryLanguageStore, type LanguageConfig } from '../src/language.js';
 import { memoryPageStore } from '../src/pages.js';
+import { renderMarkdown } from '../../site/src/lib/render-markdown.js';
+import { analyzeRenderedBody } from '../../site/src/lib/body-images.js';
 
 const xml = readFileSync(join(process.cwd(), 'test/fixtures/wxr-sample.xml'), 'utf8');
 const stubRehost = async (_url: string, _key: string, _alt: string) => ({ src: 'https://img/x', width: 100, height: 80 });
@@ -33,7 +35,7 @@ ${items}
 </rss>`;
 
 const item = (loc: 'de' | 'en', slug: string, group: string, html: string): string => `  <item>
-    <title>${slug}</title>
+    <title><![CDATA[${slug}]]></title>
     <wp:post_name><![CDATA[${slug}]]></wp:post_name>
     <wp:post_type><![CDATA[post]]></wp:post_type>
     <wp:status><![CDATA[publish]]></wp:status>
@@ -225,7 +227,131 @@ describe('WXR language modes', () => {
   });
 });
 
+describe('literal image re-host substitution', () => {
+  it.each(['fresh', 'overwrite'] as const)('preserves dollar sequences and surrounding prose on %s import', async (mode) => {
+    const store = memoryPostStore();
+    const alts = ['Menu $$ and $& here', "Before $' after", 'Before $` after'];
+    const html = '<p>Distinct intro</p>' + alts.map((alt, index) =>
+      `<p><img src="https://wp/photo-${index}.jpg" alt="${alt.replaceAll('&', '&amp;')}"></p><p>Between ${index}</p>`,
+    ).join('') + '<p>Distinct ending</p>';
+    if (mode === 'overwrite') await run(pairOf('g', 'de-1', 'en-1', '<p>Previous draft</p>'), harness(), {}, store);
+    const summary = await run(pairOf('g', 'de-1', 'en-1', html, html), harness(), { overwriteDrafts: mode === 'overwrite' }, store);
+    expect(summary).toMatchObject({ imported: mode === 'fresh' ? 1 : 0, updated: mode === 'overwrite' ? 1 : 0,
+      images: { total: 3, hosted: 3, failed: 0 } });
+    const pair = (await store.get((await store.list())[0]!.translationKey))!;
+    const expected = ['Distinct intro', ...alts.flatMap((alt, index) =>
+      [`![${alt.replaceAll('`', '\\`')}](${SRC('de-1', `https://wp/photo-${index}.jpg`)})`, `Between ${index}`]), 'Distinct ending'].join('\n\n');
+    expect(pair.de.bodyMarkdown).toBe(expected);
+    expect(pair.en.bodyMarkdown).toBe(expected);
+  });
+
+  it('heals a merge with the stored dollar-bearing alt rather than the export alt', async () => {
+    const store = memoryPostStore();
+    const source = pairOf('g', 'de-1', 'en-1', '<img src="https://wp/a.jpg" alt="Export alt">');
+    await run(source, harness({ fail: () => new FetchError('offline', 'network') }), { log: () => {} }, store);
+    const pair = (await store.get((await store.list())[0]!.translationKey))!;
+    const alt = "Author $$ $& $` $'";
+    await store.upsertDraft({ ...pair, de: { ...pair.de, title: 'Edited title',
+      bodyMarkdown: `Author intro\n\n![${alt}](https://wp/a.jpg "Optional title")\n\nAuthor ending` } });
+    expect(await run(source, harness(), {}, store)).toMatchObject({ updated: 1, failed: 0 });
+    const healed = (await store.get(pair.translationKey))!;
+    expect(healed.de.title).toBe('Edited title');
+    expect(healed.de.bodyMarkdown).toBe(`Author intro\n\n![${alt}](${SRC('de-1', 'https://wp/a.jpg')})\n\nAuthor ending`);
+    expect(healed.en).toEqual(pair.en);
+    expect(healed.shared).toEqual(pair.shared);
+  });
+
+  it('replaces every identical image literally while retaining failed image markup', async () => {
+    const store = memoryPostStore();
+    const repeated = '<p><img src="https://wp/a.jpg" alt="Cost $$ and $&amp;"></p>';
+    const html = '<p>Start</p>' + repeated + '<p>Middle</p>' + repeated
+      + '<p><img src="https://wp/fail.jpg" alt="Keep $&amp;" title="Old title"></p><p>End</p>';
+    const summary = await run(pairOf('g', 'de-1', 'en-1', html),
+      harness({ fail: (url) => url.endsWith('/fail.jpg') ? new FetchError('offline', 'network') : null }),
+      { log: () => {} }, store);
+    expect(summary.images).toEqual({ total: 2, hosted: 1, failed: 1 });
+    expect(summary.warnings.some((warning) => warning.includes('https://wp/fail.jpg'))).toBe(true);
+    const pair = (await store.get((await store.list())[0]!.translationKey))!;
+    const hosted = `![Cost $$ and $&](${SRC('de-1', 'https://wp/a.jpg')})`;
+    expect(pair.de.bodyMarkdown).toBe(['Start', hosted, 'Middle', hosted,
+      '![Keep $&](https://wp/fail.jpg "Old title")', 'End'].join('\n\n'));
+  });
+});
+
 describe('importWxr', () => {
+  it('shares scoped opening conversion with preflight, preserves edited merges, and only reformats an explicit overwrite', async () => {
+    const store = memoryPostStore();
+    const h = harness();
+    const photo = 'https://wp/a.jpg';
+    const source = pairOf('opening-breaks', 'anfang', 'opening',
+      '<div><h2>Anfang</h2><p>Eins<br>Zwei</p><h3>Eckdaten</h3><p>Zeile<br>Wert</p></div>' + imgs(photo),
+      '<h2>Opening</h2><p>One<br>Two</p><h2>On the road</h2><p>Hours:<br>9–17</p>' + imgs(photo),
+    );
+    const deps: ImportDeps = {
+      postStore: store, storageDir: '/tmp', baseUrl: 'https://img',
+      rehost: h.rehost, sleep: h.sleep, now: h.now, delayMs: 0, retries: 0, maxImages: 1,
+    };
+    const prepared = await prepareImport(source, deps);
+    expect(prepared.planned.images.planned).toBe(1);
+    expect(h.calls).toEqual([]);
+    expect(await store.list()).toEqual([]);
+    expect(await prepared.run()).toMatchObject({
+      imported: 1, failed: 0, images: { total: 1, hosted: 1, failed: 0 },
+    });
+    expect(h.calls).toEqual([photo]);
+    const tk = (await store.list())[0]!.translationKey;
+    const fresh = (await store.get(tk))!;
+    const hosted = SRC('anfang', photo);
+    const freshDe = `## Anfang\n\nEins\n\nZwei\n\n### Eckdaten\n\nZeile  \nWert\n\n![a](${hosted})`;
+    const freshEn = `## Opening\n\nOne  \nTwo\n\n## On the road\n\nHours:  \n9–17\n\n![a](${hosted})`;
+    expect(fresh.de.bodyMarkdown).toBe(freshDe);
+    expect(fresh.en.bodyMarkdown).toBe(freshEn);
+    expect(fresh.de.images[hosted]).toMatchObject({ width: 100, height: 80 });
+    expect(fresh.en.images[hosted]).toMatchObject({ width: 100, height: 80 });
+
+    const editedDe = `Handarbeit  \nBewusst verbunden\n\n### Eckdaten\n\nFakt  \nWert\n\n![Mein Alt](${photo})`;
+    const editedEn = 'My opening\n\nSeparate thought\n\n> Keep this  \n> together';
+    await store.upsertDraft({
+      ...fresh,
+      de: { ...fresh.de, bodyMarkdown: editedDe },
+      en: { ...fresh.en, bodyMarkdown: editedEn },
+    }, fresh.updatedAt);
+    h.calls.length = 0;
+    expect(await importWxr(source, deps)).toMatchObject({ updated: 1, failed: 0 });
+    expect(h.calls).toEqual([photo]);
+    const merged = (await store.get(tk))!;
+    expect(merged.de.bodyMarkdown).toBe(editedDe.replace(photo, hosted));
+    expect(merged.en.bodyMarkdown).toBe(editedEn);
+
+    expect(await importWxr(source, { ...deps, overwriteDrafts: true }))
+      .toMatchObject({ updated: 1, failed: 0 });
+    const overwritten = (await store.get(tk))!;
+    expect(overwritten.de.bodyMarkdown).toBe(freshDe);
+    expect(overwritten.en.bodyMarkdown).toBe(freshEn);
+  });
+
+  it.each(['de', 'en'] as const)('bounds %s slugs in preflight without changing accepted imported URLs', async (locale) => {
+    for (const length of [250, 251, 252, 8192]) {
+      const store = memoryPostStore();
+      const h = harness();
+      const slug = 'a'.repeat(length);
+      const de = locale === 'de' ? slug : 'short-de';
+      const en = locale === 'en' ? slug : 'short-en';
+      const content = length > 251 ? imgs('https://wp.example/must-not-fetch.jpg') : '<p>Imported story</p>';
+      const summary = await run(pairOf('bounded', de, en, content), h, {}, store);
+      if (length <= 251) {
+        expect(summary).toMatchObject({ imported: 1, rejected: 0, failed: 0 });
+        expect((await store.list())[0]).toMatchObject({ slugs: { de, en } });
+      } else {
+        expect(summary).toMatchObject({ imported: 0, updated: 0, rejected: 1, failed: 0 });
+        expect(summary.warnings.join(' ')).toContain(`${locale}.slug must be at most 251 ASCII bytes (received ${length})`);
+        expect(summary.warnings.join(' ')).not.toContain(slug);
+        expect(await store.list()).toEqual([]);
+      }
+      expect(h.calls).toEqual([]);
+    }
+  });
+
   it.each([false, true])('does not resurrect a matched draft deleted after preparation (overwrite=%s)', async (overwriteDrafts) => {
     const store = memoryPostStore();
     const body = pairOf('g', 'de-a', 'en-a', '<p>original</p>');
@@ -730,6 +856,65 @@ describe('importWxr re-run merge', () => {
     expect(healed.images['https://wp/g2.jpg']).toBeUndefined();
   });
 
+  it('heals nested and raw gallery sources without changing wrappers, caption text or the import cap', async () => {
+    const store = memoryPostStore();
+    const bilingualExport = pairOf('g', 'de-1', 'en-1', html, html);
+    const { h, nextRun } = flaky('g2.jpg');
+    await run(bilingualExport, h, {}, store);
+    const tk = (await store.list())[0]!.translationKey;
+    const p = (await store.get(tk))!;
+    const src = 'https://wp/g2.jpg';
+    const local = 'caption-override="Wie ![x](https://wp/a.jpg)"';
+    await store.upsertDraft({
+      ...p,
+      de: { ...p.de, bodyMarkdown: `Intro 😀\n\n> ~~~gallery extra\n> ${src} | 640x400 | alt="Abend" | ${local}\n> ~~~\n\nAfter` },
+      en: { ...p.en, bodyMarkdown: `<pre><code class="language-gallery">${src} | 640x400 | alt="Evening"\n</code></pre>` },
+    });
+    const before = (await store.get(tk))!;
+    nextRun();
+    h.calls.length = 0;
+    const summary = await run(bilingualExport, h, { maxImages: 4 }, store);
+    expect(summary.updated).toBe(1);
+    expect(summary.images).toEqual({ total: 4, hosted: 4, failed: 0 });
+    expect(h.calls).toEqual(['https://wp/a.jpg', 'https://wp/b.jpg', 'https://wp/g1.jpg', src]);
+    const healed = (await store.get(tk))!;
+    expect(healed.de.bodyMarkdown).toBe(before.de.bodyMarkdown.replace(src, SRC('de-1', src)));
+    expect(healed.en.bodyMarkdown.startsWith('<pre><code class="language-gallery">')).toBe(true);
+    expect(healed.en.bodyMarkdown.endsWith('\n</code></pre>')).toBe(true);
+    for (const locale of ['de', 'en'] as const) {
+      // Raw HTML edits may entity-encode punctuation. The real renderer and
+      // publish analysis must still discover exactly the healed photo.
+      expect(analyzeRenderedBody(await renderMarkdown(healed[locale].bodyMarkdown))).toEqual({
+        hasH1: false, sources: [], galleryLines: [SRC('de-1', src)],
+      });
+      expect(healed[locale].images[src]).toBeUndefined();
+    }
+    expect(healed.de.images[SRC('de-1', src)]).toEqual({ width: 100, height: 80, alt: 'Abend' });
+    expect(healed.en.images[SRC('de-1', src)]).toEqual({ width: 100, height: 80, alt: 'Evening' });
+  });
+
+  it('substitutes only the URL of malformed metadata, retaining its suffix and never fetching caption-like images', async () => {
+    const store = memoryPostStore();
+    const { h, nextRun } = flaky('g2.jpg');
+    await run(export1, h, {}, store);
+    const tk = (await store.list())[0]!.translationKey;
+    const p = (await store.get(tk))!;
+    const src = 'https://wp/g2.jpg';
+    const suffix = '  | 640x400 | alt="ignored" | capton="![caption](https://caption-only/never.jpg) <BodyImage src=&quot;https://body-only/never&quot; />"  ';
+    const body = `Intro 🦋\r\n\r\n> ~~~gallery extra\r\n>   ${src}${suffix}\r\n> ~~~\r\n`;
+    await store.upsertDraft({ ...p, de: { ...p.de, bodyMarkdown: body } });
+    expect((await store.get(tk))!.de.bodyMarkdown).toBe(body);
+    nextRun();
+    h.calls.length = 0;
+    const result = await run(export1, h, { maxImages: 4 }, store);
+    expect(result.updated).toBe(1);
+    expect(h.calls).toEqual(['https://wp/a.jpg', 'https://wp/b.jpg', 'https://wp/g1.jpg', src]);
+    const saved = (await store.get(tk))!;
+    expect(saved.de.bodyMarkdown).toBe(body.replace(src, SRC('de-1', src)));
+    expect(saved.de.images[SRC('de-1', src)]).toEqual({ width: 100, height: 80 });
+    expect(saved.en).toEqual(p.en);
+  });
+
   // Gallery-local captions (2026-10-19): only a gallery line's URL field is
   // re-hosted. Caption text that reads like an inline image of a WordPress
   // photo this run re-hosts is the author's, and must come back unchanged.
@@ -1200,6 +1385,74 @@ describe('importWxr reporting', () => {
     expect(s.images.failed).toBe(240);
     expect(s.warnings.length).toBeLessThanOrEqual(201);
     expect(s.warnings[s.warnings.length - 1]).toMatch(/and \d+ more/);
+  });
+
+  it('accounts for a real pair, a groupless story and an incomplete group exactly once each', async () => {
+    const store = memoryPostStore();
+    const h = harness();
+    const prepared = await prepareImport(wxr([
+      item('de', 'de-1', 'g1', '<p>a</p>'),
+      item('en', 'en-1', 'g1', '<p>a</p>'),
+      item('de', 'nur-deutsch', '', imgs('https://wp/untranslated.jpg')),
+      item('de', 'halb-de', 'g2', imgs('https://wp/incomplete.jpg')),
+    ].join('\n')), { postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost: h.rehost, log: () => {} });
+    expect(prepared.groups).toBe(3);
+    // #284: a group holding the primary language imports as a primary-only
+    // story with explicit secondary coverage; a groupless item never pairs.
+    expect(prepared.planned).toEqual({
+      groups: { total: 2, done: 0 }, images: { planned: 1, hosted: 0, failed: 0 },
+    });
+    const s = await prepared.run();
+    expect(s).toMatchObject({ imported: 2, updated: 0, skippedPublished: 0, rejected: 1, failed: 0 });
+    expect(s.imported + s.updated + s.skippedPublished + s.rejected + s.failed).toBe(prepared.groups);
+    expect(s.warnings).toEqual(expect.arrayContaining([expect.stringContaining('nur-deutsch (de):')]));
+    expect(h.calls).toEqual(['https://wp/incomplete.jpg']);
+    expect((await store.list()).map((p) => p.slugs.de).sort()).toEqual(['de-1', 'halb-de']);
+  });
+
+  it.each([false, true])('never pairs or writes groupless items, even with shared slugs and overwriteDrafts=%s', async (overwriteDrafts) => {
+    const store = memoryPostStore();
+    const upsert = vi.spyOn(store, 'upsertDraft');
+    const rehost = vi.fn(stubRehost);
+    const slug = '<b>{locale}$&</b>';
+    const body = wxr([
+      item('de', 'g1', '', imgs('https://wp/a.jpg')),
+      item('en', 'g1', '', imgs('https://wp/b.jpg')),
+      item('de', 'g1', '', '<p>duplicate XML item</p>'),
+      item('en', slug, '', '<p>literal warning text</p>'),
+      item('de', 'incomplete', 'g1', '<p>must not acquire a groupless partner</p>'),
+    ].join('\n'));
+    const prepared = await prepareImport(body, {
+      postStore: store, storageDir: '/tmp', baseUrl: 'https://img', rehost, overwriteDrafts, log: () => {},
+    });
+    expect(prepared.groups).toBe(5);
+    // The tagged item is a primary-only group (#284); the four groupless items
+    // are rejected and never become its partner.
+    expect(prepared.planned).toEqual({
+      groups: { total: 1, done: 0 }, images: { planned: 0, hosted: 0, failed: 0 },
+    });
+    const s = await prepared.run();
+    expect(s).toMatchObject({
+      imported: 1, updated: 0, skippedPublished: 0, rejected: 4, failed: 0,
+      images: { total: 0, hosted: 0, failed: 0 },
+    });
+    expect(s.warnings).toHaveLength(4);
+    expect(s.warnings.filter((w) => w.startsWith('g1 (de):'))).toHaveLength(2);
+    expect(s.warnings).toContain(`${slug} (en): no translation (untranslated post) — rejected`);
+    expect(rehost).not.toHaveBeenCalled();
+    expect(upsert).toHaveBeenCalledTimes(1);
+    expect((await store.list()).map((p) => p.slugs)).toEqual([{ de: 'incomplete', en: '' }]);
+  });
+
+  it('caps untranslated warnings without dropping rejected units from the summary', async () => {
+    const count = WARNING_CAP + 17;
+    const h = harness();
+    const s = await run(wxr(Array.from({ length: count }, (_, i) =>
+      item(i % 2 ? 'en' : 'de', `untranslated-${i}`, '', imgs('https://wp/no-fetch.jpg'))).join('\n')), h);
+    expect(s).toMatchObject({ imported: 0, updated: 0, skippedPublished: 0, rejected: count, failed: 0 });
+    expect(s.warnings).toHaveLength(WARNING_CAP + 1);
+    expect(s.warnings.at(-1)).toBe('…and 17 more (see server logs)');
+    expect(h.calls).toEqual([]);
   });
 
   // issue #100: one bucket per outcome. "Already published" is a success, a
