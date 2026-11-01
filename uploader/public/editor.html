@@ -38,7 +38,7 @@
 
         <div class="editor-commandbar__actions">
           <button id="saveDraft" type="button">Save draft</button>
-          <button id="publishBtn" type="button" class="btn-primary-publish">Publish</button>
+          <button id="publishBtn" type="button" class="btn-primary-publish" hidden>Publish</button>
           <button id="reviewStory" type="button" class="btn-secondary" aria-haspopup="dialog" aria-controls="storyReviewDialog">Review story</button>
           <details class="editor-actions-menu" id="editorActionsMenu">
             <summary class="btn-secondary editor-actions-menu__trigger">More actions</summary>
@@ -1820,14 +1820,17 @@
         renderLocaleChip(mobileChip, g);
         const details = $('expeditionDetails');
         if (details && g.trip.length) details.open = true;
+        // Publishing is admin-only on the server; an author is never offered a
+        // control that can only answer 403 (#302 "authors see no Publish").
         const pub = $('publishBtn');
         if (pub) {
+          pub.hidden = !reviewIsAdmin;
           const blocked = !language || loadBlocked || (currentTk && publication.availability !== 'available') || gapCount(g) > 0;
           pub.disabled = blocked;
           pub.title = blocked ? 'Fill the missing fields before publishing.' : '';
         }
         const unpub = $('unpublishBtn');
-        if (unpub) unpub.hidden = !isPublished;
+        if (unpub) unpub.hidden = !isPublished || !reviewIsAdmin;
         if (unpub) unpub.disabled = publication.availability !== 'available';
       }
 
@@ -2041,10 +2044,22 @@
       }
       $('saveDraft').addEventListener('click', () => { doSaveDraft(); });
 
+      // @ai-note Open the preview tab inside the tap and navigate it after the
+      // save: a window.open() that only runs after an await has lost the user
+      // gesture, and phone browsers then block it as a popup (#302, H1). If the
+      // browser blocks even the synchronous open, the status line offers a link.
       $('previewBtn').addEventListener('click', async () => {
+        const tab = window.open('', '_blank');
+        if (tab) tab.opener = null;
         const saved = await doSaveDraft();
-        if (!saved) return;
-        window.open('/posts/' + encodeURIComponent(currentTk) + '/preview?locale=' + activeTab, '_blank');
+        if (!saved) { if (tab) tab.close(); return; }
+        const url = '/posts/' + encodeURIComponent(currentTk) + '/preview?locale=' + activeTab;
+        if (tab && !tab.closed) { tab.location.href = url; return; }
+        const status = $('actionStatus');
+        const link = document.createElement('a');
+        link.href = url; link.target = '_blank'; link.rel = 'noopener';
+        link.textContent = editorCopy.previewOpen;
+        status.replaceChildren(document.createTextNode(editorCopy.previewBlocked + ' '), link);
       });
 
       $('publishBtn').addEventListener('click', async () => {
@@ -2507,6 +2522,7 @@
         if (!s) return;
         if (!writeRecovery.initialize(s.userId)) return;
         reviewIsAdmin = s.isAdmin === true;
+        $('publishBtn').hidden = !reviewIsAdmin;
         Auth.renderHeader(s);
         try {
           language = await SiteLanguage.get();

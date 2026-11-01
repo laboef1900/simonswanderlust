@@ -594,6 +594,11 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
   AVIF-HEIF), non-images — naming each reason; transferred rows never claim encoding; a
   keep-this-tab-open note shows only while transfers are unsettled. See
   `docs/superpowers/specs/2026-11-01-phone-media-upload-audit.md`.
+- **Implemented, device acceptance pending (#302, G5):** phone compose — Preview opens its tab
+  inside the tap (fallback link if blocked), DraftGuard also stashes on `visibilitychange` →
+  hidden (#138 keys/#22 generations unchanged), Publish/Unpublish shown to admins only, 16px
+  field text and 24px checkboxes on coarse pointers (`--control-font`). See
+  `docs/superpowers/specs/2026-11-01-phone-compose-audit.md`.
 - **Implemented, G3 pending (#310):** public DE/EN journey pages (`/rundreisen/…`,
   `/en/journeys/…`, routes owner-approved 2026-11-01), ordered published-only membership, story
   journey strips beside the unchanged chronological pager, progressive overview map. The

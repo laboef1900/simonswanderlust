@@ -1169,6 +1169,17 @@ and the `<dialog>`s appended to `<body>` share one set:
   visually hidden, so the command bar opens the workspace. The command bar separates
   primary actions from the full-width save/readiness status row. Error/status text
   wraps instead of disappearing behind ellipses.
+- On a phone the editor stays the same editor (#302). Preview opens its tab inside the tap
+  and fills it once the draft is saved — a tab opened after the save would be a blocked
+  popup — and if the browser still blocks it, the status line says so with an **Open
+  preview** link. Publish and Unpublish are shown only to admins (the routes are
+  admin-only; an author is never offered a control that can only fail). A dirty draft is
+  stashed the moment the tab is hidden, not only on `beforeunload`/`pagehide`, because a
+  backgrounded phone tab can be discarded without either.
+- Touch (coarse pointer) raises field text to 16px — iOS Safari otherwise zooms the page
+  into any smaller focused field — and checkboxes/radios to 24px; desktop keeps 14px and
+  16px. With large text below 900px the masthead's brand name truncates (its link keeps
+  the full name) so **View site** stays on screen.
 - The gallery picker keeps caption controls with the ordered selection: a native
   **Show captions** checkbox beside Layout and a locale-labelled textarea beneath
   each selected photo. **Use default caption** removes the local override and resumes
