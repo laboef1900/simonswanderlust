@@ -594,3 +594,9 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
   AVIF-HEIF), non-images — naming each reason; transferred rows never claim encoding; a
   keep-this-tab-open note shows only while transfers are unsettled. See
   `docs/superpowers/specs/2026-11-01-phone-media-upload-audit.md`.
+- **Implemented, G3 pending (#310):** public DE/EN journey pages (`/rundreisen/…`,
+  `/en/journeys/…`, routes owner-approved 2026-11-01), ordered published-only membership, story
+  journey strips beside the unchanged chronological pager, progressive overview map. The
+  VoiceOver pass (`docs/superpowers/plans/2026-11-01-issue-310-screen-reader-script.md`, fixture
+  `uploader/scripts/journey-sr-fixture.mjs`) is still owed; TalkBack waived with Android until
+  2027-05-01.

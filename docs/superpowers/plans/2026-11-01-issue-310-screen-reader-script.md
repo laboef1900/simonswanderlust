@@ -1,6 +1,7 @@
 # #310 public journeys — screen-reader check (gate G3)
 
-**Who:** a person operating VoiceOver (iOS Safari) or TalkBack (Android Chrome) on a real phone.
+**Who:** the owner, operating VoiceOver (iOS Safari) on a real iPhone. TalkBack (Android Chrome) is
+waived until 2027-05-01 (mobile matrix §13.1, E1); run its rows when an Android device is available.
 **Where:** a disposable instance of the #310 head, never the owner's live site.
 **Widths:** 320 px and 390 px CSS (iPhone SE / standard phone; or desktop browser responsive mode
 *only* for the width, with the phone's own reader for the speech).
@@ -27,18 +28,22 @@ of this branch on the machine that will serve the phones:
 1. Create an **empty** Postgres database (never the live one) and an empty data directory.
 2. In `uploader/` (after `npm ci`, `npm run build:native` and the four `scripts/copy-*.mjs`), start
    the app with `DATABASE_URL=<empty db>`, `PORT=<port>`, `HOST=<address the phones can reach>`,
-   `TRUSTED_PROXY=loopback`, `PUBLIC_BASE_URL=<this instance's own origin>`,
-   `IMG_HOST=<its host:port>`, `SITE_APP_DIR=<checkout>/site` and `STORAGE_DIR`, `SETTINGS_PATH`,
+   `TRUSTED_PROXY=loopback`, `PUBLIC_BASE_URL=<image origin>`, `IMG_HOST=<image host>`,
+   `SITE_APP_DIR=<checkout>/site` and `STORAGE_DIR`, `SETTINGS_PATH`,
    `SITE_DIR`, `BACKUP_DIR`, `MAP_DIR` inside the empty data directory:
    `node --import tsx src/main.ts`.
 3. Once `/health` answers, run `node scripts/journey-sr-fixture.mjs <that origin>`; it prints the
    URLs below. Stop the app and drop the database after the session.
 
-Phones need the pages over **trusted HTTPS** for a realistic run: put the instance behind a
-reverse proxy with a certificate the phones trust (for example a LAN name with a certificate
-from a CA you control installed on both phones, or a short-lived tunnel of your choice), and use
-that HTTPS origin as `PUBLIC_BASE_URL`/`IMG_HOST` in step 2. Plain `http://<LAN-IP>` also renders
-the public pages, which is enough for this read-only check; record which one was used.
+On the owner's server use the disposable instance from the #300 run sheet §1a
+(`https://new.simonswanderlust.com`, images on `https://img.new.simonswanderlust.com`) built from
+the `dev` commit that contains #310, then run the fixture script against
+`https://new.simonswanderlust.com`. Elsewhere, phones need the pages over **trusted HTTPS** behind
+a reverse proxy with a certificate the phones trust (for example a LAN name with a certificate
+from a CA you control installed on the phone). Any non-loopback setup needs **two names**: the
+app serves the blog on the image host only for loopback (`server.ts` `imgHostServesBlog`), so set
+`PUBLIC_BASE_URL`/`IMG_HOST` to an image name and open the pages on a second name proxied to the
+same port. Record which setup was used.
 
 Prepared 2026-11-01 on the merged head `4fa8596`: the script ran end to end against a fresh
 database; `/rundreisen/`, both journey pages and stories 1–2 answered 200, `/etappe-3-de/` and

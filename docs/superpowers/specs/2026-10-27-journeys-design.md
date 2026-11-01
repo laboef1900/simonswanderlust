@@ -1124,3 +1124,18 @@ restored owner copy printed no collision lines, loaded 0 journeys, and kept `/`,
 **Held for G3.** Merge waits for a real screen-reader pass at 320/390 px following
 `docs/superpowers/plans/2026-11-01-issue-310-screen-reader-script.md`; DOM and
 keyboard checks above are not that evidence.
+
+## Owner decisions for #310 — 2026-11-01
+
+- **Public routes approved** (owner, interview 2026-11-01): DE `/rundreisen/` and
+  `/rundreisen/<slug>/`, EN `/en/journeys/` and `/en/journeys/<slug>/` (secondary-locale prefixes
+  per the language mode), built only for journeys with a published member in that locale. No
+  existing URL changes. Merge is authorised **before** the screen-reader pass; any finding from
+  G3 is fixed in a follow-up PR and #310 stays open until the pass is recorded.
+- **G3 scope:** VoiceOver on a current iPhone at 320 and 390 px, run by the owner. **TalkBack is
+  waived** together with the Android column (exception E1 in the mobile acceptance matrix,
+  `docs/superpowers/specs/2026-10-27-mobile-acceptance-matrix-design.md` §13.1; review by
+  2027-05-01).
+- **Instance:** the disposable `new.simonswanderlust.com` / `img.new.simonswanderlust.com`
+  instance from the #300 run sheet §1a, seeded with `uploader/scripts/journey-sr-fixture.mjs`.
+
