@@ -43,9 +43,11 @@ const SERVED_ASSETS = [
 // Packages whose code/fonts reach browsers; their notices must be in the served aggregate.
 const SERVED_PACKAGES = ['@fontsource-variable/inter', '@fontsource/ibm-plex-mono', 'easymde', 'codemirror', 'htm', 'preact', 'maplibre-gl', 'fflate'];
 const SERVED_SUPPLEMENTS = ['pmtiles-LICENSE.txt', 'font-awesome-LICENSE.txt'];
-// Platform builds are named `<pkg>-<os>-<arch>` (`@img/sharp-libvips-linux-arm64`) or
-// `@scope/<os>-<arch>` (`@esbuild/linux-arm64`); both collapse to one family.
-const PLATFORM_SUFFIX = /[-/](?:darwin|linux|linuxmusl|win32|freebsd|android|openbsd|wasm32|wasi)(?:-[a-z0-9]+)*$/;
+// Platform builds are named `<pkg>-<os>-<arch>[-<abi>]` (`@img/sharp-libvips-linux-arm64`,
+// `@rolldown/binding-linux-arm64-gnu`) or `@scope/<os>-<arch>` (`@esbuild/linux-arm64`); both
+// collapse to one family. Only known os/arch/abi tokens count, so an ordinary package whose name
+// merely contains `linux` (e.g. `pkg-linux-utils`) is never treated as a platform variant.
+const PLATFORM_SUFFIX = /[-/](?:(?:darwin|linux|linuxmusl|win32|freebsd|android|openbsd|netbsd|sunos|aix)-(?:x64|arm64|arm|ia32|ppc64|s390x|riscv64|loong64|mips64el|universal)(?:-(?:gnu|musl|gnueabihf|msvc|eabi))?|wasm32|wasi)$/;
 
 const args = process.argv.slice(2);
 const image = args.find((arg) => !arg.startsWith('--'));
