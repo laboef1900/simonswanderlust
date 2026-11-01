@@ -35,6 +35,7 @@ function fakeSettings(): SettingsStore {
   return { get: () => ({ ...cur }), update: (p) => { cur = validate({ ...cur, ...p }); return { ...cur }; } };
 }
 const queue: EncodeQueue = {
+  withAdmission: (_key, operation) => operation(),
   enqueue: () => {}, isActive: () => false, recover: async () => 0, drain: async () => {}, idle: async () => {},
   quiesce: async () => {},
   stats: () => ({ pending: 0, running: 0 }),
@@ -306,15 +307,42 @@ describe('GET /comments (SPEC-API-001)', () => {
     expect(res.json()).toEqual({ enabled: false, comments: [] });
   });
 
-  it('marks approved author replies with isAuthor: true', async () => {
+  it('preserves an author reply beyond the site-wide moderation window', async () => {
     const admin = memoryCommentAdminStore();
     const b = build({ commentsAdmin: admin });
+    const older = await published(b, 'older-thread');
+    for (let i = 0; i < 500; i++) {
+      admin.add({ id: randomUUID(), translationKey: older, locale: 'de', name: 'Reader',
+        email: null, body: 'Older thread', status: 'approved', isAuthor: false,
+        createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, i)) });
+    }
     const tk = await published(b);
-    const a = await b.comments.create({ translationKey: tk, locale: 'de', name: 'Simon', body: 'Thanks!' });
-    await b.comments.approve(a.id);
-    admin.add({ id: a.id, translationKey: tk, locale: 'de', name: 'Simon', email: null, body: 'Thanks!', status: 'approved', isAuthor: true, createdAt: new Date() });
+    const reply = await b.comments.replyAsAuthor({ translationKey: tk, body: 'Thanks!', postedLocale: 'en' }, 'Simon');
+    admin.add({ ...reply, status: 'approved' });
     const res = await b.app.inject({ method: 'GET', url: `/comments?tk=${tk}` });
-    expect(res.json().comments[0]).toMatchObject({ isAuthor: true });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().comments).toEqual([{
+      id: reply.id, authorName: reply.name, body: 'Thanks!', createdAt: reply.createdAt.toISOString(),
+      isAuthor: true, postedLocale: 'en',
+    }]);
+    await b.comments.setStatus(reply.id, 'spam');
+    expect((await b.app.inject({ method: 'GET', url: `/comments?tk=${tk}` })).json().comments).toEqual([]);
+  });
+
+  it.each([false, true])('serves stored author flags without a usable moderation store (%s)', async (configured) => {
+    const admin = memoryCommentAdminStore();
+    const b = build(configured ? { commentsAdmin: {
+      ...admin, list: async () => { throw new Error('Moderation unavailable'); },
+    } } : {});
+    const tk = await published(b);
+    const reply = await b.comments.replyAsAuthor({ translationKey: tk, body: 'Author reply' }, 'Simon');
+    const reader = await b.comments.create({ translationKey: tk, locale: 'de', name: reply.name, body: 'Reader reply' });
+    await b.comments.approve(reader.id);
+    const res = await b.app.inject({ method: 'GET', url: `/comments?tk=${tk}` });
+    expect(res.statusCode).toBe(200);
+    const flags = new Map(res.json().comments.map((c: { id: string; isAuthor: boolean }) => [c.id, c.isAuthor]));
+    expect(flags.get(reply.id)).toBe(true);
+    expect(flags.get(reader.id)).toBe(false);
   });
 
   it('a store failure is a sanitized 500 that never logs the key', async () => {

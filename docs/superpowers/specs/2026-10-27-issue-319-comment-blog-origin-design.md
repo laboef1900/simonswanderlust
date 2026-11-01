@@ -169,6 +169,17 @@ The original `comment-origin-proof.json` and screenshots remain untouched.
   explicit override precedence, malformed image authority and loopback behavior;
   their execution remains the parent's full-suite verification gate.
 
+### Current-dev comments integration — 2026-10-30
+
+The production-boot integration suite also combines this origin contract with
+#349's direct author projection and #350's moderation pagination. In both split
+and loopback topologies it inserts 505 older synthetic comments, creates a real
+authenticated author reply, checks the six-key public projection and author
+marker, traverses bounded moderation pages, and deletes that reply through the
+API to check immediate public removal without rebuilding. This is regression
+coverage; execution results belong to the exact-head preparation evidence, not
+the historical runtime claims above.
+
 
 
 ## Security, documentation and recovery

@@ -17,6 +17,21 @@ new Function('window', src)(win);
 const browserParseCaption = win.LLM!.parseCaption;
 const mixedContentWarning = win.LLM!.mixedContentWarning;
 
+const FINAL = { altEn: 'final answer', altDe: 'endgültige Antwort' };
+const DRAFT_THOUGHT = '<think>Draft: {"altEn":"draft guess","altDe":"Entwurf"} but wait, the sign actually';
+const closedThinking: [string, { altEn: string; altDe: string }][] = [
+  [DRAFT_THOUGHT + ' reads otherwise</think>\n' + JSON.stringify(FINAL), FINAL],
+  [DRAFT_THOUGHT.replace('<think>', '<THINK>') + '</Think>Here:\n```json\n' + JSON.stringify(FINAL) + '\n```', FINAL],
+  ['<think>{"altEn":"one","altDe":"eins"}</think><think>{"altEn":"two","altDe":"zwei"}</think>' + JSON.stringify(FINAL), FINAL],
+  // Thinking after the answer is dropped too; the answer itself stays.
+  [JSON.stringify(FINAL) + '\n<think>{"altEn":"afterthought","altDe":"Nachgedanke"}', FINAL],
+];
+// An unclosed thought runs to EOF: what it drafted is not an answer.
+const unclosedThinking = [
+  DRAFT_THOUGHT,
+  '<think>planning</think> Sure: <think>{"altEn":"A","altDe":"B"}',
+];
+
 describe('llm.js parseCaption (shipped browser parser)', () => {
   const cases = [
     '{"altEn":"A beach","altDe":"Ein Strand"}',
@@ -35,9 +50,18 @@ describe('llm.js parseCaption (shipped browser parser)', () => {
     }
   });
   it('throws on non-JSON and on a missing/empty field (mirrors server behavior)', () => {
-    expect(() => browserParseCaption('no json here')).toThrow();
-    expect(() => browserParseCaption('{"altEn":"X","altDe":""}')).toThrow();
-    expect(() => browserParseCaption('{"altEn":"X","altDe":" \\n "}')).toThrow();
+    for (const c of ['no json here', '{"altEn":"X","altDe":""}', '{"altEn":"X","altDe":" \\n "}', ...unclosedThinking]) {
+      expect(() => browserParseCaption(c)).toThrow();
+      expect(() => serverParseCaption(c)).toThrow();
+    }
+  });
+
+  // #351: a draft written while thinking never wins over the final answer.
+  it('discards closed think blocks in both parsers and returns the final answer', () => {
+    for (const [reply, expected] of closedThinking) {
+      expect(serverParseCaption(reply)).toEqual(expected);
+      expect(browserParseCaption(reply)).toEqual(expected);
+    }
   });
 });
 
@@ -57,16 +81,17 @@ describe('llm.js mixedContentWarning', () => {
   });
 });
 
-describe('browser caption credentials', () => {
-  function client(fetcher: typeof fetch) {
-    const window: { LLM?: {
-      caption(base: string, model: string, prompt: string, image: string, timeout: number, maxTokens: number, signal?: AbortSignal, key?: string): Promise<{ altEn: string }>;
-      listModels(base: string, key?: string): Promise<string[]>;
-    } } = {};
-    new Function('window', 'fetch', src)(window, fetcher);
-    return window.LLM!;
-  }
+/** A fresh llm.js instance whose requests go to `fetcher`. */
+function client(fetcher: typeof fetch) {
+  const window: { LLM?: {
+    caption(base: string, model: string, prompt: string, image: string, timeout: number, maxTokens: number, signal?: AbortSignal, key?: string): Promise<{ altEn: string; altDe: string }>;
+    listModels(base: string, key?: string): Promise<string[]>;
+  } } = {};
+  new Function('window', 'fetch', src)(window, fetcher);
+  return window.LLM!;
+}
 
+describe('browser caption credentials', () => {
   it('keeps authorization request-local across remote caption, discovery and subsequent local calls', async () => {
     const fetcher = vi.fn<typeof fetch>(async (url) => String(url).endsWith('/models')
       ? Response.json({ data: [{ id: 'vision' }] })
@@ -152,5 +177,33 @@ describe('browser OpenRouter identity headers', () => {
     expect(headers.map((header) => header.get('authorization'))).toEqual([
       'Bearer request-key', 'Bearer request-key', 'Bearer request-key', null, null,
     ]);
+  });
+});
+
+// #351: the reply the request returns decides; a draft never fills the field.
+describe('browser caption replies', () => {
+  const IMAGE = 'data:image/jpeg;base64,AA==';
+  function replying(content: string, finishReason: string) {
+    return client(vi.fn<typeof fetch>(async () =>
+      Response.json({ choices: [{ finish_reason: finishReason, message: { content } }] })));
+  }
+
+  it('returns the final answer after a closed thought that drafted other JSON', async () => {
+    for (const [content, expected] of closedThinking) {
+      expect(await replying(content, 'stop').caption('http://localhost:1234/v1', 'm', 'p', IMAGE, 5000, 256))
+        .toEqual(expected);
+    }
+  });
+
+  it('refuses a token-truncated reply with a fixed message, even when a caption object is complete', async () => {
+    for (const content of [DRAFT_THOUGHT, JSON.stringify(FINAL), ...closedThinking.map(([reply]) => reply)]) {
+      await expect(replying(content, 'length').caption('http://localhost:1234/v1', 'm', 'p', IMAGE, 5000, 256))
+        .rejects.toThrow(/^Caption response was truncated$/);
+    }
+  });
+
+  it('keeps the generic failure for an unclosed thought that finished normally', async () => {
+    await expect(replying(DRAFT_THOUGHT, 'stop').caption('http://localhost:1234/v1', 'm', 'p', IMAGE, 5000, 256))
+      .rejects.toThrow(/^Caption request failed\. Check the provider/);
   });
 });

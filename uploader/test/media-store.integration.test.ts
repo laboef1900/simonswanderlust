@@ -239,6 +239,18 @@ maybe('pgMediaStore (integration)', () => {
     expect(await store.get('k')).toMatchObject({ status: 'ready', error: null });
   });
 
+  // #348: the rollback of a refused enqueue must never undo a settled row.
+  it('setStatusIfProcessing writes only while the row is still processing', async () => {
+    await add('k', { status: 'processing' });
+    expect(await store.setStatusIfProcessing('k', 'failed', 'queue_full')).toBe(true);
+    expect(await store.get('k')).toMatchObject({ status: 'failed', error: 'queue_full' });
+    expect(await store.setStatusIfProcessing('k', 'missing')).toBe(false);
+    await store.setStatus('k', 'ready');
+    expect(await store.setStatusIfProcessing('k', 'failed', 'queue_full')).toBe(false);
+    expect(await store.get('k')).toMatchObject({ status: 'ready', error: null });
+    expect(await store.setStatusIfProcessing('ghost', 'failed', 'queue_full')).toBe(false);
+  });
+
   it('uploaded_by is nulled rather than blocking a user delete', async () => {
     // The FK is ON DELETE SET NULL — a photo must outlive the account that
     // uploaded it.

@@ -61,7 +61,15 @@ const shikiStyle = `<style>${SHIKI_CSS}</style>`;
     <title>{title} – {identitySiteName(locale)}</title>
     <meta name="description" content={description} />
     {identity.canonicalOrigin === null && <meta name="robots" content="noindex" />}
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    {identity.assets.favicon ? (
+      <>
+        <link rel="icon" type="image/png" sizes="32x32" href={identity.assets.favicon.png32} />
+        <link rel="icon" type="image/png" sizes="192x192" href={identity.assets.favicon.png192} />
+        <link rel="apple-touch-icon" href={identity.assets.favicon.appleTouch180} />
+      </>
+    ) : (
+      <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    )}
     <link
       rel="alternate"
       type="application/rss+xml"

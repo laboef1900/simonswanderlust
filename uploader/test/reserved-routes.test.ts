@@ -53,6 +53,7 @@ describe('reserved public namespaces', () => {
       encodeQueue: {
         enqueue: () => {}, isActive: () => false, recover: async () => 0, drain: async () => {},
         quiesce: async () => {}, idle: async () => {}, stats: () => ({ pending: 0, running: 0 }),
+        withAdmission: (_key, operation) => operation(),
       },
       onRoute(route) {
         // Root wildcard static mounts serve content, not a fixed app namespace.
