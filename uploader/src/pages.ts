@@ -3,6 +3,7 @@ import type { DbClient, DbPool } from './db.js';
 import { imagesMapError, normalizeGalleryFences, type ImageMeta } from './body-content.js';
 import { REVISION_CAP } from './posts.js';
 import { memoryLanguageStore, readLanguage, type LanguageStore, type LanguageState, type LanguageLocale } from './language.js';
+import type { GalleryWarning } from '../public/gallery-photo-line.js';
 
 export type Locale = 'de' | 'en';
 /** See `body-content.ts` — the single source of truth for this shape. */
@@ -15,6 +16,8 @@ export interface PagePair { key: string; de: PageContent; en: PageContent }
  * for optimistic concurrency (issue #141) — the same contract posts have.
  */
 export interface StoredPagePair extends PagePair { updatedAt: Date | null }
+/** Transient diagnostics from the submitted bodies, excluded from get/revisions. */
+export interface SavedPagePair extends StoredPagePair { galleryWarnings: GalleryWarning[] }
 /** Pre-save snapshot in the PUT-payload shape, so a restore round-trips through the editor. */
 export type PageRevisionSnapshot = Pick<PagePair, 'de' | 'en'>;
 export interface PageRevisionSummary { id: string; savedAt: Date; title: string }
@@ -63,14 +66,17 @@ export function validatePagePair(pair: PagePair): void {
  * canonical bare-URL fence. Runs inside `save()` in BOTH stores (after
  * `validatePagePair`), so it is the single chokepoint for page writes.
  */
-function pageWithDefaults(pair: PagePair): PagePair {
-  const fill = (c: PageContent): PageContent => {
+async function pageWithDefaults(pair: PagePair): Promise<{ pair: PagePair; galleryWarnings: GalleryWarning[] }> {
+  const galleryWarnings: GalleryWarning[] = [];
+  const fill = async (c: PageContent, locale: Locale): Promise<PageContent> => {
     const images = c.images ?? {};
     if (typeof c.bodyMarkdown !== 'string') return { ...c, images };
-    const n = normalizeGalleryFences(c.bodyMarkdown, images);
+    const n = await normalizeGalleryFences(c.bodyMarkdown, images);
+    galleryWarnings.push(...n.galleryWarnings.map((warning) => ({ ...warning, locale })));
     return { ...c, bodyMarkdown: n.bodyMarkdown, images: n.images };
   };
-  return { ...pair, de: fill(pair.de), en: fill(pair.en) };
+  const normalized = { key: pair.key, de: await fill(pair.de, 'de'), en: await fill(pair.en, 'en') };
+  return { pair: normalized, galleryWarnings };
 }
 
 export type PageUpdate = Pick<PagePair, 'key'> & Partial<Pick<PagePair, 'de' | 'en'>>;
@@ -78,7 +84,7 @@ export interface PageSaveOptions {
   prepareLocale?: LanguageLocale;
   validate?: (pair: PagePair, language: LanguageState, client?: DbClient) => Promise<void>;
 }
-function mergePageUpdate(update: PageUpdate, existing: StoredPagePair, language: LanguageState, options: PageSaveOptions): PagePair {
+async function mergePageUpdate(update: PageUpdate, existing: StoredPagePair, language: LanguageState, options: PageSaveOptions): Promise<{ pair: PagePair; galleryWarnings: GalleryWarning[] }> {
   const preparing = options.prepareLocale;
   if (preparing && (language.locales.includes(preparing) || update[language.primary] !== undefined)) {
     throw new PageError('Preparation edits only the inactive language.', 'invalid_page');
@@ -97,10 +103,14 @@ export interface PageStore {
    * Create or overwrite a page. When `baseUpdatedAt` is given (the `updatedAt`
    * the editor loaded), the save is rejected with PageError code 'conflict'
    * if the stored pair was modified since — optimistic concurrency (#141).
-   * Every overwrite of an existing page first snapshots the pre-save pair
-   * into the revisions (newest REVISION_CAP kept).
+   * Omitting it skips the check (scripted callers; a key never saved, whose
+   * editor has no token to echo). Every overwrite of an existing page first
+   * snapshots the pre-save pair into the revisions (newest REVISION_CAP kept).
+   * Saves of one key are serialized (#344): the read, check, snapshot and
+   * write are one atomic step, every accepted save strictly advances
+   * `updatedAt`, and the returned pair is THIS save's state and token.
    */
-  save(pair: PageUpdate, baseUpdatedAt?: Date, options?: PageSaveOptions): Promise<StoredPagePair>;
+  save(pair: PageUpdate, baseUpdatedAt?: Date, options?: PageSaveOptions): Promise<SavedPagePair>;
   /** All page keys that have ever been saved (either locale), sorted. */
   keys(): Promise<string[]>;
   /** Revision summaries for a page, newest first (at most REVISION_CAP). */
@@ -114,21 +124,26 @@ export function memoryPageStore(language: LanguageStore = memoryLanguageStore())
   const updatedAtByKey = new Map<string, Date>();
   // Oldest first (append order) — mirrors the pg store's page_revisions table.
   const revisionsByKey = new Map<string, PageRevision[]>();
+  // Synchronous on purpose: save() must not yield between its read, its
+  // stale check and its write, or two overlapping saves both pass (#344).
+  const read = (key: string): StoredPagePair => ({
+    key,
+    de: structuredClone(byKeyLocale.get(`${key}:de`) ?? emptyContent('de')),
+    en: structuredClone(byKeyLocale.get(`${key}:en`) ?? emptyContent('en')),
+    updatedAt: updatedAtByKey.get(key) ?? null,
+  });
   return {
     async get(key) {
-      return {
-        key,
-        de: structuredClone(byKeyLocale.get(`${key}:de`) ?? emptyContent('de')),
-        en: structuredClone(byKeyLocale.get(`${key}:en`) ?? emptyContent('en')),
-        updatedAt: updatedAtByKey.get(key) ?? null,
-      };
+      return read(key);
     },
     async save(pair, baseUpdatedAt, options = {}) {
+      // The language queue serializes every memory save, so its read, stale
+      // check and write cannot interleave with another save (#344).
       return language.runExclusive(async (mode) => {
-      const existing = await this.get(pair.key);
+      const existing = read(pair.key);
       if (options.prepareLocale && existing.updatedAt && !baseUpdatedAt) throw new PageError('Reload the page before preparing a translation.', 'conflict');
       assertPageNotStale(existing.updatedAt, baseUpdatedAt);
-      const normalized = mergePageUpdate(pair, existing, mode, options);
+      const { pair: normalized, galleryWarnings } = await mergePageUpdate(pair, existing, mode, options);
       await options.validate?.(normalized, mode);
       if (existing.updatedAt) {
         const revs = revisionsByKey.get(pair.key) ?? [];
@@ -140,11 +155,10 @@ export function memoryPageStore(language: LanguageStore = memoryLanguageStore())
         byKeyLocale.set(`${pair.key}:${locale}`, structuredClone({ ...normalized[locale], locale }));
       }
       // Strictly later than any echo that passed the check, even within one
-      // tick — the pg store gets the same guarantee from now() in a later
-      // transaction.
+      // tick — the pg store computes the same GREATEST under its lock.
       const prev = existing.updatedAt?.getTime() ?? 0;
       updatedAtByKey.set(pair.key, new Date(Math.max(Date.now(), prev + 1)));
-      return this.get(pair.key);
+      return { ...read(pair.key), galleryWarnings };
       });
     },
     async keys() {
@@ -171,34 +185,44 @@ function rowToContent(r: PageRow): PageContent {
   return { locale: r.locale, title: r.title, bodyMarkdown: r.body_markdown, images: r.images ?? {} };
 }
 
+/** One read of a page pair, shared by `get` and the locked read inside `save`. */
+async function readPage(db: DbPool | DbClient, key: string, lock = false): Promise<StoredPagePair> {
+  const { rows } = await db.query<PageRow>(
+    `SELECT key, locale, title, body_markdown, images, updated_at FROM pages WHERE key = $1 ORDER BY locale${lock ? ' FOR UPDATE' : ''}`, [key],
+  );
+  const de = rows.find((r) => r.locale === 'de');
+  const en = rows.find((r) => r.locale === 'en');
+  const updatedAt = rows.length ? new Date(Math.max(...rows.map((r) => r.updated_at.getTime()))) : null;
+  return { key, de: de ? rowToContent(de) : emptyContent('de'), en: en ? rowToContent(en) : emptyContent('en'), updatedAt };
+}
+
 export function pgPageStore(pool: DbPool): PageStore {
   return {
-    async get(key) {
-      const { rows } = await pool.query<PageRow>(
-        `SELECT key, locale, title, body_markdown, images, updated_at FROM pages WHERE key = $1`, [key],
-      );
-      const de = rows.find((r) => r.locale === 'de');
-      const en = rows.find((r) => r.locale === 'en');
-      const updatedAt = rows.length ? new Date(Math.max(...rows.map((r) => r.updated_at.getTime()))) : null;
-      return { key, de: de ? rowToContent(de) : emptyContent('de'), en: en ? rowToContent(en) : emptyContent('en'), updatedAt };
-    },
+    get: (key) => readPage(pool, key),
     async save(pair, baseUpdatedAt, options = {}) {
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
+        // Lock order: language (shared), then the page (#284, #344).
         const mode = await readLanguage(client, true);
-        const { rows } = await client.query<PageRow>('SELECT key,locale,title,body_markdown,images,updated_at FROM pages WHERE key=$1 FOR UPDATE', [pair.key]);
-        const existing: StoredPagePair = {
-          key: pair.key,
-          de: rows.find((row) => row.locale === 'de') ? rowToContent(rows.find((row) => row.locale === 'de')!) : emptyContent('de'),
-          en: rows.find((row) => row.locale === 'en') ? rowToContent(rows.find((row) => row.locale === 'en')!) : emptyContent('en'),
-          updatedAt: rows.length ? new Date(Math.max(...rows.map((row) => row.updated_at.getTime()))) : null,
-        };
+        // @ai-warning (#344) The lock MUST precede the read: a check made on a
+        // read taken outside it lets two saves from one base both pass and the
+        // later commit erase the earlier one, which no revision ever captured.
+        // An advisory lock rather than FOR UPDATE alone, because a key never
+        // saved has no row to lock. The 'page:' prefix keeps it off the post
+        // pair locks (hashtextextended(translation_key, 0), post-pair-lock.ts);
+        // a hash collision would only serialize two unrelated saves.
+        await client.query(`SELECT pg_advisory_xact_lock(hashtextextended('page:' || $1, 0))`, [pair.key]);
+        const existing = await readPage(client, pair.key, true);
         if (options.prepareLocale && existing.updatedAt && !baseUpdatedAt) throw new PageError('Reload the page before preparing a translation.', 'conflict');
         assertPageNotStale(existing.updatedAt, baseUpdatedAt);
-        const normalized = mergePageUpdate(pair, existing, mode, options);
+        const { pair: normalized, galleryWarnings } = await mergePageUpdate(pair, existing, mode, options);
         await options.validate?.(normalized, mode, client);
         if (existing.updatedAt) {
+          // clock_timestamp(), not the column default now(): now() is this
+          // transaction's START, which for a save that queued on the lock
+          // predates the holder's revision, so the newer snapshot would sort
+          // (and be pruned) as the older one.
           await client.query(
             `INSERT INTO page_revisions (id, key, snapshot, saved_at) VALUES ($1, $2, $3, clock_timestamp())`,
             [randomUUID(), pair.key, JSON.stringify({ de: existing.de, en: existing.en })],
@@ -211,9 +235,17 @@ export function pgPageStore(pool: DbPool): PageStore {
             [pair.key, REVISION_CAP],
           );
         }
-        const timestamp = await client.query<{ updated_at: Date }>(
-          `SELECT GREATEST(date_trunc('milliseconds',clock_timestamp()),$1::timestamptz+interval '1 millisecond') AS updated_at`,
-          [existing.updatedAt],
+        // One token for both locale rows, millisecond-truncated (all a JS Date
+        // echo can carry) and strictly after the stored one even when the wall
+        // clock is behind it. Not now(): for a save that queued on the lock,
+        // the transaction start predates the holder's token, so the stored
+        // token could move backwards.
+        const { rows: [next] } = await client.query<{ value: Date }>(
+          `SELECT GREATEST(
+             date_trunc('milliseconds', clock_timestamp()),
+             date_trunc('milliseconds', MAX(updated_at)) + interval '1 millisecond'
+           ) AS value FROM pages WHERE key = $1`,
+          [pair.key],
         );
         for (const locale of ['de', 'en'] as Locale[]) {
           const c = normalized[locale];
@@ -222,17 +254,19 @@ export function pgPageStore(pool: DbPool): PageStore {
              VALUES ($1,$2,$3,$4,$5::jsonb,$6)
              ON CONFLICT (key, locale) DO UPDATE SET
                title=EXCLUDED.title, body_markdown=EXCLUDED.body_markdown, images=EXCLUDED.images, updated_at=EXCLUDED.updated_at`,
-            [pair.key, locale, c.title, c.bodyMarkdown, JSON.stringify(c.images ?? {}), timestamp.rows[0]!.updated_at],
+            [pair.key, locale, c.title, c.bodyMarkdown, JSON.stringify(c.images ?? {}), next!.value],
           );
         }
+        // This save's state and token, not a later writer's post-COMMIT read.
+        const saved = await readPage(client, pair.key);
         await client.query('COMMIT');
+        return { ...saved, galleryWarnings };
       } catch (e) {
-        await client.query('ROLLBACK');
+        await client.query('ROLLBACK').catch(() => {});
         throw e;
       } finally {
         client.release();
       }
-      return this.get(pair.key);
     },
     async keys() {
       const { rows } = await pool.query<{ key: string }>(`SELECT DISTINCT key FROM pages ORDER BY key`);

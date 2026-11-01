@@ -313,6 +313,10 @@ async function deskPage(options: {
     EditorCopy: { en: Object.fromEntries(Object.entries(ui.en)
       .filter(([key]) => key.startsWith('editor.chrome.'))
       .map(([key, text]) => [key.slice('editor.chrome.'.length), text])) },
+    // The dynamic copy endpoint also serves build-status copy (#297).
+    BuildCopy: { en: Object.fromEntries(Object.entries(ui.en)
+      .filter(([key]) => key.startsWith('admin.build.'))
+      .map(([key, text]) => [key.slice('admin.build.'.length), text])) },
     matchMedia: () => ({ matches: false, addEventListener() {} }),
     fetch: async (url: string, init?: { method?: string; body?: string; cache?: string }) => {
       const request = { url, method: init?.method ?? 'GET', body: init?.body, cache: init?.cache };
@@ -327,6 +331,9 @@ async function deskPage(options: {
       if (url === '/posts') return options.posts ? options.posts() : Response.json([]);
       if (url === '/media/queue') return Response.json({ pending: 0, running: 0 });
       if (url === '/health') return Response.json({ release: false });
+      // The Desk reads the language mode (#284) and, for admins, build status (#297).
+      if (url === '/language') return Response.json({ primary: 'de', locales: ['de', 'en'], lockedAt: null, updatedAt: '2026-10-27T00:00:00.000Z' });
+      if (url === '/rebuild/status') return Response.json({ live: null, running: null, last: null, record: 'missing' });
       throw new Error('Unexpected Desk request: ' + url);
     },
   };

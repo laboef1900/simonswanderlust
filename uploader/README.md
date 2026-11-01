@@ -70,12 +70,15 @@ cp uploader/.env.example .env
 
 # 3. Build the image (compose has no build: key, so `--build` is a no-op) and
 #    start the containers in the background:
-docker build -t ghcr.io/laboef1900/simonswanderlust-app:local .
+docker build -t ghcr.io/laboef1900/wanderlust-studio:local .
 IMAGE_TAG=local docker compose up -d
 
 # 4. First run — open /login to create the first admin account:
 open http://localhost:3000/login      # macOS (or just browse to the URL)
 ```
+
+After the local build, set `IMAGE_TAG=local` in your private `.env` for subsequent
+Compose commands. This tag exists locally only; do not try to pull it from GHCR.
 
 On first run, when no users exist, `/login` shows a "Create the first admin"
 form. Fill in a username and password; the form closes once any user exists. Setup/login
@@ -167,25 +170,49 @@ An empty `SITE_DIR` starts a build from `SITE_APP_DIR`, so check both paths befo
 1. Copy the repo to the server.
 2. From the monorepo root: `cp uploader/.env.example .env`, set a strong `POSTGRES_PASSWORD`, the
    matching `DATABASE_URL`, and `PUBLIC_BASE_URL=https://img.simonswanderlust.com`.
-3. Build and run: `docker build -t ghcr.io/laboef1900/simonswanderlust-app:local .` then
+3. Build and run: `docker build -t ghcr.io/laboef1900/wanderlust-studio:local .` then
    `IMAGE_TAG=local docker compose up -d` (compose has no `build:` key, so plain
-   `docker compose up -d --build` is a no-op) — or, to run the released GHCR image instead of
-   building: `docker compose pull && docker compose up -d`.
+   `docker compose up -d --build` is a no-op). To pull instead, first wait for the
+   owner-authorized initial release under `ghcr.io/laboef1900/wanderlust-studio`,
+   set `IMAGE_TAG` in `.env` to its published version, then run
+   `docker compose pull && docker compose up -d`. No release under the new name
+   is created by this source change. Historical `simonswanderlust-app` releases
+   stay under their original name; never substitute an old tag into the new name.
 4. Because the container runs non-root (uid 1000), make its data bind-mount writable once — this
    now covers image variants *and* the built blog output, since both live under the same `/data`
    volume: `mkdir -p uploader/data && sudo chown -R 1000:1000 uploader/data` (run from the
    monorepo root).
-5. Point your reverse proxy (nginx/Caddy/Traefik) at the container, terminating TLS: **both**
-   `https://simonswanderlust.com` **and** `https://img.simonswanderlust.com` → `127.0.0.1:3000`.
-   One Fastify process serves both domains — a host-header check (`IMG_HOST`) picks image-variant
-   serving vs. the blog/admin, so each domain behaves exactly as before the merge. **The proxy
-   must forward the original, verbatim `Host` header for both domains** (nginx:
-   `proxy_set_header Host $host;` — do not rely on the default, which some nginx configs override
-   with `$proxy_host`/the upstream name). If the `Host` header reaching the app isn't exactly
-   `img.simonswanderlust.com`, image URLs silently fall through to the blog/admin routing instead
-   of serving image variants.
+5. Run **one host-level TLS proxy** (nginx/Caddy/Traefik), without a CDN or additional proxy
+   hop: **both** `https://simonswanderlust.com` **and** `https://img.simonswanderlust.com`
+   → `127.0.0.1:3000`. One Fastify process serves both domains; its raw `Host` check
+   (`IMG_HOST`) selects image variants versus blog/admin.
+   Preserve the verbatim `Host`, overwrite `X-Forwarded-Proto` with the proxy's scheme,
+   and append or overwrite XFF so the rightmost address is the client the proxy accepted.
+   nginx: `proxy_set_header Host $http_host;`,
+   `proxy_set_header X-Forwarded-Proto $scheme;`,
+   `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`.
+   Never rely on an upstream-name `Host` rewrite: it sends image requests to blog/admin.
+   Compose's literal `TRUSTED_PROXY: docker-gateway` trusts only loopback and the discovered
+   bridge gateway at hop zero. Do not put it in `.env`; a different network/proxy topology
+   requires a new spec. Failed gateway discovery refuses boot rather than losing `Secure`
+   cookies or collapsing every reader into one limiter bucket.
+   Reject unintended public hostnames at the proxy. Reader comments compare Origin (or Referer
+   only when Origin is absent/empty) with the trusted scheme plus raw `Host`, **not**
+   `PUBLIC_BASE_URL` and never `X-Forwarded-Host`. This is #319's temporary request-authority
+   fallback, not a domain allow-list. The image authority and `IMG_HOST` cannot receive
+   same-origin comments, even under another scheme; single-origin loopback development remains
+   supported. No new blog-origin env setting is required. #276 will give validated canonical
+   identity precedence over this fallback; the explicit server override remains highest.
 6. Open `https://simonswanderlust.com/login` to create the first admin account, then follow
    the Desk checklist above (or use the ordinary Media/editor workflow on an existing install).
+   Before public cutover, inspect the target server's observed proxy peer, confirm `Secure`
+   on an HTTPS login, and verify independent login-limit buckets from two external networks.
+   The #369 Docker Desktop production-image TCP probe covers the Linux VM host-network
+   proxy → app bridge path, not the target VPS's published-loopback/NAT configuration.
+   Also submit a synthetic comment from the blog origin: expect 201, a pending moderation row,
+   and no public entry until approval. The image origin, a third party and hostname-prefix or
+   userinfo lookalikes must receive 403. The local #319 proof used real `main.ts`/Postgres,
+   split `.localhost` hosts and a loopback proxy; it does not replace this target-server check.
 
 The admin panel is reachable directly at `https://simonswanderlust.com/admin/` — the same process
 serves it, so there's nothing to proxy to separately anymore.
@@ -205,9 +232,11 @@ Only a 401 redirects to login; other context failures offer retry without loggin
 
 Full details in [`../SECURITY.md`](../SECURITY.md); the essentials:
 
-- **Always run behind the TLS-terminating reverse proxy.** The app trusts `X-Forwarded-*`
-  (so per-IP login throttling and the cookie `secure` flag work); your proxy MUST set
-  `X-Forwarded-Proto`. Do not expose port 3000 directly to the internet.
+- **Public hosting requires the documented host TLS proxy.** Forwarded headers are accepted
+  only from an allow-listed immediate peer, never from an arbitrary bridge container.
+  Host-local processes remain inside the trust boundary. The proxy must preserve `Host`,
+  overwrite forwarded protocol and supply the accepted client as rightmost XFF. Never expose
+  port 3000 directly or broaden trust to a subnet to compensate for misconfiguration.
 - **Password-verifying endpoints are rate-limited** per client IP (`/login`, `/setup`, and the
   authenticated `POST /users/me/password`: 10 requests per 15 minutes) to slow brute-force; they
   share one bucket, so failed current-password guesses count against login attempts from that IP.
@@ -267,6 +296,23 @@ storage key, not per variant file. Bulk drag-and-drop upload, virtual folders (a
 table; moving a photo re-labels it, it does not move bytes on disk), search, and per-item alt text
 that the gallery picker reuses.
 
+The Media page shows 60 photos per page. If deleting or moving photos removes the current
+last page, its reload steps backwards to the new last page instead of showing an empty
+library with a non-zero total. An empty result resets pagination to page 1 (the page label
+is hidden and both navigation buttons are disabled). Corrective requests keep the same
+load-sequence ticket, so a newer folder/filter selection wins even if an older correction
+arrives later. This was exercised against the real app and Postgres with 63 generated,
+encoded photos: confirmed deletion from a 61-photo folder, moving both rows off page 2,
+emptying a folder while on page 2, and a delayed correction racing a newer search.
+
+Re-uploading the same file preserves its existing non-root folder, including when recovering
+a `failed` or `missing` photo, even if the recovery attempt is refused by a full queue.
+A ready photo or a failed/missing photo being re-created may adopt the upload's selected
+folder only while still in the root; the upload response reports the stored folder.
+Processing and `queue_full` recovery retain all stored metadata, including a root folder.
+Other recovery keeps existing title, alt, caption and tags when the upload supplies no
+replacement metadata.
+
 The shared image picker in `public/media-picker.js` exposes read-only folder navigation
 for title images, heroes, and galleries. It uses `MediaApi.folderTree`, the Media page's
 folder styles, and the existing `/media/folders` endpoint. Folder views include descendants;
@@ -285,6 +331,39 @@ flagging rows whose files have vanished, and demoting a `ready` row whose varian
 longer complete for its original's width — and then `encodeQueue.recover()` re-seeds the queue
 from `status = 'processing'`). Variant and original files are written atomically (temp +
 rename), so a crash never leaves a truncated file under a final name.
+
+The Media grid refreshes automatically when uploads complete, with a 200 ms debounce for
+bursts. **Clear finished** is not needed to show the accepted photos; queue entries stay
+visible until cleared. Refreshes retain the current folder, search, status filter, sort and
+page, so a photo outside that query will not appear there. Selections still in view and
+unsaved detail edits survive the refresh; switching to another photo still asks before
+discarding edits. Keyboard focus stays on the same visible photo even if its sort position
+changes. The refresh preserves whichever photo is focused when the response is rendered,
+not when the request started, and does not pull focus away from search, upload, folder,
+queue or detail controls. A focused detail field keeps its caret and selection even before
+the first edit; explicit **Save details** still refreshes the saved values and clears the
+unsaved state. If an automatic completion refresh overtakes an explicit Save or folder
+change, the winning response still completes that explicit update rather than retaining
+an old detail baseline or folder navigation. Arrow and Space navigation continue from the
+restored photo.
+The queue's **done** means the upload was accepted, not that encoding has
+finished: the grid displays the status returned by the server, including **processing**.
+This is a completion-triggered refresh, not continuous polling for encoding progress.
+
+The backlog admits at most 200 waiting jobs, in addition to the two running jobs. When an
+upload receives **429** because that backlog is full, a new photo keeps its original as
+`failed` / `queue_full`, not stranded `processing`; an existing photo's prior status/error is
+restored unless another request already admitted or completed its job. Once capacity returns,
+**Retry** or re-uploading the same bytes encodes the retained photo. Re-upload also repairs an
+older orphan `processing` row by enqueueing it when no active job owns the key (#348).
+Upload, Retry, and boot/rescan recovery serialize admission and refusal rollback for the
+same key, including the awaited status write. Recovery re-reads the row after waiting rather
+than admitting a stale `processing` snapshot. Re-uploading a `queue_full` photo changes only
+its status and restores its original; curated folder, localized descriptions, title, tags,
+and the saved encoding profile are retained even across repeated refusals.
+Recovery starts each admitted job immediately, so a later candidate's database read failure
+does not strand earlier admissions. The rescan still reports the error; already admitted
+photos finish independently, while remaining `processing` photos can recover on a later rescan.
 
 Three consequences worth knowing:
 
@@ -317,14 +396,70 @@ routes behind it (`GET /moderation/comments`, `POST /moderation/comments/:id/sta
 `DELETE /moderation/comments/:id`, `POST /moderation/comments/:id/reply`) are all
 `requireAdmin`: unauthenticated callers get 401, authors 403, and a non-UUID id is a 400.
 Approving does not rebuild the site — comments are runtime data, never baked by `astro build`.
+Both views are oldest-first by timestamp and UUID, with **50 comments per page** and
+**Previous / Next** controls. `GET /moderation/comments?status=pending|approved&offset=N`
+returns `{ comments, hasMore }` with `Cache-Control: no-store`; offset defaults to zero,
+must be a single nonnegative decimal safe integer with room to add 50, and invalid
+pagination returns 400 only after authorization. A page beyond the end is empty.
+Successful moderation (including Reply) and filter changes restart at page one;
+cancelled confirmations do not. Other moderators can shift offsets between reads,
+so restart traversal to see the current state rather than treating pages as a snapshot.
+Every admin row remains reachable; the public thread's oldest-500 response cap is unchanged.
+Deletion and unapproval take effect on the next public comment read, without a rebuild.
+
+Unsent author replies stay in memory, keyed by comment ID, while this page is open.
+Only one reply can be sending per comment ID: its submit button stays disabled even
+when filtering or moderation recreates the row, and becomes available again after
+success or failure so a later intentional reply or retry is possible.
+Moderation actions, paging and switching between Pending and Approved preserve other replies;
+hidden rows recover their own draft when shown again. A successful reply clears only
+the submitted text, preserving newer edits made while it was sending; failed replies
+keep their input. List refreshes restore the active row control and textarea selection
+when that row remains visible, or focus the status filter when it disappears. Drafts
+are not saved to browser storage or the server: navigating away or reloading the page
+discards them.
+Paging focuses the page indicator. While loading, or after a failed page request,
+old rows and paging actions are unavailable; reselect the filter to retry from page one.
+An externally emptied page keeps Previous available.
 
 ## Galleries
 
 Several photos render as one grid from a fenced ```` ```gallery ```` block, one image URL per line.
 Authors get it from **"Insert / edit gallery"** on either locale tab, which opens the library in
 multi-select mode with an ordering strip; the button writes exactly the text a person would type by
-hand. Per-line `| WxH | alt="…" | caption="…"` metadata is lifted into the post's `images` map at
-the store chokepoint (`normalizeGalleryFences`), leaving the body as bare URLs.
+hand. Valid per-line `| WxH | alt="…" | caption="…"` metadata is lifted into the post's
+`images` map at the store chokepoint (`normalizeGalleryFences`), leaving bare URLs.
+If any field is malformed, the whole line is saved unchanged without applying any
+of its metadata. Successful post/page saves return transient `galleryWarnings`;
+the editor shows a persistent repair link. This is not a new Publish refusal, and
+preserved malformed captions may remain invisible. Hand-written quotes and pipes
+use `&quot;` and `&#124;`, not `\"` or a literal `|` inside the quoted value.
+
+Gallery identity is server-authoritative (`site/src/lib/gallery-source.ts`), using
+the actual Satteri parser features and shared sanitized render predicate. Tildes,
+indentation, list/quote containers, extra info words and raw HTML gallery markup
+receive the same save/export/audit coverage as canonical fences. Source edits
+preserve outside bytes, container prefixes and the HTML entity layer.
+
+`POST /gallery/analyze` is session-authenticated, nonpersisting and `no-store`.
+It accepts `{ bodyMarkdown }` under the existing post-body limit and returns that
+exact snapshot plus UTF-16 block/line spans. Visual tools require successful analysis;
+offline/failing analysis leaves raw Markdown editable and offers retry. A stale
+picker selection never replaces newer text. The body-content normalization and
+rewriting APIs, export, audit, import extraction and browser analysis are asynchronous.
+
+Manual descriptions for photos absent from Media keep their latest pending value per
+photo and locale. Save (and therefore Publish/Preview) waits for source analysis and
+all pending descriptions, including edits made in another locale while it waits.
+Unrelated source edits trigger fresh ranges rather than dropping the description.
+A failed analysis leaves the value available for retry and does not send a post write.
+Loading a post or restoring a revision discards the former form's pending descriptions
+and cancels a Save that was still waiting for them.
+If the session expires during analysis, the existing local draft recovery also
+retains those pending descriptions, including explicit empty values. After login,
+**Restore** re-analyzes the restored source before applying them; **Save draft**
+remains a separate action. Recovery-only values are never sent in the post payload.
+
 
 Three layout modes, selected by a `#layout:` line **inside** the fence — `column` (default,
 justified rows aligned to body text), `breakout` (justified rows wider than the story column), and
@@ -367,6 +502,22 @@ with the typed key if one is entered. Listing sends no photo and does not verify
 support. Custom providers must allow browser CORS. Local LM Studio providers never hold or
 receive a key.
 
+**Pending provider keys.** An Add/Edit form keeps its masked, unsaved key when you
+use **Set default**, **Save AI settings**, or delete another provider. These actions
+do not submit that key. **Save provider** and confirmed **Remove stored key** clear
+the originating form's key at request handoff, even if the request fails; a late
+response cannot discard a different form you opened meanwhile. Cancel, changing
+forms, switching Add to Local LM Studio, and leaving/reloading the page discard it.
+There is no browser-storage recovery of a key.
+
+When editing a provider's URL, a typed replacement is saved for that provider at
+the new URL; a blank key keeps the stored key and asks before moving it to a
+different URL. Declining confirmation preserves the form. If settings cannot be
+refreshed after another action, the open form stays visible, but Save, Remove key,
+Test and registry actions are blocked. Follow the reload-required message; reloading
+discards unsaved input. An unknown or partial save outcome is not retried
+automatically: inspect the freshly loaded provider state before submitting again.
+
 **Maximum output tokens** sets the per-photo output ceiling for both editor/uploader
 alt-text suggestions and media-library AI details (single and bulk). Default **8,000**;
 allowed range **256–32,768**, whole numbers only. Reasoning models spend this same budget
@@ -375,6 +526,13 @@ photo-details limit before returning any metadata. A higher ceiling permits more
 and may increase provider charges and latency; the chosen model must support it.
 This does not toggle thinking or change the separate caption timeout. Existing settings
 files without the field use 8,000; saved values survive restart.
+
+Alt-text suggestions discard case-insensitive `<think>…</think>` blocks, including
+an unfinished block through the end of the reply. A `finish_reason: "length"` reply
+is refused even if it contains valid-looking caption JSON. Hero/body fields and
+hosted-gallery alt text retain their existing value on refusal; the token-limit
+hint names **Maximum output tokens** rather than suggesting a connection problem.
+Gallery suggestions still require explicit acceptance before changing Markdown.
 
 Non-secret settings (`aiProviders`, `aiDefaultProviderId`, `captionProviderId`, `lmModel`,
 `captionTimeoutMs`, `captionMaxTokens`, `captionMaxEdge`, `captionPrompt`) live in settings.json.
@@ -420,9 +578,11 @@ fields. It is sent as untrusted JSON in a user message, separate from the review
 `EDITORIAL_REVIEW_SCHEMA`, and the matching pure parser.
 
 The parser accepts JSON wrapped in prose/fences or preceded by `<think>` reasoning,
-but rejects missing fields, wrong types/statuses, and extra keys. It strips Unicode
-control characters, caps text at 1,000 UTF-16 units, and caps each list at 10 strings
-of 200 units (without splitting surrogate pairs). Empty strings/lists are allowed;
+but rejects missing fields, wrong types/statuses, and extra keys. Whitespace runs
+(including newlines and tabs) become one space before other Unicode controls are
+removed and outer whitespace is trimmed, preserving word boundaries in suggestions.
+Text is capped at 1,000 UTF-16 units, and each list at 10 strings of 200 units
+(without splitting surrogate pairs). Empty strings/lists are allowed;
 title suggestions and the suggested excerpt are optional. Alt-text observations use
 `practicalDetails`, because the agreed result contract has no separate alt-text section.
 Parsing also bounds synchronous work: raw output may contain at most 128 Ki UTF-16
@@ -571,25 +731,28 @@ OpenRouter/DeepSeek keys refuse the request locally; a keyless custom endpoint i
 `gallery-fence.js` first. It is a pure, network-free advisory module, not a save/publish
 gate, and supplies the Review Story drawer's immediate quick checks.
 
-Call `lintStory({ title, excerpt, markdown, heroSrc, heroAlt })`, or the individual
-`lintTitle`, `lintExcerpt`, `lintHeadings`, `lintAltText`, and `lintInternalLinks` checks.
+Await `lintStory({ title, excerpt, markdown, heroSrc, heroAlt })`, or the body-dependent
+`lintHeadings`, `lintAltText`, and `lintInternalLinks` checks. `lintTitle` and
+`lintExcerpt` remain synchronous.
 Title (20–70) and excerpt (100–160) limits use the exact field's JavaScript string length,
 including spaces. The result contains each check, `pass`, and `warningCount` (individual
 findings, not categories). Findings have stable `code` values and readable `message`s;
 alt findings identify `target: 'hero' | 'inline' | 'gallery'`. Markdown `line` values are
 **1-indexed**; subtract one for CodeMirror. Hero and document-wide link findings have no line.
 
-ATX headings and inline image/link syntax ignore fenced examples through the same
-`GalleryFence.scanFences` used by the picker. Headings are checked before inline syntax;
-inline image/link checks hide code spans without crossing blank lines or ATX headings.
-Gallery metadata uses `GalleryFence.parse`. Inline checks cover `![alt](url)` / `[label](path)`, including
+ATX headings and inline image/link syntax ignore parser-established code blocks
+through the same asynchronous `GalleryFence.scanFences` used by the picker.
+Headings are checked before inline syntax; inline image/link checks hide code spans
+without crossing blank lines or ATX headings. Gallery metadata uses
+`GalleryFence.parse` on the analysis's logical content, never a second block scanner.
+Inline checks cover `![alt](url)` / `[label](path)`, including
 escaped labels, optional titles, and angle destinations; reference links and raw HTML are
 outside this check. Another-story links can be root-relative or path-relative, not remote
 URLs, fragment-only links, or query-only links. Alt checks flag missing/whitespace-only text,
 not generic wording; they inspect the supplied markdown rather than the saved `images` map.
 
-`findImage(markdown, src)` reuses that inline scanner to locate a body image's
-editable alt label. It returns `{ start, end, line }` (zero-based string offsets,
+Await `findImage(markdown, src)` to locate a body image's editable alt label using
+the inline scanner outside authoritative gallery/code ranges. It returns `{ start, end, line }` (zero-based string offsets,
 exclusive end, one-based line), or `null` when the image is absent. Code examples
 and ordinary links are not repair targets.
 
@@ -605,6 +768,12 @@ Edits made during an in-flight save remain dirty until a later save includes the
 Failed saves and cancelled URL-change confirmations retain the unsaved form.
 A browser recovery stash is not a server save, and saving a published post's draft
 does not change its live version.
+Restoring a local draft retains the saved-version token it was edited against.
+A stale restore gets a conflict rather than overwriting a newer server version.
+An existing post's stash without a usable version can be restored for copying, but
+cannot be saved: copy the needed text, reload, and decline the restore to return to
+the saved version. If the post has since been published, its current live slugs are
+kept. A failed restore keeps its original stash and blocks saving the partial form.
 
 ## Alt-text audit (advisory)
 
@@ -657,7 +826,19 @@ It asks the **running** app over loopback (minting and immediately revoking a on
 session) rather than spawning its own `astro build`. That is deliberate: `work-lock.ts` makes a
 build and image encoding mutually exclusive within one process, and `docker-compose.yml` sizes
 `mem_limit` as `max(build, encode) + baseline` on exactly that assumption — a second, unlocked
-builder could OOM the container. It exits non-zero on a failed build and prints the reason.
+builder could OOM the container. It exits non-zero on a failed build and prints a fixed
+failure code/reason plus `docker compose logs app`; raw generator diagnostics stay in
+server logs. Its temporary admin session is removed on both success and failure.
+
+Admins can inspect the latest attempt and the independently observed live release on
+Desk or Settings (`GET /rebuild/status`, admin-only and `no-store`). The latest record
+survives restart in unserved `SITE_DIR/build-state.json`; a previously running attempt
+becomes interrupted, not successful merely because an older release exists. After fixing
+the cause, use **Rebuild site now** or this CLI command explicitly.
+
+A failed rebuild can follow a successful CMS mutation. Follow the saved/published/deleted
+acknowledgement; do not repeat that mutation to repair generation. The previous release
+remains served until another build promotes a replacement.
 
 ## CLI password reset (recovery)
 
@@ -672,6 +853,18 @@ character policy as the web forms, and invalidates that user's sessions. Routine
 logged in uses the "Change my password" card on
 `/admin/users.html`. Full recovery notes (including the last-resort `DELETE FROM users;` →
 `/setup` fallback) are in [`../ARCHITECTURE.md`](../ARCHITECTURE.md).
+
+The admin-only Users page reports list-load errors separately from account actions.
+**Reload users** clears obsolete rows and their Remove buttons before fetching; a failed
+request or unreadable JSON response leaves an explicit error, not an apparently empty
+successful list. Reloading does not discard entries in the Add user or password forms.
+After an account is added or removed, its refresh supersedes any older list request;
+late responses cannot hide the new account or restore a deleted account's Remove button.
+Both forms support Enter to submit, disable their submit button while waiting, and
+re-enable it after success or failure. A transport failure preserves the entries and
+reports that the outcome could not be confirmed: reload the list before retrying Add user,
+since a lost response does not prove the server rejected the change. The admin UI remains
+English; these status and recovery messages come from the shared DE/EN copy registry.
 
 ## Develop
 

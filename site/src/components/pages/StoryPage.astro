@@ -10,8 +10,10 @@ import StoryMiniMap from '../StoryMiniMap.astro';
 import GalleryIsland from '../GalleryIsland.astro';
 import CommentsIsland from '../CommentsIsland.astro';
 import { byLocale, localeOf, pathOf, translationOf, type Trip } from '../../lib/trips';
-import { PROD_SITE, blogPostingJsonLd, serializeJsonLd } from '../../lib/seo';
+import { blogPostingJsonLd, serializeJsonLd } from '../../lib/seo';
+import { buildSiteOrigin } from '../../lib/build-identity';
 import { splitOpening } from '../../lib/story-opening';
+import { resizeBodyImages, STORY_BODY_SIZES, STORY_OPENING_SIZES } from '../../lib/body-images';
 
 interface Props {
   trip: Trip;
@@ -24,7 +26,9 @@ const { headings } = await render(trip);
 // sanitises it at sync time; <Content /> would print the same string). It is
 // split here, not in the loader, because the cut is a layout decision: the
 // first section sits beside the rail, the rest runs centred and wider.
-const { opening, rest } = splitOpening(trip.rendered?.html ?? '', headings);
+const split = splitOpening(trip.rendered?.html ?? '', headings);
+const opening = resizeBodyImages(split.opening, STORY_OPENING_SIZES);
+const rest = resizeBodyImages(split.rest, STORY_BODY_SIZES);
 
 const all = await getCollection('trips');
 const other = translationOf(trip, all);
@@ -42,8 +46,8 @@ const alternates = other
     : { de: pathOf(other), en: pathOf(trip) }
   : undefined;
 
-// Same production fallback as Base.astro's canonical URL.
-const site = Astro.site ?? PROD_SITE;
+// The same identity snapshot drives Astro.site and Base's standalone fallback.
+const site = Astro.site ?? buildSiteOrigin();
 const jsonLd = serializeJsonLd(
   blogPostingJsonLd({
     title: trip.data.title,
@@ -75,8 +79,8 @@ const jsonLd = serializeJsonLd(
           `display: contents`, so these are the same three disclosures stacked
           above the article they always were, and the sticky strip's
           containing block stays .story-reading — the whole story. From lg the
-          rail floats beside the opening, its stack stays in view for the
-          spread's height, and the disclosures start open. */}
+          rail floats beside the opening and sticks only when its full stack
+          fits the viewport; the disclosures start open. */}
       <div class="story-spread">
         <div class="story-rail">
           <div class="story-rail__stack">
@@ -91,19 +95,26 @@ const jsonLd = serializeJsonLd(
         </div>
         {/* Inline and synchronous, so the rail is open before first paint on a
             desktop viewport. Without JavaScript the rail is still there, just
-            collapsed — the same disclosures the narrow layout ships. */}
+            collapsed — the same disclosures the narrow layout ships. Only
+            crossing the layout boundary resets a reader's manual toggle. */}
         <script is:inline>
-          if (matchMedia('(width >= 64rem)').matches) {
-            for (const d of document.querySelectorAll('.story-rail__stack > details')) d.open = true;
+          {
+            const rail = matchMedia('(width >= 64rem)');
+            const disclosures = document.querySelectorAll('.story-rail__stack > details');
+            const syncDisclosures = ({ matches }) => {
+              for (const disclosure of disclosures) disclosure.open = matches;
+            };
+            syncDisclosures(rail);
+            rail.addEventListener('change', syncDisclosures);
           }
         </script>
-        {/* `opening`/`rest` are the loader's own sanitised render, cut at a
-            heading boundary — the same string <Content /> would print. The
-            drop cap belongs to the story's first paragraph only. */}
+        {/* The loader's sanitised render, cut at a heading boundary and given
+            this column's source hints. The drop cap belongs to the story's
+            first paragraph only. */}
         <article
           class:list={[
             PROSE,
-            'lg:w-story-column prose-p:first-of-type:first-letter:float-left prose-p:first-of-type:first-letter:mr-3 prose-p:first-of-type:first-letter:text-5xl prose-p:first-of-type:first-letter:font-extrabold prose-p:first-of-type:first-letter:text-brand-red',
+            'lg:w-story-column [&>p:first-of-type]:first-letter:float-left [&>p:first-of-type]:first-letter:mr-3 [&>p:first-of-type]:first-letter:text-5xl [&>p:first-of-type]:first-letter:font-extrabold [&>p:first-of-type]:first-letter:text-brand-red',
           ]}
           set:html={opening}
         />
@@ -126,6 +137,13 @@ const jsonLd = serializeJsonLd(
     </div>
   </div>
 </Base>
+
+<script>
+  import { initStoryRailFit } from '../../scripts/story-rail-fit';
+
+  const rail = document.querySelector<HTMLElement>('.story-rail');
+  if (rail) initStoryRailFit(rail);
+</script>
 
 <style>
   .story-spread,
@@ -168,20 +186,22 @@ const jsonLd = serializeJsonLd(
       margin-top: 4rem;
     }
 
-    /* The rail is one sticky float; its stack is a plain block. It never
-     * scrolls internally: a rail taller than the viewport simply stays where
-     * the opening puts it (the sticky offset can only hold it while the
-     * spread is taller than the rail, and then the rail fits). An inner
-     * `overflow-y: auto` used to clip it to the viewport and put a second
-     * scrollbar beside the page's — the owner asked for it gone (2026-09-20). */
+    /* The rail never scrolls internally. Only a measured, viewport-fitting
+     * rail sticks; oversized rails and the no-JS fallback scroll with the
+     * page so lower controls remain reachable. An inner scrollbar was
+     * explicitly rejected by the owner (2026-09-20). */
     .story-rail {
       display: block;
-      position: sticky;
+      position: static;
       top: 0.5rem;
       float: right;
       clear: right;
       width: var(--container-story-rail);
       margin-left: 3rem;
+    }
+
+    .story-rail[data-sticky-fit] {
+      position: sticky;
     }
 
     .story-rail__stack {

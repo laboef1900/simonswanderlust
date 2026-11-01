@@ -1,15 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { browserScript, galleryCodecBindings } from './gallery-browser-module.js';
 import { editorDocument } from './editor-dom-harness.js';
 import { ui } from '../../site/src/i18n/ui.js';
 
 const editorCopy = { en: Object.fromEntries(Object.entries(ui.en).filter(([key]) => key.startsWith('editor.chrome.')).map(([key, value]) => [key.slice('editor.chrome.'.length), value])) };
+const buildCopy = Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [
+  locale, Object.fromEntries(Object.entries(strings).filter(([key]) => key.startsWith('admin.build.')).map(([key, value]) => [key.slice('admin.build.'.length), value])),
+]));
 
 type Locale = 'de' | 'en';
 const stamp = '2026-10-27T00:00:00.000Z';
 const state = (primary: Locale, locales: Locale[], lockedAt: string | null = null) => ({ primary, locales, lockedAt, updatedAt: stamp });
-const response = (body: unknown, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => body });
+interface BrowserResponse { ok: boolean; status: number; json(): Promise<unknown> }
+const response = (body: unknown, status = 200): BrowserResponse => ({ ok: status >= 200 && status < 300, status, json: async () => body });
 async function settle() { for (let i = 0; i < 30; i++) await Promise.resolve(); }
 
 function settings(initial = state('de', ['de'])) {
@@ -27,14 +32,16 @@ function settings(initial = state('de', ['de'])) {
     document: dom.document, location: { href: '/admin/settings.html' },
     fetch: async (url: string, init: RequestInit = {}) => {
       requests.push({ url, init });
+      if (url === '/rebuild/status') return response({ record: 'missing', running: null, last: null, live: null });
       return init.method === 'PUT' ? answer : response(initial);
     },
     AdminConfirm: { ask: async (question: { body: string }) => { questions.push(question); return confirmed; } },
   };
   context.window = context;
   context.EditorCopy = editorCopy;
+  context.BuildCopy = buildCopy;
   vm.createContext(context);
-  for (const file of ['language.js', 'settings-language.js']) vm.runInContext(readFileSync('public/' + file, 'utf8'), context);
+  for (const file of ['build-reporting.js', 'language.js', 'settings-language.js']) vm.runInContext(readFileSync('public/' + file, 'utf8'), context);
   // The VM boundary loses the type of this production entry point.
   const controller = context.SettingsLanguage as { init(): Promise<void> };
   return { el, requests, questions, context,
@@ -81,10 +88,12 @@ describe('Language Settings', () => {
     const h = settings();
     await h.init();
     h.el('languageMode').value = 'de:de,en';
-    h.answer({ code: 'language_build_failed', persisted: true, language: state('de', ['de', 'en']) }, 502);
+    h.answer({ ...state('de', ['de', 'en']), build: { ok: false, code: 'build_failed', error: 'SECRET', liveRelease: null } }, 200);
     await h.submit();
     expect(h.el('prepareLanguage').hidden).toBe(true);
-    expect(h.el('languageStatus').textContent).toContain('previous release is still live');
+    expect(h.el('languageStatus').textContent).toContain('Language setting saved in the CMS');
+    expect(h.el('languageStatus').textContent).toContain('No live release yet');
+    expect(h.el('languageStatus').textContent).not.toContain('SECRET');
     expect(h.el('languageStatus').textContent).toContain('Rebuild site now');
     expect(h.requests.filter(({ init }) => init.method === 'PUT')).toHaveLength(1);
   });
@@ -139,7 +148,7 @@ describe('browser language URL mirror and tabs', () => {
   });
 });
 
-async function about(primary: Locale, prepareLocale?: Locale, updatedAt: string | null = stamp) {
+async function about(primary: Locale, prepareLocale?: Locale, updatedAt: string | null = stamp, route?: (url: string, init: RequestInit) => BrowserResponse | Promise<BrowserResponse>) {
   const html = readFileSync('public/about.html', 'utf8');
   const dom = editorDocument(html);
   const el = (id: string) => {
@@ -153,9 +162,13 @@ async function about(primary: Locale, prepareLocale?: Locale, updatedAt: string 
     en: { locale: 'en', title: 'Existing heading', bodyMarkdown: 'English text', images: {} },
   };
   const requests: { url: string; init: RequestInit }[] = [];
+  const cleaned: unknown[] = [];
   class EasyMDE {
     private text = '';
-    codemirror = { getInputField: () => dom.document.createElement('textarea'), on() {}, refresh() {} };
+    codemirror = {
+      getInputField: () => dom.document.createElement('textarea'), on() {}, refresh() {},
+      getValue: () => this.text, getLine: (line: number) => this.text.split('\n')[line] ?? '',
+    };
     value(value?: string) { if (value !== undefined) this.text = value; return this.text; }
   }
   const context: Record<string, unknown> = {
@@ -164,24 +177,28 @@ async function about(primary: Locale, prepareLocale?: Locale, updatedAt: string 
     Auth: { ensureAuthed: async () => ({ isAdmin: true }), renderHeader() {} },
     AdminConfirm: { ask: async () => true },
     DraftGuard: { createDraftGuard: () => ({
-      markDirty() {}, snapshot: () => ({}), markClean() {}, tryRestore: () => null,
+      markDirty() {}, snapshot: () => ({ title: el(primary + 'Title').value }), markClean: (snap: unknown) => cleaned.push(snap), tryRestore: () => null,
     }) },
     fetch: async (url: string, init: RequestInit = {}) => {
       requests.push({ url, init });
+      if (route && url !== '/language') return route(url, init);
       if (url === '/language') return response(state(primary, [primary]));
       if (url.endsWith('/revisions')) return response([]);
-      if (init.method === 'PUT') return response({ saved: { updatedAt: '2026-10-28T00:00:00.000Z' }, build: { ok: true } });
+      if (init.method === 'PUT') return response({ saved: { updatedAt: '2026-10-28T00:00:00.000Z' }, build: { ok: true }, galleryWarnings: [] });
       return response(page);
     },
   };
   context.window = context;
   context.EditorCopy = editorCopy;
+  context.BuildCopy = buildCopy;
   vm.createContext(context);
-  for (const file of ['language.js', 'tabs.js']) vm.runInContext(readFileSync('public/' + file, 'utf8'), context);
-  const start = html.lastIndexOf('<script>') + '<script>'.length;
-  vm.runInContext(html.slice(start, html.lastIndexOf('</script>')), context);
+  Object.assign(context, galleryCodecBindings);
+  for (const file of ['build-reporting.js', 'language.js', 'tabs.js', 'gallery-fence.js', 'gallery-metadata-warnings.js']) vm.runInContext(browserScript(file), context);
+  // The page script is a module (it imports the gallery fence); run its body.
+  const start = html.lastIndexOf('<script type="module">');
+  vm.runInContext(html.slice(html.indexOf("'use strict'", start), html.lastIndexOf('</script>')), context);
   await settle();
-  return { el, requests, page, context };
+  return { el, requests, page, context, cleaned };
 }
 
 describe('About inactive translation preparation', () => {
@@ -207,7 +224,7 @@ describe('About inactive translation preparation', () => {
     expect(h.requests.some(({ url, init }) => url === '/language' && init.method === 'PUT')).toBe(false);
   });
 
-  it.each(['de', 'en'] as const)('ordinary %s-only editing excludes retained inactive fields and links only its root About URL', async (primary) => {
+  it.each(['de', 'en'] as const)('ordinary %s-only editing excludes retained inactive fields without inferring liveness', async (primary) => {
     const h = await about(primary);
     const secondary = primary === 'de' ? 'en' : 'de';
     expect(h.el('tab-' + secondary).hidden).toBe(true);
@@ -216,8 +233,9 @@ describe('About inactive translation preparation', () => {
     await settle();
     const payload = JSON.parse(String(h.requests.find(({ init }) => init.method === 'PUT')!.init.body));
     expect(payload).toEqual({ updatedAt: stamp, [primary]: h.page[primary] });
-    expect(h.el('actionStatus').textContent).toContain('https://journal.test/' + (primary === 'de' ? 'uber-mich/' : 'about-me/'));
-    expect(h.el('actionStatus').textContent).not.toContain('/' + secondary + '/');
+    expect(h.el('actionStatus').textContent).toContain('Saved in the CMS');
+    expect(h.el('actionStatus').textContent).toContain('Live release status is unavailable');
+    expect(h.el('actionStatus').textContent).not.toContain('Live:');
   });
 
   it('refuses preparation of an already enabled language without issuing a page save', async () => {
@@ -227,6 +245,43 @@ describe('About inactive translation preparation', () => {
     h.el('saveBtn').click();
     await settle();
     expect(h.requests.some(({ init }) => init.method === 'PUT')).toBe(false);
+  });
+});
+
+describe('About acknowledged save and failed rebuild', () => {
+  it('keeps the submitted clean snapshot and mutation token despite newer edits and a failed revisions refresh', async () => {
+    let token = stamp;
+    const pending = Promise.withResolvers<BrowserResponse>();
+    let saves = 0;
+    const h = await about('en', undefined, stamp, async (url, init) => {
+      if (url.endsWith('/revisions')) throw new Error('optional list unavailable');
+      if (init.method === 'PUT') {
+        const payload = JSON.parse(String(init.body));
+        if (payload.updatedAt !== token) return response({ code: 'conflict' }, 409);
+        saves++;
+        if (saves === 1) return pending.promise;
+        return response({ saved: { updatedAt: token }, build: { ok: true, release: '1793000000000-1-0002' } });
+      }
+      return response({ updatedAt: token, en: { title: 'Initial', bodyMarkdown: 'English', images: {} }, de: { title: '', bodyMarkdown: '', images: {} } });
+    });
+    h.el('enTitle').value = 'Submitted';
+    h.el('saveBtn').click();
+    await settle();
+    h.el('enTitle').value = 'Newer local edit';
+    token = '2026-10-28T00:00:00.000Z';
+    pending.resolve(response({ saved: { updatedAt: token }, build: { ok: false, code: 'no_space', error: 'SECRET', liveRelease: null } }));
+    await settle();
+    expect(h.cleaned.at(-1)).toEqual({ title: 'Submitted' });
+    expect(h.el('enTitle').value).toBe('Newer local edit');
+    expect(h.el('actionStatus').textContent).toContain('Saved in the CMS');
+    expect(h.el('actionStatus').textContent).toContain('No live release yet');
+    expect(h.el('actionStatus').textContent).not.toContain('SECRET');
+    h.el('saveBtn').click();
+    await settle();
+    expect(saves).toBe(2);
+    expect(h.cleaned.at(-1)).toEqual({ title: 'Newer local edit' });
+    const puts = h.requests.filter(({ init }) => init.method === 'PUT');
+    expect(JSON.parse(String(puts[1]!.init.body)).updatedAt).toBe(token);
   });
 });
 

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createGeocoder } from '../src/geocoding.js';
 import type { safeFetch, SafeFetchResult } from '../src/safe-fetch.js';
 import { defaultSettings, validate } from '../src/settings.js';
+import { readFileSync } from 'node:fs';
 
 const place = { display_name: 'Cancún, Quintana Roo, México', lat: '21.1619', lon: '-86.8515' };
 const result = { label: place.display_name, lat: 21.1619, lng: -86.8515 };
@@ -18,6 +19,35 @@ function fixture(request = vi.fn<typeof safeFetch>(async () => body([place]))) {
 }
 
 describe('geocoding', () => {
+  it('identifies software/version and the current public canonical without leaking the serving origin', async () => {
+    const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('[]'));
+    let time = 0;
+    let origin: string | null = 'https://bücher.example/';
+    const request = vi.fn<typeof safeFetch>(async (url, options) => {
+      await options!.fetchImpl!(url, { headers: { Accept: 'application/json' } });
+      return body([]);
+    });
+    const lookup = createGeocoder({
+      endpoint: () => 'https://nominatim.openstreetmap.org/search',
+      canonicalOrigin: () => origin, now: () => time, request,
+    });
+    try {
+      for (const [query, canonical, contact] of [
+        ['First', 'https://bücher.example/', '+https://xn--bcher-kva.example; '],
+        ['Second', 'https://new.example', '+https://new.example; '],
+        ['Third', null, ''],
+      ] as const) {
+        origin = canonical;
+        time += 1100;
+        await lookup(query);
+        const headers = new Headers(fetcher.mock.calls.at(-1)![1]!.headers);
+        expect(headers.get('User-Agent')).toBe(`SimonsWanderlust/${version} (${contact}editor location lookup)`);
+        expect(headers.get('Accept')).toBe('application/json');
+      }
+      expect(request).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ maxRedirects: 0, timeoutMs: 10_000 }));
+    } finally { fetcher.mockRestore(); }
+  });
   it('spaces requests across queries, observes startup cooldown and caches normalized queries', async () => {
     const f = fixture();
     await expect(f.lookup('Cancun')).rejects.toMatchObject({ code: 'lookup_busy' });

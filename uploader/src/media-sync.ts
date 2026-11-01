@@ -188,7 +188,7 @@ async function assess(root: string, entry: DiskKey, expectedFormat?: ImageOutput
  * poison the library and then denormalize into every future post that picks
  * the photo.
  */
-export function harvestAlt(src: string, posts: PostUsageRow[]): { de: string; en: string } {
+export async function harvestAlt(src: string, posts: PostUsageRow[]): Promise<{ de: string; en: string }> {
   const out = { de: '', en: '' };
   for (const row of posts) {
     const locale = row.locale;
@@ -203,7 +203,7 @@ export function harvestAlt(src: string, posts: PostUsageRow[]): { de: string; en
       continue;
     }
     // Labels carry backslash escapes (`imageMarkdown`); the library stores the text the author typed.
-    const hit = markdownImages(row.bodyMarkdown ?? '').find((img) => img.url === src && img.alt);
+    const hit = (await markdownImages(row.bodyMarkdown ?? '')).find((img) => img.url === src && img.alt);
     if (hit) out[locale] = unescapeAltText(hit.alt);
   }
   return out;
@@ -230,7 +230,7 @@ export function createMediaSync(opts: MediaSyncOptions) {
       for (const entry of disk.values()) {
         if (known.has(entry.key)) continue;
         const verdict = await assess(root, entry);
-        const alt = harvestAlt(`${baseUrl}/${entry.key}`, corpus.posts);
+        const alt = await harvestAlt(`${baseUrl}/${entry.key}`, corpus.posts);
         if (alt.de || alt.en) report.altHarvested++;
         try {
           await opts.store.upsert({

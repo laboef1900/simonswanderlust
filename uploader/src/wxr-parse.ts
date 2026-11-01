@@ -10,13 +10,14 @@ export interface ParsedWxr {
   posts: ParsedPost[];
   skippedLocale: { slug: string; locale: string }[];
   rejected: { slug: string; reason: string }[];
+  untranslated: { locale: 'de' | 'en'; slug: string }[];
 }
 
 type Node = Record<string, unknown>;
 const cd = (v: unknown): string => {
   if (v == null) return '';
-  if (typeof v === 'object') { const o = v as Node; return String(o.__cdata ?? o['#text'] ?? ''); }
-  return String(v);
+  const value = typeof v === 'object' ? ((v as Node).__cdata ?? (v as Node)['#text'] ?? '') : v;
+  return Array.isArray(value) ? value.join('') : String(value);
 };
 const arr = <T>(v: T | T[] | undefined | null): T[] => (v == null ? [] : Array.isArray(v) ? v : [v]);
 
@@ -46,6 +47,7 @@ export function parseWxr(xml: string, language: LanguageConfig = DEFAULT_LANGUAG
   const posts: ParsedPost[] = [];
   const skippedLocale: ParsedWxr['skippedLocale'] = [];
   const rejected: ParsedWxr['rejected'] = [];
+  const untranslated: ParsedWxr['untranslated'] = [];
   for (const it of items) {
     const type = cd(it['wp:post_type']);
     if (type === 'attachment') {
@@ -62,10 +64,18 @@ export function parseWxr(xml: string, language: LanguageConfig = DEFAULT_LANGUAG
       skippedLocale.push({ slug, locale: lang });
       continue;
     }
-    const tagged = (lang === 'de' || lang === 'en') && typeof translationGroup === 'string' && translationGroup !== '';
+    const hasLanguage = lang === 'de' || lang === 'en';
+    const tagged = hasLanguage && typeof translationGroup === 'string' && translationGroup !== '';
     const id = cd(it['wp:post_id']);
-    if (!tagged && (language.locales.length !== 1 || !id)) {
-      rejected.push({ slug, reason: language.locales.length !== 1 ? 'no language' : 'missing post id' });
+    if (!tagged && language.locales.length !== 1) {
+      // A language without a translation group is an untranslated item (#387),
+      // reported on its own; no language at all is unroutable.
+      if (hasLanguage) untranslated.push({ locale: lang, slug });
+      else rejected.push({ slug, reason: 'no language' });
+      continue;
+    }
+    if (!tagged && !id) {
+      rejected.push({ slug, reason: 'missing post id' });
       continue;
     }
     const locale = tagged ? lang : language.primary;
@@ -79,5 +89,5 @@ export function parseWxr(xml: string, language: LanguageConfig = DEFAULT_LANGUAG
       thumbnailId: thumb ? cd(thumb['wp:meta_value']) : null,
     });
   }
-  return { attachments, posts, skippedLocale, rejected };
+  return { attachments, posts, skippedLocale, rejected, untranslated };
 }

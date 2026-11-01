@@ -241,9 +241,14 @@ the `/data` volume and only changes via Publish, **Rebuild site now**, or `POST 
 
 | Service | Port | Exposure |
 | --- | --- | --- |
-| `app` (Fastify: blog + admin + images) | `3000` | **Loopback** (`127.0.0.1:3000`) — the only published port; the host's reverse proxy is the sole ingress (#108) |
+| `app` (Fastify: blog + admin + images) | `3000` | **Loopback** (`127.0.0.1:3000`) — the only published port; one host TLS proxy, with immediate-peer address validation (#108, #369) |
 | `db` (Postgres 18) | `5432` | **Internal** — compose network only; never published to the host |
 | Astro dev server | `4321` | **Loopback** — local development only |
+
+Compose sets `TRUSTED_PROXY: docker-gateway` literally, not through `.env`. It trusts loopback
+and the discovered default gateway at hop zero only; missing/ambiguous discovery refuses boot.
+Changing bridge/proxy topology or adding a CDN requires a new spec. Docker Desktop TCP evidence
+does not replace the target-VPS peer/header/two-external-network checks before DNS cutover.
 
 ## Accessibility and High-Impact Actions
 
@@ -831,12 +836,20 @@ blog/
   every later publish, rebuild and encode until a manual restart while `/health` stayed green.
   `build.ts` now SIGKILLs the child after `BUILD_TIMEOUT_MS` (15 min) and reports a distinct
   `BuildTimeoutError`; both Content Layer loaders read through `site/src/lib/loader-pool.ts` with
-  connection/query timeouts so the hung-DB case fails in about a minute; the child's stderr is
-  tee'd and its last 4 KiB rides on the build error so the admin sees which post failed the
-  schema; the release copy stages into `releases/.<stamp>.partial` and renames into place (a
+  connection/query timeouts so the hung-DB case fails in about a minute. The child's stderr
+  stays in server logs; since #297 callers receive a fixed failure code and safe copy.
+  The release copy stages into `releases/.<stamp>.partial` and renames into place (a
   release dir is complete or absent), with leftovers swept at the next run; the boot-time build
   retries with backoff (`bootstrapRelease`) and `/health` reports `release` as information, never
   a verdict. See `docs/superpowers/specs/2026-09-05-build-timeout-and-recovery-design.md`.
+- **Implemented, unmerged: #297 build reporting (2026-10-29)** — build attempts persist in
+  unserved `site/build-state.json`; restart marks a previous running attempt interrupted.
+  Admin-only/no-store `GET /rebuild/status`, Desk and Settings report the attempt separately
+  from the observed live release. Editor/About preserve acknowledged save tokens after
+  rebuild failure; CLI output is classified and points to server logs. Neither metadata
+  failure nor post-promotion pruning changes a successful promotion. See
+  `docs/superpowers/specs/2026-10-27-issue-297-publish-recovery-design.md` for qualification
+  evidence and remaining PR/stack gates.
 - **Done:** #113 images archive safety (2026-09-06) — the incremental `images-*.tar` no longer
   leaks its multi-GB `.tmp` on a failed or interrupted run (unlinked in `catch` and from a
   synchronous `process.on('exit')` hook, so `docker stop`'s SIGTERM is covered; a SIGKILL
@@ -937,7 +950,7 @@ blog/
   so the live page hot-linked the old domain (inline image) or silently lost the photo (gallery
   line) — and after the DNS cutover both 404. `foreignImageUrls(body, imageOrigin)` in
   `publish-gate.ts` **renders** the body with the build's own `renderMarkdown` and reads every
-  `img`/`source` URL and gallery line from the sanitized hast tree (`bodyImageSources` in
+  `img`/`source` URL and gallery line from the sanitized hast tree (`analyzeRenderedBody` in
   `site/src/lib/body-images.ts`, before `images` resolution) whose origin is not the image host, by
   **origin equality** on the URL *resolved against that host* — a browser gives an origin-less
   reference the page's, so `//old.example/a.jpg` hot-links and `https:old.example/a.jpg` does not;
@@ -1053,6 +1066,13 @@ blog/
   `posts_region_check`; a region page is built and linked only once its locale has a published
   story (`liveRegions` in `site/src/lib/trips.ts`). See
   `docs/superpowers/specs/2026-10-19-new-regions-design.md`.
+- **Implemented, release pending:** #347 native image decoder hardening (2026-10-27,
+  owner-approved). Both locks resolve sharp 0.35.5 / libvips package 1.3.4; uploader's
+  install-script permission follows sharp 0.35.5. DHI ARM64 and emulated AMD64 candidates
+  loaded the patched heif/rsvg/vips versions and passed JPEG/AVIF/SVG upload, served-variant,
+  private-original, EXIF-free preview and rescan checks. Formats and EXIF privacy stay unchanged.
+  Recovery is roll-forward only; a new image release/deployment is still required.
+  See `docs/superpowers/specs/2026-10-27-issue-347-sharp-codec-upgrade.md`.
 - **In progress:** Reader comments (epic #202, spec #203) — design spec landed 2026-09-14
   (`docs/superpowers/specs/2026-09-14-comments-design.md`, incl. an ASVS L1 exception record).
   #205 admin moderation queue landed: `uploader/public/comments.html` (served at

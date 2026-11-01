@@ -69,6 +69,7 @@
       <div class="editor-workspace" id="editorWorkspace">
         <div class="editor-canvas editor-writing-surface" id="editorWritingSurface">
           <!-- Advisory checks stay with the manuscript and never gate Publish. -->
+          <div id="galleryMetadataWarnings" class="notice-warn" hidden></div>
           <details id="altAudit" class="notice-warn alt-audit" hidden>
             <summary><span id="altAuditSummary" role="status"></span></summary>
             <p id="altAuditHelp"></p>
@@ -495,6 +496,7 @@
     <script src="/admin/gpx-map.js"></script>
     <script src="/admin/editor-gpx.js"></script>
     <script src="/admin/editor-image-copy.js"></script>
+    <script src="/admin/build-reporting.js"></script>
     <script src="/admin/auth.js"></script>
     <script src="/admin/language.js"></script>
     <script src="/admin/admin-confirm.js"></script>
@@ -505,7 +507,6 @@
     <script src="/admin/media-api.js"></script>
     <script src="/admin/picker-selection.js"></script>
     <script src="/admin/media-picker.js"></script>
-    <script src="/admin/gallery-fence.js"></script>
     <script src="/admin/editor-linter.js"></script>
     <script src="/admin/editor-review.js"></script>
     <script src="/admin/editor-excerpt.js"></script>
@@ -522,7 +523,9 @@
     <script src="/admin/waypoint-lookup.js"></script>
     <script src="/admin/gallery-library.js"></script>
     <script src="/admin/editor-galleries.js"></script>
-    <script>
+    <script src="/admin/gallery-metadata-warnings.js"></script>
+    <script type="module">
+      import './gallery-fence.js';
       'use strict';
       const $ = (id) => document.getElementById(id);
       const editorCopy = EditorCopy.en;
@@ -535,17 +538,37 @@
       let loadedUpdatedAt = null;
       let loadBlocked = true;
       let recoveryDraft = null; // immutable pre-reload form while population is unsafe
+      // A restored stash that records no usable base version (#345): its content
+      // cannot be checked against what is stored, so it is never saved.
+      let restoreBaseUnknown = false;
       let storyReview = null;
       let excerptAssist = null;
       let reviewIsAdmin = false;
       let pendingSaves = 0;
+      let writeTail = Promise.resolve();
+      let writeEpoch = 0;
+      function enqueueWrite(write) {
+        if (loadBlocked) return Promise.resolve(false);
+        const epoch = writeEpoch;
+        pendingSaves += 1;
+        renderDraftState();
+        const result = writeTail.then(() => epoch === writeEpoch && !loadBlocked ? write() : false).finally(() => {
+          pendingSaves -= 1;
+          renderDraftState();
+        });
+        // A rejected request must not poison later explicit user actions.
+        writeTail = result.catch(() => {});
+        return result;
+      }
       let populatingBody = false;
+      let formVersion = 0;
       const deImages = {};        // src → {width, height}
       const enImages = {};
       const galleryEditors = {};
       let language = null;
       const omitted = { de: false, en: false };
       const publishedLocales = { de: false, en: false };
+      let savedRequestedLocales = [];
       function requestedLocales() {
         return language ? language.locales.filter((locale) => !omitted[locale]) : [];
       }
@@ -560,6 +583,7 @@
       }
 
       // ---- slugify ----
+      const MAX_SLUG_BYTES = 251; // ASCII only; parity tested against posts.ts.
       function slugify(str) {
         return str
           .toLowerCase()
@@ -569,6 +593,8 @@
           .replace(/[^a-z0-9]+/g, '-')
           .replace(/^-+|-+$/g, '')
           .replace(/-{2,}/g, '-')
+          .slice(0, MAX_SLUG_BYTES)
+          .replace(/-+$/, '')
           || 'untitled';
       }
 
@@ -612,7 +638,7 @@
         // share one and the first save deletes the other's work (#138).
         storageKey: initialTk ? 'swl:draft:' + initialTk : DraftGuard.tabScopedKey('swl:draft:new'),
         ...(initialTk ? {} : { orphanPrefix: 'swl:draft:new' }),
-        collect: () => recoveryDraft || buildPayload(),
+        collect: () => recoveryDraft || collectDraft(),
         onChange: (dirty) => {
           if (dirty && !pendingSaves) setStatus('');
           renderDraftState();
@@ -757,6 +783,13 @@
           updateLocaleChip();
         });
       }
+      const galleryMetadataWarnings = GalleryMetadataWarnings.create({
+        root: $('galleryMetadataWarnings'),
+        editors: { de: deMDE.codemirror, en: enMDE.codemirror },
+        activate: (locale) => { tabsApi.select(locale); activateLocale(locale); },
+        reveal: (locale, line) => galleryEditors[locale].revealLine(line),
+        onUnauthed: () => guard.redirectToLogin(),
+      });
 
       // ---- slug derivation from locale titles ----
       // @ai-warning Golden Rule 2 (SEO slug contract). A slug is derived from
@@ -814,7 +847,7 @@
             inspectorApi.close();
             const cm = (locale === 'en' ? enMDE : deMDE).codemirror;
             galleryEditors[locale].revealLine(finding.line - 1);
-            cm.setCursor({ line: finding.line - 1, ch: 0 });
+            cm.setCursor({ line: finding.line - 1, ch: (finding.column || 1) - 1 });
             cm.focus();
           }
         },
@@ -1171,13 +1204,35 @@
       // The picker writes the same line format an author would type by hand;
       // normalizeGalleryFences lifts it into `images` at save. Nothing here
       // touches the images map directly — see public/gallery-fence.js.
+      let galleryRequest = 0;
+      const galleryRevision = { de: 0, en: 0 };
+      deMDE.codemirror.on('changes', () => { galleryRevision.de++; });
+      enMDE.codemirror.on('changes', () => { galleryRevision.en++; });
+      function galleryFailure(locale, error, retry) {
+        if (error?.status === 401) { guard.redirectToLogin(); return; }
+        const status = $(locale + 'BodyImgStatus');
+        status.textContent = EditorGalleryCopy[locale].analysisFailed;
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'btn-secondary';
+        button.textContent = EditorGalleryCopy[locale].retry;
+        button.addEventListener('click', retry);
+        status.appendChild(button);
+      }
       function galleryFor(locale, galleryCursor) {
+        galleryForSnapshot(locale, galleryCursor).catch((error) =>
+          galleryFailure(locale, error, () => galleryFor(locale)));
+      }
+      async function galleryForSnapshot(locale, galleryCursor) {
+        const ticket = ++galleryRequest;
+        const revision = galleryRevision[locale];
         const mde = locale === 'de' ? deMDE : enMDE;
         const cm = mde.codemirror;
         const body = mde.value();
         const cursor = galleryCursor ?? cm.indexFromPos(cm.getCursor());
-        const existing = GalleryFence.fenceAt(body, cursor);
-        const current = existing ? GalleryFence.parse(existing.text) : { directives: [], lines: [] };
+        const existing = await GalleryFence.fenceAt(body, cursor, { fresh: true });
+        if (ticket !== galleryRequest || galleryRevision[locale] !== revision || cm.getValue() !== body) return;
+        const current = existing ? GalleryFence.parse(existing.content) : { directives: [], lines: [] };
 
         // What this post already says about each photo: the fence's own
         // metadata if the author typed some and has not saved yet, otherwise
@@ -1187,6 +1242,17 @@
         // so the save cannot fall back to this older copy (gallery-fence.js).
         const images = locale === 'de' ? deImages : enImages;
         const status = $(locale + 'BodyImgStatus');
+        if (current.lines.some((line) => line.valid === false)) {
+          status.textContent = EditorGalleryCopy[locale].metadataBlocked + ' ' + EditorGalleryCopy[locale].metadataSyntax;
+          galleryEditors[locale].revealLine(cm.posFromIndex(existing.start).line);
+          const raw = document.createElement('code');
+          raw.style.display = 'block';
+          raw.style.whiteSpace = 'pre-wrap';
+          raw.textContent = body.slice(existing.start, existing.end);
+          status.appendChild(raw);
+          await galleryMetadataWarnings.reopen(locale);
+          return;
+        }
         const postMeta = {};
         current.lines.forEach((line) => {
           const stored = images[line.src] || {};
@@ -1208,7 +1274,7 @@
         // An unterminated fence's extent runs to end-of-post, so there is no
         // safe range to replace. Say so instead of eating the rest of the body.
         if (existing && existing.unterminated) {
-          status.textContent = 'This gallery block has no closing ``` — close it, then try again.';
+          status.textContent = EditorGalleryCopy[locale].unterminated;
           return;
         }
 
@@ -1262,7 +1328,14 @@
             ? 'Nothing selected — confirming now removes this gallery.'
             : 'Nothing selected yet — click photos above.',
           onUnauthed: () => guard.redirectToLogin(),
-          onPick: (items, opts) => {
+          onPick: async (items, opts) => {
+            try {
+            const fresh = cm.getValue();
+            if (ticket !== galleryRequest || galleryRevision[locale] !== revision || fresh !== body || cm.getValue() !== fresh) {
+              await GalleryFence.analyze(fresh, { fresh: true });
+              status.textContent = EditorGalleryCopy[locale].stale;
+              return;
+            }
             // Rewrite only our controls, retaining unrelated author directives.
             const captions = opts.captions;
             const directives = GalleryFence.withCaptions(
@@ -1271,9 +1344,18 @@
             const fence = items.length
               ? GalleryFence.serialize(items, locale, directives, postMeta, captions.overrides)
               : '';
-            const out = GalleryFence.replaceFenceAt(body, cursor, fence);
+            const out = await GalleryFence.replaceFenceAt(fresh, cursor, fence);
+            if (ticket !== galleryRequest || galleryRevision[locale] !== revision || cm.getValue() !== fresh) {
+              status.textContent = EditorGalleryCopy[locale].stale;
+              return;
+            }
             if (out.blocked === 'unterminated') {
-              status.textContent = 'The block around the cursor has no closing ``` — close it, then try again.';
+              status.textContent = EditorGalleryCopy[locale].unterminated;
+              return;
+            }
+            if (out.blocked === 'invalid_metadata') {
+              status.textContent = EditorGalleryCopy[locale].metadataBlocked;
+              await galleryMetadataWarnings.reopen(locale);
               return;
             }
             if (out.start === out.end && out.text === '') return;
@@ -1286,11 +1368,12 @@
             guard.markDirty();
             // Count the lines actually written, not the photos picked: serialize
             // drops a newly picked photo whose dimensions are unusable.
-            const written = GalleryFence.parse(fence).lines.length;
+            const written = fence ? GalleryFence.parse(fence.slice(fence.indexOf('\n') + 1, fence.lastIndexOf('\n'))).lines.length : 0;
             status.textContent = !items.length
               ? 'Gallery removed'
               : (out.replaced ? 'Gallery updated: ' : 'Gallery inserted: ') + written + ' photo(s)'
                 + (written < items.length ? ` (${items.length - written} skipped — no usable dimensions)` : '');
+            } catch (error) { galleryFailure(locale, error, () => galleryFor(locale)); }
           },
         });
       }
@@ -1371,14 +1454,6 @@
           const body = await res.json().catch(() => ({}));
           if (!res.ok) { statusEl.textContent = 'Upload failed: ' + (body.error || res.status); return; }
 
-          // Record dims into the locale-specific images map
-          const imagesMap = locale === 'de' ? deImages : enImages;
-          imagesMap[body.src] = {
-            width: body.width,
-            height: body.height,
-            ...(body.format === 'jpeg' ? { format: body.format } : {}),
-          };
-
           // Insert markdown at the cursor in the matching EasyMDE instance —
           // but never into a fence (#333): on a gallery's closing line the
           // image turns the ``` into text and the gallery swallows the rest of
@@ -1387,20 +1462,41 @@
           // (Both edits fire a CodeMirror change → marks the guard dirty.)
           const cm = (locale === 'de' ? deMDE : enMDE).codemirror;
           const md = ImageMarkdown.image(altInput.value, body.src);
-          const spot = GalleryFence.insertBlockAt(cm.getValue(), cm.indexFromPos(cm.getCursor()), md);
-          if (spot.blocked === 'unterminated') {
-            statusEl.textContent = 'Uploaded ' + body.src + ' but not inserted: the block around the cursor has no closing ``` — close it, then paste: ' + md;
-          } else {
-            if (spot.relocated) {
-              const from = cm.posFromIndex(spot.start);
-              cm.replaceRange(spot.text, from, from);
-              cm.setCursor(cm.posFromIndex(spot.cursor));
-            } else {
-              cm.replaceSelection(md);
+          async function insertUploaded() {
+            const revision = galleryRevision[locale];
+            const snapshot = cm.getValue();
+            const selection = cm.listSelections();
+            let spot;
+            try { spot = await GalleryFence.insertBlockAt(snapshot, cm.indexFromPos(cm.getCursor()), md); }
+            catch (error) {
+              galleryFailure(locale, error, () => { void insertUploaded(); });
+              statusEl.appendChild(document.createTextNode(' ' + md));
+              return;
             }
-            statusEl.textContent = (spot.relocated ? 'Inserted after the ``` block: ' : 'Inserted: ') + body.src
-              + (body.status === 'processing' ? ' — still processing (Publish waits for it)' : '');
+            if (galleryRevision[locale] !== revision || cm.getValue() !== snapshot || JSON.stringify(cm.listSelections()) !== JSON.stringify(selection)) {
+              statusEl.textContent = EditorGalleryCopy[locale].stale + ' ' + md;
+              return;
+            }
+            if (spot.blocked === 'unterminated') {
+              statusEl.textContent = EditorGalleryCopy[locale].unterminated + ' ' + md;
+            } else {
+              const imagesMap = locale === 'de' ? deImages : enImages;
+              imagesMap[body.src] = {
+                width: body.width, height: body.height,
+                ...(body.format === 'jpeg' ? { format: body.format } : {}),
+              };
+              if (spot.relocated) {
+                const from = cm.posFromIndex(spot.start);
+                cm.replaceRange(spot.text, from, from);
+                cm.setCursor(cm.posFromIndex(spot.cursor));
+              } else {
+                cm.replaceSelection(md);
+              }
+              statusEl.textContent = (spot.relocated ? 'Inserted after the ``` block: ' : 'Inserted: ') + body.src
+                + (body.status === 'processing' ? ' — still processing (Publish waits for it)' : '');
+            }
           }
+          await insertUploaded();
           fileInput.value = '';
           altInput.value = '';
         } catch (e) {
@@ -1415,10 +1511,11 @@
       // on401 routes a session-expiry through DraftGuard (stash draft + ?next=) instead
       // of a raw redirect, matching every other 401 handler in this editor.
       const suggestOn401 = () => guard.redirectToLogin();
-      AltSuggest.wire({ button: $('deHeroSuggest'), fileInput: $('deHeroFile'), altInput: $('deHeroAlt'), statusEl: $('deHeroStatus'), lang: 'de', on401: suggestOn401 });
-      AltSuggest.wire({ button: $('enHeroSuggest'), fileInput: $('enHeroFile'), altInput: $('enHeroAlt'), statusEl: $('enHeroStatus'), lang: 'en', on401: suggestOn401 });
-      AltSuggest.wire({ button: $('deBodyImgSuggest'), fileInput: $('deBodyImgFile'), altInput: $('deBodyImgAlt'), statusEl: $('deBodyImgStatus'), lang: 'de', on401: suggestOn401 });
-      AltSuggest.wire({ button: $('enBodyImgSuggest'), fileInput: $('enBodyImgFile'), altInput: $('enBodyImgAlt'), statusEl: $('enBodyImgStatus'), lang: 'en', on401: suggestOn401 });
+      const truncatedText = editorCopy.altSuggestTruncated;
+      AltSuggest.wire({ button: $('deHeroSuggest'), fileInput: $('deHeroFile'), altInput: $('deHeroAlt'), statusEl: $('deHeroStatus'), lang: 'de', on401: suggestOn401, truncatedText });
+      AltSuggest.wire({ button: $('enHeroSuggest'), fileInput: $('enHeroFile'), altInput: $('enHeroAlt'), statusEl: $('enHeroStatus'), lang: 'en', on401: suggestOn401, truncatedText });
+      AltSuggest.wire({ button: $('deBodyImgSuggest'), fileInput: $('deBodyImgFile'), altInput: $('deBodyImgAlt'), statusEl: $('deBodyImgStatus'), lang: 'de', on401: suggestOn401, truncatedText });
+      AltSuggest.wire({ button: $('enBodyImgSuggest'), fileInput: $('enBodyImgFile'), altInput: $('enBodyImgAlt'), statusEl: $('enBodyImgStatus'), lang: 'en', on401: suggestOn401, truncatedText });
 
       // ---- assemble PostPair payload ----
       // Deliberately no `status` or `scheduledAt`: the store decides status
@@ -1498,11 +1595,25 @@
         return {
           translationKey: currentTk || undefined,
           // Concurrency echo — JSON.stringify drops it when undefined (new post).
-          updatedAt: loadedUpdatedAt || undefined,
+          // Never the loaded token for an unknown-base restore: a re-stash would
+          // turn it into a base that matches, and the next restore would save.
+          updatedAt: (!restoreBaseUnknown && loadedUpdatedAt) || undefined,
           shared,
           de,
           en,
         };
+      }
+
+      function collectDraft() {
+        const payload = buildPayload();
+        for (const locale of ['de', 'en']) {
+          const pending = galleryEditors[locale]?.snapshotAlts() || [];
+          if (pending.length) {
+            payload.galleryAlts ||= {};
+            payload.galleryAlts[locale] = pending;
+          }
+        }
+        return payload;
       }
 
       // ---- error helpers ----
@@ -1608,28 +1719,6 @@
         if (unpub) unpub.hidden = !isPublished;
       }
 
-      function setPublishedLive(slugs, release) {
-        const el = $('actionStatus');
-        el.textContent = '';
-        const urls = AdminConfirm.liveUrls(slugs);
-        el.appendChild(document.createTextNode(
-          'Published' + (release ? ' (release ' + release + ')' : '') + '. Live: '
-        ));
-        const links = language.locales.filter((locale) => urls[locale]).map((locale) => ({ href: urls[locale], label: locale.toUpperCase() }));
-        if (!links.length) {
-          el.appendChild(document.createTextNode('open the site from View site.'));
-          return;
-        }
-        links.forEach((u, i) => {
-          if (i) el.appendChild(document.createTextNode(' · '));
-          const a = document.createElement('a');
-          a.href = u.href;
-          a.textContent = u.label;
-          a.target = '_blank';
-          a.rel = 'noopener';
-          el.appendChild(a);
-        });
-      }
 
       // ---- alt-text audit (advisory; server: src/alt-audit.ts) ----
       // A photo whose alt is empty, only repeats the post title (which the site
@@ -1653,7 +1742,7 @@
       }
 
       // Reachability: each kind is fixed in a different control.
-      function jumpToPhoto(locale, kind, src) {
+      async function jumpToPhoto(locale, kind, src) {
         const feedback = $('altAuditFeedback');
         feedback.hidden = true;
         if (kind === 'hero' && $(locale + 'HeroSrc').value === src) {
@@ -1663,10 +1752,14 @@
         if (tabsApi && tabsApi.select) tabsApi.select(locale);
         activateLocale(locale);
         inspectorApi.close();
-        if (kind === 'gallery' && galleryEditors[locale].focusPhoto(src)) return;
+        if (kind === 'gallery' && await galleryEditors[locale].focusPhoto(src)) return;
         if (kind === 'body') {
           const cm = (locale === 'de' ? deMDE : enMDE).codemirror;
-          const image = EditorLinter.findImage(cm.getValue(), src);
+          const snapshot = cm.getValue();
+          let image;
+          try { image = await EditorLinter.findImage(snapshot, src); }
+          catch (error) { galleryFailure(locale, error, () => jumpToPhoto(locale, kind, src)); return; }
+          if (cm.getValue() !== snapshot || activeTab !== locale) return;
           if (image) {
             const from = cm.posFromIndex(image.start);
             const to = cm.posFromIndex(image.end);
@@ -1744,18 +1837,56 @@
       }
 
       // ---- save draft ----
-      // Persists the current on-screen form. Returns true on success so Publish
-      // can save first and validate exactly what's on screen.
-      async function doSaveDraft({ gpxAttach = false } = {}) {
-        if (loadBlocked) {
-          showErr(editorCopy.reloadFailed);
+      // Capture each explicit intent before queuing, but bind identity/version
+      // only when it runs. Later typing remains dirty; no save is coalesced.
+      // Gallery alt edits reach the body asynchronously (#354). Settle them
+      // before capturing, so the click's payload includes what was typed.
+      async function flushGalleryEdits() {
+        const version = formVersion;
+        try {
+          let before;
+          do {
+            before = guard.snapshot();
+            await Promise.all(Object.values(galleryEditors).map((editor) => editor.flush()));
+            if (version !== formVersion) return false;
+            // Another locale can receive a new edit after its flush returned
+            // while this round still waits for the first locale.
+          } while (before !== guard.snapshot());
+          return true;
+        } catch (error) {
+          if (version === formVersion) showErr(error.message);
           return false;
         }
-        if (!gpxAttach && !gpxEditor.guardAction()) return false;
+      }
+      function snapshotIntent() {
+        return { snap: guard.snapshot(), payload: structuredClone(buildPayload()), skipped: partialStopCount() };
+      }
+      // Synchronous at the click unless a gallery edit is still settling, so
+      // typing after the click stays out of this intent (#362).
+      function captureSaveIntent() {
+        if (!Object.values(galleryEditors).some((editor) => editor.snapshotAlts().length)) return snapshotIntent();
+        return flushGalleryEdits().then((ok) => ok ? snapshotIntent() : null);
+      }
+      async function doSaveDraft() {
+        if (loadBlocked || restoreBaseUnknown) {
+          showErr(restoreBaseUnknown ? editorCopy.restoreBlocked : editorCopy.reloadFailed);
+          return false;
+        }
+        if (!gpxEditor.guardAction()) return false;
+        const intent = await captureSaveIntent();
+        if (!intent) return false;
+        return enqueueWrite(() => saveDraftNow(intent));
+      }
+      // Called only while holding the editor write queue (also by Publish/GPX).
+      async function saveDraftNow({ snap, payload, skipped }) {
+        if (loadBlocked || restoreBaseUnknown) {
+          showErr(restoreBaseUnknown ? editorCopy.restoreBlocked : editorCopy.reloadFailed);
+          return false;
+        }
         showErr('');
         setStatus('');
-        const snap = guard.snapshot(); // edits typed after this point must survive markClean
-        const payload = buildPayload();
+        payload.translationKey = currentTk || undefined;
+        payload.updatedAt = loadedUpdatedAt || undefined;
         const url = currentTk ? '/posts/' + encodeURIComponent(currentTk) : '/posts';
         const method = currentTk ? 'PUT' : 'POST';
         // A slug change on an existing draft is deliberate or it does not happen
@@ -1781,8 +1912,6 @@
         }
         let res;
         let body;
-        pendingSaves += 1;
-        renderDraftState();
         try {
           res = await fetch(url, {
             method,
@@ -1794,9 +1923,6 @@
           showErr('Save failed: ' + e);
           setStatus('');
           return false;
-        } finally {
-          pendingSaves -= 1;
-          renderDraftState();
         }
         if (res.status === 401) { guard.redirectToLogin(); return false; }
         if (!res.ok) {
@@ -1826,14 +1952,15 @@
           $('pageTitle').textContent = 'Edit post';
         }
         guard.markClean(snap);
+        galleryMetadataWarnings.saved(body.galleryWarnings, payload);
         if (body.updatedAt) loadedUpdatedAt = body.updatedAt;
         loadedSlugs.de = (body.de && body.de.slug) || '';
         loadedSlugs.en = (body.en && body.en.slug) || '';
+        savedRequestedLocales = language.locales.filter((locale) => body[locale] && !body[locale].omitted);
         loadRevisions().catch(() => {});
         // What was just stored is what the audit judges — refresh from the
         // server rather than re-deriving the rule in the browser.
         refreshAltAudit().catch(() => {});
-        const skipped = partialStopCount();
         const savedMsg = guard.isDirty() ? editorCopy.saveNewer : isPublished ? editorCopy.saveLiveUnchanged : '';
         setStatus(skipped
           ? savedMsg + ' Note: ' + skipped + ' incomplete stop row(s) were skipped (each needs a name, latitude and longitude).'
@@ -1849,6 +1976,10 @@
       });
 
       $('publishBtn').addEventListener('click', async () => {
+        if (loadBlocked) {
+          showErr(editorCopy.reloadFailed);
+          return;
+        }
         if (!gpxEditor.guardAction()) return;
         let reviewedRouteVersion;
         try { reviewedRouteVersion = gpxEditor.publishVersion(); }
@@ -1862,6 +1993,11 @@
         const titles = requestedLocales().map((locale) => $(locale + 'Title').value.trim() || '(untitled)');
         const slugs = Object.fromEntries(requestedLocales().map((locale) => [locale, slugFieldFor(locale).value.trim()]));
         const urlBlock = AdminConfirm.urlsPlain(slugs);
+        const intent = await captureSaveIntent();
+        if (!intent) return;
+        await enqueueWrite(() => publishNow(intent, reviewedRouteVersion, slugs, titles, urlBlock));
+      });
+      async function publishNow(intent, reviewedRouteVersion, slugs, titles, urlBlock) {
         const ok = await AdminConfirm.ask({
           title: 'Publish to the live site?',
           body: titles.join(' / ') + '\n\n'
@@ -1870,9 +2006,10 @@
           confirmLabel: 'Publish',
         });
         if (!ok) return;
-        const saved = await doSaveDraft();
+        const saved = await saveDraftNow(intent);
         if (!saved) return;
         const btn = $('publishBtn');
+        const publishingLocales = [...savedRequestedLocales];
         btn.disabled = true;
         const started = Date.now();
         setStatus('Building…');
@@ -1888,41 +2025,42 @@
           if (res.status === 401) { guard.redirectToLogin(); return; }
           const body = await res.json().catch(() => ({}));
           if (!res.ok) {
+            if (res.status >= 500) { showErr(BuildReporting.text('unknown')); setStatus(''); return; }
             const examples = Array.isArray(body.foreignImages) && body.foreignImages.length
               ? ' Examples: ' + body.foreignImages.join(', ') : '';
             showErr(gpxEditor.publishError(body.code || body.error) || (SiteLanguage.error(body) || ('Publish failed: ' + res.status)) + examples);
             setStatus('');
             return;
           }
-          if (body.build && !body.build.ok) {
-            showErr('Build error: ' + (body.build.error || 'unknown'));
-            setStatus('');
-            return;
+          if (body.published !== true || !body.updatedAt) {
+            showErr(BuildReporting.text('unknown')); setStatus(''); return;
           }
-          const release = (body.build && body.build.release) ? body.build.release : '';
-          setPublishedLive(slugs, release);
           isPublished = true;
           if (body.updatedAt) loadedUpdatedAt = body.updatedAt;
-          for (const locale of requestedLocales()) {
+          for (const locale of publishingLocales) {
             publishedLocales[locale] = true;
             slugFieldFor(locale).disabled = true;
           }
           syncCoverage();
-          // The publish reply carries the audit of what actually went live.
+          // The audit describes the acknowledged publication, not current story liveness.
           renderAltAudit(body.altAudit, true);
           updateLocaleChip();
+          BuildReporting.renderOutcome($('actionStatus'), 'publish', body);
         } catch (e) {
-          showErr('Publish failed: ' + e);
+          showErr(BuildReporting.text('unknown'));
           setStatus('');
         } finally {
           clearInterval(tick);
           btn.disabled = false;
           updateLocaleChip();
         }
-      });
+      }
 
       $('unpublishBtn').addEventListener('click', async () => {
         const title = $(language.primary + 'Title').value.trim() || '(untitled)';
+        await enqueueWrite(() => unpublishNow(title));
+      });
+      async function unpublishNow(title) {
         const ok = await AdminConfirm.ask({
           title: 'Unpublish this trip?',
           body: '"' + title + '" will leave the live site on the next build and revert to a draft.',
@@ -1937,18 +2075,29 @@
           const res = await fetch('/posts/' + encodeURIComponent(currentTk) + '/unpublish', { method: 'POST' });
           if (res.status === 401) { guard.redirectToLogin(); return; }
           const body = await res.json().catch(() => ({}));
-          if (!res.ok) { showErr('Unpublish failed: ' + (body.error || res.status)); setStatus(''); return; }
+          if (!res.ok) { showErr(res.status >= 500 ? BuildReporting.text('unknown') : (body.error || res.status)); setStatus(''); return; }
+          if (body.unpublished !== true || !body.updatedAt) { showErr(BuildReporting.text('unknown')); setStatus(''); return; }
+          // Unpublish is an emergency brake even from a stale tab. Advancing
+          // its save token is safe only if no unseen edit preceded the brake.
+          if (body.previousUpdatedAt === loadedUpdatedAt && body.updatedAt) {
+            loadedUpdatedAt = body.updatedAt;
+          }
           isPublished = false;
+          // Unpublish is an emergency brake even from a stale tab. Advancing
+          // its save token is safe only if no unseen edit preceded the brake.
+          if (body.previousUpdatedAt === loadedUpdatedAt && body.updatedAt) {
+            loadedUpdatedAt = body.updatedAt;
+          }
           for (const locale of ['de', 'en']) slugFieldFor(locale).disabled = publishedLocales[locale];
-          setStatus('Unpublished "' + title + '".');
+          BuildReporting.renderOutcome($('actionStatus'), 'unpublish', body, { title });
           updateLocaleChip();
         } catch (e) {
-          showErr('Unpublish failed: ' + e);
+          showErr(BuildReporting.text('unknown'));
           setStatus('');
         } finally {
           btn.disabled = false;
         }
-      });
+      }
 
       document.addEventListener('keydown', (e) => {
         if ((e.metaKey || e.ctrlKey) && (e.key === 's' || e.key === 'S')) {
@@ -2010,6 +2159,7 @@
         try { mde.value(data.bodyMarkdown || ''); }
         finally { populatingBody = false; }
         galleryEditors[loc].refresh();
+        void galleryMetadataWarnings.reopen(loc);
       }
 
       // Fills the whole form from a PostPair-shaped object (or a {shared,de,en}
@@ -2017,8 +2167,10 @@
       // restored revision. Every field is overwritten (with '' when absent) so it
       // never merges with what was already on screen.
       function populateForm(post) {
+        ++formVersion;
         storyReview?.invalidate();
         excerptAssist?.invalidate();
+        Object.values(galleryEditors).forEach((editor) => editor.reset());
         // A (re)loaded post shows what Media says now, not what an earlier
         // load of this page saw — the author may have just edited it there.
         galleryLibrary.forget();
@@ -2064,11 +2216,15 @@
         syncCoverage();
         countryCoords.reset();
         updateLocaleChip();
+        for (const locale of ['de', 'en']) galleryEditors[locale]?.restoreAlts(post.galleryAlts?.[locale]);
       }
 
       // Returns false only when it redirected to /login (callers must stop);
       // true otherwise — even on a failed load, so a local stash can still be offered.
-      async function loadPost(tk) {
+      async function loadPost(tk, { deferRouteRefresh = false } = {}) {
+        // Reload explicitly replaces the editing base; older queued intents
+        // must never be replayed against that newly accepted foreign version.
+        const reloadEpoch = ++writeEpoch;
         loadBlocked = true;
         setStatus('Loading…');
         let post;
@@ -2087,10 +2243,11 @@
           setStatus('');
           return true;
         }
+        if (reloadEpoch !== writeEpoch) return true;
         // Never pair a partly populated bilingual form with a fresh concurrency
         // token. Retain the pre-reload payload independently of the live form:
         // even a second failure while rolling back cannot corrupt its stash.
-        if (currentTk && !recoveryDraft) recoveryDraft = structuredClone(buildPayload());
+        if (currentTk && !recoveryDraft) recoveryDraft = structuredClone(collectDraft());
         if (recoveryDraft) guard.stashNow();
         const wasPublished = isPublished;
         try {
@@ -2114,7 +2271,7 @@
         loadedSlugs.de = post.de?.slug || '';
         loadedSlugs.en = post.en?.slug || '';
         recoveryDraft = null;
-        loadBlocked = false;
+        restoreBaseUnknown = false;
         updateLocaleChip();
         $('pageTitle').textContent = 'Edit post';
         showErr('');
@@ -2131,6 +2288,12 @@
         setStatus(isPublished
           ? (post.hasUnpublishedChanges ? editorCopy.loadedPublishedChanges : editorCopy.loadedPublished)
           : '');
+        // Initialization alone defers this read until after local stash recovery.
+        // Explicit Reload holds the write queue closed across both reads.
+        const routeReady = deferRouteRefresh || await gpxEditor.refresh();
+        if (reloadEpoch === writeEpoch) loadBlocked = !routeReady;
+        // Publish availability follows the barrier (#284 disables it while blocked).
+        updateLocaleChip();
         return true;
       }
 
@@ -2166,11 +2329,24 @@
       // gets its own revision) — there is no direct server-side restore.
       async function restoreRevision(id) {
         if (!gpxEditor.guardAction()) return;
-        showErr('');
         const res = await fetch('/posts/' + encodeURIComponent(currentTk) + '/revisions/' + encodeURIComponent(id));
         if (res.status === 401) { guard.redirectToLogin(); return; }
         if (!res.ok) { showErr('Could not load revision: ' + res.status); return; }
         const rev = await res.json();
+        // Check after the fetch: edits made while it loads still need consent.
+        if (guard.isDirty()) {
+          const restore = await AdminConfirm.ask({
+            title: editorCopy.revisionRestoreTitle,
+            body: editorCopy.revisionRestoreBody
+              .replace('{time}', () => new Date(rev.savedAt).toLocaleString())
+              .replace('{title}', () => rev.snapshot.de?.title || rev.snapshot.en?.title || editorCopy.revisionUntitled),
+            confirmLabel: editorCopy.revisionRestoreConfirm,
+          });
+          if (!restore) return;
+        }
+        showErr('');
+        // This replaces content, not the save base. Keep loadedUpdatedAt and
+        // any #345 unknown-base block; savedAt is only the revision's label.
         // On a published post the slug fields are disabled (slug locked for
         // SEO), but buildPayload still reads their .value — restoring a
         // snapshot from before a slug change would make every Save 409
@@ -2191,7 +2367,13 @@
 
       const gpxEditor = GpxEditor.wire({
         getPost: () => ({ tk: currentTk, baseUpdatedAt: loadedUpdatedAt }),
-        saveDraft: () => doSaveDraft({ gpxAttach: true }),
+        runWrite: async (write) => {
+          const intent = await captureSaveIntent();
+          if (!intent) return false;
+          // Save-and-attach owns one queue slot; its requested draft save must
+          // use the click's form snapshot without trying to reacquire the slot.
+          return enqueueWrite(() => write(() => saveDraftNow(intent)));
+        },
         saveError: () => $('actionError').textContent,
         setBaseUpdatedAt: (value) => { loadedUpdatedAt = value; },
         adoptStops: (stops) => {
@@ -2221,6 +2403,22 @@
           noGeometry: GpxCopy.en.mapNoGeometry,
         },
       });
+      // @ai-warning #345. A stash is content PLUS the version it was edited
+      // against (the `updatedAt` buildPayload records). Restoring it must keep
+      // that base: pairing stale content with the freshly loaded post's token
+      // makes the server accept a save that overwrites both locales of a newer
+      // version. A stale base reaches the existing 409 conflict dialog. A base
+      // the server cannot judge — absent (legacy stash, or one taken before the
+      // first save), unparsable, or newer than the version just loaded — is
+      // returned as null: the caller blocks saving rather than omit the
+      // precondition (which skips the check) or invent a version.
+      function restoredBaseFor(stashBase, serverBase) {
+        const base = typeof stashBase === 'string' ? Date.parse(stashBase) : NaN;
+        if (!Number.isFinite(base)) return null;
+        const server = typeof serverBase === 'string' ? Date.parse(serverBase) : NaN;
+        return Number.isFinite(server) && base > server ? null : stashBase;
+      }
+
       // ---- init ----
       (async () => {
         const s = await Auth.ensureAuthed();
@@ -2235,7 +2433,8 @@
           activateLocale(language.primary);
           for (const locale of language.locales) {
             $(locale === 'de' ? 'slugBaseDe' : 'slugBaseEn').textContent =
-              location.host + SiteLanguage.publicPath(language, locale, 'home');
+              (window.SiteIdentity?.canonicalOrigin ? new URL(window.SiteIdentity.canonicalOrigin).host : '')
+              + SiteLanguage.publicPath(language, locale, 'home');
           }
           syncCoverage();
         } catch (error) {
@@ -2249,7 +2448,7 @@
         const params = new URLSearchParams(location.search);
         const tk = params.get('tk');
         if (tk) {
-          const proceed = await loadPost(tk);
+          const proceed = await loadPost(tk, { deferRouteRefresh: true });
           if (!proceed) return; // redirecting to /login
         } else {
           setStatus('New post. Fill in the fields and Save draft.');
@@ -2260,18 +2459,60 @@
         // the guard's dirty state here either way.
         const stash = guard.tryRestore();
         if (stash && !guard.wasDismissed(stash)) {
+          const restoredTk = stash.payload.translationKey || currentTk;
+          // Only a save that PUTs carries a base; a new-post stash creates.
+          const restoredBase = restoredTk ? restoredBaseFor(stash.payload.updatedAt, loadedUpdatedAt) : null;
+          const baseUnknown = !!restoredTk && restoredBase === null;
+          const serverChanged = !!(restoredBase && loadedUpdatedAt)
+            && Date.parse(restoredBase) !== Date.parse(loadedUpdatedAt);
+          const notice = baseUnknown ? editorCopy.restoreUnknownBase : serverChanged ? editorCopy.restoreStale : '';
           const restore = await AdminConfirm.ask({
-            title: 'Restore unsaved draft?',
-            body: 'Found an unsaved local draft from ' + new Date(stash.savedAt).toLocaleString() + '.',
-            confirmLabel: 'Restore',
+            title: editorCopy.restoreTitle,
+            body: editorCopy.restoreBody.replace('{time}', new Date(stash.savedAt).toLocaleString())
+              + (notice ? '\n\n' + notice : ''),
+            confirmLabel: editorCopy.restoreConfirm,
           });
           if (restore) {
             guard.adopt(stash);
             storyReview?.invalidate();
-            currentTk = stash.payload.translationKey || currentTk;
-            populateForm(stash.payload);
-            guard.markDirty();
-            setStatus('Restored unsaved draft — remember to Save draft.');
+            currentTk = restoredTk;
+            // Token and block go first, so even a half-applied restore cannot
+            // save over the newer version with the fresh token.
+            if (restoredBase) loadedUpdatedAt = restoredBase;
+            restoreBaseUnknown = baseUnknown;
+            let populated = true;
+            try {
+              populateForm(stash.payload);
+            } catch (error) {
+              // #332: never offer a mixed server/stash form for saving, and keep
+              // the untouched stash (not the mixed form) as what gets re-stashed.
+              populated = false;
+              console.error('Local draft restoration failed', error);
+              recoveryDraft = structuredClone(stash.payload);
+              loadBlocked = true;
+              guard.markDirty();
+              guard.stashNow();
+              showErr(editorCopy.reloadFailed);
+              setStatus('');
+            }
+            if (populated) {
+              // A published post's slug fields are disabled and its URL is
+              // locked: keep the live slugs (as restoreRevision does) rather
+              // than a stash slug the author could neither see nor correct.
+              const keptLiveSlugs = isPublished
+                && ['de', 'en'].some((l) => loadedSlugs[l] && slugFieldFor(l).value !== loadedSlugs[l]);
+              if (isPublished) {
+                for (const l of ['de', 'en']) if (loadedSlugs[l]) slugFieldFor(l).value = loadedSlugs[l];
+              }
+              guard.markDirty();
+              if (baseUnknown) {
+                setStatus('');
+                showErr(editorCopy.restoreBlocked);
+              } else {
+                setStatus((serverChanged ? editorCopy.restoredStale : editorCopy.restored)
+                  + (keptLiveSlugs ? ' ' + editorCopy.restoreSlugsKept : ''));
+              }
+            }
           } else {
             guard.dismissRestore(stash);
           }
@@ -2280,7 +2521,9 @@
         } else {
           guard.markClean();
         }
-        await gpxEditor.refresh();
+        // A failed post load is not a reconciled baseline, even if a stash was
+        // recovered. Do not promote a route-only read to a reviewed token.
+        if (!loadBlocked && !await gpxEditor.refresh()) loadBlocked = true;
         document.querySelector('main').addEventListener('input', updateLocaleChip);
         updateLocaleChip();
       })();

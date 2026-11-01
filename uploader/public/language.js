@@ -66,7 +66,7 @@
   }
   function error(body) {
     const key = ({ language_primary_locked: 'PrimaryLocked', language_locale_published: 'LocaleLocked',
-      language_pages_incomplete: 'PagesIncomplete', language_build_failed: 'BuildFailed',
+      language_pages_incomplete: 'PagesIncomplete',
       locale_published: 'LocalePublished' })[body.code];
     return key ? text(key) : body.error;
   }
