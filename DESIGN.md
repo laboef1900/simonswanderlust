@@ -1218,6 +1218,14 @@ and the `<dialog>`s appended to `<body>` share one set:
   fields (marked unsaved) and offers the rest as a tinted note with **Use**. The bulk
   dialog is the exception that saves, so it states scope, fields, destination and photo
   count first; overwriting renames the action to **Generate and overwrite**.
+- Media's upload queue gives every picked file its own outcome in words (#301). Files the
+  browser can already rule out — over the 25 MB upload limit, HEIC/HEIF (the shipped image
+  pipeline decodes only AVIF-flavoured HEIF) or not an image — are **never sent**; their row
+  says "Not sent: …" with what to do instead, on its own full-width line under the file name,
+  red only repeating the words. A transferred file reads "Transferred; image processing may
+  still be running" (never "done"): the grid badge reports processing → ready/failed. While any
+  transfer is unsettled, a warn-toned note asks to keep the tab open; it disappears once every
+  file has a result, because encoding continues on the server without the tab.
 - Settings is one flat document per tab beside a quiet vertical tab index (**AI models**,
   Images, Comments, Site identity, Site & backups), not a stack of competing cards. The active tab sits
   on the accent-soft surface, is mirrored in the URL hash (unknown → AI models) and in

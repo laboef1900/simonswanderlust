@@ -408,6 +408,33 @@ describe('media-browser current folder', () => {
 });
 
 describe('media-browser upload completion', () => {
+  it('names a refusal for each file it will not send, sends the rest, and asks to keep the tab open only while sending', async () => {
+    const page = loadPage({ locale: 'de' });
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [], total: 0 });
+    await page.flush();
+    page.el('dropZone').dispatch('drop', { dataTransfer: { files: [
+      { name: 'IMG_0001.HEIC', type: 'image/heic', size: 2_000_000 },
+      { name: 'huge.jpg', type: 'image/jpeg', size: 26 * 1024 * 1024 },
+      { name: 'notes.pdf', type: 'application/pdf', size: 1000 },
+      { name: 'ok.jpg', type: 'image/jpeg', size: 4_000_000 },
+    ] } });
+    await page.flush();
+    const states = () => page.el('uploadQueue').querySelectorAll('.upload-row__state').map((n) => n.textContent);
+    const de = ui.de;
+    expect(page.uploadRequests).toHaveLength(1);
+    expect(states().slice(0, 3)).toEqual([
+      de['editor.chrome.uploadRefusedHeic'],
+      de['editor.chrome.uploadRefusedTooLarge'].replace('{max}', '25 MB'),
+      de['editor.chrome.uploadRefusedNotImage'],
+    ]);
+    expect(page.el('uploadQueue').textContent).toContain(de['editor.chrome.uploadKeepOpen']);
+    page.uploadRequests[0]!.resolve({ key: 'ok', status: 'processing' });
+    await page.flush();
+    expect(states()[3]).toBe(de['editor.chrome.uploadDone']);
+    expect(page.el('uploadQueue').textContent).not.toContain(de['editor.chrome.uploadKeepOpen']);
+  });
+
   it('keeps keyboard navigation on the same photo when completion changes its grid index', async () => {
     const page = loadPage();
     await page.flush();
@@ -578,7 +605,8 @@ describe('media-browser upload completion', () => {
     expect(page.el('grid').querySelectorAll('.media-cell').map((n) => n.dataset.key)).toEqual(['ready', 'new', 'existing']);
     expect(page.el('grid').querySelectorAll('.media-cell__badge').map((n) => n.textContent)).toEqual(['processing']);
     expect(page.el('uploadQueue').querySelectorAll('.upload-row')).toHaveLength(2);
-    expect(page.el('uploadQueue').querySelectorAll('.upload-row__state').map((n) => n.textContent)).toEqual(['done', 'done']);
+    // Transferred, not encoded: the grid badge carries processing → ready/failed.
+    expect(page.el('uploadQueue').querySelectorAll('.upload-row__state').map((n) => n.textContent)).toEqual([ui.en['editor.chrome.uploadDone'], ui.en['editor.chrome.uploadDone']]);
     expect(page.el('dAltDe').value).toBe('Unsaved description');
     expect(page.el('dUnsaved').hidden).toBe(false);
     expect(page.el('grid').querySelectorAll('.is-selected').map((n) => n.dataset.key)).toEqual(['existing']);
@@ -652,7 +680,7 @@ describe('media-browser upload completion', () => {
     expect(query).toContain(context === 'other folder' ? 'folder=other' : 'status=ready');
     await settle();
     expect(page.el('grid').querySelectorAll('.media-cell').map((n) => n.dataset.key)).toEqual(['visible']);
-    expect(page.el('uploadQueue').querySelectorAll('.upload-row__state')[0]!.textContent).toBe('done');
+    expect(page.el('uploadQueue').querySelectorAll('.upload-row__state')[0]!.textContent).toBe(ui.en['editor.chrome.uploadDone']);
     expect(page.el('pageInfo').textContent).toBe('Page 2 of 3');
   });
 });
