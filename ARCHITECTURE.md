@@ -11,11 +11,11 @@ see [SECURITY.md](SECURITY.md).
 
 | Service (compose) | Image | Role | Exposure |
 | :-- | :-- | :-- | :-- |
-| `app` | `ghcr.io/laboef1900/wanderlust-studio` (built from the repo-root `Dockerfile`, DHI node base; released under this name from v0.18.0) | Single Fastify 5 process: admin CMS (editor, WordPress import), image service (sharp, host-routed on the img subdomain), public blog static serving, in-process `astro build` on Publish/boot/manual rebuild, `/map/` PMTiles basemap, and DB backups | Public (via host port → reverse proxy / TLS) |
+| `app` | `ghcr.io/laboef1900/wanderlust-studio` (built from the repo-root `Dockerfile`, DHI node base; released under this name from v0.18.1) | Single Fastify 5 process: admin CMS (editor, WordPress import), image service (sharp, host-routed on the img subdomain), public blog static serving, in-process `astro build` on Publish/boot/manual rebuild, `/map/` PMTiles basemap, and DB backups | Public (via host port → reverse proxy / TLS) |
 | `db` | `postgres:18-alpine` | Source of truth for posts, users, and sessions | Internal only (`:5432`) |
 
 The `app` image is released to GHCR by CI and pulled on the server (pinned via required
-`IMAGE_TAG`, with no default). v0.18.0 is the first `wanderlust-studio` release; earlier
+`IMAGE_TAG`, with no default). v0.18.1 is the first `wanderlust-studio` release; earlier
 releases stay under the old name. See the release flow below.
 `docker-compose.yml` has no `build:` key, so `docker compose up -d --build` is a no-op — to build
 the image locally, run `docker build .` from the repo root instead. See [Packaging & release
@@ -1544,7 +1544,7 @@ replaces image/private-file recovery, fencing or settings/key escrow.
 One image, built from a **multistage Dockerfile at the repo root** (context = repo root, so it can
 copy both `uploader/` and `site/`) whose base images are `ARG`-parameterized (`NODE_BUILD` /
 `NODE_RUNTIME`, defaulting to **Docker Hardened Images** (minimal, low-CVE, non-root) from
-`dhi.io` — CI passes the same bases explicitly (requires a dhi.io login):
+`dhi.io`, pinned by digest — the release workflow uses those defaults (requires a dhi.io login):
 
 | Stage | Base | Purpose |
 | :-- | :-- | :-- |
@@ -1561,11 +1561,12 @@ warns about.
 
 1. logs in to GHCR (`GITHUB_TOKEN`) and to `dhi.io` (repo variable `DHI_USERNAME` + secret
    `DHI_TOKEN`) to pull the DHI bases,
-2. `buildx` multi-arch (**amd64 + arm64**) with the DHI build-args, pushed to
+2. `buildx` multi-arch (**amd64 + arm64**) with the Dockerfile's digest-pinned DHI bases, pushed to
    `ghcr.io/laboef1900/wanderlust-studio` tagged `{version}`, `{major}.{minor}`, and `latest`,
 3. creates the GitHub Release with generated notes.
 
-v0.18.0 is the first release under this name. For every release, confirm the workflow run
+v0.18.1 is the first release under this name (the `v0.18.0` tag's workflow failed before
+publishing anything). For every release, confirm the workflow run
 for both architectures, the published version/digest and GHCR package access before an
 operator sets `IMAGE_TAG` in their private `.env` to that version and runs
 `docker compose pull && docker compose up -d` (no `dhi.io` login needed there — that's CI-only).

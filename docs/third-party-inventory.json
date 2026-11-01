@@ -14,13 +14,13 @@
   "lockfiles": {
     "site": {
       "path": "site/package-lock.json",
-      "sha256": "30bf668b8f65b1b7a319e0bd2ca7b336c06d025b3dea6c6e8c706500f0d77e87",
+      "sha256": "b89dc641062acbaa23e1983e202522f337fa7e786ef4d13034d3460d811ad8f1",
       "lockfileVersion": 3,
       "entries": 489
     },
     "uploader": {
       "path": "uploader/package-lock.json",
-      "sha256": "28f78925a087093e0812539b124050b89b64d53d2971478b19f7787fde85a23b",
+      "sha256": "e75c57ba45a4dc2766b36e7ee7a5365a019d40fde47d96198191aa599b82164b",
       "lockfileVersion": 3,
       "entries": 298
     }
@@ -30,7 +30,7 @@
       "tree": "site",
       "path": "",
       "name": "site",
-      "version": "0.18.0",
+      "version": "0.18.1",
       "license": "AGPL-3.0-only",
       "resolved": null,
       "integrity": null,
@@ -7371,7 +7371,7 @@
       "tree": "uploader",
       "path": "",
       "name": "simonswanderlust-images",
-      "version": "0.18.0",
+      "version": "0.18.1",
       "license": "AGPL-3.0-only",
       "resolved": null,
       "integrity": null,

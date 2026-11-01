@@ -7,7 +7,7 @@ domain and an image domain. Every number below comes from the
 here is a benchmark or a guarantee. Examples use `blog.example.com`, `img.example.com` and
 placeholder secrets. Replace all of them.
 
-> **Image name.** Releases from 0.18.0 on are published as
+> **Image name.** Releases from 0.18.1 on are published as
 > `ghcr.io/laboef1900/wanderlust-studio`; set `IMAGE_TAG` to a version listed on the
 > [releases](https://github.com/laboef1900/simonswanderlust/releases) page, or
 > [build the image locally](#build-the-image-locally). Releases under the old name
