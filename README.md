@@ -111,10 +111,9 @@ never runs inference. Remote providers may charge for use and receive the submit
 one app for the CMS, image processing and public blog, plus Postgres. The release workflow
 builds for amd64 and arm64.
 
-This repository includes Simon's Wanderlust branding and a DE/EN site. Adapting it to your
-own blog means updating the site identity, domain configuration and any templates you want
-to change in source. It is a self-hosted project, not a hosted signup service or a no-code
-theme marketplace. This README describes the current source; tagged images contain the
+Site name, author, logo, public domain and languages (DE+EN, DE-only or EN-only) are set
+in the admin's Settings; templates you want to change are edited in source. It is a
+self-hosted project, not a hosted signup service or a no-code theme marketplace. This README describes the current source; tagged images contain the
 features shipped in their release.
 
 ### Start with a released image
@@ -129,73 +128,34 @@ they are not copied or aliased to the new package. Existing installations should
 their existing deployment configuration until an upgrade is authorized. A saved
 `IMAGE_TAG=0.17.1` does not become valid under the new image name.
 
-You need Docker Engine with Compose (or Docker Desktop). From a checkout of this repository:
+**Installing on a server?** Follow the [installation guide](docs/install.md): supported
+platforms, measured requirements, secrets, the reverse proxy, blog and image domains, first
+run, upgrades and backups. The rest of this section is a local trial on your own machine.
+
+You need Docker Engine with Compose (or Docker Desktop for a trial). From a checkout:
 
 ```bash
 cp uploader/.env.example .env
 ```
 
-Before starting, edit your private `.env`:
+Edit your private `.env`: set `POSTGRES_PASSWORD` to the output of `openssl rand -hex 32`,
+`PUBLIC_BASE_URL=http://localhost:3000`, `IMG_HOST=localhost:3000` and `IMAGE_TAG` (a
+version published under `ghcr.io/laboef1900/wanderlust-studio`, or `local` after
+[building the current source](#build-the-current-source)). All four are required; Compose
+stops with `set … in .env` when one is missing. `PUBLIC_BASE_URL`/`IMG_HOST` name the image
+host only; a server's blog domain is set later in **Settings → Site identity**.
 
-- Set `POSTGRES_PASSWORD` to a strong, randomly generated password. Compose derives
-  `DATABASE_URL`; leave the bare-development override commented out.
-- For a local trial, set `PUBLIC_BASE_URL=http://localhost:3000` and
-  `IMG_HOST=localhost:3000`. For a server, use your image domain and its matching host.
-- After the first new-name release, set `IMAGE_TAG` to a version actually published
-  under `ghcr.io/laboef1900/wanderlust-studio`, as identified in its
-  [release notes](https://github.com/laboef1900/simonswanderlust/releases).
-  There is deliberately no default tag; empty or unset `IMAGE_TAG` stops Compose.
-
-Override **both** domain values together. Unset or explicitly empty values still select
-Compose's Simon-specific defaults: `PUBLIC_BASE_URL=https://img.simonswanderlust.com` and
-`IMG_HOST=img.simonswanderlust.com`. They do not auto-detect your blog's domain.
-
-The app runs as non-root uid 1000. On a Linux host, prepare the data directory so it is
-writable, then start the stack:
+On Linux, the app runs as uid 1000, so prepare the data directory before starting:
 
 ```bash
 mkdir -p uploader/data
 sudo chown -R 1000:1000 uploader/data
-docker compose pull
+docker compose pull      # skip for IMAGE_TAG=local
 docker compose up -d
 ```
 
-Skipping ownership on a fresh root-owned Linux bind mount produced `EACCES`/permission
-denied, an exit-code-1 restart loop and an unhealthy container in the native rehearsal.
-Prepare ownership before starting; do not reproduce this failure on existing content.
-
-If the GHCR package requires authentication, run `docker login ghcr.io` before pulling.
-Open **http://localhost:3000/login** to create the first admin account, then head to the
-editor and write your first post.
-
-For public hosting, use **one HTTPS reverse proxy in the host network namespace**, with no
-CDN or additional proxy hop, and route both blog and image domains to `127.0.0.1:3000`.
-Preserve the verbatim `Host`, overwrite `X-Forwarded-Proto` with the proxy's own scheme,
-and append or overwrite `X-Forwarded-For` so the rightmost entry is its accepted client.
-Compose exposes port 3000 on **loopback only** and sets `TRUSTED_PROXY: docker-gateway`
-literally; do not add it to `.env`. The app trusts only loopback and the discovered bridge
-gateway at hop zero, and refuses boot if gateway discovery fails. Postgres stays internal.
-Reject unintended public hostnames at the proxy. Reader comments use trusted protocol plus
-raw `Host` for temporary blog-origin equality, not the image `PUBLIC_BASE_URL` or
-`X-Forwarded-Host`; the production image authority is excluded. Single-origin loopback
-development remains supported, with no new blog-origin env setting.
-Before cutover, verify the actual target-server peer, HTTPS `Secure` cookies, independent
-rate-limit buckets from two external networks, and blog-origin comment submission through
-moderation to the public list; Docker Desktop and local split-host proof are not a VPS
-rehearsal. See [architecture and deployment](ARCHITECTURE.md) and the
-[security model](SECURITY.md#transport-headers--proxy) before exposing the service.
-
-The [2026-10-29 native amd64/arm64 rehearsal](docs/2026-10-29-clean-install-rehearsal.md)
-records exact released-image digests, a verified two-host TLS proxy example, installation
-deviations and measured resources. It exercised released **0.17.1**, not current/unmerged
-code, through real HTTPS/API calls—not interactive browser UI or a browser certificate
-store. Split-domain blog-Origin comment posting reproduced the known
-[#319](https://github.com/laboef1900/simonswanderlust/issues/319) 403 defect.
-The two synthetic photos and one bilingual story establish **no hosting minimum**.
-That historical image predates the codec fixes tracked in
-[#347](https://github.com/laboef1900/simonswanderlust/issues/347); the rehearsal is not a
-security-support or downgrade endorsement. The broader supported installation guide
-and default changes belong to [#293](https://github.com/laboef1900/simonswanderlust/issues/293).
+Open **http://localhost:3000/login** to create the first admin account; the Desk's first-run
+checklist takes it from there.
 
 ### Build the current source
 
@@ -325,6 +285,7 @@ limitations, then check correspondence and delivery in the final rebuilt release
 
 ## Documentation
 
+- [Installation guide](docs/install.md) — supported server install, requirements, proxy and domains.
 - [Authoring workflow](docs/authoring-workflow.md) — photos, stories, galleries and publishing.
 - [Architecture](ARCHITECTURE.md) — storage, deployment, builds, backups and recovery.
 - [Security](SECURITY.md) — permissions, photo privacy, credentials and request safeguards.

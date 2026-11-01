@@ -1603,13 +1603,16 @@ separate owner action, not part of the dependency PR.
 
 ## Configuration (environment)
 
+Operators install and configure through the [installation guide](docs/install.md); this table
+is the reference behind it.
+
 | Var | Used by | Purpose |
 | :-- | :-- | :-- |
 | `DATABASE_URL` | app | Postgres connection (content + auth) |
 | `ENCRYPTION_KEY` | app | Optional 64-hex master key for encrypted AI credentials; unset permits local workflows, malformed values refuse boot; escrow separately |
 | `TRUSTED_PROXY` | app / compose literal | Unset or `loopback`: loopback peers only. Compose sets `docker-gateway`: also trust the single discovered IPv4 default gateway, at hop zero only. Empty/unknown values or failed gateway discovery refuse boot. Not an `.env` setting; changing bridge/proxy topology requires a new trust spec. |
-| `PUBLIC_BASE_URL` | app | Public base for image URLs (e.g. `https://img.simonswanderlust.com`); not the allowed blog-comment origin. Its image authority is excluded from the temporary comment-origin fallback except in single-origin loopback development. |
-| `IMG_HOST` | app | Hostname routed to the image-variant static handler (defaults to the host of `PUBLIC_BASE_URL`); also excluded from the comment-origin fallback, with the same loopback exception. |
+| `PUBLIC_BASE_URL` | app | Public base for image URLs (e.g. `https://img.example.com`); required by Compose (`:?`, no owner default), optional for a bare `node` run (falls back to `http://localhost:3000`); not the allowed blog-comment origin. Its image authority is excluded from the temporary comment-origin fallback except in single-origin loopback development. |
+| `IMG_HOST` | app | Hostname routed to the image-variant static handler (the app defaults it to the host of `PUBLIC_BASE_URL`; Compose requires it explicitly); also excluded from the comment-origin fallback, with the same loopback exception. |
 | `SITE_APP_DIR` | app | Path to the Astro project the builder spawns (`/app/site`) |
 | `SITE_DIR` | app | Release root for the built blog (`/data/site`) — `current` is served from here |
 | `SITE_IDENTITY_JSON` | build child only | **Internal**, set for every spawn by `build.ts`; not operator-configurable, overrides inherited values |
