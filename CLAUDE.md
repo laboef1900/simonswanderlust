@@ -18,6 +18,9 @@ Unqualified rules describe both; where they differ, the tree is named explicitly
 ## Project Overview
 
 **Simon's Wanderlust** (`simonswanderlust.com`) — a bilingual (DE/EN) personal travel blog.
+The platform itself supports four language modes (DE+EN DE-primary — the live site — DE+EN
+EN-primary, DE-only, EN-only; see Golden Rule 2); every rule below that says "DE/EN" means
+"each enabled locale" on another install.
 This repo is the **Astro 7 static-site rebuild** of the current WordPress + Elementor site.
 
 - **Architecture:** One Astro 7 project under `site/`, **self-hosted via Docker** as a **single
@@ -150,6 +153,8 @@ Classify a change before implementing it:
   body-HTML render path, gallery URL allow-listing, `safeFetch`/WXR import, path-traversal guards,
   EXIF/GPS handling, the schema in `uploader/src/db.ts`, backup/restore, the build/publish
   pipeline, the site identity tables and exported identity/content build snapshot, the
+  **language mode** (`site_language`, `posts.omitted`, `PUT /language`, the `SITE_LANGUAGE_JSON`
+  hand-off and the published-URL-set invariant), the
   journey tables, published snapshots and transactional membership cleanup,
   canonical-origin/comment-origin roles, `/data` layout, AI credentials (the provider registry,
   `app_secrets` slots, `/ai-providers*` and `/ai-config`), or **any slug or route change**.
@@ -169,7 +174,7 @@ Classify a change before implementing it:
 | **Styling** | Tailwind 4 (via `@tailwindcss/vite`), `@tailwindcss/typography` |
 | **Database** | Postgres 18 |
 | **Content** | Postgres (loaded at build time by `site/src/lib/postgres-loader.ts`); authored in the in-admin editor — MDX files are export-only backups (the original stubs were imported once via `site/scripts/migrate-stub-posts.mjs`) |
-| **i18n** | Astro i18n routing — `defaultLocale: 'de'` (no prefix), `en` under `/en/` |
+| **i18n** | Astro i18n routing, configured per install from the Postgres `site_language` singleton (`site/astro.config.mjs` → `resolveBuildLanguage`): `defaultLocale` = the primary locale (no prefix), the optional secondary under `/<locale>/`. Four modes — DE+EN DE-primary (simonswanderlust.com: `de` at root, `en` under `/en/`), DE+EN EN-primary (`en` at root, `de` under `/de/`), DE-only, EN-only. `ui.ts` keeps both dictionaries complete in every mode; a single-language build never renders the other one |
 | **Fonts** | Inter Variable (sans), IBM Plex Mono (expedition-log accents) |
 | **Markdown** | Shiki syntax highlighting (`syntaxHighlight: { type: 'shiki', excludeLangs: ['math', 'gallery'] }`) — `site/astro.config.mjs` imports `MARKDOWN_OPTIONS` directly from `site/src/lib/render-markdown.ts`; `render-markdown.test.ts` exercises gallery markers and class-based highlighting without loading database-backed build configuration |
 | **Testing** | Vitest (both trees); `@astrojs/check` (`astro check`) for types |
@@ -580,7 +585,7 @@ blog/
 │       │   ├── gallery-layout.ts               #   justified-row partition + #layout: directive reader (pure; also runs under tsx)
 │       │   └── map-data.ts                     #   export tripPins() and tripGeometry() for map layers
 │       ├── components/pages/                   # shared per-page components
-│       ├── pages/                              # thin locale routes (de at root, en under /en/)
+│       ├── pages/                              # one dynamic route ([...path].astro) + [...locale]/rss.xml.ts, fed by lib/public-routes.ts for the enabled locales
 │       ├── scripts/travel-map.ts               #   MapLibre GL island; initializes full map and mini-maps
 │       ├── scripts/gallery-lightbox.ts         #   <dialog> lightbox + slider controls; loaded via GalleryIsland.astro
 │       └── layouts/  ·  styles/  ·  assets/
@@ -1079,6 +1084,39 @@ blog/
   `posts_region_check`; a region page is built and linked only once its locale has a published
   story (`liveRegions` in `site/src/lib/trips.ts`). See
   `docs/superpowers/specs/2026-10-19-new-regions-design.md`.
+- **Done:** Single-language publishing and primary-language configuration, epic #282 (#283
+  contract, owner-approved 2026-10-27; #284 uploader and #285 site merged to `dev` 2026-11-01;
+  docs closed 2026-11-01). **HIGH risk, owner-approved**, including the Golden Rule 2 amendment
+  for EN at root. Four modes — DE+EN DE-primary (simonswanderlust.com, byte-identical route set
+  pinned against the pre-change baseline), DE+EN EN-primary, DE-only, EN-only — stored in the
+  Postgres singleton `site_language` (`uploader/src/db.ts`; `uploader/src/language.ts` owns the
+  store and transition rules). Both locale rows of a story still exist; an absent locale is
+  `slug = ''` + `omitted = true`, made unpublishable by the `posts_omitted_unpublished` CHECK.
+  `GET /language` is session-level, `PUT /language` admin-only (`uploader/src/server.ts`); the
+  primary is locked at the first story/journey publish (`locked_at`, also derived from any
+  retained `published_at`), after which only *adding* the secondary is allowed — changing the
+  primary is 409 `language_primary_locked`, removing a locale 409 `language_locale_published`
+  — so **no mode change moves a published URL** (`uploader/test/language-mode.integration.test.ts`
+  compares the URL set before/after every transition). Mode changes, publishes, page saves and
+  draft saves serialize on `site_language … FOR UPDATE` first, then pair/journey/namespace
+  locks; the rebuild runs only after commit. `uploader/src/build.ts` hands the child
+  `SITE_LANGUAGE_JSON` from the same exported `REPEATABLE READ` snapshot as content;
+  `site/astro.config.mjs` → `resolveBuildLanguage` re-reads `site_language` and fails the build
+  on a mismatch. Routes come from one dynamic page (`site/src/pages/[...path].astro`,
+  `publicRoutes`) and `localePrefix`; the EN-at-root map word is `/travel-map/` because the app
+  owns `/map/*`. Single-language builds contain no absent-locale route, link, feed, `hreflang`,
+  switcher item or retained text (`site/test/built/routes.test.ts` marker grep). Comments are
+  bound to the committed published locale set (`getPublishedLocales`; `POST` 400 generic, `GET`
+  filtered; admin queue keeps and labels hidden rows). Dump **v12** (`LANGUAGE_DUMP_VERSION`)
+  carries `site_language` + `posts[].omitted`; restore replaces the live mode and the CLI needs
+  `--accept-language-change` on a locked install whose mode differs; boot writes a
+  pre-migration recovery set first. WXR import skips disabled-locale items, MDX export writes
+  enabled non-omitted rows only, legacy WP redirects apply to DE-primary installs only. The
+  first-run language step (#281) is a conditional add-on, not required by #282. See
+  `docs/superpowers/specs/2026-10-27-issue-283-language-mode-contract.md` (§21–24 hold the
+  #284/#285 qualification evidence), `SECURITY.md` (*Language modes — reconfirmation and
+  leakage review*), `ARCHITECTURE.md` (*Language modes*) and `DESIGN.md` (*Language switcher
+  per mode*).
 - **Implemented, release pending:** #347 native image decoder hardening (2026-10-27,
   owner-approved). Both locks resolve sharp 0.35.5 / libvips package 1.3.4; uploader's
   install-script permission follows sharp 0.35.5. DHI ARM64 and emulated AMD64 candidates
@@ -1086,6 +1124,15 @@ blog/
   private-original, EXIF-free preview and rescan checks. Formats and EXIF privacy stay unchanged.
   Recovery is roll-forward only; a new image release/deployment is still required.
   See `docs/superpowers/specs/2026-10-27-issue-347-sharp-codec-upgrade.md`.
+- **Done:** Configurable site identity, epic #272 (#273 design, #274 text identity, #275 logo /
+  favicon, #276 canonical domain). Closing evidence 2026-11-01: a fresh-install runtime scan on
+  `dev` `976f31a` found zero unclassified `Simon|simonswanderlust|Wanderlust` matches in the
+  release or the served admin; the remaining ones are #291 software name/copyright/notice texts
+  and #293 compose host defaults. The allow-list is data
+  (`docs/site-identity-branding-allowlist.json`) read by two regression scans —
+  `site/test/empty-build.integration.test.ts` (every file of the zero-content build, all four
+  language modes) and `uploader/test/branding-scan.test.ts` (every served admin page/script) —
+  so a newly hardcoded owner name fails CI. See `docs/site-identity-branding-allowlist.md`.
 - **In progress:** Reader comments (epic #202, spec #203) — design spec landed 2026-09-14
   (`docs/superpowers/specs/2026-09-14-comments-design.md`, incl. an ASVS L1 exception record).
   #205 admin moderation queue landed: `uploader/public/comments.html` (served at
