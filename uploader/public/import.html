@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Import · Simon's Wanderlust</title>
+    <title>Import</title>
     <link rel="stylesheet" href="/admin/admin.css" />
   </head>
   <body>
@@ -116,6 +116,7 @@
         $('counts').textContent =
           'Imported: ' + data.imported + '  |  Updated: ' + data.updated + updatedNote
           + '  |  Skipped (published): ' + skippedPublished
+          + '  |  ' + EditorCopy.en.languageImportSkipped + ': ' + (data.skippedLocale || 0)
           + '  |  Rejected: ' + rejected
           + '  |  Failed: ' + failed
           + '  |  Photos: ' + img.hosted + '/' + img.total + ' hosted';
@@ -133,12 +134,7 @@
         // the warning list; the same treatment #85 gave un-hosted photos.
         const rej = $('importRejected');
         if (rejected > 0) {
-          rej.textContent =
-            rejected + ' post group(s) were rejected at the import boundary — a missing '
-            + 'translation, a slug the importer will not accept (it would escape the '
-            + 'image storage directory), or a slug that already belongs to a different post '
-            + '(see the list below). Nothing here was fetched or written; fix the '
-            + 'export and run the import again.';
+          rej.textContent = EditorCopy.en.languageImportRejected.replace('{count}', String(rejected));
           rej.style.display = '';
         }
 

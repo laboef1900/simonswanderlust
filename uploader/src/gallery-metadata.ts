@@ -41,7 +41,7 @@ function keyOf(url: string, imageBase: string): string | null {
  * lines only resolve through that map, so nothing else can be a gallery photo.
  */
 export async function loadGalleryMetadata(
-  pair: Pick<PostPair, 'de' | 'en'>,
+  pair: Record<Locale, Pick<PostPair['de'], 'images'>>,
   store: Pick<MediaStore, 'descriptions'>,
   imageBase: string,
 ): Promise<LocaleGalleryMetadata> {

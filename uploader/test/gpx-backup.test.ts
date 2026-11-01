@@ -9,6 +9,8 @@ import { createDbBackup, createRouteManifestPinReader, listBackups, listRouteArc
 import { createRouteArchive, routeRecoverySummary, verifyRouteArchive, type RouteArchiveManifest, type RouteDumpRow } from '../src/gpx-backup.js';
 import { createGpxFiles, safePairHash, sourceDigest, type GpxFiles } from '../src/gpx-files.js';
 import { GPX_LIMITS } from '../public/gpx-geometry.js';
+import { identityDumpRow } from './site-identity-fixture.js';
+import { DEFAULT_NAVIGATION } from '../../site/src/lib/navigation.js';
 
 const original = Buffer.from('<gpx><trk><trkseg><trkpt lat="1.123456789" lon="2.987654321"/></trkseg></trk></gpx>');
 const now = new Date('2026-10-24T12:34:56.789Z');
@@ -28,8 +30,16 @@ function dump(rows: RouteDumpRow[], routeArchive?: RouteArchiveManifest): Dump {
     post_routes: rows }, ...(routeArchive ? { routeArchive } : {}) };
 }
 function database(rows: RouteDumpRow[]): Connectable {
-  const query = async (sql: string) => ({ rows: sql.includes('FROM post_routes') ? rows.map((row) => ({ ...row }))
-    : sql.includes('FROM posts') ? dump(rows).tables.posts : [] });
+  const query = async (sql: string) => ({ rows: sql.includes('to_regclass') ? [{ present: true, journeys: true, locales: true, members: true }]
+    : sql.includes('FROM site_language') ? [{
+      id: true, primary_locale: 'de', enabled_locales: ['de', 'en'], locked_at: null, updated_at: now.toISOString(),
+    }]
+    : sql.includes('FROM site_nav') ? [{ id: 1, config: DEFAULT_NAVIGATION, updated_at: now.toISOString() }]
+    : sql.includes('FROM post_routes') ? rows.map((row) => ({ ...row }))
+    : sql.includes('FROM site_identity ORDER') ? [identityDumpRow()]
+    : sql.includes('FROM posts') ? dump(rows).tables.posts.map((row) => ({
+      ...row, status: 'draft', omitted: false, published_at: null, published_snapshot: null,
+    })) : [] });
   return { query, connect: async () => ({ query, release() {} }) };
 }
 

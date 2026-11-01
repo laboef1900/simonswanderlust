@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { ui } from '../../site/src/i18n/ui.js';
+import { editorDocument, EditorEvent, type EditorElement } from './editor-dom-harness.js';
 
 const src = readFileSync('public/admin-confirm.js', 'utf8');
 
@@ -10,7 +12,7 @@ interface Api {
   urlsPlain(slugs: { de?: string; en?: string }): string;
 }
 
-function load(opts: { confirm?: () => boolean; prompt?: (msg: string, def?: string) => string | null; origin?: string } = {}): { api: Api; confirmedWith: string[]; promptedWith: string[] } {
+function load(opts: { confirm?: () => boolean; prompt?: (msg: string, def?: string) => string | null; origin?: string; language?: { primary: 'de' | 'en'; locales: ('de' | 'en')[] } } = {}): { api: Api; confirmedWith: string[]; promptedWith: string[] } {
   const confirmedWith: string[] = [];
   const promptedWith: string[] = [];
   const windowStub: { AdminConfirm?: Api; confirm?: (msg: string) => boolean; prompt?: (msg: string, def?: string) => string | null } = {};
@@ -33,7 +35,14 @@ function load(opts: { confirm?: () => boolean; prompt?: (msg: string, def?: stri
   };
   windowStub.confirm = ctx.confirm;
   windowStub.prompt = ctx.prompt;
-  vm.runInNewContext(src, ctx);
+  Object.assign(windowStub, { EditorCopy: { en: Object.fromEntries(Object.entries(ui.en)
+    .filter(([key]) => key.startsWith('editor.chrome.')).map(([key, value]) => [key.slice('editor.chrome.'.length), value])) } });
+  vm.createContext(ctx);
+  vm.runInContext(readFileSync('public/language.js', 'utf8'), ctx);
+  vm.runInContext(`SiteLanguage = window.SiteLanguage; SiteLanguage.accept(${JSON.stringify({
+    primary: 'de', locales: ['de', 'en'], ...opts.language, lockedAt: null, updatedAt: '2026-10-27T00:00:00.000Z',
+  })})`, ctx);
+  vm.runInContext(src, ctx);
   if (!windowStub.AdminConfirm) throw new Error('admin-confirm.js did not assign window.AdminConfirm');
   return { api: windowStub.AdminConfirm, confirmedWith, promptedWith };
 }
@@ -52,6 +61,18 @@ describe('AdminConfirm.liveUrls', () => {
     expect(api.liveUrls({ de: 'bukarest', en: '' })).toEqual({
       de: 'https://simonswanderlust.com/bukarest/',
       en: '',
+    });
+  });
+
+  it('uses the English root and never links disabled German content', () => {
+    const { api } = load({ language: { primary: 'en', locales: ['en'] } });
+    expect(api.liveUrls({ de: 'deutsch', en: 'english' })).toEqual({ de: '', en: 'https://simonswanderlust.com/english/' });
+  });
+
+  it('prefixes German when English is primary', () => {
+    const { api } = load({ language: { primary: 'en', locales: ['en', 'de'] } });
+    expect(api.liveUrls({ de: 'deutsch', en: 'english' })).toEqual({
+      de: 'https://simonswanderlust.com/de/deutsch/', en: 'https://simonswanderlust.com/english/',
     });
   });
 });
@@ -82,5 +103,88 @@ describe('AdminConfirm.ask typed fallback', () => {
   it('rejects a mismatched token', async () => {
     const { api } = load({ prompt: () => 'delete' });
     await expect(api.ask({ title: 'Delete?', typed: 'DELETE' })).resolves.toBe(false);
+  });
+});
+
+it('presents the primary URL first in the publication confirmation', () => {
+  const { api } = load({ language: { primary: 'en', locales: ['en', 'de'] } });
+  expect(api.urlsPlain({ de: 'reise', en: 'journey' })).toBe(
+    'EN  https://simonswanderlust.com/journey/\nDE  https://simonswanderlust.com/de/reise/',
+  );
+});
+
+describe('AdminConfirm.ask native dialog', () => {
+  function nativeDialog() {
+    const dom = editorDocument('<body></body>');
+    const window: { AdminConfirm?: Api } = {};
+    vm.runInNewContext(src, { window, document: dom.document });
+    const api = window.AdminConfirm!;
+    const dialog = () => dom.document.getElementById('adminConfirm') as EditorElement & { returnValue: string };
+    function close(result?: string) {
+      // Native dialog close requests leave the previous result untouched when
+      // no result is supplied (including Escape in Firefox/WebKit).
+      if (result !== undefined) dialog().returnValue = result;
+      dialog().close();
+      dom.flushDialogEvents();
+    }
+    return { api, dom, dialog, close };
+  }
+
+  it.each(['escape', 'close', 'cancel'] as const)('does not reuse prior consent after %s', async (dismiss) => {
+    const { api, dom, dialog, close } = nativeDialog();
+    const accepted = api.ask({ title: 'Unpublish?' });
+    close('ok');
+    await expect(accepted).resolves.toBe(true);
+
+    const cancelled = api.ask({ title: 'Delete?', danger: true });
+    if (dismiss === 'escape') {
+      dialog().fire('keydown', { key: 'Escape' });
+      dom.flushDialogEvents();
+    } else {
+      close(dismiss === 'cancel' ? 'cancel' : undefined);
+    }
+    await expect(cancelled).resolves.toBe(false);
+
+    const confirmedAgain = api.ask({ title: 'Publish?' });
+    close('ok');
+    await expect(confirmedAgain).resolves.toBe(true);
+  });
+
+  it('confirms a matching typed token with Enter, but not a mismatch or composition', async () => {
+    const { api, dom, dialog } = nativeDialog();
+    const accepted = api.ask({ title: 'Delete two trips?', typed: 'DELETE' });
+    const input = dom.document.getElementById('adminConfirmTyped')!;
+    for (const token of ['', 'delete', 'DELETE ']) {
+      input.value = token;
+      const event = input.fire('keydown', { key: 'Enter' });
+      expect(event.defaultPrevented).toBe(true);
+      expect(dialog().open).toBe(true);
+    }
+    input.value = 'DELETE';
+    input.dispatchEvent(new EditorEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true, cancelable: true }));
+    expect(dialog().open).toBe(true);
+    input.fire('keydown', { key: 'Enter' });
+    expect(dialog().open).toBe(false);
+    dom.flushDialogEvents();
+    await expect(accepted).resolves.toBe(true);
+  });
+
+  it('requires fresh consent and the token on each typed confirmation', async () => {
+    const { api, dom, dialog, close } = nativeDialog();
+    const accepted = api.ask({ title: 'Delete two trips?', typed: 'DELETE' });
+    dom.document.getElementById('adminConfirmTyped')!.value = 'DELETE';
+    close('ok');
+    await expect(accepted).resolves.toBe(true);
+
+    const escaped = api.ask({ title: 'Delete another trip?', typed: 'DELETE' });
+    dom.document.getElementById('adminConfirmTyped')!.value = 'DELETE';
+    dialog().fire('keydown', { key: 'Escape' });
+    dom.flushDialogEvents();
+    await expect(escaped).resolves.toBe(false);
+
+    const wrongToken = api.ask({ title: 'Delete another trip?', typed: 'DELETE' });
+    dom.document.getElementById('adminConfirmTyped')!.value = 'delete';
+    close('ok');
+    await expect(wrongToken).resolves.toBe(false);
   });
 });

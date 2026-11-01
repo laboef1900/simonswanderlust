@@ -31,6 +31,123 @@ maybe('pgMediaStore (integration)', () => {
   const add = (key: string, over: Record<string, unknown> = {}) =>
     store.upsert({ key, status: 'ready', width: 800, height: 600, origBytes: 10, exif: noExif, uploadedBy: null, ...over });
 
+
+  it('atomically admits one of two concurrent same-field conditional writers', async () => {
+    await add('conditional');
+    const attempts = await Promise.allSettled(['First', 'Second'].map((title) => store.patchConditional('conditional', {
+      version: 1, patch: { title, folder: title + '/Child', alt: { de: title } },
+      expect: { title: '', folder: '', alt: { de: '' } },
+    })));
+    expect(attempts.filter((attempt) => attempt.status === 'fulfilled')).toHaveLength(1);
+    const saved = await store.get('conditional');
+    expect(saved?.folder).toBe(saved?.title + '/Child');
+    expect(saved?.alt.de).toBe(saved?.title);
+    expect(attempts.find((attempt) => attempt.status === 'rejected')).toMatchObject({
+      reason: { code: 'media_changed', current: { title: saved?.title, folder: saved?.folder } },
+    });
+    expect(await store.folders()).toEqual([saved?.title, saved?.title + '/Child']);
+  });
+
+  it('concurrent independent locale edits survive and canonical expectations match persisted values', async () => {
+    await add('conditional', { title: 'ab', tags: ['sea'] });
+    await Promise.all([
+      store.patchConditional('conditional', { version: 1, patch: { alt: { de: 'DE' } }, expect: { alt: { de: '' } } }),
+      store.patchConditional('conditional', { version: 1, patch: { alt: { en: 'EN' } }, expect: { alt: { en: '' } } }),
+    ]);
+    const saved = await store.patchConditional('conditional', {
+      version: 1, patch: { title: 'c\u0000d', tags: ['next', 'next'], caption: { de: 'x'.repeat(1005) } },
+      expect: { title: 'a\u0000b', tags: [' sea ', 'sea'], caption: { de: '' } },
+    });
+    expect(saved).toMatchObject({ title: 'cd', tags: ['next'], alt: { de: 'DE', en: 'EN' }, caption: { de: 'x'.repeat(1000) } });
+    await expect(store.patchConditional('missing', {
+      version: 1, patch: { title: 'new', folder: 'Absent' }, expect: { title: '', folder: '' },
+    })).rejects.toMatchObject({ code: 'not_found' });
+    expect(await store.folders()).toEqual([]);
+  });
+
+  it('conditional folder creation rolls the media update and all ancestors back on failure', async () => {
+    await add('conditional');
+    let inserts = 0;
+    const failing = {
+      query: pool.query.bind(pool),
+      async connect() {
+        const client = await pool.connect();
+        return Object.assign(Object.create(client), {
+          async query(text: string, values?: unknown[]) {
+            if (text.includes('INSERT INTO media_folders') && ++inserts === 2) throw new Error('folder write failed');
+            return client.query(text, values);
+          },
+        });
+      },
+    } as unknown as DbPool;
+    await expect(pgMediaStore(failing, { baseUrl: BASE }).patchConditional('conditional', {
+      version: 1, patch: { title: 'new', folder: 'Parent/Child' }, expect: { title: '', folder: '' },
+    })).rejects.toThrow('folder write failed');
+    expect(inserts).toBe(2);
+    expect(await store.get('conditional')).toMatchObject({ title: '', folder: '' });
+    expect(await store.folders()).toEqual([]);
+  });
+
+  it('returns its own committed row and description delta even when another writer lands before the acknowledgement', async () => {
+    await add('conditional');
+    let intervened = false;
+    const racing = {
+      query: pool.query.bind(pool),
+      async connect() {
+        const client = await pool.connect();
+        return Object.assign(Object.create(client), {
+          async query(text: string, values?: unknown[]) {
+            const result = await client.query(text, values);
+            if (!intervened && text === 'COMMIT') {
+              intervened = true;
+              await store.patch('conditional', { title: 'later', caption: { de: 'later', en: 'later EN' } });
+            }
+            return result;
+          },
+        });
+      },
+    } as unknown as DbPool;
+    const saved = await pgMediaStore(racing, { baseUrl: BASE }).patchConditional('conditional', {
+      version: 1, patch: { title: 'mine', caption: { de: 'mine' } }, expect: { title: '', caption: { de: '' } },
+    });
+    expect(intervened).toBe(true);
+    expect(saved.title).toBe('mine');
+    expect(saved.caption).toEqual({ de: 'mine', en: '' });
+    expect(saved.changedDescriptions).toEqual({ de: { alt: false, caption: true }, en: { alt: false, caption: false } });
+    expect((await store.get('conditional'))?.caption).toEqual({ de: 'later', en: 'later EN' });
+  });
+
+  it('compares normalized values for no-op and reverted description writes', async () => {
+    await add('conditional', { alt: { de: 'same' } });
+    const unchanged = await store.patchConditional('conditional', {
+      version: 1, patch: { alt: { de: 'sa\u0000me' } }, expect: { alt: { de: 'same' } },
+    });
+    expect(unchanged.changedDescriptions).toEqual({ de: { alt: false, caption: false }, en: { alt: false, caption: false } });
+    await store.patchConditional('conditional', { version: 1, patch: { alt: { de: 'new' } }, expect: { alt: { de: 'same' } } });
+    const reverted = await store.patchConditional('conditional', { version: 1, patch: { alt: { de: 'same' } }, expect: { alt: { de: 'new' } } });
+    expect(reverted.changedDescriptions).toEqual({ de: { alt: true, caption: false }, en: { alt: false, caption: false } });
+  });
+
+  it('does not manufacture a successful delta when COMMIT acknowledgement is lost', async () => {
+    await add('conditional');
+    const uncertain = {
+      query: pool.query.bind(pool),
+      async connect() {
+        const client = await pool.connect();
+        return Object.assign(Object.create(client), {
+          async query(text: string, values?: unknown[]) {
+            const result = await client.query(text, values);
+            if (text === 'COMMIT') throw new Error('commit acknowledgement lost');
+            return result;
+          },
+        });
+      },
+    } as unknown as DbPool;
+    await expect(pgMediaStore(uncertain, { baseUrl: BASE }).patchConditional('conditional', {
+      version: 1, patch: { caption: { de: 'committed' } }, expect: { caption: { de: '' } },
+    })).rejects.toThrow('commit acknowledgement lost');
+    expect((await store.get('conditional'))?.caption.de).toBe('committed');
+  });
   it('round-trips every column, including tags and EXIF', async () => {
     const saved = await add('library/2025/a', {
       folder: 'Island', title: 'Sunrise', tags: ['dawn', 'sea'],
@@ -237,6 +354,18 @@ maybe('pgMediaStore (integration)', () => {
     expect(await store.get('k')).toMatchObject({ variantBytes: 4242, status: 'failed', error: 'encode_failed' });
     await store.setStatus('k', 'ready');
     expect(await store.get('k')).toMatchObject({ status: 'ready', error: null });
+  });
+
+  // #348: the rollback of a refused enqueue must never undo a settled row.
+  it('setStatusIfProcessing writes only while the row is still processing', async () => {
+    await add('k', { status: 'processing' });
+    expect(await store.setStatusIfProcessing('k', 'failed', 'queue_full')).toBe(true);
+    expect(await store.get('k')).toMatchObject({ status: 'failed', error: 'queue_full' });
+    expect(await store.setStatusIfProcessing('k', 'missing')).toBe(false);
+    await store.setStatus('k', 'ready');
+    expect(await store.setStatusIfProcessing('k', 'failed', 'queue_full')).toBe(false);
+    expect(await store.get('k')).toMatchObject({ status: 'ready', error: null });
+    expect(await store.setStatusIfProcessing('ghost', 'failed', 'queue_full')).toBe(false);
   });
 
   it('uploaded_by is nulled rather than blocking a user delete', async () => {

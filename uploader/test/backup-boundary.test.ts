@@ -11,6 +11,8 @@ import { createMediaSync, createReconciler, isCompleteSet, walkStorageKeys } fro
 import { memoryMediaStore } from '../src/media-store.js';
 import { createWorkLock } from '../src/work-lock.js';
 import type * as DiskModule from '../src/disk.js';
+import { identityDumpRow } from './site-identity-fixture.js';
+import { DEFAULT_NAVIGATION } from '../../site/src/lib/navigation.js';
 import type * as FsModule from 'node:fs';
 import type * as FsPromisesModule from 'node:fs/promises';
 
@@ -55,7 +57,18 @@ vi.mock('node:fs', async (original) => {
 
 const db: Connectable = {
   query: async () => ({ rows: [] }),
-  connect: async () => ({ query: async () => ({ rows: [] }), release() {} }),
+  connect: async () => ({
+    query: async (sql: string) => ({ rows: sql.includes('to_regclass') ? [{ present: true, journeys: true, locales: true, members: true }]
+      : sql.includes('FROM site_language') ? [{
+        id: true, primary_locale: 'de', enabled_locales: ['de', 'en'],
+        locked_at: null, updated_at: '2026-10-27T12:00:00.000Z',
+      }]
+      : sql.includes('FROM site_nav') ? [{
+        id: 1, config: DEFAULT_NAVIGATION, updated_at: '2026-10-27T12:00:00.000Z',
+      }]
+      : sql.includes('FROM site_identity ORDER') ? [identityDumpRow()] : [] }),
+    release() {},
+  }),
 };
 let root: string;
 let storage: string;

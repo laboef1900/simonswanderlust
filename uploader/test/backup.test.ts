@@ -5,10 +5,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { list as listTar } from 'tar';
 import {
-  dumpDatabase, listBackups, listImageArchives, pruneBackups, readState, writeState, isBackupDue,
+  dumpDatabase, readDump, listBackups, listImageArchives, pruneBackups, readState, writeState, isBackupDue,
   createDbBackup, archiveImages, sweepTempFiles, ArchiveSpaceError,
   BACKUP_FILE_RE, IMAGES_ARCHIVE_RE, resolveBackupDir, type Connectable,
 } from '../src/backup.js';
+import { identityDumpRow } from './site-identity-fixture.js';
+import { DEFAULT_NAVIGATION } from '../../site/src/lib/navigation.js';
 
 let dir: string;
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'backup-')); });
@@ -21,15 +23,23 @@ const fakeDb = (
   mediaFolders: Record<string, unknown>[] = [],
   comments: Record<string, unknown>[] = [],
 ): Connectable => {
+  const language = { id: true, primary_locale: 'de', enabled_locales: ['de', 'en'], locked_at: null, updated_at: '2026-10-27T12:00:00.000Z' };
   // Order matters: 'FROM media_folders' also contains 'FROM media'.
   const query = async (sql: string) => ({
-    rows: sql.includes('FROM users') ? users
+    rows: sql.includes('to_regclass') ? [{ present: true, journeys: true, locales: true, members: true }]
+      : sql.includes('FROM site_language') ? [language]
+      : sql.includes('FROM site_nav') ? [{ id: 1, config: DEFAULT_NAVIGATION, updated_at: language.updated_at }]
+      : /FROM journey(?:s|_locales|_members)/.test(sql) ? []
+      : sql.includes("to_jsonb(posts)->>'omitted'") ? posts.filter(post => post.omitted === true)
+      : sql.includes('FROM users') ? users
       : sql.includes('FROM pages') ? pages
       : sql.includes('FROM media_folders') ? mediaFolders
       : sql.includes('FROM media') ? media
       : sql.includes('FROM app_secrets') ? []
       : sql.includes('FROM comments') ? comments
       : sql.includes('FROM post_routes') ? []
+      : sql.includes('FROM site_identity_assets') ? []
+      : sql.includes('FROM site_identity') ? [identityDumpRow()]
       : posts,
   });
   return { query, connect: async () => ({ query, release() {} }) };
@@ -54,8 +64,8 @@ describe('dumpDatabase', () => {
     const name = await dumpDatabase(
       fakeDb(
         [{ id: 'u1', username: 'simon' }],
-        [{ id: 'p1', slug: 's' }],
-        [{ key: 'about', locale: 'de', title: 'X', body_markdown: 'B', images: {} }],
+        ['de', 'en'].map(locale => ({ id: `p-${locale}`, translation_key: 'p1', locale, slug: 's', status: 'draft', omitted: false, published_snapshot: null, published_at: null })),
+        ['de', 'en'].map(locale => ({ key: 'about', locale, title: 'X', body_markdown: 'B', images: {}, slug: '', status: 'published', published_at: now.toISOString(), updated_at: now.toISOString() })),
         [{ key: 'library/2025/a', folder: 'Island', tags: ['sunrise'] }],
         [{ path: 'Island' }],
         [{ id: 'c1', translation_key: 'p1', locale: 'de', name: 'R', body: 'hi', status: 'pending', is_author: false }],
@@ -68,8 +78,16 @@ describe('dumpDatabase', () => {
     const dump = JSON.parse(gunzipSync(await readFile(join(dir, name))).toString('utf8'));
     expect(dump.tables.comments).toEqual([{ id: 'c1', translation_key: 'p1', locale: 'de', name: 'R', body: 'hi', status: 'pending', is_author: false }]);
     expect(dump.tables.users).toEqual([{ id: 'u1', username: 'simon' }]);
-    expect(dump.tables.posts).toEqual([{ id: 'p1', slug: 's' }]);
-    expect(dump.tables.pages).toEqual([{ key: 'about', locale: 'de', title: 'X', body_markdown: 'B', images: {} }]);
+    expect(dump.version).toBe(14);
+    expect(dump.tables.journeys).toEqual([]);
+    expect(dump.tables.journey_locales).toEqual([]);
+    expect(dump.tables.journey_members).toEqual([]);
+    expect(dump.tables.site_language[0]).toMatchObject({ primary_locale: 'de', enabled_locales: ['de', 'en'] });
+    expect(dump.tables.posts).toEqual(['de', 'en'].map(locale => ({
+      id: `p-${locale}`, translation_key: 'p1', locale, slug: 's', status: 'draft', omitted: false, published_snapshot: null, published_at: null,
+    })));
+    expect(dump.tables.pages).toEqual(['de', 'en'].map(locale => ({ key: 'about', locale, title: 'X', body_markdown: 'B', images: {}, slug: '', status: 'published', published_at: now.toISOString(), updated_at: now.toISOString() })));
+    expect(dump.tables.site_nav[0].config).toEqual(DEFAULT_NAVIGATION);
     // Without these a restore would bring the photos back but lose every
     // folder, caption and tag — the worst kind of partial recovery.
     expect(dump.tables.media).toEqual([{ key: 'library/2025/a', folder: 'Island', tags: ['sunrise'] }]);
@@ -139,6 +157,104 @@ describe('dumpDatabase', () => {
     };
     await expect(dumpDatabase(db, dir)).rejects.toThrow('Encrypted credentials could not be backed up.');
     expect(await readdir(dir)).toEqual([]);
+  });
+
+  it.each([false, true])('captures a pre-language recovery set without inventing identity metadata (pre-identity=%s)', async preIdentity => {
+    const db = fakeDb([{ id: 'u1', username: 'retained' }]);
+    const connect = db.connect;
+    db.connect = async () => {
+      const client = await connect();
+      return { release: client.release, async query(sql, params) {
+        if (sql.includes("to_regclass('site_identity')")) return { rows: [{ absent: preIdentity }] };
+        if (sql.includes("to_regclass('site_language')")) return { rows: [{ present: false }] };
+        if (sql.includes("to_regclass('site_nav')")) return { rows: [{ present: false }] };
+        if (sql.includes("to_regclass('journeys')")) return { rows: [{ journeys: false, locales: false, members: false }] };
+        if (sql.includes('FROM posts ORDER')) expect(sql).not.toContain('omitted');
+        return client.query(sql, params);
+      } };
+    };
+    const file = join(dir, await dumpDatabase(db, dir, new Date(), { preLanguageMigration: true }));
+    const raw = JSON.parse(gunzipSync(await readFile(file)).toString('utf8'));
+    expect(raw.version).toBe(preIdentity ? 10 : 11);
+    expect(raw.tables.site_language).toBeUndefined();
+    expect(raw.tables.users).toEqual([{ id: 'u1', username: 'retained' }]);
+    expect(raw.tables.site_identity).toEqual(preIdentity ? undefined : [identityDumpRow()]);
+    expect(readDump(file).tables.site_language?.[0]).toMatchObject({ primary_locale: 'de', enabled_locales: ['de', 'en'] });
+  });
+
+  it.each([true, false])('labels a pre-route database pre-v10 instead of failing boot (pre-identity=%s)', async preIdentity => {
+    // An owner database from before private routes (and identity) has neither table;
+    // the boot-time recovery set must still be written, honestly versioned and restorable.
+    const db = fakeDb([{ id: 'u1', username: 'retained' }]);
+    const connect = db.connect;
+    db.connect = async () => {
+      const client = await connect();
+      return { release: client.release, async query(sql, params) {
+        if (sql.includes("to_regclass('site_identity')")) return { rows: [{ absent: preIdentity }] };
+        if (sql.includes("to_regclass('post_routes')")) return { rows: [{ absent: true }] };
+        if (sql.includes("to_regclass('journeys')")) return { rows: [{ journeys: false, locales: false, members: false }] };
+        if (sql.includes("to_regclass('site_language')")) return { rows: [{ present: false }] };
+        if (sql.includes("to_regclass('site_nav')")) return { rows: [{ present: false }] };
+        if (sql.includes('FROM post_routes')) throw new Error('relation "post_routes" does not exist');
+        return client.query(sql, params);
+      } };
+    };
+    if (!preIdentity) {
+      await expect(dumpDatabase(db, dir, new Date(), { preLanguageMigration: true })).rejects.toThrow('without the private route schema');
+      expect(await readdir(dir)).toEqual([]);
+      return;
+    }
+    const file = join(dir, await dumpDatabase(db, dir, new Date(), { preLanguageMigration: true }));
+    const raw = JSON.parse(gunzipSync(await readFile(file)).toString('utf8'));
+    expect(raw.version).toBe(9);
+    expect(raw.tables).not.toHaveProperty('post_routes');
+    expect(raw.tables.users).toEqual([{ id: 'u1', username: 'retained' }]);
+    expect(readDump(file).version).toBe(9);
+  });
+
+  it.each(['primary', 'single', 'omitted', 'lock'])('refuses pre-migration downgrade of active %s language metadata', async kind => {
+    const db = fakeDb();
+    const connect = db.connect;
+    db.connect = async () => {
+      const client = await connect();
+      return { release: client.release, async query(sql, params) {
+        if (sql.includes('FROM pg_attribute')) return { rows: [{ present: false }] };
+        if (kind === 'omitted' && sql.includes("to_jsonb(posts)->>'omitted'")) return { rows: [{ present: 1 }] };
+        const result = await client.query(sql, params);
+        if (sql.includes('FROM site_language')) {
+          if (kind === 'primary') result.rows[0]!.primary_locale = 'en';
+          if (kind === 'single') result.rows[0]!.enabled_locales = ['de'];
+          if (kind === 'lock') result.rows[0]!.locked_at = '2026-10-27T12:00:00.000Z';
+        }
+        return result;
+      } };
+    };
+    await expect(dumpDatabase(db, dir, new Date(), { preLanguageMigration: true })).rejects.toThrow(/legacy recovery set/);
+    expect(await readdir(dir)).toEqual([]);
+  });
+
+  it('preserves an active mode and persistent lock when only the omission CHECK needs migration', async () => {
+    const db = fakeDb();
+    const connect = db.connect;
+    db.connect = async () => {
+      const client = await connect();
+      return { release: client.release, async query(sql, params) {
+        if (sql.includes('FROM pg_attribute')) return { rows: [{ present: true }] };
+        const result = await client.query(sql, params);
+        if (sql.includes('FROM site_language')) {
+          result.rows[0]!.primary_locale = 'en';
+          result.rows[0]!.enabled_locales = ['en'];
+          result.rows[0]!.locked_at = '2026-10-27T12:00:00.000Z';
+        }
+        return result;
+      } };
+    };
+    const file = join(dir, await dumpDatabase(db, dir, new Date(), { preLanguageMigration: true }));
+    const dump = readDump(file);
+    expect(dump.version).toBe(14);
+    expect(dump.tables.site_language?.[0]).toMatchObject({
+      primary_locale: 'en', enabled_locales: ['en'], locked_at: '2026-10-27T12:00:00.000Z',
+    });
   });
 });
 

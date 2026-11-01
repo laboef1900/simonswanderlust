@@ -36,8 +36,16 @@ export const ENCODE_CONCURRENCY = 2;
 export const MAX_BACKLOG = 200;
 
 export interface EncodeQueue {
-  /** Enqueue a stored key for encoding. Throws when the backlog is full. */
+  /**
+   * Serialize same-key preparation, admission and rollback. Upload, Retry and
+   * recovery MUST read the row inside this boundary before deciding its status.
+   * Do not hold it for the encode itself.
+   */
+  withAdmission<T>(key: string, operation: () => Promise<T>): Promise<T>;
+  /** Enqueue synchronously inside withAdmission; throws when the backlog is full. */
   enqueue(key: string): void;
+  availableCapacity(): number;
+  onCapacity(listener: () => void): () => void;
   /**
    * True while `key` is queued or encoding. `DELETE /media/items/*` refuses
    * such a key: the job holds the original in memory and would write its
@@ -76,6 +84,8 @@ export interface EncodeQueueOptions extends WorkCancellationOptions {
   lock: WorkLock;
   concurrency?: number;
   maxBacklog?: number;
+  /** Pending receipt originals must be validated by their receipt recovery owner. */
+  canRecover?: (key: string) => Promise<boolean>;
   /** Injected for tests; production passes the row's persisted encoding snapshot. */
   encodeOne?: (key: string, profile: Pick<MediaItem, 'format' | 'encoding'>) => Promise<{ bytes: number }>;
   log?: (msg: string) => void;
@@ -110,6 +120,19 @@ function escapeRe(s: string): string {
 export function createEncodeQueue(opts: EncodeQueueOptions): EncodeQueue {
   const work = createWorkCancellation(opts);
   const recoveries = new Set<Promise<number>>();
+  const admissions = new Map<string, Promise<unknown>>();
+  function withAdmission<T>(key: string, operation: () => Promise<T>): Promise<T> {
+    const previous = admissions.get(key) ?? Promise.resolve();
+    const admitted = previous.catch(() => {}).then(() => {
+      work.assertWritable();
+      if (draining) throw new Error('the encode queue is draining');
+      return operation();
+    });
+    admissions.set(key, admitted);
+    const release = () => { if (admissions.get(key) === admitted) admissions.delete(key); };
+    void admitted.then(release, release);
+    return admitted;
+  }
   const concurrency = opts.concurrency ?? ENCODE_CONCURRENCY;
   const maxBacklog = opts.maxBacklog ?? MAX_BACKLOG;
   const log = opts.log ?? ((m: string) => console.log(m));
@@ -117,6 +140,7 @@ export function createEncodeQueue(opts: EncodeQueueOptions): EncodeQueue {
 
   const pending: string[] = [];
   const inFlight = new Set<string>();
+  const capacityListeners = new Set<() => void>();
   let idleWaiters: (() => void)[] = [];
   /** Set by stop()/drain(): pump() stops dequeuing while admitted jobs settle. */
   let draining = false;
@@ -201,6 +225,9 @@ export function createEncodeQueue(opts: EncodeQueueOptions): EncodeQueue {
     } finally {
       inFlight.delete(key);
       pump();
+      if (!draining && work.isWritable()) {
+        for (const listener of capacityListeners) listener();
+      }
     }
   }
 
@@ -219,6 +246,12 @@ export function createEncodeQueue(opts: EncodeQueueOptions): EncodeQueue {
   work.signal.addEventListener('abort', stop, { once: true });
   if (!work.isWritable()) stop();
   return {
+    withAdmission,
+    availableCapacity: () => draining || !work.isWritable() ? 0 : Math.max(0, maxBacklog - pending.length),
+    onCapacity(listener) {
+      capacityListeners.add(listener);
+      return () => { capacityListeners.delete(listener); };
+    },
     enqueue(key) {
       work.assertWritable();
       if (draining) throw new Error('the encode queue is draining');
@@ -239,20 +272,28 @@ export function createEncodeQueue(opts: EncodeQueueOptions): EncodeQueue {
         });
         work.assertWritable();
         if (draining) throw new Error('the encode queue is draining');
-        const queued = new Set<string>([...pending, ...inFlight]);
         let n = 0;
         for (const item of items) {
-          if (queued.has(item.key) || pending.length >= maxBacklog) continue;
-          pending.push(item.key);
-          queued.add(item.key);
-          n++;
+          await withAdmission(item.key, async () => {
+            if (opts.canRecover && !await opts.canRecover(item.key)) return;
+            // The list may predate an upload rollback that we waited for.
+            // Never admit its now-failed row from that stale snapshot.
+            if ((await opts.store.get(item.key))?.status !== 'processing') return;
+            work.assertWritable();
+            if (draining) throw new Error('the encode queue is draining');
+            if (inFlight.has(item.key) || pending.includes(item.key) || pending.length >= maxBacklog) return;
+            pending.push(item.key);
+            n++;
+            // A later row read can fail; admitted work must not depend on
+            // the rest of this recovery scan succeeding.
+            pump();
+          });
         }
         if (n > 0) log(`encode queue: recovered ${n} unfinished upload(s)`);
         // No silent truncation: say so when the cap left work behind. The rest
         // is picked up by the next reconcile pass (POST /media/rescan or a
         // restart) — NOT by POST /media/retry, which skips `processing` rows.
         if (total > n) log(`encode queue: ${total - n} more still pending — re-run recovery after this batch`);
-        pump();
         return n;
       })();
       recoveries.add(recovery);
@@ -262,6 +303,7 @@ export function createEncodeQueue(opts: EncodeQueueOptions): EncodeQueue {
     async quiesce() {
       work.stop();
       await Promise.allSettled([...recoveries]);
+      await Promise.allSettled([...admissions.values()]);
       if (isIdle()) return;
       const { promise, resolve } = Promise.withResolvers<void>();
       idleWaiters.push(resolve);

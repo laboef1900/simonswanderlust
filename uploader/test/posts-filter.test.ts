@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { REGIONS } from '../src/db.js';
+import { publication, loadPublicationState, type AvailablePublication } from './publication-client-fixture.js';
 
 // posts-filter.js is a plain browser IIFE (window.PostsFilter) holding the
 // posts list's pure search/filter/sort and thumbnail-URL logic. Run it in a vm
@@ -11,9 +12,10 @@ import { REGIONS } from '../src/db.js';
 const src = readFileSync('public/posts-filter.js', 'utf8');
 
 interface Summary {
-  translationKey: string; titleDe: string; slugDe: string; slugEn: string;
-  status: 'draft' | 'published'; updatedAt: string; hasUnpublishedChanges: boolean;
-  hasEnBody: boolean; heroSrc: string; heroWidth: number; heroFormat?: 'jpeg';
+  translationKey: string; title: string; slugs: { de: string; en: string };
+  status: 'draft' | 'published'; updatedAt: string;
+  publication: AvailablePublication | { availability: 'unavailable' } | { availability: 'missing' };
+  secondaryStatus: 'none' | 'omitted' | 'empty' | 'started'; heroSrc: string; heroWidth: number; heroFormat?: 'jpeg';
   date: string; country: string; region: string;
 }
 interface Api {
@@ -28,15 +30,15 @@ interface Api {
 
 function load(): Api {
   const windowStub: { PostsFilter?: Api } = {};
-  vm.runInNewContext(src, { window: windowStub, URLSearchParams });
+  vm.runInNewContext(src, { window: windowStub, URLSearchParams, PublicationState: loadPublicationState() });
   if (!windowStub.PostsFilter) throw new Error('posts-filter.js did not assign window.PostsFilter');
   return windowStub.PostsFilter;
 }
 
 const post = (o: Partial<Summary>): Summary => ({
-  translationKey: 'tk', titleDe: 'Titel', slugDe: 'slug-de', slugEn: 'slug-en',
-  status: 'draft', updatedAt: '2025-01-01T00:00:00.000Z', hasUnpublishedChanges: false,
-  hasEnBody: true, heroSrc: 'https://img/h', heroWidth: 1600,
+  translationKey: 'tk', title: 'Titel', slugs: { de: 'slug-de', en: 'slug-en' },
+  status: 'draft', updatedAt: '2025-01-01T00:00:00.000Z', publication: publication(o.status || 'draft'),
+  secondaryStatus: 'started', heroSrc: 'https://img/h', heroWidth: 1600,
   date: '2024-05-01', country: 'Rumänien', region: 'europe', ...o,
 });
 
@@ -94,9 +96,9 @@ describe('PostsFilter.countries', () => {
 describe('PostsFilter.apply — filtering', () => {
   const api = load();
   const posts = [
-    post({ translationKey: 'a', titleDe: 'Bukarest', country: 'Rumänien', region: 'europe', status: 'published' }),
-    post({ translationKey: 'b', titleDe: 'Reykjavík', slugDe: 'island-2023', country: 'Island', region: 'europe', status: 'draft' }),
-    post({ translationKey: 'c', titleDe: 'Patagonien', country: 'Chile', region: 'south-america', status: 'draft' }),
+    post({ translationKey: 'a', title: 'Bukarest', country: 'Rumänien', region: 'europe', status: 'published' }),
+    post({ translationKey: 'b', title: 'Reykjavík', slugs: { de: 'island-2023', en: 'iceland' }, country: 'Island', region: 'europe', status: 'draft' }),
+    post({ translationKey: 'c', title: 'Patagonien', country: 'Chile', region: 'south-america', status: 'draft' }),
   ];
   const keys = (r: Summary[]) => r.map((p) => p.translationKey);
 
@@ -130,14 +132,18 @@ describe('PostsFilter.apply — filtering', () => {
 
   it('filters the two editorial readiness states without changing draft/published semantics', () => {
     const readiness = [
-      post({ translationKey: 'changed', status: 'published', hasUnpublishedChanges: true, hasEnBody: true }),
-      post({ translationKey: 'missing-live', status: 'published', hasUnpublishedChanges: false, hasEnBody: false }),
-      post({ translationKey: 'missing-draft', status: 'draft', hasUnpublishedChanges: false, hasEnBody: false }),
+      post({ translationKey: 'changed', status: 'published', publication: publication('published', true), secondaryStatus: 'started' }),
+      post({ translationKey: 'missing-live', status: 'published', secondaryStatus: 'empty' }),
+      post({ translationKey: 'missing-draft', status: 'draft', secondaryStatus: 'empty' }),
     ];
     expect(keys(api.apply(readiness, { status: 'unpublished' }))).toEqual(['changed']);
-    expect(keys(api.apply(readiness, { status: 'missing-en' }))).toEqual(['missing-live', 'missing-draft']);
+    expect(keys(api.apply(readiness, { status: 'missing-secondary' }))).toEqual(['missing-live', 'missing-draft']);
     expect(keys(api.apply(readiness, { status: 'draft' }))).toEqual(['missing-draft']);
     expect(keys(api.apply(readiness, { status: 'published' }))).toEqual(['changed', 'missing-live']);
+  });
+
+  it('does not report intentionally omitted or disabled translations as missing', () => {
+    expect(api.apply([post({ secondaryStatus: 'none' }), post({ secondaryStatus: 'omitted' })], { status: 'missing-secondary' })).toEqual([]);
   });
 
   it('does not mutate the input array', () => {
@@ -150,9 +156,9 @@ describe('PostsFilter.apply — filtering', () => {
 describe('PostsFilter.apply — sorting', () => {
   const api = load();
   const posts = [
-    post({ translationKey: 'a', titleDe: 'Bukarest', date: '2024-05-01', updatedAt: '2025-01-02T00:00:00.000Z' }),
-    post({ translationKey: 'b', titleDe: 'Ålesund', date: '2023-01-01', updatedAt: '2025-01-03T00:00:00.000Z' }),
-    post({ translationKey: 'c', titleDe: 'Chile', date: '2025-09-09', updatedAt: '2025-01-01T00:00:00.000Z' }),
+    post({ translationKey: 'a', title: 'Bukarest', date: '2024-05-01', updatedAt: '2025-01-02T00:00:00.000Z' }),
+    post({ translationKey: 'b', title: 'Ålesund', date: '2023-01-01', updatedAt: '2025-01-03T00:00:00.000Z' }),
+    post({ translationKey: 'c', title: 'Chile', date: '2025-09-09', updatedAt: '2025-01-01T00:00:00.000Z' }),
   ];
   const keys = (r: Summary[]) => r.map((p) => p.translationKey);
 
@@ -179,7 +185,7 @@ describe('PostsFilter URL state', () => {
   it('round-trips non-default filters and omits inventory defaults', () => {
     const query = api.toSearch({
       q: 'Rhodes & sun',
-      status: 'missing-en',
+      status: 'missing-secondary',
       region: 'europe',
       country: 'Griechenland',
       sort: 'title',
@@ -187,7 +193,7 @@ describe('PostsFilter URL state', () => {
     });
     expect(api.fromSearch('?' + query, ['Griechenland'])).toEqual({
       q: 'Rhodes & sun',
-      status: 'missing-en',
+      status: 'missing-secondary',
       region: 'europe',
       country: 'Griechenland',
       sort: 'title',
@@ -218,3 +224,16 @@ describe('PostsFilter URL state', () => {
 });
 
 
+
+it('filters only observed newer drafts, including pending translation coverage, never unavailable or missing projections', () => {
+  const api = load();
+  const rows = [
+    post({ translationKey: 'pending-secondary', status: 'published', publication: {
+      ...publication('published', true), committedLocales: ['en'], live: { de: 'not-live', en: 'live' },
+    } }),
+    post({ translationKey: 'clean', status: 'published', publication: publication() }),
+    post({ translationKey: 'unknown', status: 'published', publication: { availability: 'unavailable' } }),
+    post({ translationKey: 'deleted', status: 'published', publication: { availability: 'missing' } }),
+  ];
+  expect(api.apply(rows, { status: 'unpublished' }).map((row) => row.translationKey)).toEqual(['pending-secondary']);
+});

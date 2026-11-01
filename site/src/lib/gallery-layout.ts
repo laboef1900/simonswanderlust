@@ -1,7 +1,6 @@
 /**
- * Justified-row geometry plus the readers for what a ```gallery fence says
- * about itself: the `#layout:` and `#captions:` directives and a photo line's
- * gallery-local `caption-override="…"`.
+ * Justified-row geometry and gallery-wide layout/caption directive readers.
+ * Photo-line metadata is decoded by uploader/public/gallery-photo-line.js.
  *
  * @ai-context docs/superpowers/specs/2026-07-29-gallery-layout-modes-and-lightbox-design.md
  *
@@ -110,43 +109,6 @@ export function readLayoutMode(fenceText: string): GalleryMode {
   return DEFAULT_GALLERY_MODE;
 }
 
-/**
- * Longest alt/caption a gallery line may carry. The uploader's `images`-map
- * validation (`body-content.ts`) uses the same cap.
- */
-export const MAX_GALLERY_TEXT = 1000;
-
-/**
- * Escape a gallery-line alt/caption value: the HTML-ish `& " < >` rule plus
- * the two characters this one-line-per-photo format adds — `|` is the field
- * separator and a newline would end the line. `unescapeMeta` is the exact
- * inverse.
- *
- * @ai-warning `uploader/public/gallery-fence.js` duplicates this pair (a
- * browser IIFE cannot import a module); `uploader/test/gallery-fence.test.ts`
- * compares them character for character. The uploader (`body-content.ts`,
- * `wp-content.ts`) imports this pair cross-tree rather than keeping a third copy.
- */
-export function escapeMeta(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/"/g, '&quot;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/\|/g, '&#124;')
-    .replace(/\r?\n/g, '&#10;');
-}
-
-/** Inverse of escapeMeta — `&amp;` last, so `&amp;quot;` round-trips to `&quot;`. */
-export function unescapeMeta(s: string): string {
-  return s
-    .replace(/&#10;/g, '\n')
-    .replace(/&#124;/g, '|')
-    .replace(/&quot;/g, '"')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&amp;/g, '&');
-}
 
 /**
  * A whole line reading `#captions: <value>` — the same shape and tolerance as
@@ -177,28 +139,6 @@ export function readCaptionsVisible(fenceText: string): boolean {
   return true;
 }
 
-/** One trimmed `|`-separated photo-line field holding a gallery-local caption. */
-export const CAPTION_OVERRIDE_FIELD_RE = /^caption-override="([^"]*)"$/;
-
-/**
- * A photo line's gallery-local caption: `undefined` when the line carries no
- * `caption-override="…"` field (inherit the library/stored caption), the
- * unescaped, capped text otherwise — `''` included, which is an intentional
- * clear. The last such field wins, like `alt=`/`caption=` on the same line.
- *
- * @ai-warning This value MUST stay on the photo line. Lifting it into the
- * URL-keyed `images` map would apply one gallery's caption to every gallery
- * (and inline use) of the same photo — the save normalizer and the MDX
- * exporter in `uploader/src/body-content.ts` both keep it inline.
- */
-export function readCaptionOverride(line: string): string | undefined {
-  let value: string | undefined;
-  for (const field of String(line ?? '').split('|').slice(1)) {
-    const m = CAPTION_OVERRIDE_FIELD_RE.exec(field.trim());
-    if (m) value = unescapeMeta(m[1] ?? '').slice(0, MAX_GALLERY_TEXT);
-  }
-  return value;
-}
 
 /** The container a justified mode partitions against. `slider` never partitions. */
 export function containerWidthFor(mode: Exclude<GalleryMode, 'slider'>): number {
@@ -216,50 +156,221 @@ export function galleryHeightAt(rows: readonly (readonly number[])[], width: num
   return rows.reduce((a, row) => a + rowHeightAt(row, width), 0) + (rows.length - 1) * ROW_GAP;
 }
 
+/** One unit is a prefix, edge, DP state/transition, or reconstruction photo. */
+export type PartitionPhase = 'prepare' | 'bounds' | 'objective' | 'reconstruct';
+export const PARTITION_WORK_QUANTUM = 4096;
+export interface PartitionWork {
+  operations: number;
+  phase: PartitionPhase;
+}
+export interface PartitionOptions {
+  /** Requests inject a real event-loop yield; builds omit it and drain synchronously. */
+  schedule?: (work: PartitionWork) => Promise<void>;
+}
+
+/** Optional inspection for oracle tests; request/build drivers do not collect it. */
+export interface PartitionCandidate {
+  count: number;
+  lower: number;
+  upper: number;
+  incumbent: number;
+  skipped: boolean;
+}
+
+interface RowEdge {
+  start: number;
+  height: number;
+  actualHeight: number;
+}
+
 /**
- * The partition of `ratios` into exactly `k` contiguous rows whose heights are
- * the most even — the one minimising Σ (height − target)², where `target` is
- * the height `k` equal rows would need to stack to a square — or `null` when
- * every such partition has a multi-photo row under MIN_ROW_HEIGHT. Dynamic
- * programming over the row boundaries; O(k · n²).
+ * Conservative interval rejection. Roundoff near an incumbent is deliberately
+ * evaluated, not pruned. Bounds use direct row sums (the final height's arithmetic),
+ * whereas the evenness objective keeps the original prefix-subtraction arithmetic.
  */
-function evenestRows(ratios: readonly number[], width: number, k: number): number[][] | null {
-  const n = ratios.length;
-  const target = (width - (k - 1) * ROW_GAP) / k;
+export function cannotImprovePartition(
+  lower: number, upper: number, width: number, closest: number, count: number,
+): boolean {
+  const distance = Math.max(lower - width, width - upper, 0);
+  const slack = Number.EPSILON * 32 * (count + 1) * Math.max(1, Math.abs(lower), Math.abs(upper), width, closest);
+  return distance > closest + slack;
+}
+
+/**
+ * One resumable exact optimizer for both runtimes. Each yielded chunk accounts
+ * for at most PARTITION_WORK_QUANTUM operations, including initialization.
+ * No process-global scratch state. Native buffer allocation is not a wall-clock
+ * guarantee; total worst-case work remains O(n³ B), memory O(n² + n B).
+ */
+export function* partitionRowWork(
+  ratios: readonly number[], containerWidth: number,
+  inspectCandidate?: (candidate: PartitionCandidate) => void,
+): Generator<PartitionWork, GalleryRow[], void> {
+  let operations = 0;
+  const width = Number.isFinite(containerWidth) && containerWidth > 0 ? containerWidth : BREAKOUT_WIDTH;
+  const usable: number[] = [];
   const prefix = [0];
-  for (const r of ratios) prefix.push(prefix[prefix.length - 1]! + r);
-  // Cost of the row holding photos [from, to); infinite when it is too short.
-  const cost = (from: number, to: number) => {
-    const h = (width - (to - from - 1) * ROW_GAP) / (prefix[to]! - prefix[from]!);
-    return to - from > 1 && h < MIN_ROW_HEIGHT ? Number.POSITIVE_INFINITY : (h - target) ** 2;
-  };
-  // best[i] = cheapest split of the first i photos into the current number of
-  // rows; parent[j][i] = where that split's last row starts.
-  let best = Array.from({ length: n + 1 }, (_, i) => (i === 0 ? Number.POSITIVE_INFINITY : cost(0, i)));
-  const parent: number[][] = [Array.from({ length: n + 1 }, () => 0)];
-  for (let j = 2; j <= k; j++) {
-    const next = new Array<number>(n + 1).fill(Number.POSITIVE_INFINITY);
-    const from = new Array<number>(n + 1).fill(0);
-    for (let i = j; i <= n; i++) {
-      for (let m = j - 1; m < i; m++) {
-        const c = best[m]! + cost(m, i);
-        if (c < next[i]!) {
-          next[i] = c;
-          from[i] = m;
+  for (const ratio of ratios) {
+    if (Number.isFinite(ratio) && ratio > 0) {
+      usable.push(ratio);
+      prefix.push(prefix[prefix.length - 1]! + ratio);
+    }
+    if (++operations === PARTITION_WORK_QUANTUM) { yield { operations, phase: 'prepare' }; operations = 0; }
+  }
+  const n = usable.length;
+  if (!n) {
+    if (operations) yield { operations, phase: 'prepare' };
+    return [];
+  }
+  const incoming: RowEdge[][] = [];
+  const minimum = new Int32Array(n + 1);
+  const suffix = new Int32Array(n + 1);
+  for (let i = 0; i <= n; i++) {
+    incoming.push([]);
+    minimum[i] = i === 0 ? 0 : n;
+    if (++operations === PARTITION_WORK_QUANTUM) { yield { operations, phase: 'prepare' }; operations = 0; }
+  }
+  // Advancing starts puts each incoming list in the original ascending
+  // predecessor order. Strict '<' below therefore preserves every DP tie.
+  const maxLength = Math.floor(width / ROW_GAP) + 1;
+  for (let start = 0; start < n; start++) {
+    let sum = 0;
+    for (let end = start + 1; end <= n && end - start <= maxLength; end++) {
+      sum += usable[end - 1]!;
+      const numerator = width - (end - start - 1) * ROW_GAP;
+      const height = numerator / (prefix[end]! - prefix[start]!);
+      if (++operations === PARTITION_WORK_QUANTUM) { yield { operations, phase: 'prepare' }; operations = 0; }
+      if (end - start > 1 && height < MIN_ROW_HEIGHT) break;
+      incoming[end]!.push({ start, height, actualHeight: numerator / sum });
+      minimum[end] = Math.min(minimum[end]!, minimum[start]! + 1);
+    }
+  }
+  // Every legal row can be split into legal rows, so reachable counts form
+  // [minimum, photo count]. Suffix minima give the same exact reachability
+  // test for the unfinished part of a candidate.
+  for (let end = n; end > 0; end--) {
+    for (const edge of incoming[end]!) {
+      const value = suffix[end]! + 1;
+      if (suffix[edge.start] === 0 || value < suffix[edge.start]!) suffix[edge.start] = value;
+      if (++operations === PARTITION_WORK_QUANTUM) { yield { operations, phase: 'prepare' }; operations = 0; }
+    }
+  }
+  if (operations) { yield { operations, phase: 'prepare' }; operations = 0; }
+  let low = new Float64Array(n + 1).fill(Infinity);
+  let high = new Float64Array(n + 1).fill(-Infinity);
+  low[0] = high[0] = 0;
+  let nextLow = new Float64Array(n + 1);
+  let nextHigh = new Float64Array(n + 1);
+  const lower = new Float64Array(n + 1);
+  const upper = new Float64Array(n + 1);
+  for (let count = 1; count <= n; count++) {
+    for (let end = 0; end <= n; end++) {
+      nextLow[end] = Infinity;
+      nextHigh[end] = -Infinity;
+      if (++operations === PARTITION_WORK_QUANTUM) { yield { operations, phase: 'bounds' }; operations = 0; }
+      if (end < count || minimum[end]! > count) continue;
+      for (const edge of incoming[end]!) {
+        if (edge.start >= count - 1 && minimum[edge.start]! <= count - 1) {
+          nextLow[end] = Math.min(nextLow[end]!, low[edge.start]! + edge.actualHeight);
+          nextHigh[end] = Math.max(nextHigh[end]!, high[edge.start]! + edge.actualHeight);
         }
+        if (++operations === PARTITION_WORK_QUANTUM) { yield { operations, phase: 'bounds' }; operations = 0; }
       }
     }
-    best = next;
-    parent.push(from);
+    lower[count] = nextLow[n]! + (count - 1) * ROW_GAP;
+    upper[count] = nextHigh[n]! + (count - 1) * ROW_GAP;
+    [low, nextLow] = [nextLow, low];
+    [high, nextHigh] = [nextHigh, high];
   }
-  if (!Number.isFinite(best[n])) return null;
-  const rows: number[][] = [];
-  for (let j = k, end = n; j >= 1; j--) {
-    const start = parent[j - 1]![end]!;
-    rows.unshift(ratios.slice(start, end));
-    end = start;
+  if (operations) { yield { operations, phase: 'bounds' }; operations = 0; }
+  let closest = Infinity;
+  let winner: number[][] = [];
+  for (let count = minimum[n]!; count <= n; count++) {
+    if (++operations === PARTITION_WORK_QUANTUM) { yield { operations, phase: 'objective' }; operations = 0; }
+    const skipped = cannotImprovePartition(lower[count]!, upper[count]!, width, closest, n);
+    inspectCandidate?.({ count, lower: lower[count]!, upper: upper[count]!, incumbent: closest, skipped });
+    if (skipped) continue;
+    const target = (width - (count - 1) * ROW_GAP) / count;
+    let best = new Float64Array(n + 1).fill(Infinity);
+    let next = new Float64Array(n + 1);
+    best[0] = 0;
+    const parents: Int32Array[] = [];
+    for (let row = 1; row <= count; row++) {
+      const parent = new Int32Array(n + 1);
+      parents.push(parent);
+      for (let end = 0; end <= n; end++) {
+        next[end] = Infinity;
+        if (++operations === PARTITION_WORK_QUANTUM) { yield { operations, phase: 'objective' }; operations = 0; }
+        const remaining = count - row;
+        if (end < row || minimum[end]! > row || n - end < remaining || suffix[end]! > remaining) continue;
+        for (const edge of incoming[end]!) {
+          const cost = best[edge.start]! + (edge.height - target) ** 2;
+          if (cost < next[end]!) {
+            next[end] = cost;
+            parent[end] = edge.start;
+          }
+          if (++operations === PARTITION_WORK_QUANTUM) { yield { operations, phase: 'objective' }; operations = 0; }
+        }
+      }
+      [best, next] = [next, best];
+    }
+    if (operations) { yield { operations, phase: 'objective' }; operations = 0; }
+    if (!Number.isFinite(best[n])) continue;
+    const candidate = new Array<number[]>(count);
+    for (let row = count, end = n; row > 0; row--) {
+      const start = parents[row - 1]![end]!;
+      const values: number[] = [];
+      for (let i = start; i < end; i++) {
+        values.push(usable[i]!);
+        if (++operations === PARTITION_WORK_QUANTUM) { yield { operations, phase: 'reconstruct' }; operations = 0; }
+      }
+      candidate[row - 1] = values;
+      end = start;
+    }
+    let height = 0;
+    for (const row of candidate) {
+      let sum = 0;
+      for (const ratio of row) {
+        sum += ratio;
+        if (++operations === PARTITION_WORK_QUANTUM) { yield { operations, phase: 'reconstruct' }; operations = 0; }
+      }
+      height += (width - (row.length - 1) * ROW_GAP) / sum;
+    }
+    const distance = Math.abs(height + (count - 1) * ROW_GAP - width);
+    if (distance < closest) {
+      closest = distance;
+      winner = candidate;
+    }
+    if (operations) { yield { operations, phase: 'reconstruct' }; operations = 0; }
   }
-  return rows;
+  const result: GalleryRow[] = [];
+  for (const row of winner) {
+    let sum = 0;
+    for (const ratio of row) {
+      sum += ratio;
+      if (++operations === PARTITION_WORK_QUANTUM) { yield { operations, phase: 'reconstruct' }; operations = 0; }
+    }
+    const height = (width - (row.length - 1) * ROW_GAP) / sum;
+    result.push({
+      ratios: row,
+      maxWidthFraction: height <= width ? null : (width * sum + (row.length - 1) * ROW_GAP) / width,
+    });
+  }
+  if (operations) yield { operations, phase: 'reconstruct' };
+  return result;
+}
+
+/** Request driver: never substitutes microtasks for the supplied scheduler. */
+export async function partitionRowsAsync(
+  ratios: readonly number[], width: number, options: PartitionOptions = {},
+): Promise<GalleryRow[]> {
+  if (!options.schedule) return partitionRows(ratios, width);
+  const work = partitionRowWork(ratios, width);
+  for (;;) {
+    const step = work.next();
+    if (step.done) return step.value;
+    await options.schedule(step.value);
+  }
 }
 
 /**
@@ -267,7 +378,7 @@ function evenestRows(ratios: readonly number[], width: number, k: number): numbe
  *
  * Every row fills the container; the number of rows is whichever brings the
  * stacked height closest to the container width, and within that count the
- * rows are as even as the photos' ratios allow (see evenestRows). Order is
+ * rows are as even as the photos' ratios allow (see partitionRowWork). Order is
  * never changed — the author's sequence is the story — so the square is only
  * as exact as a contiguous split can make it, and a gallery of two landscapes
  * stacks them rather than leaving a wide, short pair.
@@ -281,7 +392,7 @@ function evenestRows(ratios: readonly number[], width: number, k: number): numbe
  * and the 1112px break-out; what the width mainly changes is how large the
  * square is.
  *
- * @ai-note Row MEMBERSHIP is fixed here, at build time, for `containerWidth`.
+ * @ai-note Row MEMBERSHIP is fixed here, at render time, for `containerWidth`.
  * Only the justification WITHIN a row is fluid (the emitted ratios let the
  * browser redo that arithmetic at any width). Between ~600px and the design
  * width the same rows simply get shorter; below that the CSS container query
@@ -289,35 +400,9 @@ function evenestRows(ratios: readonly number[], width: number, k: number): numbe
  * read the ratio emission as making the whole layout responsive.
  */
 export function partitionRows(ratios: readonly number[], containerWidth: number): GalleryRow[] {
-  const width = Number.isFinite(containerWidth) && containerWidth > 0 ? containerWidth : BREAKOUT_WIDTH;
-  // The caller validates dimensions before it gets here; this is the second
-  // line of defence, because a NaN ratio would propagate silently into a
-  // `max-width` and collapse the row to nothing.
-  const usable = [...ratios].filter((r) => Number.isFinite(r) && r > 0);
-  if (usable.length === 0) return [];
-
-  // k = n (one photo per row) is always legal, so a candidate always exists.
-  // Strictly closer wins, so a tie keeps the fewer, larger rows.
-  let rows: number[][] = [];
-  let closest = Number.POSITIVE_INFINITY;
-  for (let k = 1; k <= usable.length; k++) {
-    const candidate = evenestRows(usable, width, k);
-    if (candidate === null) continue;
-    const distance = Math.abs(galleryHeightAt(candidate, width) - width);
-    if (distance < closest) {
-      rows = candidate;
-      closest = distance;
-    }
+  const work = partitionRowWork(ratios, containerWidth);
+  for (;;) {
+    const step = work.next();
+    if (step.done) return step.value;
   }
-
-  return rows.map((ratiosInRow) => {
-    // A row taller than the square is wide (realistically a lone portrait)
-    // is capped at that height instead of filling the width. Everything else
-    // fills, and omitting the cap keeps the emitted style attribute (and the
-    // DOM) free of noise.
-    if (rowHeightAt(ratiosInRow, width) <= width) return { ratios: ratiosInRow, maxWidthFraction: null };
-    const sum = ratiosInRow.reduce((a, x) => a + x, 0);
-    const capped = width * sum + (ratiosInRow.length - 1) * ROW_GAP;
-    return { ratios: ratiosInRow, maxWidthFraction: capped / width };
-  });
 }

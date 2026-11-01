@@ -4,7 +4,7 @@ import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { gunzipSync, gzipSync } from 'node:zlib';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createPool, ensureSchema, type DbPool } from '../src/db.js';
@@ -15,6 +15,8 @@ import { dumpDatabase, readDump, restoreDatabase, BACKUP_FILE_RE, DUMP_VERSION }
 import { pgCommentStore } from '../src/comments.js';
 import { pgMediaStore } from '../src/media-store.js';
 import { runCli } from './run-cli.js';
+import { seedSiteIdentity } from '../src/site-identity.js';
+import { publishTokens } from './publish-tokens.js';
 
 const url = process.env.TEST_DATABASE_URL;
 const maybe = url ? describe : describe.skip;
@@ -25,6 +27,7 @@ maybe('backup round-trip (Postgres)', () => {
   beforeAll(async () => {
     pool = createPool(url as string);
     await ensureSchema(pool);
+    await seedSiteIdentity(pool);
     await pool.query('DELETE FROM posts');
     await pool.query('DELETE FROM sessions');
     await pool.query('DELETE FROM users');
@@ -58,13 +61,24 @@ maybe('backup round-trip (Postgres)', () => {
     // pair: with TZ=Europe/Berlin, rowShared's Date→string conversion shifts
     // the calendar date west, and re-saving it would poison the date column —
     // a pre-existing quirk this test deliberately keeps out of its scope.)
-    await posts.publish(createdPair.translationKey, { baseUpdatedAt: createdPair.updatedAt, baseRouteVersion: null });
+    await posts.publish(createdPair.translationKey, await publishTokens(posts, createdPair.translationKey));
     await posts.upsertDraft({ ...base, translationKey: createdPair.translationKey, de: { ...base.de, bodyMarkdown: 'Hallo v2',
       titleImage: { ...base.de.titleImage, src: 'https://img.example/title-draft' } } });
     await pool.query(`INSERT INTO pages (key,locale,title,body_markdown) VALUES ('about','de','T','Body')
       ON CONFLICT (key,locale) DO UPDATE SET title=EXCLUDED.title, body_markdown=EXCLUDED.body_markdown`);
+    await pool.query(`UPDATE posts SET last_save_id='11111111-1111-4111-8111-111111111111', last_save_by=$1`, [u.id]);
+    await pool.query(`UPDATE pages SET last_save_id='11111111-1111-4111-8111-111111111111', last_save_by=$1`, [u.id]);
+    const addReceipt = () => pool.query(`INSERT INTO upload_receipts
+      (user_id,upload_id,media_key,sha256,identity,frozen,state,incarnation,claim)
+      VALUES ($1,'33333333-3333-4333-8333-333333333333','library/photo-12345678',$2,
+        '{"key":"","filename":"photo.jpg","title":"","alt":"","folder":""}',
+        '{"baseKey":"library/photo","encoding":{},"ext":"jpg","width":8,"height":6,"bytes":100}',
+        'pending','44444444-4444-4444-8444-444444444444','55555555-5555-4555-8555-555555555555')`, [u.id, 'a'.repeat(64)]);
+    await addReceipt();
 
     const file = join(dir, await dumpDatabase(pool, dir));
+    const exported = await readDump(file);
+    expect(JSON.stringify(exported)).not.toMatch(/last_save_id|last_save_by|upload_receipts/);
     await pool.query('DELETE FROM posts');
     await pool.query('DELETE FROM sessions');
     await pool.query('DELETE FROM users');
@@ -74,6 +88,9 @@ maybe('backup round-trip (Postgres)', () => {
     expect((await pool.query(`SELECT count(*) AS n FROM pages`)).rows[0].n).toBe('0');
 
     const counts = await restoreDatabase(pool, file);
+    await addReceipt(); // A live, unresolved attempt must also disappear on restore without a manual wipe.
+    await restoreDatabase(pool, file);
+    expect((await pool.query('SELECT count(*) AS n FROM upload_receipts')).rows[0].n).toBe('0');
     expect(counts.users).toBe(1);
     expect(counts.posts).toBe(2); // one row per locale (de + en) for the single translation pair
     // ensureSchema seeds About for both locales; we overwrote about/de to 'T' and
@@ -82,6 +99,8 @@ maybe('backup round-trip (Postgres)', () => {
     const back = await users.findByUsername('simon');
     expect(back?.isAdmin).toBe(true);
     expect((await pool.query('SELECT count(*) AS n FROM sessions')).rows[0].n).toBe('0');
+    expect((await pool.query(`SELECT count(*) AS n FROM posts WHERE last_save_id IS NOT NULL OR last_save_by IS NOT NULL`)).rows[0].n).toBe('0');
+    expect((await pool.query(`SELECT count(*) AS n FROM pages WHERE last_save_id IS NOT NULL OR last_save_by IS NOT NULL`)).rows[0].n).toBe('0');
     const list = await posts.list();
     expect(list.length).toBe(1);
     const pg = (await pool.query(`SELECT title, body_markdown FROM pages WHERE key='about' AND locale='de'`)).rows[0];
@@ -181,7 +200,7 @@ maybe('backup round-trip (Postgres)', () => {
       en: { locale: 'en' as const, slug: 'cover-trip', title: 'Cover', excerpt: 'x', country: 'Iceland', heroImage: { src: 'https://img.example/x', width: 100, height: 50, alt: 'a' }, bodyMarkdown: 'Hello', images: {} },
     };
     const created = await posts.upsertDraft(base);
-    await posts.publish(created.translationKey, { baseUpdatedAt: created.updatedAt, baseRouteVersion: null });
+    await posts.publish(created.translationKey, await publishTokens(posts, created.translationKey));
 
     const file = join(dir, await dumpDatabase(pool, dir));
     expect(readDump(file).version).toBe(DUMP_VERSION);
@@ -226,11 +245,17 @@ maybe('backup round-trip (Postgres)', () => {
     const { writeFileSync } = await import('node:fs');
     await pool.query(`INSERT INTO pages (key,locale,title,body_markdown) VALUES ('about','en','keep','me')
       ON CONFLICT (key,locale) DO UPDATE SET title='keep', body_markdown='me'`);
+    await pool.query(`UPDATE pages SET last_save_id='11111111-1111-4111-8111-111111111111',
+      last_save_by='22222222-2222-4222-8222-222222222222' WHERE key='about'`);
     const v1 = join(dir, 'db-20250101-000000.json.gz');
     writeFileSync(v1, gzipSync(JSON.stringify({ version: 1, tables: { users: [], posts: [] } })));
     await restoreDatabase(pool, v1);
-    const kept = (await pool.query(`SELECT title FROM pages WHERE key='about' AND locale='en'`)).rows[0];
-    expect(kept.title).toBe('keep');
+    const kept = (await pool.query(`SELECT title,last_save_id,last_save_by FROM pages WHERE key='about' AND locale='en'`)).rows[0];
+    expect(kept).toEqual({ title: 'keep', last_save_id: null, last_save_by: null });
+    const language = (await pool.query('SELECT * FROM site_language')).rows;
+    expect(language).toEqual([expect.objectContaining({
+      primary_locale: 'de', enabled_locales: ['de', 'en'], locked_at: null, updated_at: expect.any(Date),
+    })]);
   });
 
   it('backfills published_snapshot when restoring a pre-snapshot dump, in the same transaction', async () => {
@@ -253,6 +278,7 @@ maybe('backup round-trip (Postgres)', () => {
       oldPost('de', 'legacy-reise', 'published', 'Live DE'),
       oldPost('en', 'legacy-trip', 'published', 'Live EN'),
       { ...oldPost('de', 'entwurf', 'draft', 'Draft body'), translation_key: 'legacy-draft' },
+      { ...oldPost('en', 'draft-story', 'draft', 'Draft body EN'), translation_key: 'legacy-draft' },
     ];
     const pre = join(dir, 'db-20260601-000000.json.gz');
     writeFileSync(pre, gzipSync(JSON.stringify({ version: 2, tables: { users: [], posts } })));
@@ -268,6 +294,9 @@ maybe('backup round-trip (Postgres)', () => {
       ['legacy-trip', 'Live EN'],
     ]);
     for (const r of visible.rows) expect(r.published_at).toBeInstanceOf(Date);
+    const language = (await pool.query('SELECT * FROM site_language')).rows[0];
+    expect(language).toMatchObject({ primary_locale: 'de', enabled_locales: ['de', 'en'], updated_at: expect.any(Date) });
+    expect(language.locked_at).toEqual(new Date('2025-06-02T10:00:00.000Z'));
     // …while the draft row stays snapshot-less.
     const draft = (await pool.query(
       `SELECT published_snapshot, published_at FROM posts WHERE slug='entwurf'`,
@@ -366,12 +395,14 @@ maybe('backup round-trip (Postgres)', () => {
     }
   });
 
-  it('dumps every column of posts, so the next added column cannot be silently dropped', async () => {
+  it('dumps every content column of posts and excludes exactly its operational receipt columns', async () => {
     // @ai-warning: dumpDatabase uses an explicit column list for posts (to_char
     // on `date`), so a column added in db.ts without touching backup.ts is
     // silently absent from every dump and reset on restore — exactly how
     // categories/tags/scheduled_at were lost (issue #107). This diff is the
     // only thing that catches the next one.
+    // #305's two operational receipts are intentionally invalidated by restore,
+    // never content. Keep this exclusion exact so future content columns remain guarded.
     const posts = pgPostStore(pool);
     await pool.query('DELETE FROM posts');
     await posts.upsertDraft({
@@ -385,10 +416,11 @@ maybe('backup round-trip (Postgres)', () => {
       tables: { posts: Record<string, unknown>[] };
     };
     const schemaCols = (await pool.query(
-      `SELECT column_name FROM information_schema.columns WHERE table_name = 'posts'`,
+      `SELECT column_name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name = 'posts'`,
     )).rows.map((r) => r.column_name as string).sort();
     expect(dump.tables.posts).toHaveLength(2);
-    expect(Object.keys(dump.tables.posts[0] ?? {}).sort()).toEqual(schemaCols);
+    expect(schemaCols).toEqual(expect.arrayContaining(['last_save_id', 'last_save_by']));
+    expect(Object.keys(dump.tables.posts[0] ?? {}).sort()).toEqual(schemaCols.filter(name => name !== 'last_save_id' && name !== 'last_save_by'));
   });
 
   // Reader comments (#204): schema migration, store, delete-with-post, dump v8.
@@ -439,7 +471,7 @@ maybe('backup round-trip (Postgres)', () => {
       expect((await comments.listForAdmin({ status: 'spam' })).map((c) => c.id)).toEqual([b.id]);
       expect((await comments.listForAdmin()).map((c) => c.id)).toEqual([a.id]);
       expect(await comments.approve(a.id)).toBe(true);
-      const reply = await comments.replyAsAuthor({ translationKey: tk, body: 'Thanks!', postedLocale: 'en' });
+      const reply = await comments.replyAsAuthor({ translationKey: tk, body: 'Thanks!', postedLocale: 'en' }, 'Simon');
       expect(reply).toMatchObject({ status: 'approved', isAuthor: true, name: 'Simon', locale: 'en' });
       expect((await comments.listApproved(tk)).map((c) => [c.name, c.isAuthor])).toEqual([['Reader', false], ['Simon', true]]);
       expect((await comments.listApproved(tk, 'en')).map((c) => c.name)).toEqual(['Simon']);
@@ -479,7 +511,7 @@ maybe('backup round-trip (Postgres)', () => {
       const tk = p.translationKey;
       const a = await comments.create({ translationKey: tk, locale: 'de', name: 'A', body: 'x', senderHash: 'h1' });
       await comments.setStatus(a.id, 'rejected');
-      const r = await comments.replyAsAuthor({ translationKey: tk, body: 'reply' });
+      const r = await comments.replyAsAuthor({ translationKey: tk, body: 'reply' }, 'Simon');
       const file = join(dir, await dumpDatabase(pool, dir));
       const dump = readDump(file);
       expect(dump.tables.comments).toHaveLength(2);
@@ -559,8 +591,11 @@ maybe('backup round-trip (Postgres)', () => {
       const dumpDir = await mkdtemp(join(tmpdir(), 'bk-cli-src-'));
       const dumpFile = join(dumpDir, await dumpDatabase(pool, dumpDir));
       await users.create({ username: 'bob', password: 'password-bob-1', isAdmin: false });
-      const backupDir = await mkdtemp(join(tmpdir(), 'bk-cli-dst-'));
-      return { dumpFile, backupDir, env: { ...process.env, DATABASE_URL: url!, BACKUP_DIR: backupDir } };
+      const backupDir = await realpath(await mkdtemp(join(tmpdir(), 'bk-cli-dst-')));
+      // Restore now durably fences its data root. Never inherit the developer's
+      // storage path or fall back to the container-only /data/images in CI.
+      const storageDir = join(backupDir, 'data', 'images');
+      return { dumpFile, backupDir, env: { ...process.env, DATABASE_URL: url!, BACKUP_DIR: backupDir, STORAGE_DIR: storageDir } };
     }
 
     it('without --yes and no confirmation line (stdin EOF) it aborts: no rows touched, no pre-dump written', async () => {
@@ -581,6 +616,7 @@ maybe('backup round-trip (Postgres)', () => {
       const { dumpFile, backupDir, env } = await seed();
       const r = await runCli(['restore', '--yes', dumpFile], env);
       expect(r.code).toBe(0);
+      expect(r.stdout).toContain('identity: restored stored identity and assets.');
       const written = preDumps(backupDir);
       expect(written).toHaveLength(1);
       const preDumpPath = join(backupDir, 'db', written[0]!);
@@ -597,6 +633,36 @@ maybe('backup round-trip (Postgres)', () => {
       expect(await usernames()).toEqual(['alice', 'bob']);
       expect(preDumps(backupDir)).toHaveLength(2);
       expect(usersIn(preDumpPath)).toEqual(['alice', 'bob']);
+    }, 60_000);
+
+    it.each([11, 12])('previews and confirms a locked cross-mode v%i restore, with the live mode in its undo dump', async version => {
+      await pool.query("UPDATE site_language SET primary_locale='de',enabled_locales=ARRAY['de','en'],locked_at=NULL");
+      const { dumpFile, backupDir, env } = await seed();
+      if (version === 11) {
+        const dump = readDump(dumpFile);
+        dump.version = version;
+        delete dump.tables.journeys; delete dump.tables.journey_locales; delete dump.tables.journey_members;
+        delete dump.tables.site_language;
+        writeFileSync(dumpFile, gzipSync(JSON.stringify(dump)));
+      }
+      await pool.query("UPDATE site_language SET primary_locale='en',enabled_locales=ARRAY['en'],locked_at=now()");
+      try {
+        const refused = await runCli(['restore', '--yes', dumpFile], env);
+        expect(refused.code).toBe(1);
+        expect(refused.stdout).toContain('live EN, EN primary (locked); dump DE+EN, DE primary');
+        expect(refused.stderr).toContain('--accept-language-change');
+        expect(await usernames()).toEqual(['alice', 'bob']);
+        expect(preDumps(backupDir)).toEqual([]);
+        const restored = await runCli(['restore', '--yes', '--accept-language-change', dumpFile], env);
+        expect(restored.code).toBe(0);
+        expect(await usernames()).toEqual(['alice']);
+        expect((await pool.query('SELECT primary_locale,enabled_locales FROM site_language')).rows[0])
+          .toEqual({ primary_locale: 'de', enabled_locales: ['de', 'en'] });
+        const undo = readDump(join(backupDir, 'db', preDumps(backupDir)[0]!));
+        expect(undo.tables.site_language?.[0]).toMatchObject({ primary_locale: 'en', enabled_locales: ['en'], locked_at: expect.any(String) });
+      } finally {
+        await pool.query("UPDATE site_language SET primary_locale='de',enabled_locales=ARRAY['de','en'],locked_at=NULL");
+      }
     }, 60_000);
 
     it('a "yes" line on stdin confirms; anything else aborts', async () => {
@@ -632,6 +698,35 @@ maybe('backup round-trip (Postgres)', () => {
       expect(r.stderr).toContain('pre-restore dump into');
       expect(r.stderr).toContain('restore aborted, nothing was changed');
       expect(await usernames()).toEqual(['alice', 'bob']);
+    }, 30_000);
+
+    it('announces a legacy restore and includes the replaced identity in the undo set', async () => {
+      const { dumpFile, backupDir, env } = await seed();
+      const old = readDump(dumpFile);
+      old.version = 10;
+      delete old.tables.journeys; delete old.tables.journey_locales; delete old.tables.journey_members;
+      delete old.tables.site_identity; delete old.tables.site_identity_assets;
+      writeFileSync(dumpFile, gzipSync(JSON.stringify(old)));
+      await pool.query("UPDATE site_identity SET site_name='Undo journal', canonical_origin='https://restore.example'");
+      const r = await runCli(['restore', '--yes', dumpFile], env);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain('identity: restored legacy brand (dump predates identity). Review Settings → Site identity');
+      expect((await pool.query('SELECT site_name, seed_source, canonical_origin, saved_at FROM site_identity')).rows[0])
+        .toEqual({ site_name: "Simon's Wanderlust", seed_source: 'restored-legacy', canonical_origin: 'https://restore.example', saved_at: null });
+      const undo = readDump(join(backupDir, 'db', preDumps(backupDir)[0]!));
+      expect(undo.tables.site_identity![0]!.site_name).toBe('Undo journal');
+    }, 30_000);
+
+    it('rejects malformed identity before undo capture or any database replacement', async () => {
+      const { dumpFile, backupDir, env } = await seed();
+      const malformed = readDump(dumpFile);
+      malformed.tables.site_identity![0]!.localized = { tagline: { de: 'valid', en: 42 } };
+      writeFileSync(dumpFile, gzipSync(JSON.stringify(malformed)));
+      const r = await runCli(['restore', '--yes', dumpFile], env);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain('tagline.en');
+      expect(await usernames()).toEqual(['alice', 'bob']);
+      expect(preDumps(backupDir)).toEqual([]);
     }, 30_000);
 
     it('refuses an unsupported dump version before writing a pre-dump', async () => {

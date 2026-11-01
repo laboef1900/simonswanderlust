@@ -17,7 +17,7 @@ export async function touchPostPair(client: DbClient, translationKey: string): P
         date_trunc('milliseconds', MAX(updated_at)) + interval '1 millisecond'
       ) AS value FROM posts WHERE translation_key = $1
     )
-    UPDATE posts SET updated_at = next_time.value FROM next_time
+    UPDATE posts SET updated_at = next_time.value, last_save_id = NULL, last_save_by = NULL FROM next_time
       WHERE translation_key = $1 RETURNING updated_at
   `, [translationKey]);
   if (result.rows.length !== 2) throw new Error('A complete post pair is required.');

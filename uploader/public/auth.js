@@ -2,16 +2,35 @@
 // redirect to /login (carrying a ?next= return URL back to the current page).
 // The session cookie is sent automatically (same-origin).
 window.Auth = (function () {
+  function identityName() {
+    const locale = document.documentElement?.lang === 'de' ? 'de' : 'en';
+    return window.SiteIdentity?.siteName || EditorCopy[locale].siteTitleFallback;
+  }
+  function identityDescriptor() {
+    const locale = document.documentElement?.lang === 'de' ? 'de' : 'en';
+    return window.SiteIdentity?.studioDescriptor?.[locale] || identityName();
+  }
+  function setPageTitle(page) {
+    document.title = page + ' · ' + identityName();
+  }
+  setPageTitle(document.title || '');
+
   async function status() {
     const r = await fetch('/auth/status');
     return r.json();
   }
   async function ensureAuthed(opts) {
     const want = opts || {};
-    const s = await status();
-    if (!s.authenticated) {
+    const response = await fetch('/auth/me', { cache: 'no-store' });
+    if (response.status === 401) {
       location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search);
       return null;
+    }
+    if (!response.ok) throw new Error('auth_context_unavailable');
+    const s = await response.json();
+    if (s?.authenticated !== true || typeof s.userId !== 'string' || !s.userId
+      || typeof s.username !== 'string' || typeof s.isAdmin !== 'boolean' || s.needsSetup !== false) {
+      throw new Error('auth_context_unavailable');
     }
     if (want.admin && !s.isAdmin) { location.href = '/admin/'; return null; }
     return s;
@@ -38,8 +57,9 @@ window.Auth = (function () {
   const NAV = [
     { group: 'Journal', label: 'Desk', href: '/admin/', icon: ICON.desk },
     { group: 'Journal', label: 'Posts', href: '/admin/posts.html', icon: ICON.posts },
+    { group: 'Journal', get label() { return EditorCopy.en.journeyTitle; }, href: '/admin/journeys.html', icon: ICON.posts },
     { group: 'Journal', label: 'Media', href: '/admin/media.html', icon: ICON.media },
-    { group: 'Journal', label: 'About', href: '/admin/about.html', admin: true, icon: ICON.about },
+    { group: 'Journal', get label() { return EditorCopy.en.pagesTitle; }, href: '/admin/pages.html', admin: true, icon: ICON.about },
     { group: 'Journal', label: 'Comments', href: '/admin/comments.html', admin: true, icon: ICON.comments },
     { group: 'Site', label: 'Import', href: '/admin/import.html', admin: true, icon: ICON.import },
     { group: 'Site', label: 'Settings', href: '/admin/settings.html', admin: true, icon: ICON.settings },
@@ -62,6 +82,8 @@ window.Auth = (function () {
     const p = location.pathname;
     if (p === '/admin' || p === '/admin/index.html') return '/admin/';
     if (p === '/admin/editor.html') return '/admin/posts.html';
+    if (p === '/admin/about.html') return '/admin/pages.html';
+    if (p === '/admin/journey-editor.html') return '/admin/journeys.html';
     return p;
   }
 
@@ -189,9 +211,14 @@ window.Auth = (function () {
     const copy = EditorCopy.en;
     shell.querySelector('.cms-brand-mark').textContent = copy.studioName.charAt(0);
     shell.querySelector('.cms-brand-title').textContent = copy.studioName;
-    shell.querySelector('.cms-masthead-right > .cms-brand-sub').textContent = copy.studioDescriptor;
+    shell.querySelector('.cms-masthead-right > .cms-brand-sub').textContent = identityDescriptor();
+    const legal = document.createElement('a');
+    legal.href = '/admin/legal/en.html';
+    legal.className = 'cms-btn-ghost';
+    legal.textContent = copy.softwareNotices;
+    shell.querySelector('.cms-sidebar-footer').prepend(legal);
 
-    // Username is the one user-controlled string in this shell; set as text
+    // User-controlled strings are set as text
     // and as an attribute value AFTER the parse so it can never be markup (#131).
     const accountTrigger = shell.querySelector('.cms-account-menu__trigger');
     accountTrigger.setAttribute('aria-label', 'Account menu for ' + s.username);
@@ -219,6 +246,19 @@ window.Auth = (function () {
     if (meta) meta.remove();
 
     const contentArea = shell.querySelector('.cms-content');
+    if (s.isAdmin && here === '/admin/' && !window.SiteIdentity?.canonicalOrigin) {
+      const domainCopy = EditorCopy[document.documentElement?.lang === 'de' ? 'de' : 'en'];
+      const notice = document.createElement('p');
+      notice.id = 'deskDomainNotice';
+      notice.className = 'muted';
+      notice.setAttribute('role', 'status');
+      notice.textContent = domainCopy.identityDomainUnset + ' ';
+      const link = document.createElement('a');
+      link.setAttribute('href', '/admin/settings.html#identity');
+      link.textContent = domainCopy.identityDomainConfigure;
+      notice.appendChild(link);
+      contentArea.appendChild(notice);
+    }
     contentArea.appendChild(main);
     body.appendChild(shell);
 
@@ -282,5 +322,5 @@ window.Auth = (function () {
     });
   }
 
-  return { status, ensureAuthed, logout, renderHeader };
+  return { status, ensureAuthed, logout, renderHeader, setPageTitle, identityDescriptor };
 })();

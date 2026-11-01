@@ -126,8 +126,21 @@ window.EditorReview = (function () {
       return button;
     }
 
-    function renderInstant(request) {
-      const result = window.EditorLinter.lintStory(request.snapshot.story);
+    async function renderInstant(request) {
+      let result;
+      try { result = await window.EditorLinter.lintStory(request.snapshot.story); }
+      catch (error) {
+        if (!owns(request)) return;
+        if (error?.status === 401) { invalidate(); options.on401(); return; }
+        const copy = EditorGalleryCopy[request.snapshot.story.locale];
+        instant.replaceChildren(element('p', '', copy.analysisFailed));
+        const retry = element('button', 'btn-secondary', copy.retry);
+        retry.type = 'button';
+        retry.addEventListener('click', () => { if (owns(request)) void renderInstant(request); });
+        instant.appendChild(retry);
+        return;
+      }
+      if (!owns(request)) return;
       instant.replaceChildren();
       for (const [key, title] of quickChecks) {
         const check = result[key];
@@ -285,9 +298,9 @@ window.EditorReview = (function () {
       active = request;
       byId('reviewLocale').textContent = request.snapshot.story.locale === 'de' ? 'Deutsch · DE' : 'English · EN';
       if (!dialog.open) dialog.showModal();
-      renderInstant(request);
+      void renderInstant(request);
       dialog.querySelector('.story-review__body').scrollTop = 0;
-      say('Loading AI review settings… Quick checks are ready.', true);
+      say('Loading AI review settings…', true);
       closeButton.focus();
       void review(request);
     }

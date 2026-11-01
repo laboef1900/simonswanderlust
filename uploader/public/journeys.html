@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title></title><link rel="stylesheet" href="/admin/admin.css"></head><body>
+<header class="cms-page-meta"><h1 data-journey-copy="Title"></h1></header>
+<div class="cms-page-actions"><a href="/admin/journey-editor.html" class="btn-new" data-journey-copy="New"></a></div>
+<main><p id="journeyNotice" role="status" data-journey-copy="Loading"></p><p id="journeyError" class="err" role="alert" hidden></p><div id="journeyList"></div></main>
+<script src="/admin/editor-image-copy.js"></script><script src="/admin/auth.js"></script><script src="/admin/language.js"></script><script src="/admin/journeys-ui.js"></script>
+<script>
+(async () => {
+  const { text, el } = JourneysUI; JourneysUI.localize(document); Auth.setPageTitle(text('Title'));
+  try {
+    const session = await Auth.ensureAuthed(); if (!session) return; Auth.renderHeader(session);
+    const [result, language] = await Promise.all([JourneysUI.request(''), SiteLanguage.get()]);
+    document.getElementById('journeyNotice').textContent = result.journeys.length ? '' : text('Empty');
+    for (const journey of result.journeys) {
+      const row = el('section', undefined, 'card');
+      const heading = el('h2', undefined, 'card-heading'); const link = el('a', journey.titles[language.primary] || text('New'));
+      link.href = '/admin/journey-editor.html?id=' + encodeURIComponent(journey.id); heading.append(link);
+      const state = el('p', text(journey.status === 'published' ? 'Published' : 'Draft') + (journey.hasUnpublishedChanges ? ' · ' + text('Changes') : ''), 'muted');
+      row.append(heading, state, el('p', text('Members') + ': ' + journey.memberCount));
+      if (journey.status === 'published') for (const locale of language.locales) if (!journey.live[locale]) row.append(el('p', text('Dormant', { locale: locale.toUpperCase() }), 'muted'));
+      document.getElementById('journeyList').append(row);
+    }
+  } catch { document.getElementById('journeyNotice').textContent = ''; const error = document.getElementById('journeyError'); error.hidden = false; error.textContent = JourneysUI.text('Failed'); }
+})();
+</script></body></html>

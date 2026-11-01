@@ -2,14 +2,17 @@
 import { getCollection } from 'astro:content';
 import Contours from './Contours.astro';
 import { useTranslations, type Locale } from '../i18n/ui';
-import { aboutPath } from '../lib/paths';
+import type { ResolvedNavItem } from '../lib/resolve-navigation';
 import { byLocale, pathOf } from '../lib/trips';
+import { identity, identitySiteName, identityTagline } from '../lib/build-identity';
 
 interface Props {
   locale: Locale;
+  items: ResolvedNavItem[];
+  legal: ResolvedNavItem[];
 }
 
-const { locale } = Astro.props;
+const { locale, items, legal } = Astro.props;
 const t = useTranslations(locale);
 const latest = byLocale(await getCollection('trips'), locale).slice(0, 3);
 
@@ -42,10 +45,10 @@ const latest = byLocale(await getCollection('trips'), locale).slice(0, 3);
   class="relative overflow-hidden border-t border-white/10 bg-navy text-white [content-visibility:auto] [contain-intrinsic-size:auto_500px]"
 >
   <Contours />
-  <div class="relative mx-auto grid max-w-6xl gap-6 px-5 py-8 md:grid-cols-[2.2fr_1fr_1fr] md:gap-10 md:py-10">
+  <div class="relative mx-auto grid max-w-6xl gap-6 px-5 py-8 [overflow-wrap:anywhere] md:grid-cols-[2.2fr_1fr_1fr] md:gap-10 md:py-10">
     <div>
-      <p class="text-lg font-extrabold tracking-wider text-white uppercase">{t('site.title')}</p>
-      <p class="mt-1 text-sm text-white/70">{t('site.tagline')}</p>
+      <p class="text-lg font-extrabold tracking-wider text-white uppercase">{identitySiteName(locale)}</p>
+      <p class="mt-1 text-sm text-white/70">{identityTagline(locale)}</p>
       {/*
         The cameras are the credibility asset for a photography audience and
         they only lived on /uber-mich/ and, briefly, in an 11px line at the
@@ -56,9 +59,9 @@ const latest = byLocale(await getCollection('trips'), locale).slice(0, 3);
         <p class="font-mono text-[11px] tracking-log text-brand-red-light uppercase">
           {t('footer.logline')}
         </p>
-        <p class="mt-1 font-mono text-[11px] tracking-log text-white/70 uppercase">
-          {t('about.gear')}
-        </p>
+        {identity.aboutGear[locale] && <p class="mt-1 font-mono text-[11px] tracking-log text-white/70 uppercase">
+          {identity.aboutGear[locale]}
+        </p>}
       </div>
     </div>
     <div>
@@ -88,23 +91,40 @@ const latest = byLocale(await getCollection('trips'), locale).slice(0, 3);
         {t('footer.about')}
       </p>
       <ul role="list" class="mt-1 text-sm text-white/80">
-        <li>
+        {items.map((item) => <li>
+          <a href={item.href} aria-current={item.current ? 'page' : undefined}
+            target={item.external ? '_blank' : undefined} rel={item.external ? 'noopener noreferrer' : undefined}
+            class="inline-flex min-h-[44px] items-center rounded transition-[color] hover:text-brand-red-light active:text-brand-red-light focus-visible:outline-brand-red-light"
+          ><span>{item.label}{item.external && <> ↗<span class="sr-only"> {t('nav.newTab')}</span></>}</span></a>
+        </li>)}
+      </ul>
+      <ul role="list" class="text-sm text-white/80">
+        {identity.socialLinks.map(({ label, url }) => <li>
           <a
-            href={aboutPath(locale)}
-            class="inline-flex min-h-[44px] items-center rounded transition-[color] hover:text-brand-red-light focus-visible:outline-brand-red-light"
-            >{t('nav.about')}</a
-          >
-        </li>
-        <li>
-          <a
-            href="https://www.instagram.com/simonswanderlust"
+            href={url}
             target="_blank"
             rel="noopener noreferrer"
             class="inline-flex min-h-[44px] items-center rounded transition-[color] hover:text-brand-red-light focus-visible:outline-brand-red-light"
-            >Instagram ↗</a
+            >{label} ↗</a
           >
+        </li>)}
+        <li>
+          <a href={`/legal/${locale}.html`} class="inline-flex min-h-[44px] items-center rounded transition-[color] hover:text-brand-red-light focus-visible:outline-brand-red-light">{t('editor.chrome.softwareNotices')}</a>
+        </li>
+        <li>
+          <a href="/legal/THIRD-PARTY-NOTICES.txt" class="inline-flex min-h-[44px] items-center rounded transition-[color] hover:text-brand-red-light focus-visible:outline-brand-red-light">{t('editor.chrome.thirdPartyNotices')}</a>
         </li>
       </ul>
     </div>
   </div>
+  {legal.length > 0 && <nav aria-label={t('footer.legal')} class="relative mx-auto max-w-6xl px-5 pb-8">
+    <ul role="list" class="flex flex-wrap gap-x-6 border-t border-white/30 pt-3 text-sm text-white/80 [overflow-wrap:anywhere]">
+      {legal.map((item) => <li class="min-w-0 max-w-full">
+        <a href={item.href} aria-current={item.current ? 'page' : undefined}
+          target={item.external ? '_blank' : undefined} rel={item.external ? 'noopener noreferrer' : undefined}
+          class="inline-flex min-h-[44px] items-center rounded transition-[color] hover:text-brand-red-light active:text-brand-red-light focus-visible:outline-brand-red-light"
+        ><span>{item.label}{item.external && <> ↗<span class="sr-only"> {t('nav.newTab')}</span></>}</span></a>
+      </li>)}
+    </ul>
+  </nav>}
 </footer>

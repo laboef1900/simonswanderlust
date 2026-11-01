@@ -4,10 +4,12 @@ import { gzipSync } from 'node:zlib';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  AUTHOR_NAME, BODY_MAX, COMMENT_STATUSES, CommentError, NAME_MAX, isCommentStatus, memoryCommentStore,
+  BODY_MAX, COMMENT_STATUSES, CommentError, NAME_MAX, isCommentStatus, memoryCommentStore,
 } from '../src/comments.js';
 import { memoryPostStore } from '../src/posts.js';
 import { DUMP_VERSION, SUPPORTED_DUMP_VERSIONS, readDump } from '../src/backup.js';
+import { identityDumpRow } from './site-identity-fixture.js';
+import { memoryLanguageStore } from '../src/language.js';
 
 const base = { translationKey: 'tk-1', locale: 'de' as const, name: 'Reader', body: 'Hello there' };
 
@@ -89,12 +91,23 @@ describe('comment store (#204, memory)', () => {
 
   it('replyAsAuthor inserts an approved author sibling in the thread', async () => {
     const s = memoryCommentStore();
-    const r = await s.replyAsAuthor({ translationKey: 'tk-1', body: 'Thanks!' });
-    expect(r).toMatchObject({ status: 'approved', isAuthor: true, name: AUTHOR_NAME, locale: 'de', email: null });
-    const en = await s.replyAsAuthor({ translationKey: 'tk-1', body: 'Cheers', postedLocale: 'en' });
+    const r = await s.replyAsAuthor({ translationKey: 'tk-1', body: 'Thanks!' }, 'Ada');
+    expect(r).toMatchObject({ status: 'approved', isAuthor: true, name: 'Ada', locale: 'de', email: null });
+    const en = await s.replyAsAuthor({ translationKey: 'tk-1', body: 'Cheers', postedLocale: 'en' }, 'New author');
     expect(en.locale).toBe('en');
     expect((await s.listApproved('tk-1')).map((c) => c.isAuthor)).toEqual([true, true]);
-    await expect(s.replyAsAuthor({ translationKey: 'tk-1', body: '' })).rejects.toThrow(CommentError);
+    expect((await s.listApproved('tk-1')).map((c) => c.name)).toEqual(['Ada', 'New author']);
+    expect((await s.replyAsAuthor({ translationKey: 'tk-1', body: 'Neutral' }, '')).name).toBe('Author');
+    await expect(s.replyAsAuthor({ translationKey: 'tk-1', body: '' }, 'Ada')).rejects.toThrow(CommentError);
+  });
+
+  it('defaults author replies to the current primary while preserving an explicit locale', async () => {
+    const language = memoryLanguageStore({ primary: 'en', locales: ['en', 'de'] });
+    const store = memoryCommentStore(language);
+    expect((await store.replyAsAuthor({ translationKey: 'tk', body: 'English' }, 'Author')).locale).toBe('en');
+    expect((await store.replyAsAuthor({ translationKey: 'tk', body: 'Deutsch', postedLocale: 'de' }, 'Author')).locale).toBe('de');
+    await language.update({ primary: 'de', locales: ['de', 'en'] });
+    expect((await store.replyAsAuthor({ translationKey: 'tk', body: 'Deutsch' }, 'Author')).locale).toBe('de');
   });
 
   it('remove and removeByTranslationKey', async () => {
@@ -123,7 +136,7 @@ describe('delete-with-post (memory post store)', () => {
     const posts = memoryPostStore({ comments });
     const p = await posts.upsertDraft(pair);
     await comments.create({ ...base, translationKey: p.translationKey });
-    await comments.replyAsAuthor({ translationKey: p.translationKey, body: 'r' });
+    await comments.replyAsAuthor({ translationKey: p.translationKey, body: 'r' }, 'Ada');
     await comments.create({ ...base, translationKey: 'someone-else' });
     await posts.remove(p.translationKey);
     expect(comments.all().map((c) => c.translationKey)).toEqual(['someone-else']);
@@ -150,7 +163,14 @@ describe('dump version allow-list', () => {
     const dir = await mkdtemp(join(tmpdir(), 'dumpv-'));
     const file = async (version: number) => {
       const f = join(dir, `db-2026010${version}-000000.json.gz`);
-      await writeFile(f, gzipSync(JSON.stringify({ version, createdAt: new Date().toISOString(), tables: { users: [], posts: [], ...(version >= 10 ? { post_routes: [] } : {}) } })));
+      await writeFile(f, gzipSync(JSON.stringify({ version, createdAt: new Date().toISOString(), tables: {
+        users: [], posts: [], ...(version >= 10 ? { post_routes: [] } : {}),
+        ...(version >= 11 ? { site_identity: [identityDumpRow()], site_identity_assets: [] } : {}),
+        ...(version >= 12 ? { site_language: [{ id: true, primary_locale: 'de', enabled_locales: ['de', 'en'],
+          locked_at: null, updated_at: new Date().toISOString() }] } : {}),
+        ...(version >= 13 ? { pages: [], site_nav: [{ id: 1, config: { version: 1, header: [], footer: [], legal: [] }, updated_at: new Date().toISOString() }] } : {}),
+        ...(version >= 14 ? { journeys: [], journey_locales: [], journey_members: [] } : {}),
+      } })));
       return f;
     };
     for (const v of SUPPORTED_DUMP_VERSIONS) expect(readDump(await file(v)).version).toBe(v);

@@ -23,6 +23,7 @@ window.MediaAiDialog = (function () {
   function attach(opts) {
     const $ = (id) => document.getElementById(id);
     const ai = window.MediaAi;
+    const copy = window.EditorCopy[document.documentElement.lang === 'de' ? 'de' : 'en'];
     const dialog = $('aiDialog');
     let session = null;
 
@@ -148,14 +149,14 @@ window.MediaAiDialog = (function () {
     }
 
     function finish(report) {
-      const head = report.stopped === 'cancelled' ? 'Stopped.'
+      const head = report.stopped === 'session' ? copy.uploadNeedsAuth
+        : report.stopped === 'cancelled' ? 'Stopped.'
         : report.stopped === 'failures'
           ? 'Stopped after ' + ai.MAX_CONSECUTIVE_FAILURES + ' failures in a row. Check the photo-description settings and the provider.'
           : 'Done.';
       const rest = report.total - report.processed;
       $('aiSummary').textContent = head + ' Saved ' + report.saved + ', skipped ' + report.skipped
-        + ', failed ' + report.failed.length + (rest ? ', not processed ' + rest : '') + '.'
-        + (report.saved ? '' : ' Nothing was changed.');
+        + ', failed ' + report.failed.length + (rest ? ', not processed ' + rest : '') + '.';
       const list = $('aiFailures');
       list.innerHTML = '';
       report.failed.slice(0, MAX_LISTED_FAILURES).forEach((failure) => {
@@ -164,7 +165,18 @@ window.MediaAiDialog = (function () {
         key.className = 'media-key';
         key.textContent = failure.key;
         li.appendChild(key);
-        li.appendChild(document.createTextNode(' — ' + failure.reason));
+        const reason = failure.unsupported ? copy.mediaConditionalUnsupported
+          : failure.unknown ? copy.mediaConditionalUnknown
+          : failure.conflict ? copy.mediaConditionalConflict : failure.reason;
+        li.appendChild(document.createTextNode(' — ' + reason));
+        (failure.fields || []).forEach((field) => {
+          const comparison = document.createElement('p');
+          comparison.textContent = field.field + ': ' + copy['mediaConditional' + {
+            achieved: 'Achieved', expected: 'Expected', other: 'Other',
+          }[field.outcome]] + ' — ' + copy.mediaConditionalMine + ': ' + JSON.stringify(field.intended)
+            + '; ' + copy.mediaConditionalStored + ': ' + JSON.stringify(field.stored);
+          li.appendChild(comparison);
+        });
         list.appendChild(li);
       });
       if (report.failed.length > MAX_LISTED_FAILURES) {
