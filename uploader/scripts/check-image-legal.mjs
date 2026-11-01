@@ -79,7 +79,9 @@ async function expectedList(dir) {
   return readdir(join(root, dir));
 }
 
-const inspect = JSON.parse(docker('image', 'inspect', image))[0];
+// Without --platform a multi-platform image in the containerd store reports the index or
+// the host's platform, not the one being checked, so labels would come from the wrong config.
+const inspect = JSON.parse(docker('image', 'inspect', ...(platform ? ['--platform', platform] : []), image))[0];
 const labels = inspect.Config?.Labels ?? {};
 const created = docker('create', ...(platform ? ['--platform', platform] : []), image).trim();
 const scratch = await mkdtemp(join(tmpdir(), 'image-legal-'));
