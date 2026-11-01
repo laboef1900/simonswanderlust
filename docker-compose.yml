@@ -1,5 +1,6 @@
 # Self-hosted stack, WordPress-style: one app container + Postgres.
-# Copy uploader/.env.example to .env (set POSTGRES_PASSWORD and IMAGE_TAG). Then:
+# Copy uploader/.env.example to .env (set POSTGRES_PASSWORD, PUBLIC_BASE_URL, IMG_HOST
+# and IMAGE_TAG; see docs/install.md). Then:
 #   docker compose pull && docker compose up -d     # run a released GHCR image
 # IMAGE_TAG must identify a release published under wanderlust-studio; no default
 # is supplied during the image-name cutover. See README.md before upgrading.
@@ -18,9 +19,11 @@ services:
       # Only valid for this bridge topology. Changing networks/network_mode or
       # adding a CDN/proxy hop requires a new trust spec, not a broader allow-list.
       TRUSTED_PROXY: docker-gateway
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://img.simonswanderlust.com}
+      # Image domain only (the blog domain is Settings → Site identity). No default:
+      # a forgotten value must stop Compose, not publish another site's image host.
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL in .env}
       DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-images}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-images}}
-      IMG_HOST: ${IMG_HOST:-img.simonswanderlust.com}
+      IMG_HOST: ${IMG_HOST:?set IMG_HOST in .env}
       # Optional passthrough: omitted stays absent, explicitly empty is invalid.
       ENCRYPTION_KEY:
     # Memory ceiling (issue #71). Without one, a spike takes the whole `app`
