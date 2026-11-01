@@ -164,6 +164,10 @@ server {
 }
 ```
 
+The example overwrites `X-Forwarded-For` with the client address, as rehearsed; appending
+(`$proxy_add_x_forwarded_for`, the form `SECURITY.md` shows) is equally valid, because the app
+reads only the rightmost entry its one trusted hop added.
+
 Compose sets `TRUSTED_PROXY: docker-gateway` itself: the app trusts loopback and the Docker
 bridge gateway as its one proxy hop and refuses to boot if it cannot discover that gateway.
 Do not put `TRUSTED_PROXY` in `.env`. The full rules are in
