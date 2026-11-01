@@ -179,3 +179,26 @@ content or data changed. Current-state architecture/security/design/operator gui
 the approved projection and configuration semantics. Independent implementation-PR review,
 exact-final-head CI, prerequisite-stack integration and human merge/deployment gates remain
 separate; this record authorizes none of those external actions.
+
+## Current-dev integration (2026-11-01)
+
+Merged `dev` after #276/#279/#280/#284/#285/#297 landed. #297 changed the shared
+`PUT /language` acknowledgement: a committed mode change now answers **200** with the stored
+configuration plus its build attempt (`{ primary, locales, lockedAt, updatedAt, build }`), and
+a failed build is `build.ok === false` instead of the former `502 language_build_failed`
+envelope. The checklist's strict `languageFrom` parser rejected the new `build` key, so every
+successful save would have been shown as "could not be confirmed". The Language section now
+separates `build` from the stored configuration, treats `build.ok === false` as a committed
+change with the existing saved-state Rebuild link, and reports it with the shared
+`BuildReporting` wording; a same-mode no-op still answers without a build. No server, schema
+or policy change. Regressions: the success DOM cases return the real acknowledgement shape
+and assert the Saved notice (5 failed before the fix), and the API/DOM build-failure cases
+use the 200 contract.
+
+Verification at the merge: uploader `tsc` 0; PostgreSQL-enabled suite 4068/4069 with the
+single load-sensitive saturated-pool test passing in its own run (300/300 across the four
+onboarding/language files); site 693/693 plus `empty-build` integration 4/4; `astro check`
+0 errors; `astro build` OK. In managed Chromium against the real app, the Desk checklist saved
+English-only (real rebuild, Saved notice, stored `en`/`['en']`), and with the synthetic
+`releases/` made read-only a further save kept the committed mode, showed the shared
+failed-rebuild wording and the Settings rebuild link; an explicit rebuild then succeeded.
