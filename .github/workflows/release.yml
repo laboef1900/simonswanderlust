@@ -31,9 +31,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Needed to pull the Docker Hardened Image base images used by the
-      # Dockerfiles' NODE_BUILD/NODE_RUNTIME build-args below. Requires the repo
-      # variable DHI_USERNAME (not sensitive) + secret DHI_TOKEN (a dhi.io access token).
+      # Needed to pull the Docker Hardened Image bases. The Dockerfile's NODE_BUILD /
+      # NODE_RUNTIME defaults are the reviewed digest-pinned references; do not override
+      # them here with floating tags (the native-build stage refuses those). Requires the
+      # repo variable DHI_USERNAME (not sensitive) + secret DHI_TOKEN (a dhi.io access token).
       - name: Log in to dhi.io (Docker Hardened Images)
         uses: docker/login-action@v3
         with:
@@ -61,8 +62,6 @@ jobs:
         with:
           context: .
           build-args: |
-            NODE_BUILD=dhi.io/node:26-dev
-            NODE_RUNTIME=dhi.io/node:26
             SOURCE_REPOSITORY=${{ github.repository }}
             SOURCE_REVISION=${{ github.sha }}
           platforms: linux/amd64,linux/arm64
