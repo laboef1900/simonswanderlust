@@ -2464,7 +2464,13 @@
           if (!intent) return false;
           // Save-and-attach owns one queue slot; its requested draft save must
           // use the click's form snapshot without trying to reacquire the slot.
-          return enqueueWrite(() => write(() => saveDraftNow(intent)));
+          return enqueueWrite(() => {
+            // @ai-warning #305: a route write carries this post's version token. While a
+            // save's outcome is unknown, under comparison or paused for another account,
+            // that token is unconfirmed — refuse here instead of relying on the server's 409.
+            if (writeRecovery.unresolved()) throw Object.assign(new Error('gpx_save_unresolved'), { code: 'gpx_save_unresolved' });
+            return write(() => saveDraftNow(intent));
+          });
         },
         saveError: () => $('actionError').textContent,
         setBaseUpdatedAt: (value) => { loadedUpdatedAt = value; },

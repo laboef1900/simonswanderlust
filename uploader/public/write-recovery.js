@@ -156,7 +156,10 @@ window.WriteRecovery = (function () {
       try {
         const response = await fetch('/' + options.kind + '/' + encodeURIComponent(resource()), { cache: 'no-store', signal: controller.signal });
         if (response.status === 401) { paused = true; options.guard.stashNow(); render(); return false; }
-        if (response.status === 404) { needsProbe = false; status = copy.writeNotVisible; render(); return false; }
+        // "May still be running" is only true while an attempt for this resource is unresolved;
+        // a restored draft with none has nothing pending to report.
+        const pending = attempts.some(attempt => attempt.resource === resource());
+        if (response.status === 404) { needsProbe = false; status = pending ? copy.writeNotVisible : ''; render(); return false; }
         if (!response.ok) throw new Error('unavailable');
         const body = await response.json();
         if (!uuid.test(body?.ownerUserId)) throw new Error('unsupported');
@@ -166,7 +169,7 @@ window.WriteRecovery = (function () {
         if (matched) return await adopt(body, matched, false);
         needsProbe = false;
         const base = options.base();
-        if (!unsafeRestore && body.updatedAt === base) status = copy.writeNotVisible;
+        if (!unsafeRestore && body.updatedAt === base) status = pending ? copy.writeNotVisible : '';
         else {
           options.guard.stashNow(); comparison = body; status = copy.writeChanged;
         }
@@ -271,7 +274,11 @@ window.WriteRecovery = (function () {
         else if (response.ok) observeOwner((await response.json()).userId);
       } catch (_) { /* a failed context read is not logout */ }
     });
-    return { initialize, ownerId: () => owner, canAdopt, observeOwner, resumeOwner, exportState, restore, save, probe, createKey: () => createKey };
+    /** True while this editor's stored version is unconfirmed: a save outcome is being
+     * checked or unknown, a changed stored version awaits comparison, or the session
+     * belongs to another account. Writes that carry the version token must wait. */
+    function unresolved() { return paused || needsProbe || !!comparison; }
+    return { initialize, ownerId: () => owner, canAdopt, observeOwner, resumeOwner, exportState, restore, save, probe, unresolved, createKey: () => createKey };
   }
   return { create };
 })();
