@@ -50,6 +50,10 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest
+          # GitHub reports the repository license as `AGPL-3.0`; the approved identifier
+          # is `AGPL-3.0-only` (#291). The Dockerfile sets the same fixed value.
+          labels: |
+            org.opencontainers.image.licenses=AGPL-3.0-only
 
       - name: Build and push
         id: build
