@@ -3,6 +3,11 @@ import type { Loader } from 'astro/loaders';
 import { postgresTripsLoader, rowToEntryInput } from './postgres-loader';
 import { renderMarkdown } from './render-markdown.js';
 import { publicTrackSchema, type PublicTrack } from './public-track';
+import { unified } from 'unified';
+import rehypeParse from 'rehype-parse';
+import { visit } from 'unist-util-visit';
+import { resizeBodyImages, STORY_BODY_SIZES, STORY_OPENING_SIZES } from './body-images.js';
+import { splitOpening } from './story-opening.js';
 
 const publicTrack: PublicTrack = {
   version: 1, type: 'MultiLineString', coordinates: [[[1, 2], [3, 4]], [[10, 20], [11, 21]]],
@@ -13,6 +18,7 @@ const db = vi.hoisted(() => ({
   rows: [] as Record<string, unknown>[],
   media: [] as Record<string, unknown>[],
   sql: [] as string[],
+  language: { primary_locale: 'de', enabled_locales: ['de', 'en'] },
 }));
 
 // The loader creates its own pool (`loaderPool`, over `pg`), so mock `pg` and act
@@ -29,6 +35,7 @@ vi.mock('pg', () => ({
         db.sql.push(sql);
         if (!/^\s*SELECT\b/.test(sql)) return { rows: [] };
         if (/\bFROM media\b/.test(sql)) return { rows: db.media };
+        if (/\bFROM site_language\b/.test(sql)) return { rows: [db.language] };
         let rows = db.rows;
         if (/status\s*=\s*'published'/.test(sql)) rows = rows.filter((r) => r.status === 'published');
         if (/published_snapshot\s+IS\s+NOT\s+NULL/.test(sql)) {
@@ -152,6 +159,108 @@ describe('postgresTripsLoader load()', () => {
     db.rows = [];
     db.media = [];
     db.sql = [];
+    db.language = { primary_locale: 'de', enabled_locales: ['de', 'en'] };
+  });
+
+  it.each(['de', 'en'] as const)('excludes disabled snapshots before parsing or rendering in %s-only mode', async (locale) => {
+    vi.stubEnv('DATABASE_URL', 'postgres://mocked/never-dialed');
+    vi.stubEnv('SITE_LANGUAGE_JSON', JSON.stringify({ primary: locale, locales: [locale] }));
+    db.language = { primary_locale: locale, enabled_locales: [locale] };
+    db.rows = ['de', 'en'].map((code) => ({
+      status: 'published',
+      published_snapshot: { ...row, locale: code, body_markdown: code === locale ? 'Public body' : 'PRIVATE disabled body' },
+    }));
+    const { entries, ctx } = fakeLoadContext();
+    await postgresTripsLoader().load(ctx);
+    expect([...entries.keys()]).toEqual([`${locale}/${row.slug}`]);
+    expect([...entries.values()].map((entry) => entry.body)).toEqual(['Public body']);
+  });
+
+  it('fails before reading content when language changed after standalone configuration', async () => {
+    vi.stubEnv('DATABASE_URL', 'postgres://mocked/never-dialed');
+    vi.stubEnv('SITE_LANGUAGE_JSON', '{"primary":"de","locales":["de","en"]}');
+    db.language = { primary_locale: 'de', enabled_locales: ['de'] };
+    const { entries, ctx } = fakeLoadContext();
+    await expect(postgresTripsLoader().load(ctx)).rejects.toThrow('Site language changed');
+    expect(entries.size).toBe(0);
+    expect(db.sql.some((sql) => /FROM posts|FROM media/.test(sql))).toBe(false);
+    expect(db.sql.at(-1)).toBe('ROLLBACK');
+  });
+
+  it.each(['de', 'en'] as const)('composes final %s opening/rest hints from loader output, including unsplit and empty bodies', async (locale) => {
+    vi.stubEnv('DATABASE_URL', 'postgres://mocked/never-dialed');
+    vi.stubEnv('PUBLIC_BASE_URL', 'https://img');
+    const first = 'https://img/trips/sizes/first';
+    const second = 'https://img/trips/sizes/second';
+    const intro = `![Opening](${first})`;
+    const body = `${intro}\n\n## Next\n\n![Remainder](${second})`;
+    const heading = { depth: 2, slug: 'next', text: 'Next' };
+    for (const scenario of [
+      { body, headings: [heading], openingImages: 1, restImages: 1 },
+      { body: intro, headings: [], openingImages: 1, restImages: 0 },
+      { body, headings: [{ ...heading, slug: 'unknown' }], openingImages: 2, restImages: 0 },
+      { body: '', headings: [], openingImages: 0, restImages: 0 },
+    ]) {
+      db.rows = [{ status: 'published', published_snapshot: {
+        ...row, locale, body_markdown: scenario.body,
+        images: { [first]: { width: 3000, height: 2000 }, [second]: { width: 3000, height: 2000 } },
+      } }];
+      const { entries, ctx } = fakeLoadContext();
+      await postgresTripsLoader().load(ctx);
+      const loaded = entries.get(`${locale}/${row.slug}`)?.rendered?.html;
+      expect(loaded).toBeDefined();
+      const parser = unified().use(rehypeParse, { fragment: true });
+      visit(parser.parse(loaded!), 'element', node => {
+        if (node.tagName === 'source') expect(node.properties.sizes).toBe(STORY_BODY_SIZES);
+      });
+      const split = splitOpening(loaded!, scenario.headings);
+      for (const [section, policy, count] of [
+        [split.opening, STORY_OPENING_SIZES, scenario.openingImages],
+        [split.rest, STORY_BODY_SIZES, scenario.restImages],
+      ] as const) {
+        const final = resizeBodyImages(section, policy);
+        const alts: string[] = [];
+        let sources = 0;
+        visit(parser.parse(final), 'element', node => {
+          if (node.tagName === 'img') alts.push(String(node.properties.alt));
+          if (node.tagName === 'source') {
+            expect(node.properties.sizes).toBe(policy);
+            expect(node.properties.srcSet).toContain('1920w');
+            sources++;
+          }
+        });
+        expect(alts).toHaveLength(count);
+        expect(sources).toBe(count * 2);
+        if (count === 1) expect(alts).toEqual([policy === STORY_OPENING_SIZES ? 'Opening' : 'Remainder']);
+        if (section === '') expect(final).toBe('');
+      }
+      if (scenario.restImages === 0) expect(split.rest).toBe('');
+    }
+  });
+
+  it('builds localized decorative gallery names from each published story locale', async () => {
+    vi.stubEnv('DATABASE_URL', 'postgres://mocked/never-dialed');
+    vi.stubEnv('PUBLIC_BASE_URL', 'https://img');
+    const src = 'https://img/trips/names/photo';
+    db.rows = ['de', 'en'].map((locale) => ({
+      status: 'published',
+      published_snapshot: {
+        ...row, locale,
+        body_markdown: `\`\`\`gallery\n${src}\n${src}\n\`\`\``,
+        images: { [src]: { width: 1600, height: 1000, alt: 'Old description' } },
+      },
+    }));
+    db.media = [{ key: 'trips/names/photo', alt_de: '', alt_en: '', caption_de: '', caption_en: '' }];
+    const { entries, ctx } = fakeLoadContext();
+    await postgresTripsLoader().load(ctx);
+    for (const locale of ['de', 'en']) {
+      const html = entries.get(`${locale}/${row.slug}`)?.rendered?.html ?? '';
+      expect(html).toContain(`aria-label="${locale === 'de' ? 'Foto 1 von 2 öffnen' : 'Open photo 1 of 2'}"`);
+      expect(html).toContain(`aria-label="${locale === 'de' ? 'Foto 2 von 2 öffnen' : 'Open photo 2 of 2'}"`);
+      expect(html).toContain('alt=""');
+      expect(html).toContain(`href="${src}-1600.webp"`);
+      expect(html).not.toContain('Old description');
+    }
   });
 
   // The load-bearing guarantee of issue #20: a draft save over a published

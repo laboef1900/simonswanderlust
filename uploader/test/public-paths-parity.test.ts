@@ -3,7 +3,7 @@ import vm from 'node:vm';
 import { describe, expect, it } from 'vitest';
 import { publicPath, publicUrlSet, type PublicPathKind, type PublicUrlRow } from '../src/public-paths.js';
 import type { LanguageConfig, LanguageLocale } from '../src/language.js';
-import { aboutPath, homePath, mapPath, regionPath, regions, regionsIndexPath, regionSlugs } from '../../site/src/lib/paths.js';
+import { aboutPath, homePath, mapPath, regionPath, regions, regionsIndexPath, regionSlugs, rssPath, storyPath } from '../../site/src/lib/paths.js';
 
 interface BrowserLanguage {
   publicPath(language: LanguageConfig, locale: LanguageLocale, kind: PublicPathKind, slug?: string): string | null;
@@ -45,9 +45,16 @@ describe('public URL mirrors', () => {
           const expected = locale === language.primary ? (locale === 'de' ? rootDe : rootEn) : (locale === 'de' ? prefixedDe : prefixedEn);
           expect(kinds.map(kind => publicPath(language, locale, kind, slugFor(kind, locale)))).toEqual(expected);
           expect(kinds.map(kind => browser.publicPath(language, locale, kind, slugFor(kind, locale)))).toEqual(expected);
+          expect([
+            homePath(locale, language),
+            storyPath(slugFor('story', locale)!, locale, language),
+            aboutPath(locale, language), mapPath(locale, language),
+            regionsIndexPath(locale, language), regionPath('europe', locale, language), rssPath(locale, language),
+          ]).toEqual(expected);
           for (const region of regions) {
             const slug = regionSlugs[region][locale];
             expect(browser.publicPath(language, locale, 'region', slug)).toBe(publicPath(language, locale, 'region', slug));
+            expect(regionPath(region, locale, language)).toBe(publicPath(language, locale, 'region', slug));
           }
         });
       }

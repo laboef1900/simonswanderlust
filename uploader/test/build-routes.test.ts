@@ -18,6 +18,7 @@ import { seedSiteIdentity } from '../src/site-identity.js';
 import { buildServer } from '../src/server.js';
 import { createWorkLock } from '../src/work-lock.js';
 import { createEncodeQueue } from '../src/encode-queue.js';
+import { TEST_TRUST } from './trusted-proxy-fixture.js';
 import { idleBuildState } from './build-fixture.js';
 import { publishBody } from './publish-tokens.js';
 
@@ -52,6 +53,7 @@ async function fixture(options: { posts?: PostStore; pages?: PageStore; builder?
   await builder.initialize();
   const unavailable = async (): Promise<never> => { throw new Error('Not used by this test'); };
   const app = buildServer({
+    trustProxy: TEST_TRUST,
     storageDir: join(root, 'images'), siteDir: join(root, 'site'), backupDir: join(root, 'mdx'),
     baseUrl: origin, imgHost: 'images.test', posts, pages, media, users, sessions,
     isWritable: options.isWritable,

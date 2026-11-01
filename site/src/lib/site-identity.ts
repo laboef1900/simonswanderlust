@@ -61,15 +61,18 @@ function socialUrl(value: unknown, field: string): string {
   if (url.protocol !== 'https:' || url.username || url.password || ipLiteral(hostname) || loopback(hostname) || hostname.endsWith('.localhost') || url.href.length > 2048) throw new IdentityError(field);
   return url.href;
 }
-/** Reserved until #276: validate the stored origin shape, not deployment topology. */
-function canonicalOrigin(value: unknown): string | null {
+/** Public value validation only; deployment role checks belong to the uploader. */
+export function normalizeCanonicalOrigin(value: unknown): string | null {
   if (value === null) return null;
-  if (typeof value !== 'string' || value.length > 300 || /[\p{C}\s]/u.test(value)) throw new IdentityError('canonicalOrigin');
+  const normalized = text(value, 'canonicalOrigin', 300, 1);
+  if (/[\s\\?#]/u.test(normalized) ||
+      !/^https?:\/\/[^/@]+\/?$/i.test(normalized)) throw new IdentityError('canonicalOrigin');
   let url: URL;
-  try { url = new URL(value); } catch { throw new IdentityError('canonicalOrigin'); }
+  try { url = new URL(normalized); } catch { throw new IdentityError('canonicalOrigin'); }
   if ((url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback(url.hostname))) ||
-      (ipLiteral(url.hostname) && !loopback(url.hostname)) || url.origin !== value || url.username || url.password) throw new IdentityError('canonicalOrigin');
-  return value;
+      (ipLiteral(url.hostname) && !loopback(url.hostname)) || url.pathname !== '/' ||
+      url.username || url.password || url.origin.length > 300) throw new IdentityError('canonicalOrigin');
+  return url.origin;
 }
 export function normalizeIdentity(input: unknown): Identity {
   const value = object(input, 'identity');
@@ -78,7 +81,7 @@ export function normalizeIdentity(input: unknown): Identity {
   if (!Array.isArray(value.socialLinks) || value.socialLinks.length > 6) throw new IdentityError('socialLinks');
   return {
     siteName: text(value.siteName, 'siteName', 80), authorName: text(value.authorName, 'authorName', 80),
-    canonicalOrigin: canonicalOrigin(value.canonicalOrigin),
+    canonicalOrigin: normalizeCanonicalOrigin(value.canonicalOrigin),
     tagline: localeMap(value.tagline, 'tagline', caps.tagline),
     aboutRole: localeMap(value.aboutRole, 'aboutRole', caps.aboutRole),
     aboutGear: localeMap(value.aboutGear, 'aboutGear', caps.aboutGear),

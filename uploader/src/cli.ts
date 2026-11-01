@@ -14,6 +14,7 @@ import { verifyRouteArchive, routeRecoverySummary } from './gpx-backup.js';
 import type { DbPool } from './db.js';
 import { readLanguage, type LanguageConfig } from './language.js';
 import { buildFailureMessage, type BuildFailureCode } from './build-state.js';
+import { configuredOriginRoles, validateCanonicalRoles, type OriginRoles } from './canonical-origin.js';
 
 /** Reusable: process an in-memory image and store its variants.
  * Keys are content-hash versioned like POST /upload, so a re-upload mints a
@@ -90,7 +91,8 @@ async function restoreMain(args: string[]): Promise<void> {
   const { yes, acceptLanguageChange, file } = parseRestoreArgs(args);
   if (!file) {
     console.error(
-      'usage: stop app, then docker compose run --rm --no-deps app node --import tsx src/cli.ts restore [--yes] [--accept-language-change] /data/backup/db/db-YYYYMMDD-HHmmss.json.gz\n' +
+      'usage: docker compose stop app\n' +
+      '       docker compose run --rm --no-deps --entrypoint node app --import tsx src/cli.ts restore [--yes] [--accept-language-change] /data/backup/db/db-YYYYMMDD-HHmmss.json.gz\n' +
       '       (bare dev: stop the app, then node --import tsx src/cli.ts restore [--yes] [--accept-language-change] <file>)\n' +
       '       --yes skips confirmation, never exclusive ownership, language-change acceptance or the verified pre-restore backup.',
     );
@@ -106,8 +108,11 @@ async function restoreMain(args: string[]): Promise<void> {
     process.exit(1);
   }
   let dump: Dump;
+  let originRoles: OriginRoles;
   try {
     dump = readDump(file);
+    originRoles = configuredOriginRoles();
+    if (dump.version >= IDENTITY_DUMP_VERSION) validateCanonicalRoles(dump.tables.site_identity![0]!.canonical_origin, originRoles);
     await validateIdentityAssets(dump);
     await verifyRouteArchive(file, dump.routeArchive, dump.tables.post_routes ?? []);
   } catch (e) {
@@ -195,7 +200,7 @@ async function restoreMain(args: string[]): Promise<void> {
       return;
     }
     console.log(`pre-restore recovery set verified: ${preDump}`);
-    const counts = await restoreDatabase(pool, file, { routeFiles, assertOwner });
+    const counts = await restoreDatabase(pool, file, { routeFiles, assertOwner, originRoles });
     console.log(`restored ${counts.users} users, ${counts.posts} posts, ${counts.pages} pages, ${counts.media} media rows, ${counts.comments} comments, and ${counts.routes} private routes (all sessions invalidated).`);
     console.log(counts.appSecrets === null ? 'app_secrets preserved.' : `restored ${counts.appSecrets} encrypted app_secrets rows.`);
     console.log(dump.version < IDENTITY_DUMP_VERSION
@@ -434,7 +439,8 @@ async function main(): Promise<void> {
       'usage:\n' +
       '  npm run upload -- <imageFile> <key> [alt]\n' +
       `  ${exec} rebuild\n` +
-      `  ${exec} restore [--yes] /data/backup/db/db-YYYYMMDD-HHmmss.json.gz\n` +
+      '  docker compose stop app\n' +
+      '  docker compose run --rm --no-deps --entrypoint node app --import tsx src/cli.ts restore [--yes] /data/backup/db/db-YYYYMMDD-HHmmss.json.gz\n' +
       `  ${exec} set-password <username> [newPassword]\n` +
       `  ${exec} audit-exif`,
     );
@@ -442,7 +448,7 @@ async function main(): Promise<void> {
   }
   const opts: StorageOptions = {
     storageDir: process.env.STORAGE_DIR ?? './data/images',
-    baseUrl: process.env.PUBLIC_BASE_URL ?? 'https://img.simonswanderlust.com',
+    baseUrl: process.env.PUBLIC_BASE_URL ?? 'http://localhost:3000',
   };
   const settingsPath = process.env.SETTINGS_PATH ?? join(dirname(opts.storageDir), 'settings.json');
   const current = createSettingsStore({ path: settingsPath, defaults: defaultSettings() }).get();

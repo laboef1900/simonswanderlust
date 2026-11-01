@@ -1,14 +1,52 @@
+import type { Root, RootContent } from 'hast';
+import { unified } from 'unified';
+import rehypeParse from 'rehype-parse';
 import { largestVariant } from './images.js';
+import type { Locale } from '../i18n/ui.js';
+import { identity } from './build-identity.js';
+import { siteLanguage, type SiteLanguage } from './site-language.js';
 
-import type { Locale } from '../i18n/ui';
+export type Alternates = Record<Locale, string>;
 
-import { identity } from './build-identity';
+/** Fixed pages have counterparts only in bilingual installations. */
+export function localeAlternates(path: (locale: Locale, language: SiteLanguage) => string, language: SiteLanguage = siteLanguage()): Alternates | undefined {
+  return language.locales.length === 2 ? { de: path('de', language), en: path('en', language) } : undefined;
+}
 
-/**
- * Production origin — fallback base URL when `Astro.site` is unset.
- * Single source of truth; mirrors `site` in astro.config.mjs.
- */
-export const PROD_SITE = new URL('https://simonswanderlust.com');
+const htmlParser = unified().use(rehypeParse, { fragment: true });
+const nonProseTags: Record<string, true> = {
+  figure: true,
+  picture: true,
+  img: true,
+  pre: true,
+  script: true,
+  style: true,
+};
+
+/** First rendered paragraphs before image decoration, excluding media/captions and code. */
+export function proseDescription(html: string, fallback: string): string {
+  const parts: string[] = [];
+  function collect(node: Root | RootContent, inParagraph = false): void {
+    if (node.type === 'text') {
+      if (inParagraph) parts.push(node.value);
+      return;
+    }
+    if (node.type !== 'root' && node.type !== 'element') return;
+    if (node.type === 'element') {
+      const classes = node.properties.className;
+      if (nonProseTags[node.tagName] === true || (Array.isArray(classes) && classes.includes('jgal'))) return;
+      if (node.tagName === 'br' && inParagraph) parts.push(' ');
+      inParagraph ||= node.tagName === 'p';
+    }
+    for (const child of node.children) collect(child, inParagraph);
+    if (node.type === 'element' && node.tagName === 'p') parts.push(' ');
+  }
+  collect(htmlParser.parse(html));
+  const plain = parts.join('').replace(/\s+/g, ' ').trim();
+  if (plain.length <= 150) return plain || fallback;
+  const boundary = plain.lastIndexOf(' ', 150);
+  return boundary > 0 ? plain.slice(0, boundary) : fallback;
+}
 
 /**
  * Formats a Date as a date-only ISO 8601 string (YYYY-MM-DD) from its LOCAL

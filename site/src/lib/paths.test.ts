@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { ui, type Locale, type UIKey } from '../i18n/ui';
-import { aboutPath, homePath, mapPath, regionPath, regionsIndexPath, regionSlugs, regions } from './paths';
+import { aboutPath, homePath, mapPath, regionPath, regionsIndexPath, regionSlugs, regions, rssPath } from './paths';
+import type { SiteLanguage } from './site-language';
+import { namespaceOf, reservation } from './reserved-routes';
 
 const locales: Locale[] = ['de', 'en'];
 
@@ -74,5 +76,31 @@ describe('mapPath', () => {
   it('mapPath: DE at /karte/, EN at /en/map/', () => {
     expect(mapPath('de')).toBe('/karte/');
     expect(mapPath('en')).toBe('/en/map/');
+  });
+});
+
+describe('approved language layouts', () => {
+  it.each<SiteLanguage>([
+    { primary: 'de', locales: ['de', 'en'] }, { primary: 'en', locales: ['en', 'de'] },
+    { primary: 'de', locales: ['de'] }, { primary: 'en', locales: ['en'] },
+  ])('keeps locale words and reservation owners aligned in $primary / $locales', (language) => {
+    for (const locale of ['de', 'en'] as const) {
+      if (!language.locales.includes(locale)) {
+        for (const path of [homePath, aboutPath, mapPath, regionsIndexPath, rssPath]) {
+          expect(() => path(locale, language)).toThrow('Locale is not enabled');
+        }
+        continue;
+      }
+      const prefix = locale === language.primary ? '' : `/${locale}`;
+      expect(homePath(locale, language)).toBe(`${prefix}/`);
+      expect(rssPath(locale, language)).toBe(`${prefix}/rss.xml`);
+      expect(aboutPath(locale, language)).toBe(`${prefix}/${locale === 'de' ? 'uber-mich' : 'about-me'}/`);
+      expect(mapPath(locale, language)).toBe(`${prefix}/${locale === 'de' ? 'karte' : locale === language.primary ? 'travel-map' : 'map'}/`);
+      for (const path of [aboutPath, mapPath, regionsIndexPath]) {
+        const word = path(locale, language).slice(prefix.length + 1, -1);
+        expect(reservation(namespaceOf(locale, language), word, language)?.owner).toBe('site');
+      }
+      expect(reservation('root', 'map', language)?.owner).toBe('app');
+    }
   });
 });

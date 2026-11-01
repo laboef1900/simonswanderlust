@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { browserScript, galleryCodecBindings } from './gallery-browser-module.js';
 import { editorDocument } from './editor-dom-harness.js';
 import { ui } from '../../site/src/i18n/ui.js';
 
@@ -164,7 +165,10 @@ async function about(primary: Locale, prepareLocale?: Locale, updatedAt: string 
   const cleaned: unknown[] = [];
   class EasyMDE {
     private text = '';
-    codemirror = { getInputField: () => dom.document.createElement('textarea'), on() {}, refresh() {} };
+    codemirror = {
+      getInputField: () => dom.document.createElement('textarea'), on() {}, refresh() {},
+      getValue: () => this.text, getLine: (line: number) => this.text.split('\n')[line] ?? '',
+    };
     value(value?: string) { if (value !== undefined) this.text = value; return this.text; }
   }
   const context: Record<string, unknown> = {
@@ -180,7 +184,7 @@ async function about(primary: Locale, prepareLocale?: Locale, updatedAt: string 
       if (route && url !== '/language') return route(url, init);
       if (url === '/language') return response(state(primary, [primary]));
       if (url.endsWith('/revisions')) return response([]);
-      if (init.method === 'PUT') return response({ saved: { updatedAt: '2026-10-28T00:00:00.000Z' }, build: { ok: true } });
+      if (init.method === 'PUT') return response({ saved: { updatedAt: '2026-10-28T00:00:00.000Z' }, build: { ok: true }, galleryWarnings: [] });
       return response(page);
     },
   };
@@ -188,9 +192,11 @@ async function about(primary: Locale, prepareLocale?: Locale, updatedAt: string 
   context.EditorCopy = editorCopy;
   context.BuildCopy = buildCopy;
   vm.createContext(context);
-  for (const file of ['build-reporting.js', 'language.js', 'tabs.js']) vm.runInContext(readFileSync('public/' + file, 'utf8'), context);
-  const start = html.lastIndexOf('<script>') + '<script>'.length;
-  vm.runInContext(html.slice(start, html.lastIndexOf('</script>')), context);
+  Object.assign(context, galleryCodecBindings);
+  for (const file of ['build-reporting.js', 'language.js', 'tabs.js', 'gallery-fence.js', 'gallery-metadata-warnings.js']) vm.runInContext(browserScript(file), context);
+  // The page script is a module (it imports the gallery fence); run its body.
+  const start = html.lastIndexOf('<script type="module">');
+  vm.runInContext(html.slice(html.indexOf("'use strict'", start), html.lastIndexOf('</script>')), context);
   await settle();
   return { el, requests, page, context, cleaned };
 }

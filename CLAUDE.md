@@ -102,10 +102,15 @@ exception merely to make a check pass. Record accepted exceptions in the relevan
    `site/src/lib/` and `site/src/i18n/` is covered by Vitest; `uploader/` logic by its own Vitest
    suites in `uploader/test/`. Run `npm test` and `npx astro check` before claiming done.
    Non-behavioral changes (docs, formatting) require proportionate evidence instead.
-2. **SEO Slug Contract (Critical)** — Live WordPress slugs MUST be preserved exactly: DE at root,
-   EN under `/en/`. Encoded and tested in `site/src/lib/paths.ts` and `trips.ts`, and mirrored by
-   MDX filenames. **Never rename a slug or route** without explicit authorization — it breaks live
-   URLs and SEO.
+2. **SEO Slug Contract (Critical)** — Published slugs and routes MUST be preserved exactly.
+   simonswanderlust.com, and every install whose primary language is German, keep the live
+   WordPress layout: DE at root, EN under `/en/`. An install whose primary language is English
+   (EN-only, or DE+EN EN-primary; owner-authorized 2026-10-27, see
+   `docs/superpowers/specs/2026-10-27-issue-283-language-mode-contract.md`) serves EN at root and
+   DE under `/de/`. The primary language is locked at the first publish
+   (`language_primary_locked`); no language-mode change moves a published URL. Encoded and tested
+   in `site/src/lib/paths.ts` and `trips.ts`, and mirrored by MDX filenames. **Never rename a slug
+   or route** without explicit authorization — it breaks live URLs and SEO.
 3. **Data Safety (Critical)** — Postgres is the content source of truth (`posts`, `pages`,
    `users`), and `/data` (bind-mounted from `uploader/data`) holds image originals/variants, site
    releases, and backups. NEVER wipe persistent data without explicit user authorization: no
@@ -165,7 +170,7 @@ Classify a change before implementing it:
 | **Content** | Postgres (loaded at build time by `site/src/lib/postgres-loader.ts`); authored in the in-admin editor — MDX files are export-only backups (the original stubs were imported once via `site/scripts/migrate-stub-posts.mjs`) |
 | **i18n** | Astro i18n routing — `defaultLocale: 'de'` (no prefix), `en` under `/en/` |
 | **Fonts** | Inter Variable (sans), IBM Plex Mono (expedition-log accents) |
-| **Markdown** | Shiki syntax highlighting (`syntaxHighlight: { type: 'shiki', excludeLangs: ['math', 'gallery'] }`) — keep `site/astro.config.mjs` and `MARKDOWN_OPTIONS` in `site/src/lib/render-markdown.ts` in lockstep; `render-markdown.test.ts` asserts they agree |
+| **Markdown** | Shiki syntax highlighting (`syntaxHighlight: { type: 'shiki', excludeLangs: ['math', 'gallery'] }`) — `site/astro.config.mjs` imports `MARKDOWN_OPTIONS` directly from `site/src/lib/render-markdown.ts`; `render-markdown.test.ts` exercises gallery markers and class-based highlighting without loading database-backed build configuration |
 | **Testing** | Vitest (both trees); `@astrojs/check` (`astro check`) for types |
 | **Infrastructure** | Self-hosted Docker: one `app` image (repo-root `Dockerfile`) runs `uploader/` Fastify, which builds `site/` in-process and serves it — plus `db` (Postgres), via root `docker-compose.yml` |
 
@@ -236,9 +241,14 @@ the `/data` volume and only changes via Publish, **Rebuild site now**, or `POST 
 
 | Service | Port | Exposure |
 | --- | --- | --- |
-| `app` (Fastify: blog + admin + images) | `3000` | **Loopback** (`127.0.0.1:3000`) — the only published port; the host's reverse proxy is the sole ingress (#108) |
+| `app` (Fastify: blog + admin + images) | `3000` | **Loopback** (`127.0.0.1:3000`) — the only published port; one host TLS proxy, with immediate-peer address validation (#108, #369) |
 | `db` (Postgres 18) | `5432` | **Internal** — compose network only; never published to the host |
 | Astro dev server | `4321` | **Loopback** — local development only |
+
+Compose sets `TRUSTED_PROXY: docker-gateway` literally, not through `.env`. It trusts loopback
+and the discovered default gateway at hop zero only; missing/ambiguous discovery refuses boot.
+Changing bridge/proxy topology or adding a CDN requires a new spec. Docker Desktop TCP evidence
+does not replace the target-VPS peer/header/two-external-network checks before DNS cutover.
 
 ## Accessibility and High-Impact Actions
 
@@ -924,7 +934,7 @@ blog/
   so the live page hot-linked the old domain (inline image) or silently lost the photo (gallery
   line) — and after the DNS cutover both 404. `foreignImageUrls(body, imageOrigin)` in
   `publish-gate.ts` **renders** the body with the build's own `renderMarkdown` and reads every
-  `img`/`source` URL and gallery line from the sanitized hast tree (`bodyImageSources` in
+  `img`/`source` URL and gallery line from the sanitized hast tree (`analyzeRenderedBody` in
   `site/src/lib/body-images.ts`, before `images` resolution) whose origin is not the image host, by
   **origin equality** on the URL *resolved against that host* — a browser gives an origin-less
   reference the page's, so `//old.example/a.jpg` hot-links and `https:old.example/a.jpg` does not;
@@ -1040,6 +1050,13 @@ blog/
   `posts_region_check`; a region page is built and linked only once its locale has a published
   story (`liveRegions` in `site/src/lib/trips.ts`). See
   `docs/superpowers/specs/2026-10-19-new-regions-design.md`.
+- **Implemented, release pending:** #347 native image decoder hardening (2026-10-27,
+  owner-approved). Both locks resolve sharp 0.35.5 / libvips package 1.3.4; uploader's
+  install-script permission follows sharp 0.35.5. DHI ARM64 and emulated AMD64 candidates
+  loaded the patched heif/rsvg/vips versions and passed JPEG/AVIF/SVG upload, served-variant,
+  private-original, EXIF-free preview and rescan checks. Formats and EXIF privacy stay unchanged.
+  Recovery is roll-forward only; a new image release/deployment is still required.
+  See `docs/superpowers/specs/2026-10-27-issue-347-sharp-codec-upgrade.md`.
 - **In progress:** Reader comments (epic #202, spec #203) — design spec landed 2026-09-14
   (`docs/superpowers/specs/2026-09-14-comments-design.md`, incl. an ASVS L1 exception record).
   #205 admin moderation queue landed: `uploader/public/comments.html` (served at

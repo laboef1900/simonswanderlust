@@ -15,6 +15,7 @@ import { defaultSettings, validate } from '../src/settings.js';
 import { createGpxFiles } from '../src/gpx-files.js';
 import type { GpxService } from '../src/gpx-service.js';
 import type { LanguageConfig } from '../src/language.js';
+import { TEST_TRUST } from './trusted-proxy-fixture.js';
 
 const modes: LanguageConfig[] = [
   { primary: 'de', locales: ['de', 'en'] }, { primary: 'en', locales: ['en', 'de'] },
@@ -38,6 +39,7 @@ describe('reserved public namespaces', () => {
     let settings = defaultSettings();
     await Promise.all(['images', 'map', 'site/current'].map(path => mkdir(join(root, path), { recursive: true })));
     const app = buildServer({
+      trustProxy: TEST_TRUST,
       storageDir: join(root, 'images'), siteDir: join(root, 'site'), mapDir: join(root, 'map'),
       baseUrl: 'https://images.example', imgHost: 'images.example', backupDir: join(root, 'backup'),
       users: memoryUserStore(), sessions: memorySessionStore(), posts, pages: memoryPageStore(posts.language),
@@ -52,6 +54,7 @@ describe('reserved public namespaces', () => {
       encodeQueue: {
         enqueue: () => {}, isActive: () => false, recover: async () => 0, drain: async () => {},
         quiesce: async () => {}, idle: async () => {}, stats: () => ({ pending: 0, running: 0 }),
+        withAdmission: (_key, operation) => operation(),
       },
       onRoute(route) {
         // Root wildcard static mounts serve content, not a fixed app namespace.
