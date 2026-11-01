@@ -1460,3 +1460,29 @@ Docker Desktop file-share bind reached the ext4 guard and was rejected as design
 [`docs/superpowers/plans/2026-11-01-g6-deployment-mount-qualification.md`](../plans/2026-11-01-g6-deployment-mount-qualification.md)
 on the real mount with the image to be deployed, and the result is recorded here.
 
+### Owner waiver of the deployment-mount run (G6) — 2026-11-01
+
+- **Waived rule:** the pre-deployment requirement above that the actual deployment mount pass the
+  packaged ownership matrix before #486–#489 are deployed.
+- **Facts stated by the owner:** production `uploader/data` (the `/data` bind source) is on a
+  **local XFS** disk — not NFS/SMB, not FUSE, not a Docker Desktop share.
+- **Reason:** on Linux, `flock(2)` for local filesystems is implemented once in the kernel's
+  generic VFS lock code (`fs/locks.c`); neither ext4 nor XFS supplies its own lock operation, so
+  lock ownership per open file description, release on last close or process death (including
+  SIGKILL) and second-owner refusal behave identically. The divergent cases — NFS, SMB/CIFS and
+  FUSE, which bring their own lock handling — do not apply. The harness's `ef53` assertion is a
+  deliberately narrow evidence claim, not a property the app depends on: `uploader/src` never
+  inspects the filesystem type.
+- **Risk:** no run has observed the lock on the production mount, kernel and mount options; a
+  defect specific to that combination would surface only in operation.
+- **Compensating controls:** the full matrix passed with the shipped native module on native
+  amd64 and arm64 ext4 runners, with both named volumes and bind mounts
+  ([run 41347014866](https://github.com/laboef1900/simonswanderlust/actions/runs/41347014866));
+  the PostgreSQL ownership lock and quiescence protocol stay in force alongside the file lock;
+  a failing lock call fails closed (the app refuses to start rather than run unlocked).
+- **Approver:** the owner (laboef1900), 2026-11-01.
+- **Scope and review:** this mount only. The waiver ends — and the run sheet
+  (`docs/superpowers/plans/2026-11-01-g6-deployment-mount-qualification.md`, after the harness
+  accepts the filesystem in question) applies — if `/data` moves to another filesystem type,
+  to network or FUSE storage, or to another server; otherwise review by **2027-05-01**.
+

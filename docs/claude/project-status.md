@@ -611,8 +611,9 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 - **Done, closed by the owner (#296, epic #294, 2026-11-01):** offsite contract (Veeam
   whole-server backup, ≥14 daily restore points, escrow); the restore drill is covered by the
   owner's regular restore test, not recorded here.
-- **Tooling ready, owner run pending (G6):** the packaged native-lock harness takes
-  `--data-root` and runs its ownership matrix on bind-mounted subdirectories of a real directory
-  (passed on native amd64/arm64 ext4 runners). The owner qualifies the server's `/data`
-  filesystem with `docs/superpowers/plans/2026-11-01-g6-deployment-mount-qualification.md`
-  before #486–#489 are deployed.
+- **G6 waived by the owner (2026-11-01):** production `/data` is a local XFS disk; local-filesystem
+  `flock` is generic kernel code, so the deployment-mount run was waived for this mount (record,
+  risk and review date in the #304 spec). The packaged harness takes `--data-root` and passed on
+  native amd64/arm64 ext4 runners; the run sheet
+  `docs/superpowers/plans/2026-11-01-g6-deployment-mount-qualification.md` applies again if
+  `/data` moves to another filesystem, network/FUSE storage or another server.
