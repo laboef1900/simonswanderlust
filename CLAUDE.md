@@ -1124,6 +1124,15 @@ blog/
   private-original, EXIF-free preview and rescan checks. Formats and EXIF privacy stay unchanged.
   Recovery is roll-forward only; a new image release/deployment is still required.
   See `docs/superpowers/specs/2026-10-27-issue-347-sharp-codec-upgrade.md`.
+- **Done:** Configurable site identity, epic #272 (#273 design, #274 text identity, #275 logo /
+  favicon, #276 canonical domain). Closing evidence 2026-11-01: a fresh-install runtime scan on
+  `dev` `976f31a` found zero unclassified `Simon|simonswanderlust|Wanderlust` matches in the
+  release or the served admin; the remaining ones are #291 software name/copyright/notice texts
+  and #293 compose host defaults. The allow-list is data
+  (`docs/site-identity-branding-allowlist.json`) read by two regression scans —
+  `site/test/empty-build.integration.test.ts` (every file of the zero-content build, all four
+  language modes) and `uploader/test/branding-scan.test.ts` (every served admin page/script) —
+  so a newly hardcoded owner name fails CI. See `docs/site-identity-branding-allowlist.md`.
 - **In progress:** Reader comments (epic #202, spec #203) — design spec landed 2026-09-14
   (`docs/superpowers/specs/2026-09-14-comments-design.md`, incl. an ASVS L1 exception record).
   #205 admin moderation queue landed: `uploader/public/comments.html` (served at

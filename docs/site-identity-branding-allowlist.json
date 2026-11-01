@@ -1,0 +1,35 @@
+{
+  "$comment": "Read by site/test/empty-build.integration.test.ts and uploader/test/branding-scan.test.ts. Each entry exempts only matches of the scan expression that fall inside an occurrence of `text` in a path matching `path`. See docs/site-identity-branding-allowlist.md.",
+  "expression": "Simon|simonswanderlust|Wanderlust",
+  "flags": "gi",
+  "entries": [
+    {
+      "surface": "admin",
+      "path": "^/admin/admin\\.css$",
+      "text": "Wanderlust Studio",
+      "owner": "#291",
+      "reason": "Software product name (kept by the #291 decision) in the stylesheet's header comments."
+    },
+    {
+      "surface": "admin",
+      "path": "^/admin/editor-image-copy\\.js$",
+      "text": "Wanderlust Studio",
+      "owner": "#291",
+      "reason": "Software product name in the localized admin chrome (editor.chrome.studioName and the software-license summary)."
+    },
+    {
+      "surface": "admin",
+      "path": "^/admin/editor-image-copy\\.js$",
+      "text": "Copyright 2026 Simon und Mitwirkende",
+      "owner": "#291",
+      "reason": "Software copyright notice (editor.chrome.softwareSummary, DE) required by the approved AGPL-3.0-only grant."
+    },
+    {
+      "surface": "admin",
+      "path": "^/admin/editor-image-copy\\.js$",
+      "text": "Copyright 2026 Simon and contributors",
+      "owner": "#291",
+      "reason": "Software copyright notice (editor.chrome.softwareSummary, EN) required by the approved AGPL-3.0-only grant."
+    }
+  ]
+}
