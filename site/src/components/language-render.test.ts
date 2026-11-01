@@ -11,7 +11,7 @@ import { GET as feed } from '../pages/[...locale]/rss.xml';
 import { homePath, aboutPath, mapPath, regionPath, rssPath } from '../lib/paths';
 import { pathOf, type Trip } from '../lib/trips';
 import type { SiteLanguage } from '../lib/site-language';
-import type { Locale } from '../i18n/ui';
+import { ui, type Locale } from '../i18n/ui';
 
 const content = vi.hoisted(() => ({ trips: [] as Trip[] }));
 vi.mock('astro:content', () => ({
@@ -46,6 +46,25 @@ afterEach(async () => {
 });
 
 describe('configured public language rendering', () => {
+  it.each(modes)('renders honest empty Home and Map pages for $primary / $locales', async (language) => {
+    vi.stubEnv('SITE_LANGUAGE_JSON', JSON.stringify(language));
+    const container = await AstroContainer.create();
+    for (const locale of language.locales) {
+      for (const component of [HomePage, MapPage]) {
+        const document = documentOf(await container.renderToString(component, {
+          props: { locale }, request: new Request(`https://simonswanderlust.com${component === HomePage ? homePath(locale) : mapPath(locale)}`),
+        }));
+        const main = document.querySelector('main')!;
+        expect(document.querySelectorAll('h1')).toHaveLength(1);
+        expect(main.textContent).toContain(ui[locale][component === HomePage ? 'stories.emptyBody' : 'map.emptyBody']);
+        expect(main.querySelectorAll('[data-geojson], #map, .story-grid, nav ul')).toHaveLength(0);
+        expect(main.querySelectorAll('a[href]')).toHaveLength(0);
+        expect(document.documentElement.lang).toBe(locale);
+        expect(document.querySelectorAll('link[hreflang]')).toHaveLength(language.locales.length === 2 ? 3 : 0);
+      }
+    }
+  });
+
   it.each(modes)('renders enabled routes, SEO, maps, comments and feeds for $primary / $locales', async (language) => {
     vi.stubEnv('SITE_LANGUAGE_JSON', JSON.stringify(language));
     // Deliberately include a disabled locale: public consumers must not leak it.

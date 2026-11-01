@@ -7,14 +7,17 @@ import { isPageKind, PAGE_KINDS } from '../../site/src/lib/page-kinds.js';
 import { namespaceOf, reservation } from '../../site/src/lib/reserved-routes.js';
 import { DEFAULT_NAVIGATION, validateNavigation, pageNavReferences, withoutPageNavigation, type Navigation, type PageNavReference } from '../../site/src/lib/navigation.js';
 import { lockContentNamespaces, registerMemoryClaims, memorySlugOwner, memoryStoryBodies } from './content-namespace.js';
-import { analyzeBodyImages } from './publish-gate.js';
+import { analyzeBodyContent } from './publish-gate.js';
 import { publicPath } from './public-paths.js';
+import type { GalleryWarning } from '../public/gallery-photo-line.js';
 
 export type Locale = 'de' | 'en';
 export type ImageDims = ImageMeta;
 export interface PageContent { locale: Locale; title: string; bodyMarkdown: string; images: Record<string, ImageDims>; slug?: string; publishedAt?: Date | null }
 export interface PagePair { key: string; de: PageContent; en: PageContent }
 export interface StoredPagePair extends PagePair { status: 'draft' | 'published'; updatedAt: Date | null }
+/** Transient diagnostics from the submitted bodies, excluded from get/revisions. */
+export interface SavedPagePair extends StoredPagePair { galleryWarnings: GalleryWarning[] }
 export type PageRevisionSnapshot = Pick<PagePair, 'de' | 'en'>;
 export interface PageRevisionSummary { id: string; savedAt: Date; title: string }
 export interface PageRevision extends PageRevisionSummary { snapshot: PageRevisionSnapshot }
@@ -57,7 +60,7 @@ export interface PageRemoval {
 export interface PageStore {
   configureImageOrigin(origin: string): void;
   get(key: string): Promise<StoredPagePair>;
-  save(pair: PageUpdate, baseUpdatedAt?: Date, options?: PageSaveOptions): Promise<StoredPagePair>;
+  save(pair: PageUpdate, baseUpdatedAt?: Date, options?: PageSaveOptions): Promise<SavedPagePair>;
   publish(key: string, baseUpdatedAt?: Date, options?: PageSaveOptions): Promise<StoredPagePair>;
   unpublish(key: string, baseUpdatedAt?: Date): Promise<StoredPagePair>;
   removalInfo(key: string): Promise<PageRemoval>;
@@ -76,7 +79,7 @@ function assignedPagePaths(pair: StoredPagePair, mode: LanguageConfig): string[]
 export function pagePaths(pair: StoredPagePair, mode: LanguageConfig): string[] {
   return pair.status === 'published' ? assignedPagePaths(pair, mode) : [];
 }
-function mergePageUpdate(update: PageUpdate, existing: StoredPagePair, mode: LanguageConfig, options: PageSaveOptions): StoredPagePair {
+async function mergePageUpdate(update: PageUpdate, existing: StoredPagePair, mode: LanguageConfig, options: PageSaveOptions): Promise<{ pair: StoredPagePair; galleryWarnings: GalleryWarning[] }> {
   const preparing = options.prepareLocale;
   if (preparing && (mode.locales.includes(preparing) || update[mode.primary] !== undefined)) throw new PageError('Preparation edits only the inactive language.');
   const pair = structuredClone(existing);
@@ -86,13 +89,17 @@ function mergePageUpdate(update: PageUpdate, existing: StoredPagePair, mode: Lan
     }
   }
   validatePagePair(pair);
+  // Save-time normalization, mirroring `draftWithDefaults` for posts: lift ```gallery
+  // per-line metadata into `images`. The warnings describe the submitted bodies only.
+  const galleryWarnings: GalleryWarning[] = [];
   for (const locale of LOCALES) {
     const row = pair[locale];
     if (existing[locale].publishedAt && row.slug !== existing[locale].slug) throw new PageError(`${locale}: a previously published page URL cannot change.`, 'page_slug_locked');
-    const normalized = normalizeGalleryFences(row.bodyMarkdown, row.images);
-    pair[locale] = { ...row, ...normalized };
+    const normalized = await normalizeGalleryFences(row.bodyMarkdown, row.images);
+    galleryWarnings.push(...normalized.galleryWarnings.map((warning) => ({ ...warning, locale })));
+    pair[locale] = { ...row, bodyMarkdown: normalized.bodyMarkdown, images: normalized.images };
   }
-  return pair;
+  return { pair, galleryWarnings };
 }
 /** Completeness exception applies only to About; image analysis is never exempt. */
 export async function validatePublishedPage(pair: StoredPagePair, mode: LanguageConfig, imageOrigin: string): Promise<void> {
@@ -100,7 +107,7 @@ export async function validatePublishedPage(pair: StoredPagePair, mode: Language
   for (const locale of mode.locales) {
     const row = pair[locale];
     if (pair.key !== 'about' && (!row.title.trim() || !row.bodyMarkdown.trim() || !row.slug)) throw new PageError(`${locale}: title, body and slug are required to publish.`, 'invalid_page', undefined, locale);
-    const analyzed = await analyzeBodyImages(row.bodyMarkdown, row.images, imageOrigin);
+    const analyzed = await analyzeBodyContent(row.bodyMarkdown, row.images, imageOrigin, locale);
     if (analyzed.foreign.length) throw new PageError('Replace foreign body images with hosted photos before publishing.', 'foreign_images', undefined, locale, analyzed.foreign);
   }
 }
@@ -145,7 +152,9 @@ export function memoryPageStore(language: LanguageStore = memoryLanguageStore(),
     }
     if (pair.status === 'published') { await validatePublishedPage(pair, mode, origin); await extra?.(pair, mode); }
   }
-  async function mutate(key: string, base: Date | undefined, action: 'save' | 'publish' | 'unpublish', update?: PageUpdate, opts: PageSaveOptions = {}): Promise<StoredPagePair> {
+  async function mutate(key: string, base: Date | undefined, action: 'save' | 'publish' | 'unpublish', update?: PageUpdate, opts: PageSaveOptions = {}): Promise<SavedPagePair> {
+    // The language queue serializes every memory mutation: read, stale check and
+    // write cannot interleave with another save (#344).
     return language.runExclusive(async (mode) => {
       const existing = await store.get(key);
       if (base && !existing.updatedAt) throw new PageError('Page not found.', 'not_found');
@@ -153,7 +162,7 @@ export function memoryPageStore(language: LanguageStore = memoryLanguageStore(),
       if (action === 'unpublish') fixed(key);
       if (opts.prepareLocale && existing.updatedAt && !base) throw new PageError('Reload before preparing a translation.', 'conflict');
       assertPageNotStale(existing.updatedAt, base);
-      const pair = mergePageUpdate(update ?? { key }, existing, mode, opts);
+      const { pair, galleryWarnings } = await mergePageUpdate(update ?? { key }, existing, mode, opts);
       if (action !== 'save') pair.status = action === 'publish' ? 'published' : 'draft';
       // Unpublish is containment for a recovered collision or invalid live body.
       if (action !== 'unpublish') await validate(pair, mode, opts.validate);
@@ -162,7 +171,7 @@ export function memoryPageStore(language: LanguageStore = memoryLanguageStore(),
         list.push({ id: randomUUID(), savedAt: new Date(), title: existing[mode.primary].title, snapshot: { de: existing.de, en: existing.en } });
         revisions.set(key, list.slice(-REVISION_CAP));
       }
-      stamp(pair, mode); pairs.set(key, structuredClone(pair)); return structuredClone(pair);
+      stamp(pair, mode); pairs.set(key, structuredClone(pair)); return { ...structuredClone(pair), galleryWarnings };
     });
   }
   const store: PageStore = {
@@ -236,8 +245,13 @@ export function pgPageStore(pool: DbPool, options: { imageOrigin?: string } = {}
     catch (error) { await client.query('ROLLBACK'); throw error; }
     finally { client.release(); }
   }
-  async function mutate(key: string, base: Date | undefined, action: 'save' | 'publish' | 'unpublish', update?: PageUpdate, opts: PageSaveOptions = {}): Promise<StoredPagePair> {
+  async function mutate(key: string, base: Date | undefined, action: 'save' | 'publish' | 'unpublish', update?: PageUpdate, opts: PageSaveOptions = {}): Promise<SavedPagePair> {
     return transaction(async (client, mode) => {
+      // @ai-warning (#344) `transaction` already holds the language row FOR UPDATE, so
+      // every page mutation is serialized before this read. Row locks alone cannot
+      // serialize two creations of a never-saved key (no row to lock); keep the
+      // language lock ahead of the read, or both would pass the check and the later
+      // write would erase the earlier one without a revision.
       const existing = await readPage(client, key, true);
       if (base && !existing.updatedAt) throw new PageError('Page not found.', 'not_found');
       await lockContentNamespaces(client);
@@ -245,7 +259,7 @@ export function pgPageStore(pool: DbPool, options: { imageOrigin?: string } = {}
       if (action === 'unpublish') fixed(key);
       if (opts.prepareLocale && existing.updatedAt && !base) throw new PageError('Reload before preparing a translation.', 'conflict');
       assertPageNotStale(existing.updatedAt, base);
-      const pair = mergePageUpdate(update ?? { key }, existing, mode, opts);
+      const { pair, galleryWarnings } = await mergePageUpdate(update ?? { key }, existing, mode, opts);
       if (action !== 'save') pair.status = action === 'publish' ? 'published' : 'draft';
       if (action !== 'unpublish') await pgClaims(client, pair, mode);
       if (pair.status === 'published') { await validatePublishedPage(pair, mode, origin); await opts.validate?.(pair, mode, client); }
@@ -261,7 +275,7 @@ export function pgPageStore(pool: DbPool, options: { imageOrigin?: string } = {}
           slug=EXCLUDED.slug,status=EXCLUDED.status,published_at=EXCLUDED.published_at,updated_at=EXCLUDED.updated_at`,
         [key, locale, row.title, row.bodyMarkdown, JSON.stringify(row.images), row.slug ?? '', pair.status, row.publishedAt, pair.updatedAt]);
       }
-      return pair;
+      return { ...pair, galleryWarnings };
     });
   }
   async function info(client: DbPool | DbClient, key: string, mode: LanguageConfig): Promise<PageRemoval> {

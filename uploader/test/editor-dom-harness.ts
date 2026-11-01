@@ -142,6 +142,10 @@ export class EditorElement {
   contains(target: EditorElement | null): boolean { return target === this || this.childNodes.some((child) => child.contains(target)); }
   matches(selector: string): boolean {
     return selector.split(',').some((part) => {
+      const child = part.lastIndexOf('>');
+      if (child !== -1) {
+        return this.matches(part.slice(child + 1)) && (this.parentElement?.matches(part.slice(0, child)) ?? false);
+      }
       let rest = part.trim();
       const negatives = [...rest.matchAll(/:not\(([^)]+)\)/g)];
       if (negatives.some((match) => this.matches(match[1]!))) return false;

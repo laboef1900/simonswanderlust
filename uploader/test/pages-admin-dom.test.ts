@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { describe, expect, it } from 'vitest';
 import { editorDocument } from './editor-dom-harness.js';
+import { browserScript, galleryCodecBindings } from './gallery-browser-module.js';
 import { ui } from '../../site/src/i18n/ui.js';
 const stamp = '2026-10-29T00:00:00.000Z';
 const copy = { en: Object.fromEntries(Object.entries(ui.en).filter(([key]) => key.startsWith('editor.chrome.')).map(([key, value]) => [key.slice(14), value])) };
@@ -20,12 +21,15 @@ async function editor(key = 'contact', status = 'draft', prepare = false) {
   const timers = new Map<number, () => void>();
   let timerId = 0;
   class EasyMDE {
-    private body = ''; codemirror = { getInputField: () => dom.document.createElement('textarea'), on() {}, refresh() {} };
+    private body = ''; codemirror = { getInputField: () => dom.document.createElement('textarea'), on() {}, refresh() {},
+      getValue: () => this.body, getLine: (line: number) => this.body.split('\n')[line] ?? '' };
     value(value?: string) { if (value !== undefined) this.body = value; return this.body; }
   }
   const response = (body: unknown, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => body });
   const context: Record<string, unknown> = {
     document: dom.document, URLSearchParams, EasyMDE, EditorCopy: copy,
+    BuildCopy: Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [locale, Object.fromEntries(Object.entries(strings)
+      .filter(([key]) => key.startsWith('admin.build.')).map(([key, value]) => [key.slice('admin.build.'.length), value]))])),
     location: { search: '?key=' + key + (prepare ? '&prepareLocale=en' : ''), origin: 'https://journal.test', href: '' },
     localStorage: {
       getItem: (key: string) => storage.get(key) ?? null,
@@ -55,8 +59,11 @@ async function editor(key = 'contact', status = 'draft', prepare = false) {
     },
   };
   context.window = context; vm.createContext(context);
-  for (const file of ['draft-guard.js', 'language.js', 'tabs.js', 'pages-ui.js']) vm.runInContext(readFileSync('public/' + file, 'utf8'), context);
-  vm.runInContext(html.slice(html.lastIndexOf('<script>') + 8, html.lastIndexOf('</script>')), context);
+  Object.assign(context, galleryCodecBindings);
+  for (const file of ['build-reporting.js', 'draft-guard.js', 'language.js', 'tabs.js', 'pages-ui.js', 'gallery-fence.js', 'gallery-metadata-warnings.js']) vm.runInContext(browserScript(file), context);
+  // The page script is a module (it imports the gallery fence); run its body.
+  const start = html.lastIndexOf('<script type="module">');
+  vm.runInContext(html.slice(html.indexOf("'use strict'", start), html.lastIndexOf('</script>')), context);
   await settle();
   return {
     dom, el, requests, questions, page, context, storage,

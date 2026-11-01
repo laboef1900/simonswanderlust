@@ -1,3 +1,5 @@
+import { idleBuildState } from './build-fixture.js';
+import { TEST_TRUST } from './trusted-proxy-fixture.js';
 import { describe, expect, it, beforeEach } from 'vitest';
 import { mkdtemp, mkdir, writeFile, symlink, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -17,9 +19,12 @@ import type { EncodeQueue } from '../src/encode-queue.js';
 import { memorySecretsStore } from '../src/secrets.js';
 import { LEGACY_REDIRECTS } from '../src/redirects.js';
 import { memoryLanguageStore, type LanguageConfig } from '../src/language.js';
+import { memorySiteIdentityStore } from '../src/site-identity.js';
+import { neutralIdentity } from '../../site/src/lib/site-identity.js';
 
 /** This suite only exercises host routing, so the queue never needs to run. */
 const noopQueue = (): EncodeQueue => ({
+  withAdmission: (_key, operation) => operation(),
   enqueue: () => {}, isActive: () => false, recover: async () => 0, drain: async () => {}, idle: async () => {},
   quiesce: async () => {},
   stats: () => ({ pending: 0, running: 0 }),
@@ -76,9 +81,10 @@ function stubBackup(backupDir: string): DbBackup {
 
 function build(extra: Partial<ServerConfig> = {}) {
   const hasRelease = () => existsSync(join(siteDir, 'current'));
-  const builder: SiteBuilder = { build: async () => ({ ok: true, release: 'r' }), hasRelease, quiesce: async () => {} };
+  const builder: SiteBuilder = { ...idleBuildState, build: async () => ({ ok: true, attemptId: 'r', release: 'r' }), hasRelease, quiesce: async () => {} };
   const backupDir = join(dir, 'backup');
   return buildServer({
+    trustProxy: TEST_TRUST,
     storageDir: join(dir, 'images'), baseUrl: `https://${IMG}`, imgHost: IMG,
     siteDir, mapDir: join(dir, 'map'),
     users: memoryUserStore(), sessions: memorySessionStore(), posts: memoryPostStore(),
@@ -426,6 +432,35 @@ describe('legacy WordPress redirects', () => {
     expect(res.body).toBe('static feed');
   });
 
+  it.each<LanguageConfig>([
+    { primary: 'de', locales: ['de', 'en'] }, { primary: 'en', locales: ['en', 'de'] },
+    { primary: 'de', locales: ['de'] }, { primary: 'en', locales: ['en'] },
+  ])('keeps redirect and host-routing behavior independent of canonical for $primary / $locales', async language => {
+    const identityStore = memorySiteIdentityStore();
+    const app = build({ identityStore });
+    try {
+      for (const canonicalOrigin of ['https://first.example', 'https://second.example', null]) {
+        const current = identityStore.get();
+        await identityStore.update(current.revision, { ...current.identity, canonicalOrigin, siteName: 'Changed identity' });
+        await release(`identity-${current.revision}`, {
+          'index.html': `<!doctype html><html data-site-primary="${language.primary}" data-site-locales="${language.locales.join(',')}"><head><link rel="canonical" href="${canonicalOrigin ?? 'https://unconfigured.invalid'}/"></head><body>home</body></html>`,
+          '404.html': 'nf',
+        });
+        for (const [url, target] of LEGACY_REDIRECTS) {
+          const eligible = language.primary === 'de' && (!url.startsWith('/en/') || language.locales.includes('en'));
+          const response = await app.inject({ url, headers: { host: MAIN } });
+          expect(response.statusCode, `${canonicalOrigin}: ${url}`).toBe(eligible ? 301 : 404);
+          expect(response.headers.location).toBe(eligible ? target : undefined);
+          if (eligible && url.includes('/category/')) {
+            expect((await app.inject({ url: target, headers: { host: MAIN } })).statusCode).toBe(404);
+          }
+          expect((await app.inject({ url, headers: { host: IMG } })).statusCode).toBe(404);
+        }
+        // Canonical never becomes a host allow-list or an old-domain redirect.
+        expect((await app.inject({ url: '/', headers: { host: 'another-serving.example' } })).statusCode).toBe(200);
+      }
+    } finally { await app.close(); }
+  });
   it.each<LanguageConfig>([
     { primary: 'de', locales: ['de', 'en'] }, { primary: 'en', locales: ['en', 'de'] },
     { primary: 'de', locales: ['de'] }, { primary: 'en', locales: ['en'] },

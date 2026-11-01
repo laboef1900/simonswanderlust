@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest';
 import { previewCsp, renderPreviewHtml } from '../src/preview.js';
 import { SHIKI_CSS } from '../../site/src/lib/shiki-classes.js';
 import type { PostPair } from '../src/posts.js';
+import { PREVIEW_BODY_SIZES } from '../../site/src/lib/body-images.js';
+import { editorDocument } from './editor-dom-harness.js';
 
 /** The app's own image base — what server.ts passes as the gallery allow-list. */
 const ORIGIN = 'https://img.example.com';
@@ -45,6 +47,22 @@ function pair(overrides: Partial<PostPair> = {}): PostPair {
 }
 
 describe('renderPreviewHtml', () => {
+  it.each(['de', 'en'] as const)('names decorative gallery links in script-free %s preview output', async (locale) => {
+    const p = pair();
+    const src = `${ORIGIN}/trips/bukarest/decorative`;
+    p[locale].bodyMarkdown = ['column', 'breakout', 'slider'].map((mode) =>
+      `\`\`\`gallery\n#layout: ${mode}\n${src}\n${src} | caption-override="Visible caption"\n\`\`\``).join('\n\n');
+    p[locale].images = { [src]: { width: 1600, height: 1200, alt: 'Stale alt', caption: 'Stale caption' } };
+    const html = await renderPreviewHtml(p, locale, ORIGIN, new Map([[src, { alt: '', caption: '' }]]));
+    const name = locale === 'de' ? 'Foto 1 von 2 öffnen' : 'Open photo 1 of 2';
+    expect(html.match(new RegExp(`aria-label="${name}"`, 'g'))).toHaveLength(3);
+    expect(html.match(/aria-label="Visible caption"/g)).toHaveLength(3);
+    expect(html.match(new RegExp(`href="${src}-1600.webp"`, 'g'))).toHaveLength(6);
+    expect(html.match(/alt=""/g)?.length).toBeGreaterThanOrEqual(6);
+    expect(html).not.toContain('Stale');
+    expect(html).not.toContain('<script');
+  });
+
   it('renders the independent title image with its own alt, format and framing, then falls back when removed', async () => {
     const p = pair();
     p.de.titleImage = { src: ORIGIN + '/trips/bukarest/title', width: 2400, height: 800,
@@ -76,6 +94,23 @@ describe('renderPreviewHtml', () => {
     expect(html).toContain('type="image/webp"');
     expect(html).toContain('https://img.example.com/trips/bukarest/old-town-1280.webp');
     expect(html).toContain('alt="Old town"');
+  });
+
+  it.each(['de', 'en'] as const)('renders inline %s hints for the standalone preview, not either story column', async (locale) => {
+    const p = pair();
+    const src = `${ORIGIN}/trips/bukarest/preview-body`;
+    p[locale].bodyMarkdown = `![First](${src})\n\n## Next\n\nText ![Second](${src}) after.`;
+    p[locale].images = { [src]: { width: 3000, height: 2000 } };
+    const html = await renderPreviewHtml(p, locale, ORIGIN);
+    const { document } = editorDocument(html);
+    const pictures = document.querySelectorAll('picture[data-body-image]');
+    expect(pictures).toHaveLength(2);
+    for (const picture of pictures) {
+      const sources = picture.querySelectorAll('source');
+      expect(sources).toHaveLength(2);
+      for (const source of sources) expect(source.getAttribute('sizes')).toBe(PREVIEW_BODY_SIZES);
+    }
+    expect(html).not.toContain('<script');
   });
 
   it('renders JPEG-only body references without requesting nonexistent modern variants', async () => {

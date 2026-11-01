@@ -22,11 +22,12 @@ describe('closed page lifecycle', () => {
     const { pages } = fixture();
     await expect(pages.save(page('anything'))).rejects.toMatchObject({ code: 'unknown_page_kind' });
     await expect(pages.save(page('about'))).rejects.toMatchObject({ code: 'page_slug_locked' });
-    const about = await pages.save({ key: 'about', de: { ...content('de', ''), title: '', bodyMarkdown: '' }, en: { ...content('en', ''), title: '', bodyMarkdown: '' } });
+    // A save also reports transient gallery diagnostics, which are never stored.
+    const { galleryWarnings: _aboutWarnings, ...about } = await pages.save({ key: 'about', de: { ...content('de', ''), title: '', bodyMarkdown: '' }, en: { ...content('en', ''), title: '', bodyMarkdown: '' } });
     expect(about.status).toBe('published');
     for (const action of ['remove', 'unpublish'] as const) await expect(pages[action]('about')).rejects.toMatchObject({ code: 'page_fixed' });
     expect(await pages.get('about')).toEqual(about);
-    const draft = await pages.save({ key: 'contact', de: { ...content('de', ''), bodyMarkdown: '' } });
+    const { galleryWarnings: _contactWarnings, ...draft } = await pages.save({ key: 'contact', de: { ...content('de', ''), bodyMarkdown: '' } });
     expect(draft.status).toBe('draft');
     await expect(pages.publish('contact')).rejects.toMatchObject({ code: 'invalid_page' });
     expect(await pages.get('contact')).toEqual(draft);
@@ -96,7 +97,7 @@ describe('closed page lifecycle', () => {
 
   it.each(['![x](https://foreign.test/a.jpg)', '```gallery\nhttps://foreign.test/a | 800x600 | alt="A"\n```'])('rejects foreign rendered images on publish and every live/revision save (%s)', async (bodyMarkdown) => {
     const { pages } = fixture(); const input = page(); input.de.bodyMarkdown = bodyMarkdown;
-    const draft = await pages.save(input);
+    const { galleryWarnings: _draftWarnings, ...draft } = await pages.save(input);
     await expect(pages.publish('contact')).rejects.toMatchObject({ code: 'foreign_images', locale: 'de', foreignImages: ['https://foreign.test/a' + (bodyMarkdown.startsWith('!') ? '.jpg' : '')] });
     expect(await pages.get('contact')).toEqual(draft);
     const clean = await pages.save(page()); await pages.publish('contact', clean.updatedAt!);

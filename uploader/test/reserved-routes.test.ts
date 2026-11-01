@@ -1,3 +1,4 @@
+import { idleBuildState } from './build-fixture.js';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -16,6 +17,7 @@ import type { GpxService } from '../src/gpx-service.js';
 import type { LanguageConfig } from '../src/language.js';
 import { LEGACY_REDIRECTS } from '../src/redirects.js';
 import { isSafeSlug } from '../src/posts.js';
+import { TEST_TRUST } from './trusted-proxy-fixture.js';
 
 const modes: LanguageConfig[] = [
   { primary: 'de', locales: ['de', 'en'] }, { primary: 'en', locales: ['en', 'de'] },
@@ -50,12 +52,13 @@ describe('reserved public namespaces', () => {
     let settings = defaultSettings();
     await Promise.all(['images', 'map', 'site/current'].map(path => mkdir(join(root, path), { recursive: true })));
     const app = buildServer({
+      trustProxy: TEST_TRUST,
       storageDir: join(root, 'images'), siteDir: join(root, 'site'), mapDir: join(root, 'map'),
       baseUrl: 'https://images.example', imgHost: 'images.example', backupDir: join(root, 'backup'),
       users: memoryUserStore(), sessions: memorySessionStore(), posts, pages: memoryPageStore(posts.language),
       media: memoryMediaStore({ baseUrl: 'https://images.example' }), secrets: memorySecretsStore(), gpx,
       settings: { get: () => settings, update: patch => { settings = validate({ ...settings, ...patch }); return settings; } },
-      builder: { build: async () => ({ ok: true, release: 'unused' }), hasRelease: () => false, quiesce: async () => {} },
+      builder: { ...idleBuildState, build: async () => ({ ok: true, attemptId: 'unused', release: 'unused' }), hasRelease: () => false, quiesce: async () => {} },
       dbCheck: async () => {},
       dbBackup: {
         dir: join(root, 'backup'), runNow: async () => ({}), running: () => false, state: () => ({}),
@@ -64,6 +67,7 @@ describe('reserved public namespaces', () => {
       encodeQueue: {
         enqueue: () => {}, isActive: () => false, recover: async () => 0, drain: async () => {},
         quiesce: async () => {}, idle: async () => {}, stats: () => ({ pending: 0, running: 0 }),
+        withAdmission: (_key, operation) => operation(),
       },
       onRoute(route) {
         // Root wildcard static mounts serve content, not a fixed app namespace.
@@ -76,6 +80,7 @@ describe('reserved public namespaces', () => {
       expect([...seen].sort()).toEqual([...APP_SEGMENTS].sort());
       expect(seen.has('gpx')).toBe(true);
       expect(seen.has('map')).toBe(true);
+      expect(seen.has('onboarding')).toBe(true);
     } finally {
       await app.close();
       await rm(root, { recursive: true, force: true });

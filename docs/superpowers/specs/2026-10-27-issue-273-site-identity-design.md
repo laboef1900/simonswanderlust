@@ -685,6 +685,23 @@ No new `.env` variable is introduced anywhere in this contract.
   acceptance).
 - There is no server-side fetch of a remote logo URL, ever.
 
+**#275 endpoint/UI implementation contract (2026-10-28):** `GET /settings/identity`
+also returns `assets: { logo: boolean, favicon: boolean }`. Upload is
+`PUT /settings/identity/assets/:role` with multipart `revision` (positive decimal integer)
+and one `file`; removal is `DELETE` on that path with JSON `{ revision }`. `:role` is
+`logo` or `favicon`. A successful mutation returns
+`{ revision, savedAt, takesEffect: 'next_build', assets: { logo, favicon } }`.
+Stale revisions return 409 `identity_conflict`; invalid role/revision returns 400
+`invalid_identity` naming the field. The space refusal is 507 `insufficient_space`;
+an oversized normalized output is 400 `asset_too_large` (distinct from the input's 413).
+These writes are admin-only and responses are `no-store`.
+
+Asset actions save independently from text. The Settings controller adopts the returned
+shared revision and asset-presence flags without replacing unsaved text. Conflicts retain
+the current inputs until an explicit reload. Removal asks for confirmation; saved/default
+state and a locally chosen filename are not a preview of the public release. No preview
+endpoint or automatic rebuild is introduced.
+
 ### 9.5 Rejected
 
 - **Sanitized SVG.** It needs a sanitizer dependency whose parse must match every browser's.
@@ -1194,3 +1211,94 @@ and captures are retained in `.issue-runtime/identity-about-home-reflow-proof.js
 development database was unchanged. This supplements, not replaces, the API/Unicode and
 header/footer acceptance evidence for #274.
 
+## 25. #275 implementation and acceptance coverage (2026-10-28)
+
+The asset upload/removal boundary and Settings/Nav/Base consumers complete §9 while reusing
+#274's schema, shared asset validator, v11 backup codec and build snapshot. The existing
+`SECURITY.md`, `ARCHITECTURE.md`, `DESIGN.md` and authoring workflow describe the normalized
+asset lifecycle, separate save timing, recovery and defaults. Canonical-origin work remains
+#276; no owner content, deployment or public rebuild is part of this change.
+
+Recovery/build regression coverage is extended in the existing suites:
+
+- `identity-backup.test.ts`: PNG/JPEG/static WebP passed through the upload normalizer,
+  then canonical-base64 dump parsing and full restored-PNG validation for all four roles.
+- `identity-backup.integration.test.ts`: normalized logo/favicon bytes and metadata survive
+  a real PostgreSQL dump/restore; malicious metadata, dimensions, incomplete/duplicate roles
+  and base64 refuse before changing live rows. Current-format empty assets and supported
+  pre-identity restores clear destination custom assets.
+- `build-snapshot.integration.test.ts`: captured logo and all favicon bytes/paths remain
+  the captured version despite committed replacements; a later capture sees the new version,
+  while removal yields default asset references without rewriting an older release.
+
+These are added acceptance assertions, **not runtime verification evidence**. This coverage
+assignment did not execute checks, tests, builds or browser runs. PostgreSQL integration
+suites require `TEST_DATABASE_URL`; a skipped suite is not recovery/build proof.
+
+Recovery remains §13's verified undo dump and atomic restore, followed by restart and explicit
+Rebuild. For an unwanted asset, remove or replace the saved role and rebuild; retain its source
+locally if it may be needed again. Existing release rollback retains that release's captured
+assets, and no original upload is stored.
+
+### Integration preparation — 2026-10-30
+
+Baseline `2a33742d5f9e1236b387e235661324c49c8641fd` retains the identity v11
+allocation. The asset-route registration and fingerprinted identity cache policy are
+combined with the baseline trusted-proxy type and native static-serving policy;
+neither boundary is replaced. Prior runtime evidence remains historical, with new
+integration checks recorded separately in the local preparation ledger.
+
+## 26. #276 canonical-origin qualification (2026-10-29)
+
+`site/scripts/canonical-build-matrix.mjs` passed twelve real Astro builds: legacy,
+changed and unconfigured origins under DE-primary bilingual, EN-primary bilingual,
+DE-only and EN-only fixtures. The matrix checks output filenames and route paths,
+canonical/social/JSON-LD origins, locale alternates, feeds, sitemaps, robots/noindex
+policy and unchanged image origins. Fixtures are synthetic; no database rows are
+mutated by this script. The prerequisite RSS correction derives the endpoint locale
+from Astro's URL-derived `currentLocale`, not cached endpoint props.
+
+Retained evidence is under
+`.local/backlog-execution-2026-10-27/issue-276-runtime/canonical-modes-1793273261849/`,
+with exact source identity, per-mode manifests, private logs and all output artifacts.
+The separate `issue-276-runtime/proof.json` records 132 runtime assertions, including
+the real admin form and split-host comment path. These observations do not authorize
+an owner-domain change, production content mutation, deployment or PR merge; final
+actual-PR review and required CI remain separate gates.
+
+Final integrated source `a614ab5baf94d8e847d959bae4b081414d929371` passed a
+fresh twelve-build matrix under `canonical-modes-1793283746741/` and a separate
+actual-`main.ts` run under `final-head-1793283762700/`: 168 assertions passed,
+including two application-triggered builds, browser domain confirmation/cancel/save,
+revision conflicts, immediate comment-Origin changes and unchanged image URLs.
+The synthetic fixture's existing posts/pages/media/language rows stayed unchanged;
+only the exercised identity save, pending comment and operational state changed.
+Earlier evidence above retains its original source attribution. Production DNS,
+public TLS, deployed ingress, other browser engines and outbound providers were not
+qualified by this loopback run. Both required CI jobs and the independent actual-PR
+review passed at the qualified source; stack retargeting still needs requalification.
+
+## 27. #276 current-dev integration (2026-11-01)
+
+Merged `dev` after #275 (logo/favicon) and #284/#285 (language modes) landed. #275 had
+written its tests and docs against a reserved, read-only canonical origin; with #276 the
+origin is an editable required field of every text save, so the two dev tests that stripped
+it from the payload now send the stored identity unchanged. `SECURITY.md` keeps #275's asset
+subsection and replaces its "not implemented by #274/#275" paragraph with this change's
+canonical-origin paragraph. `Base.astro` emits both the unset-origin `noindex` and #275's
+favicon group; `seo.ts` keeps dev's `proseDescription` and drops `PROD_SITE` as before. The
+Settings form keeps one shared revision for text and asset writes, with the domain-change
+confirmation in front of text saves only.
+
+Verification at the merge: uploader `tsc` 0; the eight affected uploader files 505/505 with
+PostgreSQL; the full PostgreSQL-enabled suite 3612/3615 before the two test adaptations above,
+the third failure being the load-sensitive `gpx-worker` cap test that passes in isolation;
+site 688/689 with the load-sensitive `gallery-partition` property test passing in isolation;
+`astro check` 0 errors and `astro build` OK. The real app from this worktree built an
+unconfigured site (`canonical` under `https://unconfigured.invalid/`, `noindex`,
+`Disallow: /`), stored `https://BÜCHER.example:443/` as `https://xn--bcher-kva.example`,
+uploaded a favicon on the shared revision (a stale text save then answered 409), refused an
+origin with credentials, and after a rebuild served the configured canonical, an `Allow`/
+`Sitemap` robots file and content-hashed favicon PNGs with `nosniff`. On loopback the
+image-role comparison is exempt by design, so the topology refusal itself rests on the
+existing unit and restore tests.

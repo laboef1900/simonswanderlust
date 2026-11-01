@@ -146,9 +146,11 @@ window.SettingsNavigation = (function () {
         const response = await fetch('/settings/navigation', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ config, updatedAt }) });
         if (response.status === 401) { location.href = '/login'; return; }
         const result = await response.json();
-        if (response.ok || result.code === 'navigation_build_failed' && result.persisted && result.saved) {
+        if (response.ok) {
           config = result.saved.config; updatedAt = result.saved.updatedAt; locales = result.saved.language.locales;
-          dirty = false; paint(); status(response.ok ? copy.navigationSaved : copy.navigationBuildFailed, true);
+          // The save is acknowledged either way; a failed rebuild names its cause (#297).
+          const failed = result.build && result.build.ok === false;
+          dirty = false; paint(); status(failed ? copy.navigationBuildFailed + ' ' + BuildReporting.failure(result.build.code) : copy.navigationSaved, true);
         } else if (response.status === 409) { conflicted = true; status(copy.navigationConflict, true); }
         else if (response.status === 400) status(copy.navigationInvalid, true);
         else { conflicted = true; status(copy.navigationFailed, true); }

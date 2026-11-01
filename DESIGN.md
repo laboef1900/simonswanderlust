@@ -282,6 +282,11 @@ ratio to three decimals. Recorded failures it now prevents: `text-ink/70` under
 columns is **3.705:1** against the ridge, `/60` clears by 0.077 of a point, `/70`
 is **5.578:1**; `navy/60` on canvas is **4.05:1** where `navy/70` passes;
 `text-ink/60` on the language switcher was **4.33:1**.
+The small StoryGrid empty-state title and About profile-stat labels use
+`navy/70`; the no-JavaScript map introduction uses `ink/70`. Browser-composited
+contrast on their canvas surfaces measures **5.51:1** and **5.98:1**, respectively,
+in DE and EN at desktop and mobile widths. Their size, weight and spacing still
+carry the secondary hierarchy; reduced contrast does not.
 
 **The Two-Accent Rule.** `brand-red` is for light material, `brand-red-light`
 for dark. They are not a light/dark pair to be "simplified" into one token —
@@ -347,6 +352,15 @@ Extend those roles with a size or a weight when needed — never
 a tracking value, and never a coloured plate, which is what the card's date
 line used to be.
 
+**Count grammar.** Public DE/EN labels use the singular only for exactly one:
+`1 REISE` / `1 TRIP`, `1 LAND` / `1 COUNTRY`, `1 KONTINENT` / `1 CONTINENT`,
+`1 Pin-Standort` / `1 pin location`, and `1 Kommentar` / `1 comment`.
+The homepage map band, region kicker, map page, About statistics and comment
+thread share this rule through `countLabel`; translated forms stay in `ui.ts`.
+Zero and two or more use plural labels. Existing empty states take precedence:
+the homepage omits its map band without stories, empty regions have no page,
+and an empty comment thread says “Noch keine Kommentare.” / “No comments yet.”
+
 **Where the entry number belongs.** `N°09` is a signature mark and it earns
 its place where it says something: the homepage hero's entry, where it
 introduces the latest story as one of a numbered series. It was also on every
@@ -354,6 +368,13 @@ grid card, nine of them down one index, restating an order the grid's own
 newest-first sequence already shows, and on the story page, where the reader
 has already arrived and the number told them nothing they act on. Spending
 the mark where it carries meaning is not a retreat from the identity.
+
+**Equal-date stories keep one order (#377).** `byLocale` orders trip dates
+newest first, then the pair's shared `translationKey` ascending by code-point
+comparison. Localized titles, slugs and save chronology never decide ties.
+The homepage cover (including competing featured stories), its entry number,
+home/region grids, previous/next links, footer latest list and RSS share that
+rule, so DE and EN retain the same pair order after saves and rebuilds.
 
 ### Named Rules
 
@@ -384,15 +405,29 @@ box — 10% wider at the owner's request (2026-10-19). Inside the spread the
 rail is a fixed `18rem`, the gap `3rem`, and the column takes the available
 remainder — up to `45rem` (720px) — so the three always sum to the spread
 (`--container-story-column` / `--container-story-rail`). The rail holds
-the story's furniture — contents, key facts, the route map — open in a stack
-that stays `0.5rem` from the viewport top while the *opening* is in view.
-The stack never scrolls internally: a second scrollbar beside the page's was
-the owner's objection, and a rail taller than the spread simply sets the
-spread's height and stays put.
+the story's furniture — contents, key facts, the route map — open in a stack.
+The rail is static by default and sticks `0.5rem` from the viewport top only
+when its measured height plus that offset fits the viewport. A ResizeObserver
+and viewport resize listener update `data-sticky-fit` as disclosures, fonts,
+lazy map content or the viewport change. An oversized rail scrolls with the
+page, so its lower facts and map controls remain reachable before the opening
+ends, including by keyboard. The stack never scrolls internally: a second
+scrollbar beside the page's was the owner's objection. Without JavaScript or
+ResizeObserver it stays nonsticky; native disclosures remain usable (initially
+collapsed without JavaScript). A rail taller than the opening still sets the
+spread's height.
 The opening is the body's first section — everything before the first
-top-level heading that has content in front of it (`story-opening.ts`), so
-an intro heading, its paragraphs and its first photograph sit beside the
-rail. The rest of the story then runs **centred on the same 1056px**, with
+root-level heading at the shallowest root heading depth that has content in
+front of it (`story-opening.ts`), so an intro heading, its paragraphs and its
+first photograph sit beside the rail. Headings inside blockquotes or list
+items never become cut points or determine that depth: the complete quote or
+list stays in the opening, followed by any introductory paragraphs. Stacked
+intro headings stay together until there is content before a later heading.
+The HTML tree locates original source offsets, without reserializing the
+sanitized body; concatenating the two fragments reproduces it exactly. With
+no eligible heading, or root heading IDs/depths that disagree with renderer
+metadata, the whole body remains the opening rather than guessing a cut.
+The rest of the story then runs **centred on the same 1056px**, with
 the route divider and pagination on the same measure. Matching the edges
 and the owner's requested wider reading area take precedence over a
 shorter line measure. The spread wrapper is a
@@ -447,6 +482,33 @@ stored aspect ratio. Their source hints are `100vw` and `calc(100vw - 2.5rem)`
 respectively; a fixed-height correction would over-fetch them. Desktop retains
 the existing cover crops and their height-aware source hints. The compact cover
 thumbnail reuses the photograph already requested by the eager hero.
+
+**Body images.** Known images receive responsive pictures. A figure is reserved
+for an image-only top-level paragraph, including one image-only link; the figure
+wraps that single sanitized link, never the other way around. Mixed sentences,
+consecutive images and nested prose keep bare pictures at their original
+positions, with paragraph text and link order intact. Authored pictures retain
+their sanitized source choices. This adds no lightbox or stored-content rewrite.
+
+Generated inline pictures receive section-specific source hints before JavaScript
+runs. The story loader starts with the full-width envelope; `StoryPage` applies
+the final hints after splitting the opening from the remainder:
+
+| Viewport | Opening slot | Remainder slot |
+| --- | --- | --- |
+| below `48rem` / 768px | `100vw - 2.5rem` | same |
+| `48rem` to below `64rem` | `45.5rem` / 728px | same |
+| `64rem` to below `68.5rem` | `100vw - 23.5rem` | `100vw - 2.5rem` |
+| at least `68.5rem` / 1096px | `45rem` / 720px | `66rem` / 1056px |
+
+About uses its own grid: below `64rem`, `100vw - 2.5rem`; above it,
+`(min(100vw, 72rem) - 5.5rem) × 2.2 / 3.2`, capped at 731.5px.
+Standalone preview uses `min(100vw, 46rem) - 2.5rem`, capped at 696px.
+The rem geometry follows CSS and the shared gallery `COLUMN_WIDTH`; nested prose
+may be narrower, so these are containing-column envelopes. Galleries keep their
+existing per-row/slider hints, and authored pictures keep their sanitized choices.
+No variant URL, format, loading policy or layout changes. An intrinsically small
+original still has only its existing no-upscale candidates.
 
 **Break-out.** Below `lg` a wide gallery may exceed the story column to
 `min(100% + 24rem, 100vw - 3.5rem, 1112px)` — 24rem is the measured overhang
@@ -657,7 +719,14 @@ heading. Both are gone; see Story card below, and do not reintroduce either.
   the list, focuses the heading and preserves native fragment/history
   navigation, and Escape returns focus to the summary. In the rail (`lg`) it
   starts open, is static and fully expanded, flush with the disclosures under
-  it, and a section link focuses the heading without closing anything. Summary
+  it, and a section link focuses the heading without closing anything. Crossing
+  the `64rem` boundary without a reload resets all three rail disclosures:
+  Contents, Key Facts and Route map close below it and open at or above it.
+  Resizing within either layout preserves the reader's manual toggles. A
+  real published DE/EN story with 20 contents entries confirmed this through
+  repeated 1180×820 ↔ 820×1180 rotations and the exact 1023/1024px boundary;
+  the collapsed mobile strip measured `47px` high at `top: 8px` while scrolling,
+  with keyboard section focus and Escape-to-summary preserved. Summary
   and links have at least `44px` targets. Without JavaScript the links still
   work and heading margins clear the expanded strip; the rail simply starts
   collapsed.
@@ -668,6 +737,12 @@ heading. Both are gone; see Story card below, and do not reintroduce either.
 - **Route map:** the story's mini-map is the third disclosure, in the same
   dress as Key Facts. It mounts lazily on intersection, which a closed
   disclosure never reports — opening it is what mounts the map.
+  WebGL2 is probed before MapLibre construction and checked again on its real
+  canvas. If either fails, no empty focusable canvas survives: trackless stories
+  retain their localized map link at its natural height; tracked stories hide
+  the empty map slot and retain the published route summary, endpoints, stops
+  and map link. On the full map page, initialization failure hides the entire
+  map wrapper (including its `70vh` allocation), leaving the story-link list.
 - **Story pagination:** chronological links with `80px` square, lazy-loaded
   photo thumbnails and full wrapped titles. A sole link spans the reading
   column; two split from `768px`. No empty placeholder cell, border or shadow;
@@ -699,6 +774,12 @@ and focal point. If absent, the existing hero is used. This does not alter the o
 geometry or introduce text over the photograph; homepage covers, cards, pagination and
 social images keep the hero. Selection is per locale in the editor's existing inspector,
 using the same media picker, upload and framing controls rather than a new visual pattern.
+
+Story openings and About use one 3rem, extra-bold red drop cap on the article's
+first **direct-child paragraph**. A preceding heading does not suppress it.
+Quoted paragraphs, loose-list paragraphs, later direct paragraphs and the
+story-rest article keep their ordinary body-size initials; nested prose never
+starts another decorative opening.
 
 ### Navigation
 
@@ -766,6 +847,14 @@ rotation are hashed from the country code, so a country always stamps the same
 way. `mix-blend-mode: multiply` at full opacity on an opaque canvas chip; the
 chip stays square while the ink is rotated.
 
+The date is the stored trip's **calendar date**, not a UTC instant: `Stamp.astro`
+reads local day/month/year, matching the loader's local-midnight convention and
+the hero/card date formatters. Do not use UTC getters here. Runtime rebuilds via
+the app's `/rebuild` endpoint were verified in UTC, Europe/Zurich and
+America/Los_Angeles with unchanged `2024-01-01` and `2024-03-01` synthetic
+published stories: both DE and EN stamps retain `01 01 2024` and `01 03 2024`
+respectively (#400).
+
 ### Route Divider (signature)
 
 Filled `brand-red` dot → dashed 2px navy rule → a 16px compass arrow at
@@ -809,6 +898,21 @@ so a 37-photo gallery grows taller than it is wide instead of
 becoming a contact sheet. The one cap left is on a row that would stand taller
 than the square — a lone portrait — held at the square's own height as a
 **percentage** of the container so it scales with it.
+
+Every gallery photo link is named in the server-rendered HTML: a nonblank image
+alt supplies its native name; otherwise use the resolved visible caption, then
+the localized “Open photo {current} of {total}” action. Hidden or deliberately
+cleared captions are not exposed through a name. Decorative `alt=""` stays
+decorative; no photo description is invented. Numbering counts accepted photos,
+continues across rows and resets per gallery. The names work without JavaScript
+and in the script-free preview; the lightbox leaves them intact.
+
+**Lightbox dismissal follows the visible content, not its containers.** In all
+three modes, clicking or tapping the dark space around a photo closes the native
+dialog, even when that space hit-tests to its full-viewport figure. Only the
+photo, caption and controls are excluded from backdrop dismissal — never the
+whole figure or frame. Photo and caption clicks keep it open; arrows navigate;
+Close and Escape dismiss and return focus to the gallery link.
 
 ## Do's and Don'ts
 
@@ -887,6 +991,45 @@ New post accents. The public blog's expedition identity is unchanged. Self-hoste
 Inter/IBM Plex Mono remain; the shell and login identify the workspace as **Wanderlust
 Studio**, with **Simon's travel journal** as the descriptor.
 
+**First-run checklist (#279).** Preserve the incumbent Desk and its independent draft,
+photo-queue and live-site sections. Only an eligible admin sees the compact checklist above
+them; the shared protected-page context resolves first, and authors retain ordinary
+upload/draft-authoring empty states without identity/settings/Publish affordances.
+Upgraded/restored installations never gain a retroactive setup wizard.
+
+The progress rows remain Account (informational), Name your blog (**Optional**), Photo, Story and
+Publish. Completion is **three required steps**, not five: identity follows an explicit
+Settings save and never gates Finish or Publish. An optional **Language** configuration section
+sits after Account, with four native radio choices, URL consequences and explicit Save/confirmation.
+It shows current stored configuration, never a completion badge or remembered acknowledgement.
+Publication history makes this section read-only; Settings still owns allowed secondary activation.
+Changed selection alone writes nothing, and ambiguous outcomes trigger a read, not a replay.
+Each progress row links into the existing Media, Settings identity tab or editor; no sample,
+pre-created draft or automatic upload/publication. Text/icons accompany colour; photo precedence
+is ready, processing, failed/missing, then empty. Regressions are truthful until explicit permanent
+Finish; completing a publish does not finish the checklist.
+
+**Hide checklist** applies install-wide across admins, sessions and restarts. The only reopen
+affordance is **Show setup checklist** in the Desk header, not Settings/navigation. Show
+focuses the checklist heading. A hidden complete checklist remains hidden. **Finish** requires
+the three current required predicates, confirms permanent removal, and removes both checklist
+and Show; later content regressions do not reopen it. Ordinary empty states remain useful.
+Loading/unavailable states are explicit, with read-only Retry and visible keyboard focus;
+after an uncertain action acknowledgement reload state instead of replaying the mutation.
+The checklist uses the existing responsive control vocabulary, wrapping at 320px rather than
+creating a second shell. Authentication-context failures are unavailable, not automatic logout.
+
+**Ordinary empty states (#280).** These remain independent of checklist eligibility,
+dismissal and retirement. Desk offers a private draft without assuming two active
+languages; Posts keeps its existing New post action. Media distinguishes an empty
+library from a narrowed view, offers the existing photo picker to authors and admins,
+and lets a narrowed view return to all photos without creating content. Its explanatory
+status and actions sit outside the photo listbox; a populated grid is unchanged.
+Comments retains its announced Pending/Approved empty result and moderation explanation:
+having no comments needs no setup action. Users cannot legitimately have an empty
+authenticated list (first-admin setup precedes access), while Import's idle state is
+the existing export-file chooser, not a second onboarding workflow.
+
 Admin tokens live on `:root` in `uploader/public/admin.css`, so the shell, the login page
 and the `<dialog>`s appended to `<body>` share one set:
 
@@ -921,6 +1064,9 @@ and the `<dialog>`s appended to `<body>` share one set:
   Rebuild. `.btn-new` is the accent command link (New post, New trip). Form actions sit in
   one `.form-actions` row, primary first; dense rows (bulk bars, folder actions,
   revisions, comment moderation) use the small height.
+- **Confirmations** require fresh consent for each opening. Escape, Cancel, and a
+  result-less `close()` never reuse an earlier acceptance; a typed confirmation also
+  requires the current prompt's exact token.
 - **Sections** inside the white workspace are flat: stacked `.card`s divide by a hairline
   (`--line`), never as cards inside the workspace card. Simple form pages (Users, Import)
   keep fields at a `34rem` measure.
@@ -991,6 +1137,15 @@ and the `<dialog>`s appended to `<body>` share one set:
   lightbox captions. Edits apply only to this gallery in the active locale, commit with
   Insert/Update gallery, and Cancel discards them. The manuscript widget marks hidden
   captions explicitly. On phones, each reset button sits below its textarea.
+- With gallery previews enabled, typing or pasting at either collapsed fence edge
+  inserts prose on separate lines outside the gallery, including at the start or
+  end of the manuscript. Arrow-key navigation and clicking the visually empty
+  boundary must not prefix the opener or suffix the closer. Undo/redo, local alt
+  edits, picker replacements, and the raw-Markdown toggle retain their existing
+  behavior; the saved Markdown remains the source of truth. Undo/redo restores
+  the caret with the inserted text, not at the fence or trailing padding, so
+  continued typing stays in the same paragraph. Consecutive typing remains one
+  undo group.
 - Story details sits beside the manuscript on desktop. Its header carries one
   icon-only panel toggle (`panel-right-close` / `panel-right-open`, named Collapse /
   Expand story details); collapsing slides the panel right into a slim rail that
@@ -1053,8 +1208,18 @@ and the `<dialog>`s appended to `<body>` share one set:
   Saving checks the loaded revision: conflicts retain the author's inputs until an explicit,
   confirmed reload. Save never rebuilds. The timing note distinguishes the next public
   Publish/Rebuild from immediate new author replies and next-load admin chrome; **Rebuild
-  site now** confirms that it uses saved values, not unsaved form input. Domain and asset
-  controls remain owned by #276 and #275.
+  site now** confirms that it uses saved values, not unsaved form input. Domain controls
+  remain owned by #276.
+  Logo and favicon controls save/remove separately from text. Each states whether a custom
+  asset is saved or the default is selected; a local filename is a selection, not a public
+  preview. Accept PNG, JPEG or static WebP (2 MiB maximum), never SVG. Successful asset
+  actions advance the shared revision without discarding unsaved text; conflicts keep the
+  current inputs until explicit reload. Removal requires confirmation and restores the
+  default only at the next Publish/Rebuild, just like replacement.
+  On the public site a saved logo replaces the text wordmark inside the existing home link:
+  its accessible name is the site name (or localized fallback), its intrinsic dimensions
+  reserve space and its target height is 2rem. Without it the text name remains. Custom
+  favicon links replace the bundled icon only when the complete group exists.
   Text limits count NFC-normalized, trimmed Unicode code points; supplementary characters
   do not consume two slots. Excess input stays intact and receives focus on Save rather
   than being truncated by an HTML UTF-16 length cap. Configured wordmarks and footer text

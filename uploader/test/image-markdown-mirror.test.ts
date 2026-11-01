@@ -39,8 +39,8 @@ describe('image-markdown.js mirrors body-content.ts', () => {
 
 describe('the composed image survives the importer-grade parser', () => {
   for (const alt of CORPUS) {
-    it(`parses back: ${JSON.stringify(alt)}`, () => {
-      const [img, ...rest] = markdownImages(`intro ${imageMarkdown(alt, SRC)} outro`);
+    it(`parses back: ${JSON.stringify(alt)}`, async () => {
+      const [img, ...rest] = (await markdownImages(`intro ${imageMarkdown(alt, SRC)} outro`));
       expect(rest).toEqual([]);
       expect(img?.url).toBe(SRC);
       expect(unescapeAltText(img?.alt ?? '')).toBe(alt);

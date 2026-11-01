@@ -7,6 +7,9 @@ import { DEFAULT_NAVIGATION } from '../../site/src/lib/navigation.js';
 const html = readFileSync('public/settings.html', 'utf8');
 const source = readFileSync('public/settings-navigation.js', 'utf8');
 const copy = Object.fromEntries(Object.entries(ui.en).filter(([key]) => key.startsWith('editor.chrome.')).map(([key, value]) => [key.slice('editor.chrome.'.length), value]));
+const buildCopy = Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [
+  locale, Object.fromEntries(Object.entries(strings).filter(([key]) => key.startsWith('admin.build.')).map(([key, value]) => [key.slice('admin.build.'.length), value])),
+]));
 type Request = { url: string; method: string; body?: string };
 async function settle() { for (let i = 0; i < 24; i++) await Promise.resolve(); }
 async function page(options: { primary?: 'de' | 'en'; locales?: ('de' | 'en')[]; save?: (request: Request) => Response | Promise<Response>; confirm?: boolean } = {}) {
@@ -15,7 +18,7 @@ async function page(options: { primary?: 'de' | 'en'; locales?: ('de' | 'en')[];
   const initial = { config: structuredClone(DEFAULT_NAVIGATION), updatedAt: '2026-01-01T00:00:00.000Z',
     language: { primary: options.primary ?? 'de', locales: options.locales ?? ['de', 'en'] }, socialLinks: [{ label: '<img onerror=x>', url: 'https://social.example/' }] };
   const requests: Request[] = []; const confirms: unknown[] = [];
-  const context: Record<string, unknown> = { document, EditorCopy: { en: copy }, location: { href: '' },
+  const context: Record<string, unknown> = { document, EditorCopy: { en: copy }, location: { href: '' }, BuildCopy: buildCopy,
     AdminConfirm: { ask: async (question: unknown) => { confirms.push(question); return options.confirm ?? true; } },
     fetch: async (url: string, init?: { method?: string; body?: string }) => {
       const request = { url, method: init?.method ?? 'GET', body: init?.body }; requests.push(request);
@@ -25,7 +28,8 @@ async function page(options: { primary?: 'de' | 'en'; locales?: ('de' | 'en')[];
       return options.save?.(request) ?? Response.json({ saved: { ...initial, config: JSON.parse(request.body!).config, updatedAt: '2026-01-02T00:00:00.000Z' }, build: { ok: true } });
     },
   };
-  context.window = context; vm.createContext(context); vm.runInContext(source, context);
+  context.window = context; vm.createContext(context);
+  vm.runInContext(readFileSync('public/build-reporting.js', 'utf8'), context); vm.runInContext(source, context);
   const el = (id: string) => { const node = document.getElementById(id); if (!node) throw new Error('Missing real element ' + id); return node; };
   // The real browser script installs this controller in the VM's window.
   const controller = context.SettingsNavigation as { init(): Promise<void> };
@@ -69,9 +73,10 @@ describe('owner-usable navigation settings', () => {
     expect(h.confirms).toHaveLength(1); expect(h.el('navigationSave').disabled).toBe(false);
   });
   it('adopts the acknowledged token after failed rebuild and retries rebuild without resaving', async () => {
-    const h = await page({ save: (request) => Response.json({ code: 'navigation_build_failed', persisted: true,
-      saved: { config: JSON.parse(request.body!).config, updatedAt: '2026-01-03T00:00:00.000Z', language: { primary: 'de', locales: ['de', 'en'] } } }, { status: 502 }) });
-    await h.submit(); expect(h.el('navigationStatus').textContent).toBe(copy.navigationBuildFailed);
+    const h = await page({ save: (request) => Response.json({ build: { ok: false, attemptId: 'a1', code: 'release_write_failed', liveRelease: null },
+      saved: { config: JSON.parse(request.body!).config, updatedAt: '2026-01-03T00:00:00.000Z', language: { primary: 'de', locales: ['de', 'en'] } } }) });
+    await h.submit();
+    expect(h.el('navigationStatus').textContent).toBe(`${copy.navigationBuildFailed} ${buildCopy.en!['failure.release_write_failed']}`);
     h.el('navigationRebuild').click(); await settle();
     expect(h.requests.filter((request) => request.method === 'PUT')).toHaveLength(1);
     expect(h.requests.filter((request) => request.url === '/rebuild')).toHaveLength(1);

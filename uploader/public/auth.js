@@ -21,10 +21,16 @@ window.Auth = (function () {
   }
   async function ensureAuthed(opts) {
     const want = opts || {};
-    const s = await status();
-    if (!s.authenticated) {
+    const response = await fetch('/auth/me', { cache: 'no-store' });
+    if (response.status === 401) {
       location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search);
       return null;
+    }
+    if (!response.ok) throw new Error('auth_context_unavailable');
+    const s = await response.json();
+    if (s?.authenticated !== true || typeof s.userId !== 'string' || !s.userId
+      || typeof s.username !== 'string' || typeof s.isAdmin !== 'boolean' || s.needsSetup !== false) {
+      throw new Error('auth_context_unavailable');
     }
     if (want.admin && !s.isAdmin) { location.href = '/admin/'; return null; }
     return s;
@@ -204,6 +210,11 @@ window.Auth = (function () {
     shell.querySelector('.cms-brand-mark').textContent = copy.studioName.charAt(0);
     shell.querySelector('.cms-brand-title').textContent = copy.studioName;
     shell.querySelector('.cms-masthead-right > .cms-brand-sub').textContent = identityDescriptor();
+    const legal = document.createElement('a');
+    legal.href = '/admin/legal/en.html';
+    legal.className = 'cms-btn-ghost';
+    legal.textContent = copy.softwareNotices;
+    shell.querySelector('.cms-sidebar-footer').prepend(legal);
 
     // User-controlled strings are set as text
     // and as an attribute value AFTER the parse so it can never be markup (#131).
@@ -233,6 +244,19 @@ window.Auth = (function () {
     if (meta) meta.remove();
 
     const contentArea = shell.querySelector('.cms-content');
+    if (s.isAdmin && here === '/admin/' && !window.SiteIdentity?.canonicalOrigin) {
+      const domainCopy = EditorCopy[document.documentElement?.lang === 'de' ? 'de' : 'en'];
+      const notice = document.createElement('p');
+      notice.id = 'deskDomainNotice';
+      notice.className = 'muted';
+      notice.setAttribute('role', 'status');
+      notice.textContent = domainCopy.identityDomainUnset + ' ';
+      const link = document.createElement('a');
+      link.setAttribute('href', '/admin/settings.html#identity');
+      link.textContent = domainCopy.identityDomainConfigure;
+      notice.appendChild(link);
+      contentArea.appendChild(notice);
+    }
     contentArea.appendChild(main);
     body.appendChild(shell);
 
