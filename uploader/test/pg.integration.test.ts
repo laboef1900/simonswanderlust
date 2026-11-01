@@ -567,7 +567,7 @@ maybe('pgPostStore (integration)', () => {
     await ensureSchema(pool);
     await pool.query('DELETE FROM posts');
     const indexDef = async () => (await pool.query<{ indexdef: string }>(
-      `SELECT indexdef FROM pg_indexes WHERE tablename='posts' AND indexname='posts_locale_slug_idx'`,
+      `SELECT indexdef FROM pg_indexes WHERE schemaname=current_schema() AND tablename='posts' AND indexname='posts_locale_slug_idx'`,
     )).rows[0]?.indexdef ?? '';
     // Rewind to the pre-#119 schema and seed one DE-first draft under it.
     await pool.query(`DROP INDEX posts_locale_slug_idx`);
@@ -619,6 +619,40 @@ maybe('pgPostStore (integration)', () => {
     } finally {
       await a.end(); await b.end();
       await owner.query(`DROP SCHEMA ${migrated} CASCADE`); await owner.query(`DROP SCHEMA ${legacy} CASCADE`);
+      await owner.end();
+    }
+  });
+
+  // CI runs 41263714065 / 41298018083: ensureSchema died with XX000 "could not
+  // open relation with OID" while a sibling test file dropped its scratch schema.
+  // pg_indexes.indexdef is pg_get_indexdef(), which opens the index's TABLE to
+  // deparse the partial predicate, so an unscoped read of posts_locale_slug_idx
+  // opened every schema's `posts` — including one mid-DROP. Holding a foreign
+  // `posts` under ACCESS EXCLUSIVE turns that reach into a deterministic lock
+  // wait: a probe that still touches it trips lock_timeout (55P03) instead of
+  // racing the drop, while a schema-scoped boot never waits at all.
+  it('ensureSchema never opens another schema\'s posts table (CI: could not open relation with OID)', async () => {
+    const owner = createPool(url!);
+    const mine = `slugidx_mine_${randomUUID().replaceAll('-', '')}`;
+    const other = `slugidx_other_${randomUUID().replaceAll('-', '')}`;
+    const u = new URL(url!); u.searchParams.set('options', `-c search_path=${mine} -c lock_timeout=2000`);
+    const pool = createPool(u.href);
+    await owner.query(`CREATE SCHEMA ${mine}`); await owner.query(`CREATE SCHEMA ${other}`);
+    const holder = await owner.connect();
+    try {
+      await owner.query(`CREATE TABLE ${other}.posts (locale text, slug text)`);
+      await owner.query(`CREATE UNIQUE INDEX posts_locale_slug_idx ON ${other}.posts (locale, slug) WHERE slug <> ''`);
+      await holder.query('BEGIN');
+      await holder.query(`LOCK TABLE ${other}.posts IN ACCESS EXCLUSIVE MODE`);
+      await ensureSchema(pool);
+      const def = (await owner.query<{ indexdef: string }>(
+        `SELECT indexdef FROM pg_indexes WHERE schemaname=$1 AND indexname='posts_locale_slug_idx'`, [mine],
+      )).rows[0]?.indexdef ?? '';
+      expect(def).toMatch(/WHERE \(?slug <> ''/);
+    } finally {
+      await holder.query('ROLLBACK'); holder.release();
+      await pool.end();
+      await owner.query(`DROP SCHEMA ${mine} CASCADE`); await owner.query(`DROP SCHEMA ${other} CASCADE`);
       await owner.end();
     }
   });
