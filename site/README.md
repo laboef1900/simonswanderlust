@@ -21,6 +21,23 @@ separate build server or web server. See `../ARCHITECTURE.md` for the full pipel
 | `npm test` | Run vitest suites (i18n, paths, trips, format) |
 | `npx astro check` | Type-check `.astro`/`.ts` files |
 
+### Empty-install coverage
+
+With no published stories, Home and Destinations keep their localized explanation
+instead of a story grid or map teaser. Map explains where future published trips
+will appear without mounting a map or an empty destination list. Empty regions
+are neither generated nor linked; RSS remains a valid empty channel and the
+sitemap lists only the generated public pages. These rules follow all four
+supported primary/enabled-language configurations.
+
+`TEST_DATABASE_URL=<test database> npm test` also runs
+`test/empty-build.integration.test.ts`: it creates a private schema, runs the real
+migrations and Astro builds in each language mode, and checks the emitted HTML,
+RSS and sitemap. It removes only its own schema and temporary build/cache output.
+The database role needs schema-creation permission; without `TEST_DATABASE_URL`
+this integration suite is skipped. CI supplies it. Existing populated-page
+rendering tests continue to cover map pins, fallback links and locale navigation.
+
 ## Structure
 
 - `src/content/trips/{de,en}/<slug>.mdx` — authoring reference / backup; the `id`s (`de/<slug>`, `en/<slug>`) and filenames are the live WordPress slugs (SEO contract — never rename). `heroImage` is a remote URL object `{src,width,height,alt}` served by the image server (no binaries in git).

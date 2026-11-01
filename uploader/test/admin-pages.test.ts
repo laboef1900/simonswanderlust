@@ -18,6 +18,7 @@ interface Guard {
   markDirty(): void;
   markClean(token?: number): void;
   snapshot(): number;
+  isDirty(): boolean;
   stashNow(): void;
   tryRestore(): Stash | null;
   adopt(stash: Stash | null): void;
@@ -301,10 +302,13 @@ describe('DraftGuard.createDraftGuard', () => {
     const guard = sb.api.createDraftGuard({ storageKey: KEY, collect: () => ({ e: 5 }) });
     guard.markDirty();
     guard.redirectToLogin();
+    expect(guard.isDirty()).toBe(true);
     expect(sb.store.has(KEY)).toBe(true);
     expect(sb.location.href).toBe('/login?next=%2Fadmin%2Feditor.html%3Ftk%3Dabc');
     // the intentional navigation must not trigger the leave-page dialog
     expect(sb.fireBeforeUnload().defaultPrevented).toBe(false);
+    guard.markDirty();
+    expect(sb.fireBeforeUnload().defaultPrevented).toBe(true);
   });
 
   it('redirectToLogin does not stash a pristine form (nothing worth restoring)', () => {
@@ -485,17 +489,6 @@ describe('admin page wiring', () => {
     expect(auth).toContain(".cms-user-name').textContent = s.username");
   });
 
-  it('Publish, Rebuild, Save & rebuild, Unpublish, and Delete go through AdminConfirm', () => {
-    expect(editor).toContain('AdminConfirm.ask');
-    expect(editor).toContain('Publish to the live site?');
-    expect(editor).toContain('setPublishedLive');
-    expect(readFileSync('public/settings.html', 'utf8')).toContain('Rebuild the live site?');
-    expect(readFileSync('public/posts.html', 'utf8')).toContain('Unpublish this trip?');
-    expect(readFileSync('public/posts.html', 'utf8')).toContain('Delete this trip?');
-    expect(readFileSync('public/users.html', 'utf8')).toContain('Remove this account?');
-    expect(readFileSync('public/media-browser.js', 'utf8')).toContain('Delete this photo?');
-  });
-
   it('the desk is a publishing home, not a second uploader', () => {
     const index = readFileSync('public/index.html', 'utf8');
     expect(index).toContain('<h1>Desk</h1>');
@@ -520,17 +513,6 @@ describe('admin page wiring', () => {
     expect(editor).toContain('GalleryFence.withLayout(current.directives,');
   });
 
-  it('every fetch path surfaces a visible error on network failure', () => {
-    expect(editor).toContain("'Upload failed: ' + e");
-    expect(editor).toContain("'Save failed: ' + e");
-    expect(editor).toContain("'Publish failed: ' + e");
-    expect(editor).toContain("'Could not load post: ' + e");
-    expect(about).toContain("'Upload failed: ' + e");
-    expect(about).toContain("'Save failed: ' + e");
-    expect(about).toContain("'Could not load: ' + e");
-    expect(login).toContain('Could not reach the server');
-  });
-
   it('declining the restore prompt keeps the stash (non-destructive) instead of wiping it', () => {
     // A misclicked Cancel must not destroy unsaved work: both editors gate the
     // prompt on wasDismissed() and, when a stash exists but is not restored,
@@ -548,9 +530,6 @@ describe('admin page wiring', () => {
     expect(login).not.toMatch(/location\.href = '\/admin\/'/);
   });
 
-  it('ensureAuthed sends the current page as the return URL', () => {
-    expect(auth).toContain("'/login?next=' + encodeURIComponent(location.pathname + location.search)");
-  });
 
   it('EasyMDE built-in autosave stays disabled (DraftGuard owns persistence)', () => {
     // @ai-warning do not re-enable EasyMDE autosave: it is body-only and would

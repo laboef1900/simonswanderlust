@@ -1,3 +1,4 @@
+import { buildFailureMessage } from '../src/build-state.js';
 import { describe, expect, it, beforeEach } from 'vitest';
 import { mkdtemp, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -248,9 +249,9 @@ describe('triggerRebuild', () => {
     await expect(
       triggerRebuild(users, sessions, async () => ({
         status: 200,
-        body: JSON.stringify({ ok: false, error: 'trips/de/x.mdx: country is required' }),
+        body: JSON.stringify({ ok: false, attemptId: 'failed', code: 'build_failed', error: 'trips/de/SECRET.mdx: internal database path' }),
       })),
-    ).rejects.toThrow('country is required');
+    ).rejects.toThrow(`rebuild failed (build_failed): ${buildFailureMessage('build_failed')} — details: docker compose logs app`);
   });
 
   it('refuses when no admin exists, without minting anything', async () => {

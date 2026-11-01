@@ -997,3 +997,106 @@ F2–F6 remain correctness clarifications of the approved invariants, not new pr
   simonswanderlust.com URL or slug may be renamed.
 - **Review:** first EN-primary production install or 2027-10-27, whichever comes first.
 - Release, deployment and production/owner-content changes remain outside this authorization.
+
+## 21. #284 implementation qualification (2026-10-29)
+
+The isolated current-source qualification exercised all four language modes through the real
+authoring, publication and recovery paths. Retained evidence separates the original baseline
+(361 HTTP records / 48 screenshots), corrected phase (481 / 54), and final phase (210 / 12);
+the earlier evidence is not relabelled as proof of later fixes.
+
+- Readiness validation reuses the locked transaction client. Concurrent activation cannot bypass
+  draft-slug consent: both stores recheck the route's captured language token under that lock.
+- Mirrored first About preparation preserves an explicit `updatedAt: null`; actual browser saves
+  returned 200, preserved active content and did not activate the candidate. Stale replay returned
+  409. Ordinary boot seeds About rows, so the null boundary was exercised in backed-up synthetic
+  database clones with only their cloned default About rows removed—not called a fresh-boot state.
+- The final phase exercised GPX publication/export/archive/restore/restart in all four modes,
+  actual current CLI restores of dump formats 1–11, patched older-v10 reader rejection, populated
+  pre-language migration and public-comment/moderation locale workflows. Historical reader proof
+  is limited to patched v10; restoring older formats with the current CLI is not an older-binary test.
+- Uploader TypeScript and its complete PostgreSQL-enabled suite, site tests, Astro check and an
+  actual build passed after the null-token correction. Eight public desktop/mobile axe audits
+  reported zero violations; retained shared-shell best-practice and incomplete-audit observations
+  mean this is not a blanket WCAG claim.
+
+Reports and synthetic fixtures remain in the gitignored execution ledger. Final PR review/CI and
+downstream combined-source qualification are separate gates. Public routing belongs to #285,
+canonical origins to #276, and the page registry/navigation to #288/#289; this record does not
+claim those dependent stacks are merge-ready or authorize production changes.
+
+## 22. #285 public-output qualification (2026-10-29)
+
+The actual-build matrix compares a pre-change DE-primary bilingual baseline with all
+four approved modes using synthetic published stories and retained inactive-locale
+content. Five built-route contract cases pass, covering HTML/RSS inventories, locale
+links, SEO, comments configuration and absence of inactive content. The RSS endpoint
+uses Astro's URL-derived `currentLocale`: actual prerendering reused primary-locale
+endpoint props for the secondary feed, which the real-build assertion caught.
+
+Managed-browser qualification of those outputs passed 138 desktop/mobile page cases,
+48 reciprocal switcher round trips and 62 HTTP cases; 208 image instances decoded
+without horizontal overflow or unexpected network failures. Eight map fallback links
+were exercised. Evidence is retained under
+`.local/backlog-execution-2026-10-27/issue-285-runtime/` (`results.json`,
+`browser-results.json` and screenshots). The fixture serves real build output with
+production PostgreSQL comment stores and the production redirect resolver; it is not
+a full `buildServer`/authentication/deployment proof, and intentionally absent basemap
+assets do not establish rendered-basemap qualification.
+
+Existing singular-count copy (“1 COMMENTS” / “1 KOMMENTARE”) was also observed on the
+baseline and is not a routing regression. #284's independent authoring/publishing
+qualification, final PR review and required CI remain separate gates.
+
+### Unit-test configuration boundary (#285, 2026-10-29)
+
+CI exposed a unit test importing the now database-backed `astro.config.mjs`.
+Astro and the standalone Markdown renderer now consume the same `MARKDOWN_OPTIONS`
+object instead of comparing two copies. The obsolete configuration-value assertions
+are removed; rendered gallery markers, highlighted classes and sanitization regressions
+remain. A database-free focused run passed all eight Markdown cases; full site tests,
+Astro check and the real build passed in wave `1793274723357_17653`. Build language still
+requires PostgreSQL; no fallback, skip or production guard was added.
+
+## 23. #284 current-dev integration (2026-11-01)
+
+Merged onto `dev` 65b110d (dump v11 → this change's v12). Decisions taken while
+integrating, each pinned by an updated or retained test:
+
+- **Namespace rollout (D2.6).** The read-only reverse-collision query ran against the
+  owner-confirmed content target on 2026-10-31: no story (working or published
+  snapshot) or page holds any reserved or newly proposed segment in DE-primary or
+  EN-primary mode. `dev` meanwhile gained the top-level `POST /gallery/analyze` route
+  (#354); the route-equality test therefore reserves `gallery` in `APP_SEGMENTS`, and the
+  same read-only query found no holder.
+- **Untranslated WXR items (#387).** In bilingual mode an item with a language but no
+  translation group stays an individually reported `untranslated` rejection; only an
+  item with no language at all is `no language`. Single-language mode still keys untagged
+  items by WordPress id. A group holding the primary imports primary-only.
+- **Publication body gate (#375).** The rendered-body analysis runs once per requested
+  locale on the reviewed pair before any mutation (H1 → 400, foreign images → 409). Under
+  the language lock only media readiness is re-read; the publish tokens prove the locked
+  pair is the analyzed one.
+- **Page saves (#344).** The Postgres store takes the shared language row first, then the
+  page's advisory lock, then reads; the memory store serializes saves on the language
+  queue. Saves of a language-limited payload return only the sent locales' gallery
+  warnings and leave the other locale's advisory state unchanged.
+- **Drafts.** Gallery normalization runs inside the post-pair lock, because a disabled
+  locale keeps the stored row read under that lock; its slug is not re-validated.
+
+## 24. #285 current-dev integration (2026-11-01)
+
+Merged `dev` after #284 landed. `astro.config.mjs` keeps this change's `MARKDOWN_OPTIONS`
+import (build and preview cannot diverge), so the lockstep test now pins the processor
+wiring and gallery exclusion instead of comparing two option objects. The About loader keeps
+dev's prose-description extraction and per-locale inline image sizes and applies them only to
+enabled locales, after the language assertion inside the loader snapshot. `byLocale` keeps
+dev's total `translationKey` tie-break and returns nothing for a disabled locale.
+
+Verification at the merge: site tests 668/668, `astro check` 0 errors, `astro build` and the
+uploader typecheck pass; the PostgreSQL-enabled uploader suite passed except one heavy test per
+run (`build-snapshot` once, `gpx-worker` once), neither touched by this change and both passing
+in isolation. A real app booted from this worktree published a bilingual DE-primary story (DE
+at root, EN under `/en/`, reciprocal `hreflang`, per-locale RSS) and refused both a primary
+change and removal of a published locale with 409; a fresh EN-primary instance served an
+EN-only story at root, 404 under `/en/`, `lang="en"` and no alternate.

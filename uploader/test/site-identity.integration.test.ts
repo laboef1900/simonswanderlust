@@ -6,6 +6,8 @@ import { pgPostStore } from '../src/posts.js';
 import { identityFromRow, pgSiteIdentityStore, seedSiteIdentity, type IdentityRow } from '../src/site-identity.js';
 import { LEGACY_IDENTITY } from '../src/site-identity-legacy.js';
 import { neutralIdentity } from '../../site/src/lib/site-identity.js';
+import sharp from 'sharp';
+import { normalizeIdentityUpload } from '../src/site-identity-assets.js';
 
 const url = process.env.TEST_DATABASE_URL;
 describe.skipIf(!url)('site identity Postgres singleton', () => {
@@ -51,9 +53,9 @@ describe.skipIf(!url)('site identity Postgres singleton', () => {
     expect(store.get().revision).toBe(1);
   });
   it('commits one concurrent writer, rejects a stale writer, retains canonical, and refreshes detached cache', async () => {
-    await seedSiteIdentity(pool, { bootstrapBlogOrigin: 'https://blog.example' });
+    await seedSiteIdentity(pool, { bootstrapBlogOrigin: 'https://BLOG.example:443/' });
     const store = await pgSiteIdentityStore(pool);
-    const { canonicalOrigin: _reserved, ...edit } = store.get().identity;
+    const edit = store.get().identity;
     const results = await Promise.allSettled([store.update(1, { ...edit, siteName: 'First' }), store.update(1, { ...edit, siteName: 'Second' })]);
     expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
     const rejected = results.find((result) => result.status === 'rejected');
@@ -71,6 +73,16 @@ describe.skipIf(!url)('site identity Postgres singleton', () => {
     await expect(store.update(2, { ...edit, tagline: { en: 42 } })).rejects.toMatchObject({ code: 'invalid_identity' });
     expect((await pool.query('SELECT revision FROM site_identity')).rows[0].revision).toBe(2);
   });
+  it('persists normalized canonical updates and clearing without changing language', async () => {
+    await seedSiteIdentity(pool);
+    const store = await pgSiteIdentityStore(pool);
+    const language = (await pool.query('SELECT * FROM site_language')).rows;
+    await store.update(1, { ...store.get().identity, canonicalOrigin: 'https://BÜCHER.example:443/' });
+    expect((await pgSiteIdentityStore(pool)).get().identity.canonicalOrigin).toBe('https://xn--bcher-kva.example');
+    await store.update(2, { ...store.get().identity, canonicalOrigin: null });
+    expect((await pgSiteIdentityStore(pool)).get().identity.canonicalOrigin).toBeNull();
+    expect((await pool.query('SELECT * FROM site_language')).rows).toEqual(language);
+  });
   it('ignores invalid bootstrap origin without logging it and fails loading corrupt retained maps', async () => {
     const logs: string[] = [];
     await seedSiteIdentity(pool, { bootstrapBlogOrigin: 'private-invalid-input', log: (message) => logs.push(message) });
@@ -78,5 +90,59 @@ describe.skipIf(!url)('site identity Postgres singleton', () => {
     expect((await pgSiteIdentityStore(pool)).get().identity.canonicalOrigin).toBeNull();
     await pool.query(`UPDATE site_identity SET localized = '{"tagline":{"en":42}}'::jsonb`);
     await expect(pgSiteIdentityStore(pool)).rejects.toMatchObject({ code: 'invalid_identity', field: 'tagline.en' });
+  });
+  it('serializes asset/text writers on one revision and persists complete role groups', async () => {
+    await seedSiteIdentity(pool);
+    const store = await pgSiteIdentityStore(pool);
+    const source = await sharp({ create: { width: 180, height: 180, channels: 4, background: '#12345680' } }).png().toBuffer();
+    const icons = await normalizeIdentityUpload(source, 'favicon');
+    const edit = store.get().identity;
+    const results = await Promise.allSettled([
+      store.replaceAssets(1, 'favicon', icons),
+      store.update(1, { ...edit, siteName: 'Concurrent name' }),
+    ]);
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.find((result) => result.status === 'rejected')).toMatchObject({ reason: { code: 'identity_conflict' } });
+    expect(store.get().revision).toBe(2);
+    await store.replaceAssets(2, 'favicon', icons);
+    const rows = (await pool.query('SELECT role, sha256, width, height, bytes FROM site_identity_assets ORDER BY role')).rows;
+    expect(rows).toEqual([...icons].sort((a, b) => a.role.localeCompare(b.role)));
+    expect(store.getAssetState()).toEqual({ logo: false, favicon: true });
+    const reload = await pgSiteIdentityStore(pool);
+    expect(reload.getAssetState()).toEqual(store.getAssetState());
+    expect(reload.get()).toEqual(store.get());
+    await expect(store.replaceAssets(2, 'favicon', [])).rejects.toMatchObject({ code: 'identity_conflict' });
+    await store.replaceAssets(3, 'favicon', []);
+    expect((await pool.query('SELECT * FROM site_identity_assets')).rows).toEqual([]);
+    expect(store.getAssetState()).toEqual({ logo: false, favicon: false });
+  });
+
+  it('rolls back bytes, timestamps, revision and cache after a mid-group insert or removal failure', async () => {
+    await seedSiteIdentity(pool);
+    const store = await pgSiteIdentityStore(pool);
+    const make = async (background: string) => normalizeIdentityUpload(
+      await sharp({ create: { width: 180, height: 180, channels: 3, background } }).png().toBuffer(), 'favicon');
+    await store.replaceAssets(1, 'favicon', await make('#123456'));
+    const before = (await pool.query('SELECT * FROM site_identity_assets ORDER BY role')).rows;
+    const identityBefore = (await pool.query('SELECT * FROM site_identity')).rows;
+    const cached = store.get();
+    // This real database constraint fails the SECOND insert after deletion and
+    // a successful first insert; no mock can accidentally hide a partial commit.
+    await pool.query("ALTER TABLE site_identity_assets ADD CONSTRAINT reject_test_icon CHECK (role <> 'favicon-192') NOT VALID");
+    try {
+      await expect(store.replaceAssets(2, 'favicon', await make('#abcdef'))).rejects.toThrow();
+    } finally { await pool.query('ALTER TABLE site_identity_assets DROP CONSTRAINT reject_test_icon'); }
+    expect((await pool.query('SELECT * FROM site_identity_assets ORDER BY role')).rows).toEqual(before);
+    expect((await pool.query('SELECT * FROM site_identity')).rows).toEqual(identityBefore);
+    expect(store.get()).toEqual(cached);
+    expect(store.getAssetState()).toEqual({ logo: false, favicon: true });
+    await pool.query('ALTER TABLE site_identity ADD CONSTRAINT reject_test_revision CHECK (revision <= 2) NOT VALID');
+    try { await expect(store.replaceAssets(2, 'favicon', [])).rejects.toThrow(); }
+    finally { await pool.query('ALTER TABLE site_identity DROP CONSTRAINT reject_test_revision'); }
+    expect((await pool.query('SELECT * FROM site_identity_assets ORDER BY role')).rows).toEqual(before);
+    expect((await pool.query('SELECT * FROM site_identity')).rows).toEqual(identityBefore);
+    expect(store.get()).toEqual(cached);
+    await store.replaceAssets(2, 'favicon', []);
+    expect(store.get().revision).toBe(3);
   });
 });

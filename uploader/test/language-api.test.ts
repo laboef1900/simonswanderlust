@@ -1,8 +1,10 @@
+import { idleBuildState } from './build-fixture.js';
+import { buildFailureMessage } from '../src/build-state.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { ensureSchema, type DbPool } from '../src/db.js';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildServer } from '../src/server.js';
@@ -17,7 +19,10 @@ import { defaultSettings, validate } from '../src/settings.js';
 import { createEncodeQueue } from '../src/encode-queue.js';
 import { createWorkLock } from '../src/work-lock.js';
 import type { BuildOutcome } from '../src/build.js';
+import { TEST_TRUST } from './trusted-proxy-fixture.js';
 import { publishBody } from './publish-tokens.js';
+import { pgOnboardingStore, type OnboardingStore } from '../src/onboarding.js';
+import { captureBootEvidence, initializeApplicationSchema, initializeOnboarding } from '../src/onboarding-bootstrap.js';
 
 const modes: [LanguageConfig, LanguageConfig, LanguageConfig, LanguageConfig] = [
   { primary: 'de', locales: ['de', 'en'] }, { primary: 'en', locales: ['en', 'de'] },
@@ -26,7 +31,7 @@ const modes: [LanguageConfig, LanguageConfig, LanguageConfig, LanguageConfig] = 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
 
-async function fixture(initial: LanguageConfig = modes[0]!, pool?: DbPool) {
+async function fixture(initial: LanguageConfig = modes[0]!, pool?: DbPool, onboarding?: OnboardingStore) {
   const dir = await mkdtemp(join(tmpdir(), 'language-api-'));
   const language = pool ? pgLanguageStore(pool) : memoryLanguageStore(initial);
   if (pool) await language.update(initial);
@@ -39,17 +44,18 @@ async function fixture(initial: LanguageConfig = modes[0]!, pool?: DbPool) {
   const lock = createWorkLock();
   const queue = createEncodeQueue({ store: media, storageDir: dir, lock });
   let settings = defaultSettings();
-  let outcome: BuildOutcome = { ok: true, release: 'language-release' };
+  let outcome: BuildOutcome = { ok: true, attemptId: 'language-release', release: 'language-release' };
   // Acquiring the real non-reentrant work lock here also catches a route that
   // incorrectly wraps an ordinary builder invocation in that same lock.
   const build = vi.fn(async () => lock.runExclusive(async () => ({ ...outcome })));
   const unavailable = async (): Promise<never> => { throw new Error('Not part of this fixture'); };
   const app = buildServer({
-    storageDir: dir, baseUrl: 'https://images.test', imgHost: 'images.test', siteDir: join(dir, 'site'),
+    storageDir: dir, baseUrl: 'https://images.test', imgHost: 'images.test', siteDir: join(dir, 'site'), trustProxy: TEST_TRUST,
     posts, pages, media, users, sessions, secrets: memorySecretsStore(),
+    onboarding,
     // Deliberately omit cfg.language: the server must use posts.language.
     settings: { get: () => ({ ...settings }), update: (patch) => (settings = validate({ ...settings, ...patch })) },
-    builder: { build, hasRelease: () => true, quiesce: async () => {} },
+    builder: { ...idleBuildState, build, hasRelease: () => true, quiesce: async () => {} },
     workLock: lock, encodeQueue: queue, backupDir: join(dir, 'backup'), dbCheck: unavailable,
     dbBackup: { dir, runNow: unavailable, running: () => false, sweepTempFiles: () => [], list: () => [],
       listImageArchives: () => [], listRouteArchives: () => [], state: () => ({}), quiesce: async () => {} },
@@ -71,9 +77,9 @@ async function fixture(initial: LanguageConfig = modes[0]!, pool?: DbPool) {
       shared: { date: '2026-10-27', countryCode: 'DE', region: 'europe', coordinates: { lat: 1, lng: 2 } },
       de: locale('de'), en: locale('en') });
   }
-  return { app, language, posts, pages, media, cookies, login, put, story, build,
-    failBuild: () => { outcome = { ok: false, error: 'Synthetic build failure' }; },
-    recoverBuild: () => { outcome = { ok: true, release: 'recovered-release' }; } };
+  return { app, language, posts, pages, media, cookies, login, put, story, build, dir,
+    failBuild: () => { outcome = { ok: false, attemptId: 'failed', code: 'internal', error: buildFailureMessage('internal') }; },
+    recoverBuild: () => { outcome = { ok: true, attemptId: 'recovered-release', release: 'recovered-release' }; } };
 }
 
 describe('language API', () => {
@@ -103,7 +109,9 @@ describe('language API', () => {
     expect(response.headers['cache-control']).toBe('no-store');
     expect(response.json()).toMatchObject({ ...mode, lockedAt: null });
     expect(await f.language.get()).toMatchObject(mode);
-    expect((await f.app.inject({ method: 'GET', url: '/language', cookies: f.cookies })).json()).toEqual(response.json());
+    const { build, ...storedLanguage } = response.json();
+    expect(build).toMatchObject({ ok: true, attemptId: 'language-release', release: 'language-release' });
+    expect((await f.app.inject({ method: 'GET', url: '/language', cookies: f.cookies })).json()).toEqual(storedLanguage);
     expect(f.build).toHaveBeenCalledTimes(1);
     const saved = await f.language.get();
     expect((await f.put(mode)).statusCode).toBe(200);
@@ -175,9 +183,10 @@ describe('language API', () => {
     const f = await fixture();
     f.failBuild();
     const response = await f.put(modes[3]);
-    expect(response.statusCode).toBe(502);
+    expect(response.statusCode).toBe(200);
     expect(response.headers['cache-control']).toBe('no-store');
-    expect(response.json()).toMatchObject({ code: 'language_build_failed', persisted: true, language: modes[3] });
+    expect(response.json()).toMatchObject({ ...modes[3], build: { ok: false, code: 'internal' } });
+    expect(f.build).toHaveBeenCalledWith('rebuild');
     expect(await f.language.get()).toMatchObject(modes[3]!);
     f.recoverBuild();
     const retried = await f.app.inject({ method: 'POST', url: '/rebuild', cookies: f.cookies });
@@ -250,9 +259,9 @@ describe('inactive About preparation', () => {
     expect(before[secondary].publishedAt).toBeNull();
     f.failBuild();
     const failed = await f.put({ primary, locales: [primary, secondary] });
-    expect(failed.statusCode).toBe(502);
-    expect(failed.json()).toMatchObject({ code: 'language_build_failed', persisted: true,
-      language: { primary, locales: [primary, secondary] } });
+    // #297: the committed activation answers 200 with its failed build attempt.
+    expect(failed.statusCode).toBe(200);
+    expect(failed.json()).toMatchObject({ primary, locales: [primary, secondary], build: { ok: false } });
     const activated = await f.pages.get('about');
     expect(activated[secondary].publishedAt).toBeInstanceOf(Date);
     expect(activated).toEqual({
@@ -443,7 +452,8 @@ describe('editable page API lifecycle', () => {
     const initial = { key: 'about', de: { locale: 'de' as const, title: 'Before', bodyMarkdown: '', images: {} } };
     await f.pages.save(initial); f.failBuild();
     const result = await f.app.inject({ method: 'PUT', url: '/pages/about', cookies: f.cookies, payload: { de: { ...initial.de, title: 'Saved despite build failure' } } });
-    expect(result.statusCode).toBe(502); expect(result.json()).toMatchObject({ persisted: true, code: 'page_build_failed', saved: { de: { title: 'Saved despite build failure' } } });
+    // #297: the committed save answers 200 beside its failed build attempt.
+    expect(result.statusCode).toBe(200); expect(result.json()).toMatchObject({ build: { ok: false }, saved: { de: { title: 'Saved despite build failure' } } });
     const revision = (await f.pages.getRevision('about', (await f.pages.listRevisions('about'))[0]!.id))!;
     f.recoverBuild();
     const restored = await f.app.inject({ method: 'PUT', url: '/pages/about', cookies: f.cookies, payload: { ...revision.snapshot, updatedAt: result.json().saved.updatedAt } });
@@ -464,7 +474,7 @@ describe('editable page API lifecycle', () => {
     expect(await f.language.get()).toEqual(before);
     f.failBuild();
     const activation = await f.put({ primary, locales: [primary, secondary] });
-    expect(activation.statusCode).toBe(502); expect(activation.json().persisted).toBe(true);
+    expect(activation.statusCode).toBe(200); expect(activation.json()).toMatchObject({ primary, locales: [primary, secondary], build: { ok: false } });
     expect((await f.pages.get('contact'))[secondary].publishedAt).toBeInstanceOf(Date);
     f.recoverBuild();
     expect((await f.app.inject({ method: 'POST', url: '/rebuild', cookies: f.cookies })).json().ok).toBe(true);
@@ -648,5 +658,122 @@ for (const backend of ['memory', 'postgres'] as const) {
       resume.resolve();
       await Promise.allSettled([request, ...waiters]);
     }
+  });
+});
+
+(databaseUrl ? describe : describe.skip)('eligible onboarding using the shared language API', () => {
+  async function fresh(mode: LanguageConfig = modes[0]) {
+    const schema = `onboarding_language_${randomUUID().replaceAll('-', '')}`;
+    const owner = new pg.Pool({ connectionString: databaseUrl });
+    await owner.query(`CREATE SCHEMA ${schema}`);
+    // A one-connection pool makes a second read connection a deterministic failure,
+    // rather than concealing a snapshot split behind plentiful idle connections.
+    const pool = new pg.Pool({ connectionString: databaseUrl, max: 1, connectionTimeoutMillis: 1500,
+      options: `-c search_path=${schema}` });
+    cleanups.push(async () => { await pool.end(); await owner.query(`DROP SCHEMA ${schema} CASCADE`); await owner.end(); });
+    const writable = async () => {};
+    const evidence = await captureBootEvidence(pool, writable);
+    await initializeApplicationSchema(pool, writable);
+    const onboarding = pgOnboardingStore(pool, () => true);
+    const f = await fixture(mode, pool, onboarding);
+    const dataRoot = await realpath(f.dir);
+    await initializeOnboarding(pool, {
+      storageDir: join(dataRoot, 'images'), settingsPath: join(dataRoot, 'settings.json'),
+      siteDir: join(dataRoot, 'site'), backupDir: join(dataRoot, 'backup'),
+    }, evidence, writable);
+    const read = () => f.app.inject({ method: 'GET', url: '/onboarding', cookies: f.cookies });
+    return { ...f, pool, onboarding, read };
+  }
+
+  it.each(modes)('persists %j through PUT and exposes only current configuration, without progress or acknowledgement changes', async (mode) => {
+    const f = await fresh(mode.primary === 'de' ? modes[3] : modes[2]);
+    const before = (await f.read()).json();
+    const metadata = (await f.pool.query('SELECT * FROM onboarding_state')).rows;
+    const saved = await f.put(mode);
+    expect(saved.statusCode).toBe(200);
+    const read = await f.read();
+    expect(read.statusCode).toBe(200);
+    expect(read.headers['cache-control']).toBe('no-store');
+    const projection = read.json();
+    expect(Object.keys(projection).sort()).toEqual(['complete', 'language', 'status', 'steps']);
+    // The acknowledgement adds the build attempt (#297) beside the stored configuration.
+    const { build: _build, ...stored } = saved.json();
+    expect(projection.language).toEqual(stored);
+    expect(Object.keys(projection.language).sort()).toEqual(['locales', 'lockedAt', 'primary', 'updatedAt']);
+    expect(projection.steps).toEqual(before.steps);
+    expect(projection.complete).toBe(false);
+    expect(projection.steps.filter((step: { required: boolean }) => step.required)).toHaveLength(3);
+    expect((await f.pool.query('SELECT * FROM onboarding_state')).rows).toEqual(metadata);
+    f.build.mockClear();
+    expect((await f.put(mode)).json()).toEqual(stored);
+    expect((await f.read()).json()).toEqual(projection);
+    expect(f.build).not.toHaveBeenCalled();
+    expect((await f.pool.query('SELECT * FROM onboarding_state')).rows).toEqual(metadata);
+  });
+
+  it('keeps a committed build failure visible to onboarding and recovers through Rebuild, not a second configuration write', async () => {
+    const f = await fresh();
+    f.failBuild();
+    const saved = await f.put(modes[3]);
+    // #297: the committed configuration answers 200 with its failed build attempt.
+    expect(saved.statusCode).toBe(200);
+    const { build, ...stored } = saved.json();
+    expect(build).toMatchObject({ ok: false, code: 'internal' });
+    expect((await f.read()).json().language).toEqual(stored);
+    expect((await pgOnboardingStore(f.pool, () => true).read())).toMatchObject({ language: modes[3], complete: false });
+    f.recoverBuild();
+    const recovered = await f.app.inject({ method: 'POST', url: '/rebuild', cookies: f.cookies });
+    expect(recovered.statusCode).toBe(200);
+    expect((await f.read()).json().language).toEqual(stored);
+    expect(f.build).toHaveBeenCalledTimes(2);
+  });
+
+  it('refuses a now-forbidden mode after publication wins between the checklist read and Save', async () => {
+    const f = await fresh();
+    const pair = await f.story();
+    const before = (await f.read()).json();
+    expect(before.language.lockedAt).toBeNull();
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const update = f.posts.language.update.bind(f.posts.language);
+    vi.spyOn(f.posts.language, 'update').mockImplementationOnce(async (...args) => {
+      entered.resolve();
+      await release.promise;
+      return update(...args);
+    });
+    const saving = f.put(modes[1]).then((response) => response);
+    await entered.promise;
+    try {
+      const published = await f.app.inject({ method: 'POST', url: `/posts/${pair.translationKey}/publish`,
+        cookies: f.cookies, payload: await publishBody(f.posts, pair.translationKey) });
+      expect(published.statusCode).toBe(200);
+    } finally { release.resolve(); }
+    const refused = await saving;
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().code).toBe('language_primary_locked');
+    const after = (await f.read()).json();
+    expect(after.language).toMatchObject({ ...modes[0], lockedAt: expect.any(String) });
+    expect(await f.posts.getPublishedLocales(pair.translationKey)).toEqual(['de', 'en']);
+    expect(after.steps.find((step: { id: string }) => step.id === 'publish').state).toBe('done');
+    expect(after.complete).toBe(true);
+    expect(f.build).toHaveBeenCalledTimes(1);
+    const finished = await f.app.inject({ method: 'POST', url: '/onboarding', cookies: f.cookies, payload: { action: 'finish' } });
+    expect(finished.json()).toEqual({ status: 'retired' });
+    expect((await f.read()).json()).toEqual({ status: 'retired' });
+  });
+
+  it('protects the shared onboarding read and language write from authors and anonymous callers', async () => {
+    const f = await fresh();
+    const author = await f.login(false);
+    const before = (await f.read()).json();
+    for (const [cookies, status] of [[undefined, 401], [author, 403]] as const) {
+      const read = await f.app.inject({ method: 'GET', url: '/onboarding', cookies });
+      const write = await f.app.inject({ method: 'PUT', url: '/language', cookies, payload: modes[3] });
+      expect(read.statusCode).toBe(status);
+      expect(write.statusCode).toBe(status);
+      expect(read.headers['cache-control']).toBe('no-store');
+    }
+    expect((await f.read()).json()).toEqual(before);
+    expect(f.build).not.toHaveBeenCalled();
   });
 });

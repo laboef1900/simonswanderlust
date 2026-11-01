@@ -18,8 +18,9 @@ interface BrowserLlm {
   caption(baseUrl: string, model: string, prompt: string, dataUrl: string, timeoutMs: number, maxTokens: number): Promise<{ altEn: string; altDe: string }>;
   listModels(baseUrl: string): Promise<string[]>;
 }
-function browserClient(fetcher: typeof fetch = vi.fn<typeof fetch>()): BrowserLlm {
-  const window = {} as { LLM: BrowserLlm };
+function browserClient(fetcher: typeof fetch = vi.fn<typeof fetch>(),
+  identity?: { canonicalOrigin: string | null; siteName: string }): BrowserLlm {
+  const window = { SiteIdentity: identity } as { LLM: BrowserLlm; SiteIdentity?: typeof identity };
   runInNewContext(source, { window, URL, AbortController, AbortSignal, setTimeout, clearTimeout, fetch: fetcher });
   return window.LLM;
 }
@@ -126,6 +127,24 @@ describe('editorial review parser and shipped browser mirror', () => {
     }
   });
 
+  it('preserves word boundaries across model whitespace in every review field', () => {
+    const multiline: EditorialReviewResult = {
+      title: { status: 'warn', critique: '  Too short.\r\nAdd the place.  ', suggestions: ['Lisbon\nin three days'] },
+      excerpt: { status: 'pass', critique: 'Clear\tsearch intent.', suggestedExcerpt: 'Trams,\n tiles and tascas.' },
+      headings: { status: 'pass', critique: 'One\u00a0route\t two stops.' },
+      practicalDetails: { status: 'warn', critique: 'Explain\nseasonal access.', missingAspects: ['Best\tseason'] },
+      internalLinks: { status: 'info', linkOpportunities: ['Nearby\r\nwalks\u200e'] },
+    };
+    const expected: EditorialReviewResult = {
+      title: { status: 'warn', critique: 'Too short. Add the place.', suggestions: ['Lisbon in three days'] },
+      excerpt: { status: 'pass', critique: 'Clear search intent.', suggestedExcerpt: 'Trams, tiles and tascas.' },
+      headings: { status: 'pass', critique: 'One route two stops.' },
+      practicalDetails: { status: 'warn', critique: 'Explain seasonal access.', missingAspects: ['Best season'] },
+      internalLinks: { status: 'info', linkOpportunities: ['Nearby walks'] },
+    };
+    for (const parse of parsers) expect(parse(JSON.stringify(multiline))).toEqual(expected);
+  });
+
   it('strips Unicode controls before clamping every text and list field', () => {
     const dirty = '\u0000\n\t\u200e\u202e\uD800' + 'x'.repeat(1200);
     const oversized: EditorialReviewResult = {
@@ -226,10 +245,11 @@ describe('browser-direct review transport', () => {
       ['https://notopenrouter.ai/v1', false],
     ] as const) {
       const fetcher = vi.fn<typeof fetch>().mockResolvedValue(completion());
-      await browserClient(fetcher).reviewStory(url, 'm', DEFAULT_REVIEW_PROMPT, { ...story, locale: 'de' }, testKey);
+      await browserClient(fetcher, { canonicalOrigin: 'https://blog.example:8443', siteName: 'Field notes' })
+        .reviewStory(url, 'm', DEFAULT_REVIEW_PROMPT, { ...story, locale: 'de' }, testKey);
       const headers = fetcher.mock.calls[0]![1]!.headers as Record<string, string>;
-      expect(headers['HTTP-Referer']).toBe(attributed ? 'https://simonswanderlust.com' : undefined);
-      expect(headers['X-Title']).toBe(attributed ? 'SimonsWanderlust' : undefined);
+      expect(headers['HTTP-Referer']).toBe(attributed ? 'https://blog.example:8443' : undefined);
+      expect(headers['X-Title']).toBe(attributed ? 'Field notes' : undefined);
       expect(bodyOf(fetcher).messages).toEqual(expect.arrayContaining([
         expect.objectContaining({ role: 'system', content: expect.stringContaining('German.') }),
       ]));

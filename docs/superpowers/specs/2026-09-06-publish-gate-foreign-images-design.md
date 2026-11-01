@@ -10,8 +10,8 @@ origin is not the configured image host (`PUBLIC_BASE_URL`, `cfg.baseUrl`), or c
 line the renderer would silently drop for the same reason.
 
 **The gate judges the rendered body, not the Markdown text.** Since #334,
-`analyzeBodyImages(body, images, imageOrigin)` (`uploader/src/publish-gate.ts`) runs the body through `renderMarkdown` and then
-`bodyImageSources` (`site/src/lib/body-images.ts`), which parses and sanitizes exactly as
+`analyzeBodyContent(body, images, imageOrigin)` (`uploader/src/publish-gate.ts`; expanded for #375) runs the body through `renderMarkdown` and then
+`analyzeRenderedBody` (`site/src/lib/body-images.ts`), which parses and sanitizes exactly as
 `transformBodyImages` does and reads, from that hast tree, **before any `images` resolution**:
 
 - the `src`/`srcset` of every `<img>` and `<source>` (the sanitizer allows a raw `<picture>`
@@ -45,8 +45,8 @@ The response carries the count and up to five example URLs so the author can fin
 { "error": "2 image(s) in the body still point at another host — re-run the WordPress import to re-host them, or replace them with library photos, then publish again", "foreignImages": ["https://old.example/wp-content/uploads/a.jpg", "…"], "foreignImageCount": 2 }
 ```
 
-`server.ts` collects this function's foreign results per pair (`publicationImages`) next to
-`notReadyPhotos`. Order in the handler: `validateForPublish` (400) → foreign images (409, no
+`server.ts` collects this function's foreign results per pair (`publicationBody`) next to
+`notReadyPhotos`. Order in the handler: `validateForPublish` (400) → rendered H1 gate (#375, 400) → foreign images (409, no
 store access) → `notReadyPhotos` (409, hits the media store). The combined analysis also reads
 actual transformed body references for readiness (#334), without changing this pre-resolution
 foreign-origin interpretation. A foreign URL has no `media` row to look up, so checking it first
@@ -117,9 +117,9 @@ such hot-link 404s on the live site.
   foreign gallery line is reported under every spelling the renderer accepts (backtick, tilde,
   indented, extra info words, raw `<pre id>`/whitespace) and the test shows the renderer would
   drop it; results are de-duplicated.
-- `site/src/lib/body-images.test.ts`: `bodyImageSources` reads `img`/`source` `src`+`srcset`,
+- `site/src/lib/body-images.test.ts`: `analyzeRenderedBody` reads `img`/`source` `src`+`srcset`,
   drops a `javascript:` src with the sanitizer, and reads gallery lines in every accepted shape.
-- `uploader/test/server.test.ts` (`publish gate (foreign images)`): 409 with `foreignImages` +
+- `uploader/test/server.test.ts` (`publish body gates`): 409 with `foreignImages` +
   count on the single-post route, nothing published; per-post failure on the bulk path; a body
   with only own-origin images publishes.
 

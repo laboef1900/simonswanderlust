@@ -21,8 +21,11 @@ export type MediaStatus = 'processing' | 'ready' | 'failed' | 'missing';
  * @ai-warning libvips embeds filesystem paths in its errors and the library UI
  * displays this field — the real error is logged to stdout only, matching the
  * global error handler's contract.
+ *
+ * `queue_full`: POST /upload stored the original but the encode backlog
+ * refused the job (#348) — nothing was encoded; Retry or a re-send recovers it.
  */
-export type MediaError = 'decode_failed' | 'encode_failed' | 'write_failed' | 'no_space';
+export type MediaError = 'decode_failed' | 'encode_failed' | 'write_failed' | 'no_space' | 'queue_full';
 
 export interface MediaItem {
   key: string;
@@ -89,6 +92,14 @@ export interface MediaStore {
   descriptions(keys: string[]): Promise<Map<string, MediaDescriptions>>;
   /** Set a row's status; `e` is stored only for `failed` and cleared otherwise. */
   setStatus(key: string, s: MediaStatus, e?: MediaError): Promise<void>;
+  /**
+   * `setStatus`, but only while the row is still `processing`; resolves whether
+   * it changed. The rollback of a refused enqueue (#348) MUST use this: the
+   * rollback is async, and an unconditional write landing after a concurrent
+   * same-key job already recorded `ready` (or its own failure) would turn an
+   * encoded photo back into `failed`.
+   */
+  setStatusIfProcessing(key: string, s: MediaStatus, e?: MediaError): Promise<boolean>;
   setVariantBytes(key: string, bytes: number): Promise<void>;
   folders(): Promise<string[]>;
   createFolder(path: string): Promise<void>;
@@ -410,6 +421,13 @@ export function memoryMediaStore(opts: MediaStoreOptions): MediaStore {
       r.status = s;
       r.error = s === 'failed' ? e ?? null : null;
     },
+    async setStatusIfProcessing(key, s, e) {
+      const r = rows.get(key);
+      if (!r || r.status !== 'processing') return false;
+      r.status = s;
+      r.error = s === 'failed' ? e ?? null : null;
+      return true;
+    },
     async setVariantBytes(key, bytes) {
       const r = rows.get(key);
       if (r) r.variantBytes = bytes;
@@ -696,6 +714,13 @@ export function pgMediaStore(pool: DbPool, opts: MediaStoreOptions): MediaStore 
     },
     async setStatus(key, s, e) {
       await pool.query(`UPDATE media SET status = $1, error = $2 WHERE key = $3`, [s, s === 'failed' ? e ?? null : null, key]);
+    },
+    async setStatusIfProcessing(key, s, e) {
+      const res = await pool.query(
+        `UPDATE media SET status = $1, error = $2 WHERE key = $3 AND status = 'processing'`,
+        [s, s === 'failed' ? e ?? null : null, key],
+      );
+      return (res.rowCount ?? 0) > 0;
     },
     async setVariantBytes(key, bytes) {
       await pool.query(`UPDATE media SET variant_bytes = $1 WHERE key = $2`, [bytes, key]);

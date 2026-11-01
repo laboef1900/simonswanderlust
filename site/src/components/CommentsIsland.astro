@@ -44,6 +44,7 @@ const t = useTranslations(locale);
   data-author-badge={t('comments.authorBadge')}
   data-privacy={t('comments.privacy')}
   data-count={t('comments.count')}
+  data-count-one={t('comments.countOne')}
 >
   <p class="comments__kicker">{t('comments.heading')}</p>
   <h2 id="comments-heading" class="comments__heading">{t('comments.heading')}</h2>
@@ -230,6 +231,7 @@ const t = useTranslations(locale);
         authorBadge: d.authorBadge ?? '',
         privacy: d.privacy ?? '',
         count: d.count ?? '',
+        countOne: d.countOne ?? '',
       },
     });
   }

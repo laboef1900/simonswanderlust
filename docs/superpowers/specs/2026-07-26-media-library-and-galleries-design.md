@@ -656,14 +656,13 @@ Languages in `syntaxHighlight.excludeLangs` bypass Shiki entirely. Proven with t
 already configured, `math`: the output is byte-identical before and after sanitize, with
 `class="language-math"` intact.
 
-**Two files must change together**, or the draft preview diverges from the build:
+**Build and draft preview share the same options.** Since #285,
+`site/astro.config.mjs` imports `MARKDOWN_OPTIONS` directly from
+`site/src/lib/render-markdown.ts`, eliminating the original duplicated configuration and
+its value-parity assertion. Actual renderer tests retain gallery-marker and highlighting
+coverage without loading the database-backed Astro configuration.
 
-- `site/astro.config.mjs` — currently has **no** `markdown` key, so this block is new. Specifying
-  the option *replaces* the default, so it must keep `math`.
-- `site/src/lib/render-markdown.ts:24` — the mirrored options.
-
-To make the parity testable, `render-markdown.ts` **exports** the options rather than hard-coding
-them inside `getRenderer()`:
+`render-markdown.ts` exports the options rather than hard-coding them inside `getRenderer()`:
 
 ```ts
 export const MARKDOWN_OPTIONS = {
@@ -672,8 +671,8 @@ export const MARKDOWN_OPTIONS = {
 } as const;
 ```
 
-imported by `getRenderer()` and by a test that compares it against `astro.config.mjs`. A silent
-divergence here means previews and the live site disagree about what a gallery is.
+The example above is the original gallery configuration; #124 subsequently added the
+class-based Shiki transformer. Both build and preview consume that same exported object.
 
 **Considered and rejected: splitting the markdown before rendering.** `@astrojs/markdown-satteri`
 instantiates its heading slugger *inside* each `render()` call, so a post with two `## Etappe`
@@ -1056,7 +1055,7 @@ Usage references are computed only for the visible page. No new scanning is need
 - `body-images.test.ts` — fence → figure grid; unknown URL skipped; empty gallery leaves the
   `<pre>`; **`javascript:` and `data:` URLs rejected**; **off-base-URL rejected**; **a node-shaped
   object in `alt`/`caption` cannot emit markup**; **non-integer dimensions skip the item**.
-- `render-markdown.test.ts` — `MARKDOWN_OPTIONS` parity with `astro.config.mjs`.
+- `render-markdown.test.ts` — actual gallery-marker and class-based highlighting behavior through the shared options.
 
 **Verification loop:** `npx astro check`, `npm test` in both apps, then `npm run dev` for visual
 work.

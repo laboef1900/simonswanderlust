@@ -3,9 +3,11 @@ import Base from '../../layouts/Base.astro';
 import GalleryIsland from '../GalleryIsland.astro';
 import { getCollection, getEntry, render } from 'astro:content';
 import { useTranslations, type Locale } from '../../i18n/ui';
+import { countLabel } from '../../i18n/count';
 import { aboutPath } from '../../lib/paths';
 import { byLocale, tripStats } from '../../lib/trips';
 import { identity } from '../../lib/build-identity';
+import { localeAlternates } from '../../lib/seo';
 
 interface Props {
   locale: Locale;
@@ -21,15 +23,14 @@ const stats = tripStats(byLocale(await getCollection('trips'), locale));
 const entry = await getEntry('pages', `about/${locale}`);
 const heading = entry?.data.title?.trim() || t('about.title');
 const Content = entry ? (await render(entry)).Content : null;
-const plain = (entry?.body ?? '').replace(/[#>*_`~\-\[\]!()]/g, ' ').replace(/\s+/g, ' ').trim();
-const description = plain ? plain.slice(0, 150) : t('about.title');
+const description = entry?.data.description || t('about.title');
 ---
 
 <Base
   title={t('about.title')}
   description={description}
   locale={locale}
-  alternates={{ de: aboutPath('de'), en: aboutPath('en') }}
+  alternates={localeAlternates(aboutPath)}
 >
   <section class="mx-auto max-w-6xl px-5 py-14">
     <div class="grid gap-12 lg:grid-cols-[1fr_2.2fr] lg:items-start">
@@ -52,15 +53,15 @@ const description = plain ? plain.slice(0, 150) : t('about.title');
 
         <div class="mt-6 border-t border-navy/10 pt-4 space-y-3 font-mono text-xs text-ink/80">
           <div class="flex justify-between">
-            <span class="text-navy/60 uppercase tracking-wider">{t('stats.trips')}</span>
+            <span class="text-navy/70 uppercase tracking-wider">{countLabel(stats.trips, t('stats.trip'), t('stats.trips'))}</span>
             <span class="font-bold text-navy">{stats.trips}</span>
           </div>
           <div class="flex justify-between">
-            <span class="text-navy/60 uppercase tracking-wider">{t('stats.countries')}</span>
+            <span class="text-navy/70 uppercase tracking-wider">{countLabel(stats.countries, t('stats.country'), t('stats.countries'))}</span>
             <span class="font-bold text-navy">{stats.countries}</span>
           </div>
           <div class="flex justify-between">
-            <span class="text-navy/60 uppercase tracking-wider">{t('stats.continents')}</span>
+            <span class="text-navy/70 uppercase tracking-wider">{countLabel(stats.continents, t('stats.continent'), t('stats.continents'))}</span>
             <span class="font-bold text-navy">{stats.continents}</span>
           </div>
         </div>
@@ -76,7 +77,7 @@ const description = plain ? plain.slice(0, 150) : t('about.title');
       <!-- Main Content Block -->
       <div>
         <h1 class="text-3xl font-extrabold text-navy md:text-4xl">{heading}</h1>
-        <article class="prose prose-lg mt-6 max-w-none prose-headings:font-extrabold prose-headings:text-navy prose-a:font-semibold prose-a:text-brand-red prose-blockquote:border-l-2 prose-blockquote:border-brand-red/60 prose-blockquote:italic prose-p:first-of-type:first-letter:float-left prose-p:first-of-type:first-letter:mr-3 prose-p:first-of-type:first-letter:text-5xl prose-p:first-of-type:first-letter:font-extrabold prose-p:first-of-type:first-letter:text-brand-red">
+        <article class="prose prose-lg mt-6 max-w-none prose-headings:font-extrabold prose-headings:text-navy prose-a:font-semibold prose-a:text-brand-red prose-blockquote:border-l-2 prose-blockquote:border-brand-red/60 prose-blockquote:italic [&>p:first-of-type]:first-letter:float-left [&>p:first-of-type]:first-letter:mr-3 [&>p:first-of-type]:first-letter:text-5xl [&>p:first-of-type]:first-letter:font-extrabold [&>p:first-of-type]:first-letter:text-brand-red">
           {Content ? <Content /> : null}
         </article>
         <GalleryIsland locale={locale} />

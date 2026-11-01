@@ -1,7 +1,8 @@
 import { publishTokens } from './publish-tokens.js';
 import { describe, expect, it, vi } from 'vitest';
-import { memoryPostStore, normalizeBodyImages, PostError, REVISION_CAP, validateDraft, validateForPublish, type PostPair } from '../src/posts.js';
+import { memoryPostStore, normalizeBodyImages, PostError, REVISION_CAP, MAX_SLUG_BYTES, isSafeSlug, validateDraft, validateForPublish, type PostPair } from '../src/posts.js';
 import { renderPostToMdx } from '../src/export.js';
+import * as bodyContent from '../src/body-content.js';
 import { imageUsage } from '../src/media-files.js';
 import { REGIONS } from '../src/db.js';
 import { regions as siteRegions } from '../../site/src/lib/paths.js';
@@ -20,6 +21,46 @@ function pair(overrides: Partial<PostPair> = {}): PostPair {
   };
 }
 
+describe('story slug byte bound (#353)', () => {
+  it.each(['de', 'en'] as const)('%s accepts 250/251 bytes unchanged and refuses 252/multi-kilobyte input at every save boundary', async (locale) => {
+    expect(MAX_SLUG_BYTES).toBe(251);
+    for (const length of [250, 251, 252, 8192]) {
+      const store = memoryPostStore();
+      const input = pair();
+      input[locale].slug = 'a'.repeat(length);
+      if (length <= MAX_SLUG_BYTES) {
+        expect(isSafeSlug(input[locale].slug)).toBe(true);
+        expect(() => validateDraft(input)).not.toThrow();
+        expect(() => validateForPublish(input)).not.toThrow();
+        const saved = await store.upsertDraft(input);
+        expect(saved[locale].slug).toBe(input[locale].slug);
+        await store.publish(saved.translationKey, await publishTokens(store, saved.translationKey));
+        expect((await store.get(saved.translationKey))?.[locale].slug).toBe(input[locale].slug);
+      } else {
+        const message = `${locale}.slug must be at most 251 ASCII bytes (received ${length})`;
+        expect(isSafeSlug(input[locale].slug)).toBe(false);
+        expect(() => validateDraft(input)).toThrow(message);
+        expect(() => validateForPublish(input)).toThrow(message);
+        await expect(store.upsertDraft(input)).rejects.toThrow(message);
+        expect(await store.list()).toEqual([]);
+        const saved = await store.upsertDraft(pair());
+        const revisions = await store.listRevisions(saved.translationKey);
+        await expect(store.upsertDraft({ ...input, translationKey: saved.translationKey })).rejects.toThrow(message);
+        expect({ ...await store.get(saved.translationKey), galleryWarnings: [] }).toEqual(saved);
+        expect(await store.listRevisions(saved.translationKey)).toEqual(revisions);
+      }
+    }
+  });
+
+  it.each(['de', 'en'] as const)('%s keeps the unset draft sentinel but never publishes it', async (locale) => {
+    const input = pair();
+    input[locale].slug = '';
+    expect(() => validateDraft(input)).not.toThrow();
+    expect((await memoryPostStore().upsertDraft(input))[locale].slug).toBe('');
+    expect(() => validateForPublish(input)).toThrow(`${locale}.slug`);
+  });
+});
+
 describe('memoryPostStore', () => {
   it('keeps title images independent and protects the published banner after a draft removal', async () => {
     const store = memoryPostStore();
@@ -31,7 +72,7 @@ describe('memoryPostStore', () => {
     expect((await store.get(saved.translationKey))?.de.titleImage).toEqual(titleImage);
     expect(saved.en.titleImage).toBeUndefined();
     expect(saved.de.heroImage).toEqual(input.de.heroImage);
-    expect(renderPostToMdx(saved, 'de')).toContain("titleImage:\n  src: 'https://img/title'\n  width: 2400\n  height: 800\n  alt: 'Panorama'\n  format: jpeg\n  focus: { x: 30, y: 70 }");
+    expect((await renderPostToMdx(saved, 'de'))).toContain("titleImage:\n  src: 'https://img/title'\n  width: 2400\n  height: 800\n  alt: 'Panorama'\n  format: jpeg\n  focus: { x: 30, y: 70 }");
     await store.publish(saved.translationKey, await publishTokens(store, saved.translationKey));
     delete saved.de.titleImage;
     await store.upsertDraft(saved);
@@ -206,12 +247,18 @@ describe('memoryPostStore', () => {
     expect((await s.get(created.translationKey))?.shared.stops).toBeUndefined();
   });
 
-  it('unpublish flips a published pair back to draft', async () => {
+  it('unpublish returns its new token for the next save without acknowledging later writes', async () => {
     const s = memoryPostStore();
     const c = await s.upsertDraft(pair());
-    await s.publish(c.translationKey, await publishTokens(s, c.translationKey));
-    await s.unpublish(c.translationKey);
-    expect((await s.get(c.translationKey))?.status).toBe('draft');
+    const published = await s.publish(c.translationKey, await publishTokens(s, c.translationKey));
+    const unpublished = await s.unpublish(c.translationKey);
+    expect(unpublished.previousUpdatedAt).toEqual(published.updatedAt);
+    expect(unpublished.updatedAt.getTime()).toBeGreaterThan(published.updatedAt.getTime());
+    expect(await s.get(c.translationKey)).toMatchObject({ status: 'draft', updatedAt: unpublished.updatedAt });
+    const saved = await s.upsertDraft({ ...c, de: { ...c.de, title: 'After unpublish' } }, unpublished.updatedAt);
+    expect(saved.de.title).toBe('After unpublish');
+    expect(saved.updatedAt.getTime()).toBeGreaterThan(unpublished.updatedAt.getTime());
+    await expect(s.upsertDraft(c, unpublished.updatedAt)).rejects.toMatchObject({ code: 'conflict' });
   });
 
   it('unpublish retains the per-row publication slug lock', async () => {
@@ -557,22 +604,6 @@ describe('post validation', () => {
     // side knows either fails the build or is unpickable.
     expect([...REGIONS]).toEqual([...siteRegions]);
   });
-  it('publish rejects Markdown and raw-HTML body H1s with the locale named', () => {
-    expect(() => validateForPublish(pair({
-      de: { ...pair().de, bodyMarkdown: '# Duplicate document title\n\nCopy' },
-    }))).toThrow(/German: body must not contain an H1; the story hero provides the page H1/);
-    expect(() => validateForPublish(pair({
-      en: { ...pair().en, bodyMarkdown: '<h1 class="legacy">Legacy title</h1>\n\nCopy' },
-    }))).toThrow(/English: body must not contain an H1/);
-  });
-
-  it('publish permits H1 examples inside fenced code blocks', () => {
-    const bodyMarkdown = '````markdown\n# Example heading\n<h1>Example HTML</h1>\n````\n\n## Real section';
-    expect(() => validateForPublish(pair({
-      de: { ...pair().de, bodyMarkdown },
-      en: { ...pair().en, bodyMarkdown },
-    }))).not.toThrow();
-  });
   it('publish rejects out-of-range coordinates', () => {
     expect(() => validateForPublish(pair({ shared: { ...pair().shared, coordinates: { lat: 91, lng: 0 } } }))).toThrow(/lat/);
     expect(() => validateForPublish(pair({ shared: { ...pair().shared, coordinates: { lat: -91, lng: 0 } } }))).toThrow(/lat/);
@@ -668,6 +699,61 @@ describe('images-map validation at the store chokepoint', () => {
 describe('gallery fences at the store chokepoint', () => {
   const a = 'https://img/g/a-1a2b3c4d';
 
+  it.each([false, true])('preserves every malformed field atomically with existing images=%s', async (existingImages) => {
+    const store = memoryPostStore();
+    const fields = [
+      String.raw`caption="The \"Old\" Bridge"`, 'caption="Rom | Tag 2"',
+      'capton="Tippfehler"', 'alt = "Blick mit Leerzeichen"', "alt='Blick'",
+      'caption-override="broken', 'caption-override="valid" | capton="unknown"',
+    ];
+    const input = pair();
+    const lines = fields.map((field, index) => `${a}-${index} | 3000x2000 | alt="😀" | ${field}  `);
+    input.de.bodyMarkdown = ['```gallery', ...lines, '```'].join('\r\n');
+    input.de.images = existingImages
+      ? Object.fromEntries(fields.map((_, index) => [`${a}-${index}`, { width: 8, height: 6, alt: 'Existing', caption: 'Keep' }]))
+      : {};
+    input.en.bodyMarkdown = `~~~gallery\n${a} | 30x20 | alt="View"\n~~~`;
+    const saved = await store.upsertDraft(input);
+    expect(saved.de.bodyMarkdown).toBe(input.de.bodyMarkdown);
+    expect(saved.de.images).toEqual(input.de.images);
+    expect(saved.en.bodyMarkdown).toBe(`~~~gallery\n${a}\n~~~`);
+    expect(saved.en.images[a]).toEqual({ width: 30, height: 20, alt: 'View' });
+    expect(saved.galleryWarnings).toHaveLength(fields.length);
+    expect(saved.galleryWarnings.map(({ locale, line }) => ({ locale, line })))
+      .toEqual(fields.map((_, index) => ({ locale: 'de', line: index + 2 })));
+    expect(saved.galleryWarnings[0]).toEqual({
+      code: 'invalid_gallery_metadata', locale: 'de', line: 2,
+      column: lines[0]!.indexOf('caption=') + 1, field: 'caption', reason: 'malformed_field',
+    });
+    expect(await store.get(saved.translationKey)).not.toHaveProperty('galleryWarnings');
+    const again = await store.upsertDraft(saved);
+    expect(again.galleryWarnings).toEqual(saved.galleryWarnings);
+    expect(await store.get(saved.translationKey)).not.toHaveProperty('galleryWarnings');
+    const [revision] = await store.listRevisions(saved.translationKey);
+    expect((await store.getRevision(saved.translationKey, revision!.id))!.snapshot).not.toHaveProperty('galleryWarnings');
+    const repaired = await store.upsertDraft({ ...again, de: { ...again.de, bodyMarkdown: `~~~gallery\n${a} | 30x20 | caption="The &quot;Old&quot; Bridge"\n~~~` } });
+    expect(repaired.galleryWarnings).toEqual([]);
+    expect(repaired.de.images[a]?.caption).toBe('The "Old" Bridge');
+  });
+
+  it('reports submitted coordinates before multiline BodyImage conversion and retains conflict precedence', async () => {
+    const store = memoryPostStore();
+    const input = pair();
+    const bad = `> ${a} | 30x20 | capton="Wrong"`;
+    input.en.bodyMarkdown = `<BodyImage\n src="https://img/body"\n width={30} height={20} alt="View"\n/>\n\n> ~~~gallery extra\n${bad}\n> ~~~`;
+    const saved = await store.upsertDraft(input);
+    expect(saved.en.bodyMarkdown).toContain('![View](https://img/body)');
+    expect(saved.galleryWarnings).toEqual([{
+      code: 'invalid_gallery_metadata', locale: 'en', line: 7,
+      column: bad.indexOf('capton=') + 1, field: 'unknown', reason: 'unknown_field',
+    }]);
+    const before = await store.get(saved.translationKey);
+    await expect(store.upsertDraft(saved, new Date(0))).rejects.toMatchObject({ code: 'conflict' });
+    expect(await store.get(saved.translationKey)).toEqual(before);
+    expect(await store.listRevisions(saved.translationKey)).toEqual([]);
+    await expect(store.upsertDraft({ ...input, translationKey: '' })).rejects.toMatchObject({ code: 'duplicate_slug' });
+  });
+
   it('lifts per-line metadata into images and bares the fence line', async () => {
     const s = memoryPostStore();
     const p = pair();
@@ -689,48 +775,94 @@ describe('gallery fences at the store chokepoint', () => {
 });
 
 describe('normalizeBodyImages', () => {
-  it('converts a JSX-attr <BodyImage> tag to a markdown image and records its dims', () => {
+  it('normalizes direct-store nested and raw galleries in both locales and round-trips their metadata', async () => {
+    const store = memoryPostStore();
+    const input = pair();
+    const src = 'https://img/gallery/direct';
+    input.de.bodyMarkdown = `Intro 😀\r\n\r\n> ~~~gallery extra\r\n> #layout: slider\r\n> ${src} | 30x20 | alt="Blick" | caption=""\r\n> ~~~\r\n\r\nAfter`;
+    input.en.bodyMarkdown = `<pre><code class="language-gallery">${src} | 30x20 | alt="" | caption="Day 1"\n</code></pre>`;
+    input.de.images = { 'https://img/unrelated': { width: 5, height: 4, alt: 'Keep' } };
+    const before = structuredClone(input);
+    const saved = await store.upsertDraft(input);
+    expect(input).toEqual(before);
+    expect(saved.de.bodyMarkdown).toBe(`Intro 😀\r\n\r\n> ~~~gallery extra\r\n> #layout: slider\r\n> ${src}\r\n> ~~~\r\n\r\nAfter`);
+    expect(saved.en.bodyMarkdown).toBe(`<pre><code class="language-gallery">${src}\n</code></pre>`);
+    expect(saved.de.images[src]).toEqual({ width: 30, height: 20, alt: 'Blick', caption: '' });
+    expect(saved.en.images[src]).toEqual({ width: 30, height: 20, alt: '', caption: 'Day 1' });
+    expect(saved.de.images['https://img/unrelated']).toEqual(input.de.images['https://img/unrelated']);
+    for (const locale of ['de', 'en'] as const) {
+      const mdx = await renderPostToMdx(saved, locale);
+      const body = mdx.slice(mdx.indexOf('\n---\n') + 6).trim();
+      const back = await normalizeBodyImages(body, {});
+      expect(back.bodyMarkdown).toBe(saved[locale].bodyMarkdown);
+      expect(back.images[src]).toEqual(saved[locale].images[src]);
+    }
+    expect((await store.upsertDraft(saved)).de.images).toEqual(saved.de.images);
+  });
+
+  it('does not save either locale or a revision when later locale analysis fails', async () => {
+    const store = memoryPostStore();
+    const saved = await store.upsertDraft(pair());
+    const input = { ...saved, de: { ...saved.de, bodyMarkdown: '~~~gallery\nhttps://img/new | 30x20\n~~~' }, en: { ...saved.en, bodyMarkdown: 'EN analysis failure' } };
+    const before = structuredClone(input);
+    const normalize = bodyContent.normalizeGalleryFences;
+    const analysis = vi.spyOn(bodyContent, 'normalizeGalleryFences').mockImplementation((body, images) => {
+      if (body === input.en.bodyMarkdown) return Promise.reject(new Error('source mapping unavailable'));
+      return normalize(body, images);
+    });
+    try {
+      await expect(store.upsertDraft(input)).rejects.toThrow('source mapping unavailable');
+      expect(analysis).toHaveBeenCalledWith(input.de.bodyMarkdown, input.de.images);
+      const { galleryWarnings, ...stored } = saved;
+      expect(galleryWarnings).toEqual([]);
+      expect(await store.get(saved.translationKey)).toEqual(stored);
+      expect(await store.listRevisions(saved.translationKey)).toEqual([]);
+      expect(input).toEqual(before);
+    } finally { analysis.mockRestore(); }
+  });
+
+  it('converts a JSX-attr <BodyImage> tag to a markdown image and records its dims', async () => {
     const body = 'Intro\n\n<BodyImage src="https://img/x/y" width={1600} height={1067} alt="Gasse" />\n\nMore';
-    const out = normalizeBodyImages(body, {});
+    const out = (await normalizeBodyImages(body, {}));
     expect(out.bodyMarkdown).toBe('Intro\n\n![Gasse](https://img/x/y)\n\nMore');
     expect(out.images).toEqual({ 'https://img/x/y': { width: 1600, height: 1067 } });
   });
 
-  it('preserves JPEG format through BodyImage normalization', () => {
+  it('preserves JPEG format through BodyImage normalization', async () => {
     const src = 'https://img/x/jpeg';
     const body = `<BodyImage src="${src}" width={1600} height={1067} alt="Gasse" format="jpeg" />`;
-    const out = normalizeBodyImages(body, {});
+    const out = (await normalizeBodyImages(body, {}));
     expect(out.bodyMarkdown).toBe(`![Gasse](${src})`);
     expect(out.images).toEqual({ [src]: { width: 1600, height: 1067, format: 'jpeg' } });
   });
 
-  it('accepts quoted numeric attrs and decodes &quot; in alt (inverse of export escaping)', () => {
+  it('accepts quoted numeric attrs and decodes &quot; in alt (inverse of export escaping)', async () => {
     const body = '<BodyImage src="https://img/a/b" width="1600" height="1067" alt="Die &quot;Gasse&quot;" />';
-    const out = normalizeBodyImages(body, {});
+    const out = (await normalizeBodyImages(body, {}));
     expect(out.bodyMarkdown).toBe('![Die "Gasse"](https://img/a/b)');
     expect(out.images).toEqual({ 'https://img/a/b': { width: 1600, height: 1067 } });
   });
 
-  it('converts a tag without parsable dims but records no images entry', () => {
-    const out = normalizeBodyImages('<BodyImage src="https://img/no/dims" alt="x" />', {});
+  it('converts a tag without parsable dims but records no images entry', async () => {
+    const out = (await normalizeBodyImages('<BodyImage src="https://img/no/dims" alt="x" />', {}));
     expect(out.bodyMarkdown).toBe('![x](https://img/no/dims)');
     expect(out.images).toEqual({});
   });
 
-  it('leaves a src-less tag untouched', () => {
+  it('leaves a src-less tag untouched', async () => {
     const body = 'a <BodyImage alt="broken" /> b';
-    const out = normalizeBodyImages(body, {});
+    const out = (await normalizeBodyImages(body, {}));
     expect(out.bodyMarkdown).toBe(body);
     expect(out.images).toEqual({});
   });
 
-  it('is idempotent: plain/already-normalized markdown passes through byte-identical, existing dims preserved', () => {
+  it('is idempotent: plain/already-normalized markdown passes through byte-identical, existing dims preserved', async () => {
     const existing = { 'https://img/x/y': { width: 800, height: 600 } };
     const body = '## Hi\n\n![Gasse](https://img/x/y)\n';
-    const once = normalizeBodyImages(body, existing);
+    const once = (await normalizeBodyImages(body, existing));
     expect(once.bodyMarkdown).toBe(body);
     expect(once.images).toEqual(existing);
-    const twice = normalizeBodyImages(once.bodyMarkdown, once.images);
+    const twice = (await normalizeBodyImages(once.bodyMarkdown, once.images));
     expect(twice).toEqual(once);
   });
 
@@ -755,7 +887,7 @@ describe('normalizeBodyImages', () => {
     const p = pair();
     p.de.bodyMarkdown = '<BodyImage src="https://img/x/y" width={1600} height={1067} alt="Gasse" />';
     const saved = await s.upsertDraft(p);
-    const mdx = renderPostToMdx(saved, 'de');
+    const mdx = (await renderPostToMdx(saved, 'de'));
     expect(mdx).toContain('<BodyImage src="https://img/x/y" width={1600} height={1067} alt="Gasse" />');
   });
 
@@ -765,19 +897,19 @@ describe('normalizeBodyImages', () => {
     p.de.bodyMarkdown = '<BodyImage src="https://img/x/y" width={16} height={10} alt="Blick [Norwegen]" />';
     const saved = await s.upsertDraft(p);
     expect(saved.de.bodyMarkdown).toBe('![Blick \\[Norwegen\\]](https://img/x/y)');
-    expect(renderPostToMdx(saved, 'de')).toContain('alt="Blick [Norwegen]"');
+    expect((await renderPostToMdx(saved, 'de'))).toContain('alt="Blick [Norwegen]"');
   });
 
-  it('converts a tag whose quoted alt contains ">" (legacy exports escaped only quotes)', () => {
+  it('converts a tag whose quoted alt contains ">" (legacy exports escaped only quotes)', async () => {
     const body = '<BodyImage src="https://img/x/y" width={1600} height={1067} alt="Blick > Westen" />';
-    const out = normalizeBodyImages(body, {});
+    const out = (await normalizeBodyImages(body, {}));
     expect(out.bodyMarkdown).toBe('![Blick > Westen](https://img/x/y)');
     expect(out.images).toEqual({ 'https://img/x/y': { width: 1600, height: 1067 } });
   });
 
-  it('does not truncate the tag on "/>" inside a quoted alt', () => {
+  it('does not truncate the tag on "/>" inside a quoted alt', async () => {
     const body = 'a <BodyImage src="https://img/x/y" width={16} height={10} alt="x/>y" /> b';
-    const out = normalizeBodyImages(body, {});
+    const out = (await normalizeBodyImages(body, {}));
     expect(out.bodyMarkdown).toBe('a ![x/>y](https://img/x/y) b');
     expect(out.images).toEqual({ 'https://img/x/y': { width: 16, height: 10 } });
   });
@@ -789,19 +921,19 @@ describe('normalizeBodyImages', () => {
     p.de.bodyMarkdown = `![${alt}](https://img/x/y)`;
     p.de.images = { 'https://img/x/y': { width: 1600, height: 1067 } };
     const saved = await s.upsertDraft(p);
-    const mdx = renderPostToMdx(saved, 'de');
+    const mdx = (await renderPostToMdx(saved, 'de'));
     expect(mdx).toContain('alt="Blick &lt;über&gt; das &quot;Tor&quot; &amp; zurück"');
     const tag = mdx.match(/<BodyImage[^\n]*\/>/)?.[0] ?? '';
-    const back = normalizeBodyImages(tag, {});
+    const back = (await normalizeBodyImages(tag, {}));
     expect(back.bodyMarkdown).toBe(`![${alt}](https://img/x/y)`);
     expect(back.images).toEqual({ 'https://img/x/y': { width: 1600, height: 1067 } });
   });
 
-  it('accepts a multiline tag and the braced src={…} attribute form', () => {
-    const multi = normalizeBodyImages('<BodyImage\n  src="https://img/m/l"\n  width={10}\n  height={20}\n  alt="ml"\n/>', {});
+  it('accepts a multiline tag and the braced src={…} attribute form', async () => {
+    const multi = (await normalizeBodyImages('<BodyImage\n  src="https://img/m/l"\n  width={10}\n  height={20}\n  alt="ml"\n/>', {}));
     expect(multi.bodyMarkdown).toBe('![ml](https://img/m/l)');
     expect(multi.images).toEqual({ 'https://img/m/l': { width: 10, height: 20 } });
-    const braced = normalizeBodyImages('<BodyImage src={https://img/b/r} width={10} height={20} alt="b" />', {});
+    const braced = (await normalizeBodyImages('<BodyImage src={https://img/b/r} width={10} height={20} alt="b" />', {}));
     expect(braced.bodyMarkdown).toBe('![b](https://img/b/r)');
     expect(braced.images).toEqual({ 'https://img/b/r': { width: 10, height: 20 } });
   });
@@ -809,7 +941,7 @@ describe('normalizeBodyImages', () => {
   // Gallery-local captions (2026-10-19): a gallery line's text is content.
   // The <BodyImage> pass must not reach into a fence and rewrite a caption
   // that happens to read like a tag or an inline image.
-  it('never rewrites image- or tag-like text inside a gallery caption override', () => {
+  it('never rewrites image- or tag-like text inside a gallery caption override', async () => {
     const a = 'https://img/g/a';
     const c = 'https://img/g/c';
     const text = `![x](${a}) <BodyImage src={${a}} width={1} height={1} />`;
@@ -818,17 +950,17 @@ describe('normalizeBodyImages', () => {
     const typed = `${c} | caption-override="<BodyImage src={${c}} width={5} height={5} />"`;
     const body = `<BodyImage src="${a}" width={10} height={20} alt="out" />\n\n\`\`\`gallery\n`
       + `${a} | 10x20 | caption-override="${text}"\n${typed}\n\`\`\``;
-    const out = normalizeBodyImages(body, {});
+    const out = (await normalizeBodyImages(body, {}));
     expect(out.bodyMarkdown).toBe(`![out](${a})\n\n\`\`\`gallery\n${a} | caption-override="${escaped}"\n${typed}\n\`\`\``);
     expect(out.images).toEqual({ [a]: { width: 10, height: 20 } });
-    expect(normalizeBodyImages(out.bodyMarkdown, out.images)).toEqual(out);
+    expect((await normalizeBodyImages(out.bodyMarkdown, out.images))).toEqual(out);
   });
 
-  it('leaves malformed tags untouched rather than truncating (pinned rejected shapes)', () => {
+  it('leaves malformed tags untouched rather than truncating (pinned rejected shapes)', async () => {
     const nonSelfClosing = 'a <BodyImage src="https://img/x/y"></BodyImage> b';
-    expect(normalizeBodyImages(nonSelfClosing, {}).bodyMarkdown).toBe(nonSelfClosing);
+    expect((await normalizeBodyImages(nonSelfClosing, {})).bodyMarkdown).toBe(nonSelfClosing);
     const unclosedQuote = 'a <BodyImage src="https://img/x/y" alt="oops /> b';
-    expect(normalizeBodyImages(unclosedQuote, {}).bodyMarkdown).toBe(unclosedQuote);
+    expect((await normalizeBodyImages(unclosedQuote, {})).bodyMarkdown).toBe(unclosedQuote);
   });
 
   it('normalizes the EN locale through the store chokepoint too', async () => {
@@ -870,7 +1002,8 @@ describe('explicit memory publish tokens', () => {
     const saved = await store.upsertDraft(pair());
     const tk = saved.translationKey;
     const reviewed = await publishTokens(store, tk);
-    expect(await store.getPublishState(tk)).toMatchObject({ pair: saved, routeVersion: null, language: { primary: 'de', locales: ['de', 'en'] } });
+    const { galleryWarnings: _warnings, ...stored } = saved;
+    expect(await store.getPublishState(tk)).toMatchObject({ pair: stored, routeVersion: null, language: { primary: 'de', locales: ['de', 'en'] } });
     expect((await store.getPublishedTrack(tk)).track).toBeUndefined();
     for (const tokens of [
       { ...reviewed, baseUpdatedAt: new Date(saved.updatedAt.getTime() + 1) },

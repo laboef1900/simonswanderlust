@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { MARKDOWN_OPTIONS, renderMarkdown } from './render-markdown';
 import { SHIKI_CSS } from './shiki-classes';
-import astroConfig from '../../astro.config.mjs';
+import { MARKDOWN_FEATURES } from './markdown-features';
+import { MARKDOWN_OPTIONS, renderMarkdown } from './render-markdown';
 
-describe('MARKDOWN_OPTIONS parity with astro.config.mjs', () => {
-  // The build reads astro.config.mjs; the uploader's draft preview reads
-  // MARKDOWN_OPTIONS. A silent divergence means previews and the live site
-  // disagree about what a ```gallery fence is. Fix a failure here by editing
-  // BOTH files, never by relaxing this assertion.
-  it('matches the markdown block the build runs with', () => {
-    expect(astroConfig.markdown).toEqual(MARKDOWN_OPTIONS);
+// astro.config.mjs uses MARKDOWN_OPTIONS itself (#285), so build and preview
+// cannot diverge; what remains to pin is the processor wiring and gallery class.
+describe('MARKDOWN_OPTIONS', () => {
+  it('passes source-analysis features through the actual Satteri processor option API', () => {
+    expect(MARKDOWN_OPTIONS.processor.name).toBe('satteri');
+    expect(MARKDOWN_OPTIONS.processor.options.features).toEqual(MARKDOWN_FEATURES);
+    expect(MARKDOWN_FEATURES).toEqual({ gfm: true, smartPunctuation: true });
   });
 
   it("excludes 'gallery' from syntax highlighting so the fence keeps its class", () => {
@@ -60,6 +60,18 @@ describe('renderMarkdown', () => {
   it('gives headings github-slugger ids (Toc anchor parity with the build)', async () => {
     const html = await renderMarkdown('## Anreise & Tag 1');
     expect(html).toContain('<h2 id="anreise--tag-1">');
+  });
+
+  it('deduplicates heading anchors within a story without leaking them into another render', async () => {
+    const body = '## Arrival\n\nFirst stop.\n\n## Arrival\n\nSecond stop.';
+    const first = await renderMarkdown(body);
+    await renderMarkdown('## Arrival\n\nAn unrelated story.');
+    const repeated = await renderMarkdown(body);
+    const concurrent = await Promise.all([renderMarkdown(body), renderMarkdown(body)]);
+    for (const html of [first, repeated, ...concurrent]) {
+      expect([...html.matchAll(/<h2 id="([^"]+)"/g)].map((match) => match[1]))
+        .toEqual(['arrival', 'arrival-1']);
+    }
   });
 
   it('renders ![alt](url) as <img src> — the shape transformBodyImages upgrades', async () => {
