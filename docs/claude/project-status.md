@@ -605,3 +605,9 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
   VoiceOver pass (`docs/superpowers/plans/2026-11-01-issue-310-screen-reader-script.md`, fixture
   `uploader/scripts/journey-sr-fixture.mjs`) is still owed; TalkBack waived with Android until
   2027-05-01.
+- **Tooling ready, owner run pending (G6):** the packaged native-lock harness takes
+  `--data-root` and runs its ownership matrix on bind-mounted subdirectories of a real directory
+  (passed on native amd64/arm64 ext4 runners). The owner qualifies the server's `/data`
+  filesystem with `docs/superpowers/plans/2026-11-01-g6-deployment-mount-qualification.md`
+  before #486–#489 are deployed.
+
