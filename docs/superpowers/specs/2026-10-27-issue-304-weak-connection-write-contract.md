@@ -989,9 +989,9 @@ actual deployment mount passed.
 
 | Acceptance | Implementation boundary | Added/updated regression evidence to execute |
 |---|---|---|
-| Create-only UUID post identity; empty slugs do not merge independent attempts | `server.ts` validates canonical create identity; `PostSaveOptions.createOnly` checks inside memory/PG serialization before slug collision checks | `write-receipts.test.ts`, raw protocol cases in `server.test.ts` |
-| Required captured owner/save ID, writer-only latest receipt, atomic read projection | `posts.ts` repeatable-read projection and `pages.ts` single-query projection; owner fence before content/revision/build writes; no-store responses | `write-receipts.test.ts`, `server.test.ts`, `write-recovery.test.ts` |
-| Every competing writer invalidates evidence | `touchPostPair`, receipt-less importer saves, publish/unpublish/language transitions, page saves; offline restore clears preserved v1 pages too | `write-receipts.test.ts`, real-main GPX receipt invalidation in `gpx-main-boot.integration.test.ts`, `backup.integration.test.ts` |
+| Create-only UUID post identity; empty slugs do not merge independent attempts | `server.ts` validates canonical create identity; `PostSaveOptions.createOnly` checks inside memory/PG serialization before slug collision checks | `write-receipts.integration.test.ts`, raw protocol cases in `server.test.ts` |
+| Required captured owner/save ID, writer-only latest receipt, atomic read projection | `posts.ts` repeatable-read projection and `pages.ts` single-query projection; owner fence before content/revision/build writes; no-store responses | `write-receipts.integration.test.ts`, `server.test.ts`, `write-recovery.test.ts` |
+| Every competing writer invalidates evidence | `touchPostPair`, receipt-less importer saves, publish/unpublish/language transitions, page saves; offline restore clears preserved v1 pages too | `write-receipts.integration.test.ts`, real-main GPX receipt invalidation in `gpx-main-boot.integration.test.ts`, `backup.integration.test.ts` |
 | One bounded probe, no automatic write replay, late own-save recognition | `write-recovery.js` retains unresolved attempts and exact snapshots; unavailable probes allow only manual Check again; ordinary acknowledgements use the same owner/generation gate | `write-recovery.test.ts`, `editor-dom.test.ts`, `language-admin-dom.test.ts`, `editor-gpx.test.ts` |
 | Preserve-and-compare without cleaning newer edits | Shared controller compares current form, attempts and stored text; stored-version adoption creates a separate recovery context first and refuses if preservation fails | `write-recovery.test.ts` includes newer edits, older late attempt, A→B late acknowledgement retention, quota failure and private legacy bytes |
 | All upload entry points use immutable account-scoped identities | `media-api.js` plus `upload-recovery.js`; Media, editor hero/body, About body and title-image consumers; newer hero selection/title alt/framing are preserved | `media-api.test.ts`, `upload-recovery.test.ts`, inline adoption cases in `editor-dom.test.ts`; real-browser all-caller gate below |
@@ -1010,7 +1010,7 @@ The actual #288 generic-page branch is integrated, not copied: all four registry
 the same page receipt/options contract, generic editor and upload identity. Publish,
 unpublish, deletion and language activation invalidate receipts. Draft saves do not build;
 committed actions use #297 HTTP 200/projected build outcomes, while real 5xx remain Unknown.
-The merged generic-page lifecycle/DOM tests, `write-receipts.test.ts` and strict bootstrap
+The merged generic-page lifecycle/DOM tests, `write-receipts.integration.test.ts` and strict bootstrap
 tests cover those integration boundaries; no worker execution is claimed.
 The actual #369 dependency/proxy branch (including the #347 sharp security floor) is
 also integrated. Every server construction chooses its immediate-peer trust policy;

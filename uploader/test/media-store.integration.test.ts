@@ -88,26 +88,65 @@ maybe('pgMediaStore (integration)', () => {
     expect(await store.folders()).toEqual([]);
   });
 
-  it('returns its own UPDATE result rather than a later writer observed by a separate get', async () => {
+  it('returns its own committed row and description delta even when another writer lands before the acknowledgement', async () => {
     await add('conditional');
     let intervened = false;
     const racing = {
-      async query(text: string, values?: unknown[]) {
-        const result = await pool.query(text, values);
-        if (!intervened && text.startsWith('UPDATE media SET')) {
-          intervened = true;
-          await store.patch('conditional', { title: 'later' });
-        }
-        return result;
+      query: pool.query.bind(pool),
+      async connect() {
+        const client = await pool.connect();
+        return Object.assign(Object.create(client), {
+          async query(text: string, values?: unknown[]) {
+            const result = await client.query(text, values);
+            if (!intervened && text === 'COMMIT') {
+              intervened = true;
+              await store.patch('conditional', { title: 'later', caption: { de: 'later', en: 'later EN' } });
+            }
+            return result;
+          },
+        });
       },
-      connect: pool.connect.bind(pool),
     } as unknown as DbPool;
     const saved = await pgMediaStore(racing, { baseUrl: BASE }).patchConditional('conditional', {
-      version: 1, patch: { title: 'mine' }, expect: { title: '' },
+      version: 1, patch: { title: 'mine', caption: { de: 'mine' } }, expect: { title: '', caption: { de: '' } },
     });
     expect(intervened).toBe(true);
     expect(saved.title).toBe('mine');
-    expect((await store.get('conditional'))?.title).toBe('later');
+    expect(saved.caption).toEqual({ de: 'mine', en: '' });
+    expect(saved.changedDescriptions).toEqual({ de: { alt: false, caption: true }, en: { alt: false, caption: false } });
+    expect((await store.get('conditional'))?.caption).toEqual({ de: 'later', en: 'later EN' });
+  });
+
+  it('compares normalized values for no-op and reverted description writes', async () => {
+    await add('conditional', { alt: { de: 'same' } });
+    const unchanged = await store.patchConditional('conditional', {
+      version: 1, patch: { alt: { de: 'sa\u0000me' } }, expect: { alt: { de: 'same' } },
+    });
+    expect(unchanged.changedDescriptions).toEqual({ de: { alt: false, caption: false }, en: { alt: false, caption: false } });
+    await store.patchConditional('conditional', { version: 1, patch: { alt: { de: 'new' } }, expect: { alt: { de: 'same' } } });
+    const reverted = await store.patchConditional('conditional', { version: 1, patch: { alt: { de: 'same' } }, expect: { alt: { de: 'new' } } });
+    expect(reverted.changedDescriptions).toEqual({ de: { alt: true, caption: false }, en: { alt: false, caption: false } });
+  });
+
+  it('does not manufacture a successful delta when COMMIT acknowledgement is lost', async () => {
+    await add('conditional');
+    const uncertain = {
+      query: pool.query.bind(pool),
+      async connect() {
+        const client = await pool.connect();
+        return Object.assign(Object.create(client), {
+          async query(text: string, values?: unknown[]) {
+            const result = await client.query(text, values);
+            if (text === 'COMMIT') throw new Error('commit acknowledgement lost');
+            return result;
+          },
+        });
+      },
+    } as unknown as DbPool;
+    await expect(pgMediaStore(uncertain, { baseUrl: BASE }).patchConditional('conditional', {
+      version: 1, patch: { caption: { de: 'committed' } }, expect: { caption: { de: '' } },
+    })).rejects.toThrow('commit acknowledgement lost');
+    expect((await store.get('conditional'))?.caption.de).toBe('committed');
   });
   it('round-trips every column, including tags and EXIF', async () => {
     const saved = await add('library/2025/a', {

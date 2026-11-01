@@ -237,9 +237,12 @@ does not encrypt storage or prevent direct inspection by someone with profile ac
 Media metadata PATCH uses only `{ conditional: { version: 1, patch, expect } }`. Missing,
 extraneous or legacy top-level mutable fields are refused before mutation. Shared pure
 canonicalization defines text/control/length, tag ordering/deduplication and NFC folder
-comparison. One conditional database UPDATE checks all changed fields atomically; a mismatch
-refuses the whole patch. A conflict's current item uses the same GPS/uploader redaction as
-ordinary reads. Successful responses require `conditionalVersion: 1`; a nested envelope
+comparison. One row-locked transaction reads the stored preimage and executes the conditional
+UPDATE, checking all changed fields atomically; a mismatch refuses the whole patch.
+`changedDescriptions` compares that normalized preimage to this write's returned row before
+commit, never to a later reread. Folder ancestors commit in the same transaction.
+A conflict's current item uses the same GPS/uploader redaction as ordinary reads.
+Successful responses require `conditionalVersion: 1`; a nested envelope
 cannot mutate an old handler's top-level fields, and a missing marker never cleans local edits.
 Detail, single AI and bulk AI callers all participate; no schema column or dump-version change
 is involved. Unknown outcomes get one read and field-by-field comparison, not automatic replay.
@@ -291,6 +294,20 @@ must invalidate the same operational evidence offline before traffic resumes.
   action. The existing irreversible promotion boundary is unchanged. Host write access to `/data`
   remains trusted; rollback reverts feature code without rewriting data or downgrading codecs.
   See the owner-approved #316 contract and `ARCHITECTURE.md`.
+- **Media impact observations (#318)** — authenticated detail GET/PATCH responses are `no-store`.
+  `impact` contains only availability, the three story scopes, story key/title, and enumerated
+  per-locale gallery/following-caption/hero-title/inline counts. Mode, requested/committed
+  coverage and working/snapshot bodies come from one consistent story-store read and use
+  the actual renderer classifier; pages and retained ineligible translations are not reach.
+  Existing usage/deletion guards are unchanged. `livePending` is admin-only (absent, not null,
+  for authors); unknown release or failed comparison is null, not false. The existing
+  admin summary owns aggregate pending counts; no extra build/status endpoint is added.
+  The **owner-approved precise AC4 amendment** preserves camera/lens/capture fields on the
+  whole author Media item while GPS/uploader values remain null. The new impact projection
+  itself contains none of those fields. Optional enrichment cannot undo an acknowledged
+  write or replace its own result; unavailable impact is not an empty usage list.
+  Shared `PublicationRefresh` refreshes only impact/pending observations, never form values
+  or conditional expectations. No Media read/save triggers a rebuild or grants Publish.
 - **Media library** — browsing (`GET /media`, `GET /media/items/*`) and editing a photo's own
   metadata are **session-level**, a deliberate downgrade from the admin-only `GET /images` they
   replace: the gallery picker needs authors to browse. What makes that safe is the redaction

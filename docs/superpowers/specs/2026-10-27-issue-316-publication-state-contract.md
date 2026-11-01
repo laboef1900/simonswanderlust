@@ -607,6 +607,15 @@ new reconciliation gate, foreign token adoption or offline queue is added here.
   returned content/token into a dirty form. Lists/Desk read `/posts`; Media refreshes only the
   selected detail's impact and (admin) livePending, preserving dirty metadata fields. Desk/Settings
   admins refresh summary and #297 status under the same schedule; authors never request them.
+- Media reuses the selected item's PATCH acknowledgement, conflict observation, AI preflight
+  GET or the conditional protocol's one bounded recovery GET for the projection. These settle
+  through the shared lifecycle without a trailing projection GET; an invalid/failed observation
+  is unavailable, not permission to probe again. Only the conditional protocol can establish a
+  saved outcome or offer comparison choices. Initial detail observation is a separate read;
+  valid acknowledgements and unsupported old-server successes add no recovery reads. Manual,
+  focus and 30-second refresh remain enabled, and a nested selection/non-item action still
+  requests its required post-action observation. Shared generation fencing rejects older item
+  responses as well as older background responses without adopting fields into the form.
 - Use a local request generation per active resource. Invalidate it on a local action start,
   completion, navigation or detail selection change. Discard late/out-of-order responses and do
   not launch projection refresh during a local mutation; refresh once it settles. No token is
@@ -977,6 +986,255 @@ at its normal deadline; the lock was released and a later deletion rebuilt succe
 The correct-origin thumbnail and public alias returned200. Sessions, tabs, cookies,
 interceptions, app and fixture rows were cleaned; database/data/evidence remain retained.
 
+## 22. #318 implementation handoff (2026-10-29)
+
+The Media detail GET/PATCH source adds the exact §8 impact union and admin-only nullable
+`livePending`, reusing `classifyRow`, `galleryPending` and the existing admin summary.
+`PostStore.mediaImpactCorpus()` captures language mode, authoritative coverage and working/
+published rows in a single consistent read (PostgreSQL REPEATABLE READ; memory exclusive
+language read). It is story-only and has no cross-request working-content cache.
+`ConditionalMediaResult` extends the acknowledged Media item with `changedDescriptions`;
+the conditional write captures the normalized preimage under `FOR UPDATE` and returns its
+own postimage/delta from the same transaction. Internal unconditional patches are unchanged.
+
+The detail panel consumes the actual shared `PublicationRefresh` lifecycle, installs only
+observations, preserves conditional expectations/dirty fields, and retains this session's
+acknowledged write delta separately. DE/EN copy explains scope, occurrence versus distinct-story
+counts, caption inheritance, unchanged locales, removed newer-draft uses and no-gallery effects.
+Only existing authorized `usedIn` titles become editor links. Summary rendering remains the
+#317 implementation beside Rebuild, with #297 build status independent.
+
+The precise owner-approved §8.5 amendment is implemented as specified, not as a claim that
+the original literal whole-response AC4 is satisfied. Exact GET/PATCH projection-key assertions
+sit beside whole-item camera/lens/capture preservation and null GPS/uploader assertions.
+Regression source also covers fresh draft classification, conditional deltas/races/unknown
+commit outcomes, pending content changes/reverts/captured-release behavior, optional enrichment
+failure, dirty detail refresh, stale responses, and author-only request/control boundaries.
+
+**Verification status:** no checks, builds, installs or runtime exercises were run by the
+#318 implementation worker. These are source/test additions, not passing-test or rendered-page
+evidence. Parent qualification must run the full PostgreSQL-enabled suites, Astro checks/build,
+real browser and served-gallery protocol, actual-PR review and final-head CI before delivery.
+No schema/dump change, rendering-policy change, deployment or owner-data mutation is authorized.
+
+## 23. #318 isolated qualification (2026-10-29)
+
+The parent exercised actual main/PostgreSQL/Astro/Chromium at product `73bb0f0`;
+the retained runtime evidence contains 71 observations, including 43 recorded API
+results, served HTML and real release manifests. These are bounded evidence counts,
+not total-run request counts. Complete uploader/PostgreSQL/site checking and a real
+build passed at that product (`wave1793301326468_22276`); integrated final-head checks,
+CI and independent PR review are recorded separately in the execution ledger.
+
+A DE caption change measured two distinct published gallery stories and one draft,
+without counting repeated occurrences twice or changing EN. Hero, inline and About
+descriptions remained local and their served HTML byte-identical. A real successful
+build included the DE caption and cleared pending counts; an edit made while the
+actual Astro child was paused after snapshot capture remained pending after that
+build. A genuine release-write failure preserved the current release and pending
+counts, and keyboard-operated recovery cleared only included changes.
+
+The amended AC4 was exercised against exact author GET/PATCH shapes: the impact
+projection exposes only approved fields, `livePending` is absent, GPS/uploader
+values are null, and existing camera/lens/capture metadata remains visible.
+Admin summary/build status refused authors. Dirty detail input and conditional
+expectations survived refresh and delayed older responses. Twenty-four refreshes
+coalesced to one item read; an ordinary Save performed one PATCH and no item-read
+echo. A real cancelled usage query after a committed PATCH returned acknowledged
+saved details with unavailable optional impact, rather than pretending the save failed.
+
+Desktop and 320px captures, keyboard focus and recovery were inspected. Single/bulk
+AI inference was not exercised in this supplement: no worker-owned provider was
+available, and an owner's model was not contacted. #306's separately recorded AI
+interruption evidence is not relabeled as #318 inference coverage.
+
+The workstation's Node installation was externally replaced during this run:
+the old process's deleted executable path caused a genuine `build_unavailable`.
+Restarting only the owned app under Node26.13.0 (unchanged ABI147/NAPI10) restored
+actual publish/rebuild; no fallback or product change was introduced. Earlier
+unsuccessful fixture probes and this interruption remain disclosed. All owned
+processes/tabs stopped, paused child resumed, query lock rolled back and exact
+filesystem permissions restored; synthetic fixtures remain retained. No owner-data,
+deployment or physical accessibility qualification is claimed.
+
+### Independent-review reauthentication and focus repairs
+
+Independent PR review found that an initialized Media page did not restart its stopped
+detail observer after same-owner reauthentication, and that replacing the impact subtree
+discarded keyboard focus. Both consumer regressions failed before repair. Reactivation
+now restarts read-only observation without adopting dirty fields; repaint restores the
+equivalent focused control, falls back to Refresh when its link disappears, and never
+takes focus from outside the impact section.
+
+Actual qualification at `552f76e` expired only a fresh synthetic session, observed the real
+item401, then signed in and resumed. Resume made one auth, list, folders and selected-item
+read with zero mutations; both dirty input nodes/text survived. The next explicit Save
+made exactly one PATCH200 with original conditional expectations and no item-read echo.
+Native Enter retained Refresh focus, bounds and scroll at desktop and320px. Automatic
+observation retained a focused story link, fell back after a real usage-removal PUT, and
+left an outside input focused. Native visible focus outlines were inspected.
+
+The managed headless browser did not emit native window-focus events on foreground
+switching; that listener was exercised with an explicitly disclosed synthetic focus event
+and genuine reads, not represented as native window-focus proof. Apps, tabs, sessions and
+interception were cleaned up; private evidence records harness limitations.
+
+### Integrated pending-recovery qualification
+
+Actual `cb517fe` qualification combined the inherited Media recovery controls with the
+impact observer in the real main process. Two native tabs and a genuinely published
+referencing story produced409, then a committed200 held at the response boundary. An
+older genuine Check stored response released after acknowledgement did not reopen the
+comparison, replace Mine, or alter the acknowledged description effects and story impact.
+The next EN-caption Save sent one PATCH containing only that leaf and its empty expectation.
+Holding its real acknowledgement for32.004seconds produced zero observer requests or
+automatic writes and retained identical dirty input nodes.
+
+After acknowledgement, native Refresh Enter made one item GET at each desktop/320px width
+with zero writes, preserving visible focus, bounds and scroll. HTTP and independent
+`title`/`caption_de`/`caption_en` SQL reads agreed. The evidence distinguishes an expired
+preliminary old-GET hold from the successful ordering run and the separate32-second pause
+proof. Sessions, tabs, cookies, app and interception were closed; synthetic fixtures remain.
+
+### Integrated panel-lifetime qualification
+
+Actual `4a1c305` qualification exercised the inherited panel-instance fence with the impact
+observer enabled, two native tabs, two uploaded photos and a published bilingual referencing
+story. Held genuine200 responses left new Save buttons disabled; clean reopened panels
+adopted canonical values, while dirty reopened panels kept their inputs and original bases.
+A discarded genuine409 did not attach its comparison to the replacement panel. Subsequent
+caption-only PATCHes omitted title and preserved the acknowledged or competing stored title.
+
+Native Refresh and two actual32-second observer windows made reads only, retained dirty
+inputs/bases and continued to show the published story's impact. Same-panel newer typing
+remained dirty and its next PATCH expected exactly the acknowledged caption. Final HTTP and
+PostgreSQL readbacks agreed. Settled desktop/320px captures showed visible keyboard focus,
+pending controls and no horizontal overflow. The retained evidence distinguishes genuine
+response holds and interrupted harness attempts; it does not claim a held GET in the run
+where none arrived. Native logout, zero remaining sessions/cookies, closed tabs, removed
+interceptions and a stopped app complete the isolated run; synthetic fixtures remain.
+
+### Listing reconciliation and detail-resource retirement
+
+Actual `bb1e7f1` qualification combined the restored listing reload with impact observation.
+Clean Save and genuine409 → Use stored reconciled title/folder filters, total and selection.
+A held genuine listing200 retained newer dirty nodes, focus/caret, scroll and original
+comparison bases while the grid updated; subsequent leaf-only Saves preserved title/folder.
+Refresh and32.097seconds of observation made two GETs and no PATCH. Another photo showed its
+own empty impact rather than the first photo's published-story impact.
+
+The same run exposed an old-photo GET after its clean detail panel left the query. Safe
+non-rendering was not enough for §11's selected-detail-only contract. The renderer now
+clears an absent clean detail key before comparing observer resources, invalidating its
+generation; the early dirty guard still preserves a visible edited panel. The consumer
+regression failed before repair; all65 Media DOM cases passed afterward.
+
+Actual `ee8bfac` qualification observed32.051seconds after clean removal with zero new
+old-photo GETs or mutations. The genuine held item200 was canceled with `ERR_ABORTED`;
+this is cancellation/fencing proof, not delivery of an unabortable late response. Selecting
+the same photo again issued a fresh GET and restored its correct bilingual story impact.
+A dirty panel survived query changes and32.123seconds of read-only observation; a genuine
+held query response retained exact nodes, focus/caret and scroll. Its caption-only Save
+kept the original caption expectation and preserved an independently changed title, then
+retired the now-clean absent panel for32.125seconds with zero requests.
+
+Negative node-identity probes mixed browser execution realms and remain in the evidence.
+Same-realm reference checks and an additional same-realm held-query trial established the
+actual invariant without deleting the failed probes. Desktop/320px captures, correct-origin
+thumbnail200s, public DE/EN200s and HTTP/SQL agreement are retained. Logout, zero sessions,
+closed cookies/tabs, removed interception and a stopped app completed both isolated runs.
+
+### Overlapping comparison settlement
+
+Final review found the opposite recovery ordering still mattered: an older Check stored
+read settling before a newer Use mine acknowledgement advanced the observer generation,
+so the valid new impact projection was discarded. Beginning an action and accepting a
+projection still fence older observations; completing an action now only decrements the
+pending count and preserves the existing refresh scheduling. Both successful and failed
+old-read regressions failed before repair; all79 Media DOM/observer cases passed afterward.
+
+Actual `59fa6e7` qualification held genuine server responses around two real409 conflicts.
+An old comparison GET200 was delivered, or failed at the browser connection boundary,
+before the successful PATCH acknowledgement. A real second draft acquired the photo
+between the snapshots, making the old and fresh projections distinguishable. The immediate
+acknowledgement UI showed the new story links/counts, changed descriptions and live pending
+state, with clean acknowledged values and untouched EN. Each primary interaction made
+one comparison GET and two explicit PATCHes; checking the clean base made no request.
+The injected connection failure is not claimed as a server outage.
+
+A32.197-second held acknowledgement caused no observer reads or automatic writes.
+Dirty observation for32.044seconds and a separate narrow manual Refresh retained exact
+nodes, original base, focus/caret and scroll; the next leaf-only Save preserved the
+independently changed title. Clean-resource retirement for32.007seconds made no old-item
+reads or writes, and selecting B showed B's impact only. Real DE/EN public pages retained
+their galleries. HTTP and independent SQL agreed. Stable desktop/320px captures and
+corrected fixture probes remain recorded; logout200, zero sessions, closed tabs/cookies,
+detached interceptions and a stopped app completed the run.
+
+The same integrated stack moves database-backed mixed test files into the existing
+serialized integration project. No assertions or production bootstrap checks were
+weakened. Normal uploader project scheduling passed all152files/3,661tests and the full
+six-step check at this source; CI run `40981244277` passed separately.
+
+### Cross-photo action isolation
+
+A further complete-PR review found that title-only bulk AI work on B could invalidate
+selected photo A's pending Save projection. Item GET/PATCH wrappers now advance the
+observation generation only for the selected resource. Every action still contributes
+to pending-read suppression; same-resource actions and selection changes retain their
+fences. Both consumer regressions failed with A's old authorized story link before the
+repair, then passed with the fresh link. All 81 Media DOM/observer cases passed.
+
+Actual `2347b7a` qualification exercised the real all-view, title-only AI dialog while A's
+caption Save acknowledgement was held: B's conditional GET remained pending in one case,
+and B's GET/PATCH had settled in the other. Both immediately showed A's fresh authorized
+story link/count, changed descriptions and DE live pending state. Each case made one
+A PATCH, zero rescue A GETs, one B GET and one B PATCH; clean-save probes made no request.
+B changed title only. Manual Refresh preserved A, and selecting B showed B's own state.
+
+A genuine scheduled 30-second observation tick crossed a 6.594-second held B GET without
+background requests. An initial 32-second hold exceeded the native 15-second GET deadline
+and produced the expected AI failure; that attempt is retained, not passed off as a
+success or fixed by disabling deadlines. The successful scenario instead aligned its
+short hold with the real observer tick.
+
+The loopback provider returned deterministic fixture details, not model inference.
+Product requests, PostgreSQL, Publish/rebuild and served DE/EN gallery output were real.
+Settled desktop/mobile screenshots and HTTP/SQL agreement are retained. Logout, zero
+sessions, closed tabs/interceptions and closed app/provider ports completed the run;
+owned fixtures remain. Normal uploader scheduling passed 152 files / 3,663 tests, the site
+suite passed 36 files / 507 tests, and all six local checks passed at this code head.
+
+### Visibility and cached-page restoration
+
+Hiding a page now detaches and aborts its background read without superseding a selected
+item's pending acknowledgement. A detached read cannot report a false failure after the
+page returns. Both Save visibility orderings failed before the repair and passed afterward.
+Actual `943c92f` HTTP/SQL qualification used explicitly synthetic main-world visibility
+transitions: native tab/window controls did not produce a hidden document in this managed
+browser. Those scenarios are not claimed as native visibility proof.
+
+The same runtime did achieve genuine BFCache navigation and exposed another defect:
+trusted persisted pagehide/pageshow events fenced the old acknowledgement correctly, but
+restoration lost its requested read while Save remained pending. The form became clean
+while impact omitted a newly authorized story present in the acknowledgement. Restoration
+now retains one deferred read through final action settlement; ordinary item completion
+still avoids a read echo, and no write is replayed. The consumer regression failed before
+repair; all 86 Media DOM/observer cases passed afterward.
+
+Actual `b7580d4` qualification passed both return-before-acknowledgement and response-
+continued-while-away orderings, with trusted persisted events. Each made one PATCH and
+exactly one fresh selected-item GET. Holding that GET separately proved the old-lifetime
+acknowledgement stayed fenced; the new read repaired authorized links/counts/live pending
+without replacing the acknowledged captions or delta. The away case records callbacks
+after restoration, not JavaScript execution while frozen. Clean Save made no request.
+
+Manual Refresh and selection fencing passed; an obsolete intercepted read was canceled,
+not fabricated as late delivery. Real Publish/rebuild, correct-host DE/EN output and SQL
+agreed. Settled desktop/mobile captures, failed admin-host 404 probes and the unchanged
+native-visibility limit are retained. Logout, auth/media 401s, zero sessions, closed tabs
+and interceptions, and a stopped app completed the run. Normal scheduling passed all
+152 uploader files / 3,668 tests, 36 site files / 507 tests, and all six local checks.
 ## #317 current-dev integration (2026-11-01)
 
 Merged `origin/dev` at `5844e62` (after #305, #306, #288/#289, #297 and the gallery
@@ -1004,3 +1262,20 @@ locales; a newer DE-only save → `draftDiffers`; publish with a read-only
 `releases/` → 200 with `release_write_failed`, DE `older-version-live`, EN `live`,
 served HTML byte-identical; Rebuild site now → both `live` and the new title
 served; Posts list at 390px shows "Live" as text, no horizontal overflow.
+
+## #318 current-dev integration (2026-11-01)
+
+Merged `origin/dev` at `65b5595` (after #317 landed). Conflicts: `renderDetail`
+keeps dev's rule that background upload completion never replaces a focused,
+clean detail panel, beside #318's observation lifecycle; the media DOM harness
+combines dev's focus/timer model (`Timer` ids, upload watchdog kept pending)
+with #318's window/document lifecycle events.
+
+Verification: uploader `tsc` and full suite with isolated PostgreSQL 4502/4502;
+site 795/795 with PostgreSQL, `astro check` 0/0/0, `npm run build`. Runtime on a
+fresh database: a published story using a gallery photo shows it in the photo's
+impact (`published`, both locales, one gallery use following the library
+caption); a conditional caption change reports `livePending` caption for both
+locales until **Rebuild site now**, after which pending clears and the live page
+carries the new caption; detail responses are `no-store`; the Media detail at
+390px lists Story impact without horizontal overflow.

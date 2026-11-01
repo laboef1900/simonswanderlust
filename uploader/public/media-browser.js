@@ -38,6 +38,9 @@
     detailGeneration: 0,
     detailSaving: false,
     detailRecovery: null,
+    detailObservation: null,
+    detailChanged: null, // only this session's acknowledged write, never inferred by a read
+    observedKey: null,
     suggest: null,       // in-flight AI suggestion for the panel's photo: { key, controller }
     offers: null,        // suggestions shown under fields that had text: { key, slots: [[inputId, value, what]] }
     queue: null,
@@ -67,6 +70,62 @@
     try { uploads.observeOwner((await client.me()).userId); }
     catch (error) { if (error.status === 401) uploads.pause(); }
   });
+
+  var detailRefresh = window.PublicationRefresh.create({
+    resource: function () { return state.detailKey; },
+    read: function (signal) {
+      return window.PublicationRefresh.json('/media/items/' + state.detailKey, signal);
+    },
+    apply: function (item) {
+      // Deliberately do not replace detailItem, form values, or conditional-write expectations.
+      state.detailObservation = { impact: item.impact, livePending: item.livePending,
+        usedIn: item.usedIn || state.detailObservation?.usedIn || state.detailItem?.usedIn || [] };
+      renderImpact();
+    },
+    unavailable: function () {
+      state.detailObservation = { impact: { availability: 'unavailable' }, livePending: null };
+      renderImpact();
+    },
+    unauthorized: function () { uploads.pause(); say(copy.uploadNeedsAuth); },
+  });
+  // Reuse item responses for observation only, never for form values or write
+  // acknowledgement. savePatch alone owns validation and the one recovery GET.
+  ['get', 'patch'].forEach(function (method) {
+    var request = client[method];
+    client[method] = async function (key) {
+      var version = detailRefresh.beginAction(key === state.detailKey);
+      function observe(item) {
+        if (key !== state.detailKey) return;
+        try { api.assertItem(item, key); }
+        catch (_) { item = { impact: { availability: 'unavailable' }, livePending: null }; }
+        detailRefresh.accept(item, version);
+      }
+      try {
+        var item = await request.apply(client, arguments);
+        observe(item);
+        return item;
+      } catch (error) {
+        observe(error.current);
+        throw error;
+      } finally { detailRefresh.endAction(false); }
+    };
+  });
+  // Other mutations have no item projection, so observe after they settle.
+  // Background projection reads use PublicationRefresh.json, never this wrapped client.
+  ['remove', 'move', 'retry', 'rescan', 'renameFolder', 'deleteFolder', 'createFolder'].forEach(function (method) {
+    var mutate = client[method];
+    client[method] = async function () {
+      detailRefresh.beginAction();
+      try { return await mutate.apply(client, arguments); }
+      finally { detailRefresh.endAction(); }
+    };
+  });
+
+  function renderImpact() {
+    var box = $('dImpact');
+    if (box) window.MediaImpact.render(box, state.detailObservation, state.detailChanged,
+      !!state.me?.isAdmin, copy, function () { detailRefresh.refresh(); });
+  }
 
   function say(msg) { $('out').textContent = msg; }
 
@@ -329,8 +388,16 @@
   // (see detailReplaceable).
   function renderDetail(background) {
     if (state.detailDirty) return;
-    var panel = $('detail');
     var item = state.items.filter(function (i) { return i.key === state.detailKey; })[0];
+    if (!item) state.detailKey = null;
+    var selectionChanged = state.observedKey !== state.detailKey;
+    if (selectionChanged) {
+      detailRefresh.beginAction();
+      state.observedKey = state.detailKey;
+      state.detailObservation = null;
+      state.detailChanged = null;
+    }
+    var panel = $('detail');
     // Background completion must not remove a control between focus and typing.
     // Explicit actions (including Save) still refresh the clean panel normally.
     if (background && item && panel.dataset.key === item.key
@@ -344,6 +411,7 @@
     if (!item) {
       delete panel.dataset.key;
       panel.appendChild(el('p', 'muted', 'Select a photo to edit its details.'));
+      if (selectionChanged) detailRefresh.endAction();
       return;
     }
     panel.dataset.key = item.key;
@@ -413,6 +481,12 @@
     comparison.id = 'dCompare';
     comparison.setAttribute('aria-live', 'polite');
     panel.appendChild(comparison);
+    var impact = el('section');
+    impact.id = 'dImpact';
+    impact.setAttribute('aria-live', 'polite');
+    panel.appendChild(impact);
+    renderImpact();
+    if (selectionChanged) detailRefresh.endAction();
 
     // EXIF is read-only. lat/lng are absent entirely for non-admins.
     panel.appendChild(el('p', 'section-label', 'Camera'));
@@ -829,10 +903,14 @@
     var titleInput = $('dTitle');
     var refreshListing = false;
     setDetailSaving(true);
+    detailRefresh.beginAction();
+    state.detailChanged = null;
+    renderImpact();
     try {
       var patch = detailPatch(current && state.detailRecovery ? state.detailRecovery.patch : null);
       if (!Object.keys(patch).length) {
         state.detailDirty = false;
+        state.detailChanged = { de: { alt: false, caption: false }, en: { alt: false, caption: false } };
         renderDetail();
         return;
       }
@@ -840,6 +918,8 @@
       refreshListing = true;
       state.items = state.items.map(function (item) { return item.key === key ? saved : item; });
       if ($('detail').dataset.key !== key) return;
+      state.detailChanged = saved.changedDescriptions || null;
+      renderImpact();
       if ($('dTitle') !== titleInput) {
         // Navigation discarded that form. Refresh a clean reopened panel, but
         // never advance a new dirty panel's editing base underneath its inputs.
@@ -877,6 +957,7 @@
       else fail(error);
     } finally {
       setDetailSaving(false);
+      detailRefresh.endAction(false);
       // Reconcile server-side filters, order and selection after adoption.
       // reload preserves dirty panels and fences superseded list responses.
       if (refreshListing) void reload();
@@ -1121,7 +1202,12 @@
       $('renameFolder').hidden = true;
       $('deleteFolder').hidden = true;
     }
-    if (initialized) { await reload(); return; }
+    if (initialized) {
+      detailRefresh.start(false);
+      await reload();
+      await detailRefresh.refresh();
+      return;
+    }
     initialized = true;
     $('emptyChoosePhotos').textContent = copy.mediaChoosePhotos;
     $('emptyChoosePhotos').addEventListener('click', function () {
@@ -1146,6 +1232,7 @@
     // Delegated: the panel's inputs are rebuilt by renderDetail; the panel is not.
     $('detail').addEventListener('input', markDetailDirty);
     $('detail').addEventListener('change', markDetailDirty);
+    detailRefresh.start(false);
     await reload();
   }
   (async function init() {
