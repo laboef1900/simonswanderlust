@@ -1200,3 +1200,34 @@ confirmation was stubbed in-page for the editor click. Public rendering of
 non-About pages remains #289 (`/kontakt/` is 404 at this head by design). The
 G1 read-only owner inventory found no reserved-route collisions, matching a
 silent boot report.
+
+## #289 current-dev integration (2026-11-01)
+
+Merged `origin/dev` after #288 (#484) and the pre-route boot fix (#492) landed.
+Resolutions, keeping both intents:
+
+- **Page loader.** One render per row: registered images are re-pointed at this
+  host first (`retargetImageOrigins`; the stored origin is advisory), then any
+  still-foreign reference refuses the build, then the row's prose `description`
+  (#273 SEO) is extracted before responsive pictures are injected. Basic pages
+  use `BASIC_PAGE_BODY_SIZES` for their `max-w-3xl` column; About keeps
+  `ABOUT_BODY_SIZES`. `BasicPage` takes the loader description instead of a
+  regex-stripped body. The content schema is `pageDataSchema` plus `description`.
+- **Publish gate.** `foreignBodyImageSources` (shared with the loader) now reads
+  `analyzeRenderedBody`; the gate returns `hasH1` beside it.
+- **Navigation save (#297).** `PUT /settings/navigation` answers 200
+  `{ saved, build }` with the projected build report; the settings page adopts
+  the token either way and names the failure cause. The 502 `persisted`
+  envelope is gone.
+- `MAX_GALLERY_TEXT` now comes from `uploader/public/gallery-photo-line.js`.
+
+Verification: uploader `tsc` and full suite with isolated PostgreSQL (4166/4167,
+the remaining SQL-recovery case passes against its pg_dump wrapper database);
+site suite with PostgreSQL 763/763, `astro check` 0/0/0, `npm run build`,
+zero-content build 4/4. Runtime on a fresh database: contact page publish →
+`/kontakt/` and `/en/contact/` 200 with hreflang pair and prose description, in
+the sitemap; navigation save through the real settings page with a read-only
+`releases/` → saved, cause shown; successful save → footer legal link and
+header label live; unpublish → 404 and the footer link is omitted. Owner copy
+(isolated restore): boot report silent (matches G1), initial release built,
+`/`, `/uber-mich/`, `/en/about-me/`, `/karte/` 200.
