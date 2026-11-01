@@ -2,8 +2,8 @@
 # Copy uploader/.env.example to .env (set POSTGRES_PASSWORD, PUBLIC_BASE_URL, IMG_HOST
 # and IMAGE_TAG; see docs/install.md). Then:
 #   docker compose pull && docker compose up -d     # run a released GHCR image
-# IMAGE_TAG must identify a release published under wanderlust-studio; no default
-# is supplied during the image-name cutover. See README.md before upgrading.
+# IMAGE_TAG must identify a release published under wanderlust-studio (0.18.0 or
+# later) or `local`; there is no default. See README.md before upgrading.
 # Compose only RUNS the published image; to rebuild it, `docker build` from the
 # repo root (bases default to DHI — see Dockerfile).
 services:

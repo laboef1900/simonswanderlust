@@ -11,12 +11,12 @@ see [SECURITY.md](SECURITY.md).
 
 | Service (compose) | Image | Role | Exposure |
 | :-- | :-- | :-- | :-- |
-| `app` | `ghcr.io/laboef1900/wanderlust-studio` (built from the repo-root `Dockerfile`, DHI node base; first release under this name pending) | Single Fastify 5 process: admin CMS (editor, WordPress import), image service (sharp, host-routed on the img subdomain), public blog static serving, in-process `astro build` on Publish/boot/manual rebuild, `/map/` PMTiles basemap, and DB backups | Public (via host port → reverse proxy / TLS) |
+| `app` | `ghcr.io/laboef1900/wanderlust-studio` (built from the repo-root `Dockerfile`, DHI node base; released under this name from v0.18.0) | Single Fastify 5 process: admin CMS (editor, WordPress import), image service (sharp, host-routed on the img subdomain), public blog static serving, in-process `astro build` on Publish/boot/manual rebuild, `/map/` PMTiles basemap, and DB backups | Public (via host port → reverse proxy / TLS) |
 | `db` | `postgres:18-alpine` | Source of truth for posts, users, and sessions | Internal only (`:5432`) |
 
 The `app` image is released to GHCR by CI and pulled on the server (pinned via required
-`IMAGE_TAG`, with no default). The first `wanderlust-studio` release is a future owner
-action; this source cutover does not publish it. See the release prerequisites below.
+`IMAGE_TAG`, with no default). v0.18.0 is the first `wanderlust-studio` release; earlier
+releases stay under the old name. See the release flow below.
 `docker-compose.yml` has no `build:` key, so `docker compose up -d --build` is a no-op — to build
 the image locally, run `docker build .` from the repo root instead. See [Packaging & release
 pipeline](#packaging--release-pipeline). Note: rebuilding the image does not regenerate the
@@ -1565,13 +1565,13 @@ warns about.
    `ghcr.io/laboef1900/wanderlust-studio` tagged `{version}`, `{major}.{minor}`, and `latest`,
 3. creates the GitHub Release with generated notes.
 
-The first release under this name requires a future owner-authorized **new** version tag on
-merged `main`, a successful multi-architecture workflow run, and confirmation of the published
-version/digest and GHCR package access. Only after that may the operator set `IMAGE_TAG` in
-their private `.env` to that published version and run
+v0.18.0 is the first release under this name. For every release, confirm the workflow run
+for both architectures, the published version/digest and GHCR package access before an
+operator sets `IMAGE_TAG` in their private `.env` to that version and runs
 `docker compose pull && docker compose up -d` (no `dhi.io` login needed there — that's CI-only).
-Compose requires an explicit tag; the example leaves it empty instead of inventing a release.
-Until publication, build locally with the new name and `IMAGE_TAG=local` as described in README.
+Compose requires an explicit tag; the example leaves it empty instead of naming a release.
+For an image built from the current source, use the new name and `IMAGE_TAG=local` as
+described in README.
 
 Historical images remain at `ghcr.io/laboef1900/simonswanderlust-app`, including `:0.17.1`.
 Old tags are not available under the new name merely because this source changed.
