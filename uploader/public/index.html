@@ -5,16 +5,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Desk</title>
     <link rel="stylesheet" href="/admin/admin.css" />
+    <link rel="stylesheet" href="/admin/onboarding.css" />
   </head>
   <body>
     <header class="cms-page-meta">
       <h1>Desk</h1>
       <p class="lede">What to write, what still needs publishing, and whether photos are still encoding.</p>
+      <div id="onboardingOpener" class="cms-page-actions" hidden></div>
     </header>
 
     <main>
       <p id="deskStatus" class="muted" role="status"></p>
-      <p id="deskError" class="err" role="alert" hidden></p>
+      <div id="deskError" class="err" role="alert" hidden></div>
+      <section id="onboardingChecklist" hidden></section>
 
       <section aria-labelledby="deskNextHeading">
         <h2 id="deskNextHeading" class="desk-heading">Most recently edited draft</h2>
@@ -42,10 +45,14 @@
     <script src="/admin/language.js"></script>
     <script src="/admin/posts-filter.js"></script>
     <script src="/admin/desk.js"></script>
+    <script src="/admin/admin-confirm.js"></script>
+    <script src="/admin/onboarding.js"></script>
     <script>
       const $ = (id) => document.getElementById(id);
       let redirecting = false;
+      let authenticatedContext = null;
       let isAdmin = false;
+      const copy = EditorCopy[document.documentElement.lang === 'de' ? 'de' : 'en'];
 
       function say(msg) { $('deskStatus').textContent = msg; }
 
@@ -216,7 +223,7 @@
           a.textContent = 'View live site';
           root.appendChild(a);
         } else {
-          root.textContent = 'No live release yet — publish a trip or rebuild from Settings.';
+          root.textContent = authenticatedContext.isAdmin ? copy.deskNoReleaseAdmin : copy.deskNoReleaseAuthor;
         }
       }
 
@@ -296,16 +303,32 @@
         if (!redirecting) say('');
       }
 
-      (async () => {
-        const s = await Auth.ensureAuthed();
-        if (!s) return;
-        Auth.renderHeader(s);
-        isAdmin = s.isAdmin === true;
-        $('deskBuild').hidden = !isAdmin;
-        try { await SiteLanguage.get(); }
-        catch (error) { $('deskError').hidden = false; $('deskError').textContent = error.message; return; }
-        await loadDesk();
-      })();
+      const openDesk = Desk.resilientLoader(async () => Auth.ensureAuthed(), {
+        loading() { $('deskError').hidden = true; },
+        ready(context) {
+          if (!context) return;
+          authenticatedContext = context;
+          isAdmin = context.isAdmin === true;
+          Auth.renderHeader(context);
+          $('deskBuild').hidden = !isAdmin;
+          Onboarding.init({
+            root: $('onboardingChecklist'),
+            openerRoot: $('onboardingOpener'),
+            isAdmin: context.isAdmin,
+            focusTarget: document.querySelector('.cms-page-title'),
+          });
+          // Story labels need the language mode (#284) before the first paint.
+          SiteLanguage.get().then(() => loadDesk(), (error) => {
+            $('deskError').hidden = false;
+            $('deskError').textContent = error.message;
+          });
+        },
+        unavailable() {
+          $('deskError').hidden = false;
+          showUnavailable($('deskError'), copy.authContextUnavailable, copy.authContextRetry, openDesk);
+        },
+      });
+      openDesk();
     </script>
   </body>
 </html>

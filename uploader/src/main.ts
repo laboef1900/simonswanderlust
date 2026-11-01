@@ -4,7 +4,7 @@ import { mkdir } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { buildServer } from './server.js';
 import { createSettingsStore, defaultSettings } from './settings.js';
-import { createPool, ensureSchema } from './db.js';
+import { createPool } from './db.js';
 import { pgUserStore } from './users.js';
 import { pgSessionStore } from './sessions.js';
 import { pgPostStore } from './posts.js';
@@ -27,7 +27,9 @@ import { createGpxFiles } from './gpx-files.js';
 import { createGpxWorker } from './gpx-worker.js';
 import { createPublicTrackWorker } from './gpx-public-worker.js';
 import { createGpxService } from './gpx-service.js';
-import { pgSiteIdentityStore, seedSiteIdentity } from './site-identity.js';
+import { pgSiteIdentityStore } from './site-identity.js';
+import { captureBootEvidence, initializeApplicationSchema, initializeOnboarding } from './onboarding-bootstrap.js';
+import { pgOnboardingStore } from './onboarding.js';
 import { LEGACY_REVIEW_PROMPT } from './site-identity-legacy.js';
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -54,10 +56,13 @@ const owner = await acquireStorageOwner(databaseUrl, { role: 'app' });
 const runtime = { signal: owner.signal, isWritable: owner.isWritable };
 const storageDir = process.env.STORAGE_DIR ?? '/data/images';
 const settingsPath = process.env.SETTINGS_PATH ?? join(dirname(storageDir), 'settings.json');
+const siteDir = resolve(process.env.SITE_DIR ?? '/data/site');
+const backupDir = resolveBackupDir();
 const settings = createSettingsStore({ path: settingsPath, defaults: defaultSettings() });
 
 const pool = createPool(databaseUrl, owner.applicationName);
 pool.on('error', () => console.error('Application database connection unavailable.'));
+const bootEvidence = await captureBootEvidence(pool, owner.assertWritable);
 // A logical pre-migration recovery set precedes the first language schema write.
 // Fresh databases have no content to back up; partial boot migrations stay recoverable.
 const languageMigration = await pool.query<{ posts: string | null; language: string | null; omitted: boolean; constraint_present: boolean }>(`
@@ -73,9 +78,8 @@ if (migration.posts && (!migration.language || !migration.omitted || !migration.
   });
   owner.assertWritable();
 }
-await ensureSchema(pool);
-owner.assertWritable();
-await seedSiteIdentity(pool);
+await initializeApplicationSchema(pool, owner.assertWritable);
+await initializeOnboarding(pool, { storageDir, settingsPath, backupDir, siteDir }, bootEvidence, owner.assertWritable);
 const identityStore = await pgSiteIdentityStore(pool);
 const secrets = pgSecretsStore(pool, encryptionKey);
 // AI provider registry migration (spec §5), before listen(): copy the legacy
@@ -112,9 +116,7 @@ try {
   console.error(`PUBLIC_BASE_URL is not a valid URL (set IMG_HOST explicitly): ${baseUrl}`);
   process.exit(1);
 }
-// Resolve once so a relative SITE_DIR (dev) can't produce broken relative
-// symlink targets in the builder or an invalid @fastify/static root.
-const siteDir = resolve(process.env.SITE_DIR ?? '/data/site');
+// siteDir is resolved before onboarding classification and shared with the builder.
 // @ai-warning: ONE lock instance, shared by the builder and the encode queue.
 // `astro build` and sharp both peak around 2 GB in a container with no
 // mem_limit headroom to spare, so they must never run at the same time; the
@@ -147,7 +149,6 @@ const reconciler = createReconciler({
   }),
   queue: encodeQueue,
 });
-const backupDir = resolveBackupDir();
 const gpx = createGpxService({
   pool, files: routeFiles, worker: createGpxWorker(), backupDir: join(backupDir, 'db'),
   isWritable: owner.isWritable, readManifestPins: createRouteManifestPinReader(join(backupDir, 'db')),
@@ -187,6 +188,7 @@ const app = buildServer({
   sessions,
   settings,
   identityStore,
+  onboarding: pgOnboardingStore(pool, owner.isWritable),
   language: posts.language,
   secrets,
   posts,

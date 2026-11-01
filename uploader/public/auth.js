@@ -21,10 +21,16 @@ window.Auth = (function () {
   }
   async function ensureAuthed(opts) {
     const want = opts || {};
-    const s = await status();
-    if (!s.authenticated) {
+    const response = await fetch('/auth/me', { cache: 'no-store' });
+    if (response.status === 401) {
       location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search);
       return null;
+    }
+    if (!response.ok) throw new Error('auth_context_unavailable');
+    const s = await response.json();
+    if (s?.authenticated !== true || typeof s.userId !== 'string' || !s.userId
+      || typeof s.username !== 'string' || typeof s.isAdmin !== 'boolean' || s.needsSetup !== false) {
+      throw new Error('auth_context_unavailable');
     }
     if (want.admin && !s.isAdmin) { location.href = '/admin/'; return null; }
     return s;

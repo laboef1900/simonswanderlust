@@ -111,7 +111,11 @@ async function desk(isAdmin: boolean) {
   const requests: string[] = [];
   let failing = true;
   const context: Record<string, unknown> = {
-    document: dom.document, BuildCopy: buildCopy, location: { pathname: '/admin/index.html', origin: 'https://blog.test' },
+    document: Object.assign(dom.document, { documentElement: { lang: 'en' } }), BuildCopy: buildCopy,
+    EditorCopy: Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [locale, Object.fromEntries(Object.entries(strings)
+      .filter(([key]) => key.startsWith('editor.chrome.')).map(([key, text]) => [key.slice('editor.chrome.'.length), text]))])),
+    Onboarding: { init() {} },
+    location: { pathname: '/admin/index.html', origin: 'https://blog.test' },
     Auth: { ensureAuthed: async () => ({ isAdmin }), renderHeader() {} },
     SiteLanguage: { get: async () => ({}), config: () => ({ primary: 'en', locales: ['en'] }), text: () => '' },
     fetch: async (url: string) => {

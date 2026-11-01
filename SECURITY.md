@@ -123,8 +123,35 @@ an owner-authorized safe rebuild/release switch and cache assessment. No safety 
   carries the admin cookie, and a forged cookie on a public page costs no lookup. A store failure
   on a guarded route is a sanitized 500, never "anonymous" — a database outage must not read as
   "logged out". Spec: `docs/superpowers/specs/2026-09-06-lazy-session-resolution-design.md`.
+- **Protected-page context** (independently owner-approved 2026-10-29, #278 §9):
+  `GET /auth/me` requires a session and returns only
+  `{ authenticated: true, userId, username, isAdmin, needsSetup: false }`.
+  All responses, including 401 and server errors, are `Cache-Control: no-store`.
+  The shared `Auth.ensureAuthed` helper requests this context without caching, preserves
+  author/admin gating, and redirects only a 401 to login with an encoded local return path.
+  Network, non-401 HTTP and malformed-response failures never become "logged out".
+  The Desk consumes this same helper before its admin-only checklist; client roles are
+  presentation gates, while the onboarding routes still require admin authorization.
+  Login, setup, `/auth/status`, session issuance and expiry are unchanged.
+  The non-secret account ID does not authorize owner fencing, write receipts, draft stashes
+  or native locking (#304/#305/#306). Rollback removes the endpoint/helper cutover and Desk
+  activation together without clearing onboarding retirement state or restore fences.
 - **First-admin setup** (`/setup`) is only available while no users exist, and is **serialized**
   with a per-process lock so two concurrent requests cannot both create an admin (TOCTOU closed).
+- **First-run checklist** (#279, approved #278 Q1–Q5/P1–P2) is install-wide admin-only
+  operational metadata, not an authentication/setup permission input. `GET`/`POST /onboarding`
+  require `requireAdmin` (anonymous 401, author 403), with `no-store` on success and errors.
+  The strict 1 KiB action object permits only dismiss/resume/finish. Progress uses one
+  REPEATABLE READ snapshot; Finish locks/rechecks required photo/story/publication predicates
+  before permanent retirement. Identity is optional. Responses contain only fixed step/state
+  identifiers, required flags and server-built destinations (translation keys URL-encoded);
+  no content titles, counts, retirement reasons, timestamps or photo metadata are disclosed.
+  No account/session/content/build writes or cookies are performed by these handlers.
+  Missing/invalid state and DB errors fail through the sanitized error path, never anonymous
+  or a fabricated fresh checklist. Boot classifies before cleanup/listen and aborts on
+  uncertain evidence or commit; retired state cannot become eligible through an app action.
+  Existing `/setup`, `/login`, `/auth/status` contracts, setup lock, zero-user check,
+  login/setup rate limits and session policy are reconfirmed unchanged.
 - **Account removal** (#368) preserves at least one administrator in a configured installation.
   `UserStore.remove` takes a short Postgres `SHARE ROW EXCLUSIVE` users-table lock before reading
   the target/count and deleting in the same transaction; the memory store makes the same decision
@@ -1284,8 +1311,20 @@ deliberate trade-off, not an oversight:
   ```
 
   The explicit Node entrypoint supports the shell-less image. Do not add service ports.
-  Fresh-schema recovery keeps all ingress closed throughout the zero-user/setup window;
-  see the [major-upgrade alternative](ARCHITECTURE.md#upgrading-a-postgres-major-eg-17--18).
+  Fresh-target recovery uses offline `prepare-native-restore [--yes]`, not HTTP boot to
+  create schema; keep ingress closed and auto-start disabled throughout the zero-user window.
+  Only recognized bootstrap-only schema/default singleton values are admitted, never saved
+  identity/content or unknown shapes. The shared schema/identity seed runs after permanent
+  fencing, without listeners/builds/workers. Preparation does not itself verify an undo set.
+  Catalog admission includes all installed indexes, not only table constraints: changed
+  uniqueness, expressions, predicates, methods or invalid enforcement refuse preparation before
+  any fence/schema mutation. Missing standalone indexes may be created by normal initialization
+  only when their schema-wide names are free: a non-index relation such as a sequence is refused,
+  including before the owning table exists. Same-name replacements cannot hide behind
+  `IF NOT EXISTS`. Fence durability includes all
+  data-root ancestor entries, re-flushed on retries even when a failed mkdir/fsync attempt left
+  directories present. Any unresolved flush failure still blocks replacement.
+  See [offline preparation](ARCHITECTURE.md#offline-preparation-for-a-fresh-native-restore-target).
   This guidance reconfirms the unchanged [GPX storage-owner boundary](#gpx-routes--private-source-and-public-snapshot):
   exclusive ownership and absence of app sessions are mandatory, never bypassed by killing
   sessions or disabling fencing.
@@ -1301,6 +1340,38 @@ deliberate trade-off, not an oversight:
   only after successful completion and result inspection, reconcile settings/key escrow,
   then sign in and explicitly rebuild. Failed or ambiguous completion: leave the app stopped,
   preserve input/undo/staged sets and investigate rather than retrying blindly.
+- **Restore-safe onboarding retirement:** native JSON excludes `onboarding_state`, but SQL,
+  physical backups and snapshots may contain eligible metadata. Every supported restore
+  (self/empty/partial/legacy, filesystem-only, host/clone and undo included) must retire before
+  replacement/activation. Native restore validates source and the actual captured undo dump,
+  identity assets and required paired archive first, then publishes the permanent off-DB
+  fence and separately commits retirement **before GPX staging**. Retirement survives later
+  failure, rollback and unknown content COMMIT; it does not certify successful content recovery.
+  Unknown fence durability or retirement commit stops replacement.
+  The fence is derived from `STORAGE_DIR`'s resolved parent as `onboarding.restore-retired`,
+  normally `/data/onboarding.restore-retired`; its fixed payload is
+  `swl-onboarding-restore-retired-v1\n`, with no credentials, owner content or progress.
+  Publication flushes the private temporary file and parent directory using no-clobber
+  activation; reads reject non-regular/symlink/multi-link/wrong-payload entries and unsafe roots.
+  Invalid/unreadable metadata fails boot/recovery closed; preserve it for diagnosis and
+  repair only to retired, under stopped writers. Never remove a fence to recover eligibility.
+- **SQL/host activation boundary:** use `onboarding-retire` against the configured destination
+  before replacement; it immediately writes/verifies only the fence, needs reachable
+  Postgres for the existing owner/drain check, and needs no application schema. Its lease
+  **ends on CLI exit**: it does not guard subsequent `psql`, copies, restart policies or
+  different-cluster writers. Stop all writers and disable automatic activation across command
+  boundaries and failures; use `psql -v ON_ERROR_STOP=1`. Preserve/exclude the destination
+  fence during copying and verify/re-fence the final recovered root before activation,
+  even if copied SQL is eligible. Raw whole-root snapshots require isolated offline staging
+  followed by fencing before the live-root switch. Never auto-start an unfenced restored
+  snapshot; unannounced whole-machine rollback cannot be inferred after both stores roll back.
+  Keep the prior root and recovery evidence. The
+  [managed recovery procedure](ARCHITECTURE.md#sql-filesystem-host-and-clone-recovery)
+  remains mandatory, not replaced by a filesystem lock or perpetual lease.
+  Code rollback preserves the table/fence; older code does not enforce them, so retain the
+  current retirement CLI/procedure and recheck before rolling forward. No web/CLI reset,
+  metadata deletion or owner-data wipe is authorized. Password/account-only recovery leaves
+  onboarding unchanged and is not a content restore.
 - In-app backups live on the **same disk** as the live data; disaster recovery requires an
   offsite host-level backup of `./uploader/data` — see
   [ARCHITECTURE.md](ARCHITECTURE.md#backups--disaster-recovery).

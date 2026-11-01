@@ -25,12 +25,13 @@ describe('ui dictionaries', () => {
   });
 
   /**
-   * Keys whose DE and EN values are legitimately identical — brand names and
-   * shared vocabulary. Everything else that is byte-identical in both locales
-   * is almost certainly an untranslated copy/paste.
+   * Keys whose DE and EN values are legitimately identical — brand names,
+   * proper nouns, cognates and shared vocabulary. Everything else that is
+   * byte-identical in both locales is almost certainly an untranslated copy/paste.
    */
   const IDENTICAL_ON_PURPOSE: readonly UIKey[] = [
     'editor.chrome.studioName',
+    'editor.chrome.onboardingOptional', // “Optional” is the same adjective in DE and EN.
     // Preserve ESA's prescribed English credit and the standard license identifier.
     'map.landcoverAttribution', 'map.landcoverLicense',
     'editor.chrome.identityLogo', // “Logo” is the same word in German and English.

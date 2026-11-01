@@ -81,11 +81,42 @@ After the local build, set `IMAGE_TAG=local` in your private `.env` for subseque
 Compose commands. This tag exists locally only; do not try to pull it from GHCR.
 
 On first run, when no users exist, `/login` shows a "Create the first admin"
-form. Fill in a username and password to create the admin account; the form is
-closed once any user exists. Sign in at `/login`, then pick a key
-(e.g. `trips/rhodes-2021/hero`) and alt text, choose a photo, and click
-**Upload** — the page prints the `heroImage:` snippet to paste into the post's
-frontmatter.
+form. Fill in a username and password; the form closes once any user exists. Setup/login
+take you to the existing publishing **Desk**, not a snippet/frontmatter workflow.
+
+On a genuinely fresh installation the admin Desk offers this checklist:
+
+1. **Admin account created** — informational, already done after setup.
+2. **Name your blog — Optional** — opens Settings → Site identity. Only an explicit save
+   completes it; leaving seeded identity untouched never blocks Finish or Publish.
+3. **Upload your first photo** — opens Media. Upload and wait until a photo is ready;
+   processing is not completion, and failed/missing photos link to the existing retry workflow.
+4. **Write your first story** — opens the existing editor (or your newest saved story).
+   Pick the uploaded hero, fill the required locale/story fields and **Save draft**.
+   The checklist creates no post, slug or sample content for you.
+5. **Publish it** — explicitly Publish in the editor after its normal validation and
+   confirmation. This rebuilds the public site; saving a draft never publishes.
+
+Progress counts only the three required photo/story/publish steps and reflects current data.
+Deleting the only ready photo/story or unpublishing the only publication regresses progress.
+**Hide checklist** is install-wide and survives browser changes/restarts; **Show setup checklist**
+appears only in the Desk header. Once the three required steps are done, explicit **Finish**
+permanently retires the checklist after confirmation; Publish alone never finishes it.
+A hidden complete checklist stays hidden until you Show it. Nothing reopens it after Finish.
+
+Authors retain normal upload/draft actions but never receive the checklist or admin setup CTAs.
+Upgrades, restored installations and zero-user installations with existing content/data are
+excluded; absence of a checklist is not an error or a reason to erase data. There is no reset.
+On context/checklist failure use the displayed read-only Retry; uncertainty is not logout or
+an empty checklist. No language placeholder is added by this feature.
+
+Recovery is offline: every JSON/SQL/host/clone restore permanently retires onboarding.
+For a fresh JSON target use `prepare-native-restore [--yes]`, not an HTTP boot for schema;
+SQL/filesystem recovery uses fence-only `onboarding-retire` before replacement and verifies
+the final root again before activation. Keep all writers stopped and auto-start disabled
+between commands—the CLI lease ends on exit. Follow
+[the complete recovery procedure](../ARCHITECTURE.md#database-dumps); never delete retirement
+metadata, old volumes or owner content to make setup look fresh.
 
 Uploaded variants — plus the untouched original as `{key}-orig.<ext>` — are
 written to `./data/images/` on the host (a Docker volume), so they survive
@@ -172,7 +203,8 @@ An empty `SITE_DIR` starts a build from `SITE_APP_DIR`, so check both paths befo
    same-origin comments, even under another scheme; single-origin loopback development remains
    supported. No new blog-origin env setting is required. #276 will give validated canonical
    identity precedence over this fallback; the explicit server override remains highest.
-6. Open `https://simonswanderlust.com/login` to create the first admin account, then upload.
+6. Open `https://simonswanderlust.com/login` to create the first admin account, then follow
+   the Desk checklist above (or use the ordinary Media/editor workflow on an existing install).
    Before public cutover, inspect the target server's observed proxy peer, confirm `Secure`
    on an HTTPS login, and verify independent login-limit buckets from two external networks.
    The #369 Docker Desktop production-image TCP probe covers the Linux VM host-network
@@ -190,6 +222,11 @@ lists published trips with saved changes, reports the photo-processing count, an
 current live site. Those three data sources load independently. If posts, queue status, or health
 is unavailable, only that section shows a retry; unknown queue/release state is never presented as
 an idle queue or as confirmation that no release exists.
+The optional first-run checklist sits above these existing sections; it does not replace them.
+Protected pages share read-only `GET /auth/me`, returning exactly
+`{ authenticated: true, userId, username, isAdmin, needsSetup: false }` with `no-store`.
+Only a 401 redirects to login; other context failures offer retry without logging out.
+`/setup`, `/login` and `/auth/status` keep their existing contracts.
 
 ### Security notes
 
