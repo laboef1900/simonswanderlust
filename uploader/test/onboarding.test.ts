@@ -3,7 +3,7 @@ import { decodeOnboardingRow, memoryOnboardingStore, onboardingView, RETIRED_REA
 
 const evaluatedAt = '2026-10-27T12:00:00.000Z';
 const eligible: OnboardingState = { schemaVersion: 1, state: 'eligible', reason: 'fresh', evaluatedAt, dismissedAt: null, retiredAt: null };
-const empty: OnboardingProgress = { identity: false, ready: false, processing: false, attention: false, story: false, published: false, newest: null, newestDraft: null };
+const empty: OnboardingProgress = { language: { primary: 'de', locales: ['de', 'en'], lockedAt: null, updatedAt: evaluatedAt }, identity: false, ready: false, processing: false, attention: false, story: false, published: false, newest: null, newestDraft: null };
 const row = { singleton: true, schema_version: 1, state: 'eligible', reason: 'fresh', evaluated_at: evaluatedAt, dismissed_at: null, retired_at: null };
 
 describe('onboarding state decoding', () => {
@@ -49,7 +49,8 @@ describe('snapshot-derived onboarding', () => {
       expect([...url.searchParams]).toEqual([['tk', key]]);
       expect(url.hash).toBe('');
     }
-    expect(Object.keys(view).sort()).toEqual(['complete', 'status', 'steps']);
+    expect(Object.keys(view).sort()).toEqual(['complete', 'language', 'status', 'steps']);
+    expect(Object.keys(view.language).sort()).toEqual(['locales', 'lockedAt', 'primary', 'updatedAt']);
     expect(Object.keys(view.steps[0]!).sort()).toEqual(['href', 'id', 'required', 'state']);
   });
   it('hides install-wide, resumes idempotently, regresses live predicates and permanently finishes without identity', async () => {

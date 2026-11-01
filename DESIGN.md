@@ -990,13 +990,17 @@ them; the shared protected-page context resolves first, and authors retain ordin
 upload/draft-authoring empty states without identity/settings/Publish affordances.
 Upgraded/restored installations never gain a retroactive setup wizard.
 
-The ordered rows are Account (informational), Name your blog (**Optional**), Photo, Story and
+The progress rows remain Account (informational), Name your blog (**Optional**), Photo, Story and
 Publish. Completion is **three required steps**, not five: identity follows an explicit
-Settings save and never gates Finish or Publish. Each row links into the existing Media,
-Settings identity tab or editor; no sample, pre-created draft, automatic upload/publication or
-language placeholder. Current data determines state, with text/icons rather than colour alone:
-photo precedence is ready, processing, failed/missing, then empty. Regressions are truthful
-until explicit permanent Finish; completing a publish does not finish the checklist.
+Settings save and never gates Finish or Publish. An optional **Language** configuration section
+sits after Account, with four native radio choices, URL consequences and explicit Save/confirmation.
+It shows current stored configuration, never a completion badge or remembered acknowledgement.
+Publication history makes this section read-only; Settings still owns allowed secondary activation.
+Changed selection alone writes nothing, and ambiguous outcomes trigger a read, not a replay.
+Each progress row links into the existing Media, Settings identity tab or editor; no sample,
+pre-created draft or automatic upload/publication. Text/icons accompany colour; photo precedence
+is ready, processing, failed/missing, then empty. Regressions are truthful until explicit permanent
+Finish; completing a publish does not finish the checklist.
 
 **Hide checklist** applies install-wide across admins, sessions and restarts. The only reopen
 affordance is **Show setup checklist** in the Desk header, not Settings/navigation. Show

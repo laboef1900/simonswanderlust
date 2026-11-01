@@ -223,6 +223,13 @@ current live site. Those three data sources load independently. If posts, queue 
 is unavailable, only that section shows a retry; unknown queue/release state is never presented as
 an idle queue or as confirmation that no release exists.
 The optional first-run checklist sits above these existing sections; it does not replace them.
+Eligible admins can configure Language after Account: choose DE-only, EN-only or either
+primary language with both enabled, review the URL consequences and explicitly Save.
+The section shows persisted configuration, not a completed task; only Photo, Story and Publish
+are required for Finish. Publication history makes it read-only here; use Settings for allowed
+secondary-language activation. If configuration saves but rebuilding fails, the prior release
+stays live: use Settings' explicit Rebuild rather than resaving. Existing/restored/finished
+installs and authors do not receive this onboarding section.
 Protected pages share read-only `GET /auth/me`, returning exactly
 `{ authenticated: true, userId, username, isAdmin, needsSetup: false }` with `no-store`.
 Only a 401 redirects to login; other context failures offer retry without logging out.

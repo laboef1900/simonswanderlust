@@ -523,10 +523,17 @@ helper has resolved admin role; client role checks avoid useless requests, never
 
 The first-story action opens the current new-post editor. First Save uses the existing post
 endpoint, slug guard and validation. No pre-created pair, invented slug, tutorial mode or sample.
-Language has no step until #281 lands after #284/#285 under the approved #282/#283 contract;
-#281 must define its real completion signal and allowed changes. A seeded language default does
-not prove explicit choice. Existing-install/changeability restrictions remain binding. #277
-can close without #281.
+Language is implemented by #281 on the integrated #284/#285 source under the approved #282/#283
+contract; its new implementation qualification is still pending.
+The owner approved #281 option A on 2026-10-29: an optional current-configuration section,
+with explicit Save but no completion badge or persisted acknowledgement. It does not enter
+progress counters or change Finish requirements. A seeded default still proves no explicit
+choice; subsequent reads show configuration, not remembered consent. Existing-install and
+changeability restrictions remain binding. See `2026-10-29-issue-281-language-choice.md`.
+Eligible projections include current language/history beside the progress steps, from the same
+read transaction. The optional section sits after Account and before Identity; only explicit
+confirmed Save uses the existing `PUT /language`, and publication-locked onboarding is read-only.
+#277 can close without #281.
 
 #273 is approved; #274 must expose `identityConfigured() = saved_at IS NOT NULL` before #279.
 Optionality is now settled by Q1; do not reopen it. #280 depends only on the inventory/roles,

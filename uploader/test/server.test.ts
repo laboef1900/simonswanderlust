@@ -4928,6 +4928,7 @@ describe('admin onboarding metadata boundary', () => {
     evaluatedAt: '2026-10-27T12:00:00.000Z', dismissedAt: null, retiredAt: null,
   };
   const empty: OnboardingProgress = {
+    language: { primary: 'de', locales: ['de', 'en'], lockedAt: null, updatedAt: '2026-10-27T12:00:00.000Z' },
     identity: false, ready: false, processing: false, attention: false,
     story: false, published: false, newest: null, newestDraft: null,
   };
