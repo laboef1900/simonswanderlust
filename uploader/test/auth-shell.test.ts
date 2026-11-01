@@ -39,6 +39,7 @@ interface StubElement {
   getAttribute(name: string): string | null;
   hasAttribute(name: string): boolean;
   appendChild(child: StubElement): void;
+  prepend(child: StubElement): void;
   addEventListener(type: string, listener: Listener): void;
   querySelector(selector: string): StubElement | null;
   querySelectorAll(selector: string): StubElement[];
@@ -101,6 +102,7 @@ function shellSandbox(pathname: string, options: SandboxOptions = {}) {
       getAttribute(name) { return attrs.get(name) ?? null; },
       hasAttribute(name) { return attrs.has(name); },
       appendChild(child) { element.children.push(child); },
+      prepend(child) { element.children.unshift(child); },
       addEventListener(type, listener) {
         const registered = listeners.get(type);
         if (registered) registered.push(listener);
@@ -204,6 +206,7 @@ function shellSandbox(pathname: string, options: SandboxOptions = {}) {
             '.cms-masthead-right > .cms-brand-sub': makeElement(),
             '#cmsAccountMenu': accountMenu,
             '.cms-account-menu__trigger': accountTrigger,
+            '.cms-sidebar-footer': makeElement(),
             '#cmsSidebar': sidebar,
             '#cmsMenuBtn': menu,
             '#cmsNavScrim': scrim,
@@ -345,6 +348,30 @@ function expectDrawerClosed(shell: DrawerParts) {
 }
 
 describe('Auth navigation shell', () => {
+  it.each(['/admin/', '/admin', '/admin/index.html'])('shows a neutral actionable domain notice on the admin Desk at %s', (path) => {
+    const shell = shellSandbox(path, {
+      identity: { siteName: '', studioDescriptor: {}, canonicalOrigin: null },
+    });
+    const [notice, main] = shell.part('.cms-content').children;
+    expect(notice!.id).toBe('deskDomainNotice');
+    expect(notice!.className).toBe('muted');
+    expect(notice!.getAttribute('role')).toBe('status');
+    expect(notice!.textContent).toBe(ui.en['editor.chrome.identityDomainUnset'] + ' ');
+    expect(notice!.children[0]!.textContent).toBe(ui.en['editor.chrome.identityDomainConfigure']);
+    expect(notice!.children[0]!.getAttribute('href')).toBe('/admin/settings.html#identity');
+    expect(main).toBe(shell.main);
+  });
+
+  it('does not show the domain notice on configured sites, author Desks or unrelated pages', () => {
+    for (const shell of [
+      shellSandbox('/admin/', { identity: { siteName: '', studioDescriptor: {}, canonicalOrigin: 'https://blog.example' } }),
+      shellSandbox('/admin/', { isAdmin: false }),
+      shellSandbox('/admin/editor.html'),
+    ]) {
+      expect(shell.part('.cms-content').children).toEqual([shell.main]);
+    }
+  });
+
   it('paints configured identity as text, never as shell markup', () => {
     const hostile = '</title><img src=x onerror=alert(1)>';
     const shell = shellSandbox('/admin/posts.html', {

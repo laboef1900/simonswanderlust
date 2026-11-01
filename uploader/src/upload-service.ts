@@ -152,6 +152,9 @@ export function createUploadService(opts: Options): UploadService {
       const before = await original(r);
       if (before === 'uncertain') { await pending(r, false, 'recovery_required'); return; }
       let item = existing;
+      // A recovered (failed/missing) photo keeps its curated folder, or takes this
+      // drop's folder while it is still in the root — the duplicate rule (#135, #348).
+      if (item && item.folder === '' && r.identity.folder !== '') item = await opts.media.patch(r.mediaKey, { folder: r.identity.folder });
       if (!item) item = await opts.media.upsert({ key: r.mediaKey, title: r.identity.title, folder: r.identity.folder,
         alt: { de: r.identity.alt, en: r.identity.alt }, width: r.frozen.width, height: r.frozen.height,
         origBytes: r.frozen.bytes, status: 'processing', exif, uploadedBy: r.userId,

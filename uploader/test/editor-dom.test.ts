@@ -1,17 +1,24 @@
 import { webcrypto } from 'node:crypto';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import type { PostPair } from '../src/posts.js';
+import { resolve } from 'node:path';
+import { MAX_SLUG_BYTES, isSafeSlug, assertNotStale, memoryPostStore, PostError, type PostPair, type PostStore } from '../src/posts.js';
 import type { EditorialReviewResult } from '../src/editorial-review.js';
 import { editorDocument, EditorElement, EditorEvent } from './editor-dom-harness.js';
 import { ui } from '../../site/src/i18n/ui.js';
 import { normalizeGalleryFences } from '../src/body-content.js';
-import { readCaptionOverride, readCaptionsVisible } from '../../site/src/lib/gallery-layout.js';
+import { analyzeGallerySource } from '../../site/src/lib/gallery-source.js';
+import { readCaptionsVisible } from '../../site/src/lib/gallery-layout.js';
+import { readCaptionOverride, galleryWarnings } from '../public/gallery-photo-line.js';
+import { browserScript, galleryCodecBindings } from './gallery-browser-module.js';
 import { REGIONS } from '../src/db.js';
 import type { AltAudit } from '../src/alt-audit.js';
 import { publication } from './publication-client-fixture.js';
+import { publishTokens } from './publish-tokens.js';
 
+
+beforeAll(async () => { await analyzeGallerySource(''); });
 // editor.html's inline script is plain top-level browser code. Run it in a vm
 // context whose `document.getElementById` answers from the REAL markup's ids —
 // null for anything the page does not contain — so populateForm()/buildPayload()
@@ -19,7 +26,7 @@ import { publication } from './publication-client-fixture.js';
 // checks let #105 through (an input was removed while the JS still read it);
 // this is the only kind of test that catches a script/markup drift.
 const html = readFileSync('public/editor.html', 'utf8');
-const scriptStart = html.lastIndexOf('<script>');
+const scriptStart = html.lastIndexOf('<script type="module">');
 const script = html.slice(html.indexOf("'use strict'", scriptStart), html.lastIndexOf('</script>'));
 const markup = html.slice(0, scriptStart);
 
@@ -40,26 +47,43 @@ type Fetch = (url: string, options?: RequestInit) => Promise<Response>;
 interface EditorOptions {
   language?: { primary: 'de' | 'en'; locales: ('de' | 'en')[] };
   clock?: boolean;
+  canonicalOrigin?: string | null;
   fetch?: Fetch;
   auth?: () => Promise<Response>;
   rawPostResponses?: boolean;
   storage?: Map<string, string>;
+  galleryFetch?: Fetch;
   review?: Review;
   isAdmin?: boolean;
   mobile?: boolean;
   search?: string;
-  confirm?: boolean;
+  /** One answer for every AdminConfirm prompt, or an answer per prompt. */
+  confirm?: boolean | ((prompt: ConfirmPrompt) => boolean);
   publishVersion?: () => string | null;
-  stash?: { key: string; payload: unknown };
+  /** One answer per GpxEditor route refresh (the reload barrier); default resolves true. */
+  routeRefresh?: () => Promise<boolean>;
+  /**
+   * Seeds one owner-scoped DraftGuard record. `key` names the pre-#305 resource
+   * (`swl:draft:<tk>` or `swl:draft:new`); `recovery` overrides the
+   * WriteRecovery state stored with it (`null` = a record without one).
+   */
+  stash?: { key: string; payload: unknown; recovery?: Partial<StashRecovery> | null };
+  /**
+   * Runs as each EasyMDE body (0 = DE, 1 = EN) is constructed — before the
+   * page's init, which `loadEditor` awaits in full. The only seam for arming a
+   * failure that the start-up restore path itself must hit.
+   */
+  onEditor?: (editor: { value(text?: string): string }, index: number) => void;
   pickImage?: { src: string; width: number; height: number; alt: { de: string; en: string }; format?: 'jpeg' };
   caption?: (options: { url: string; lang: string; signal: AbortSignal }) => Promise<string>;
   upload?: (options: { ownerId: string; fields: Record<string, string>; file: File }) => Promise<{ src: string; key: string; width: number; height: number; status: string }>;
 }
+interface ConfirmPrompt { title: string; body: string; confirmLabel?: string }
 /** What editor.html passes to MediaPicker.open for a gallery, as far as these tests read it. */
 interface GalleryPicker {
   multiple: true;
   captions?: { locale: 'de' | 'en'; visible: boolean; overrides: Record<string, string>; fallback: Record<string, string> };
-  onPick(items: unknown[], options: { layout: string | null; captions?: { visible: boolean; overrides: Record<string, string> } }): void;
+  onPick(items: unknown[], options: { layout: string | null; captions?: { visible: boolean; overrides: Record<string, string> } }): Promise<void>;
 }
 type PickerSettings = GalleryPicker | { multiple?: false; onPick?: (item: EditorOptions['pickImage']) => void };
 interface EditorApi {
@@ -70,6 +94,24 @@ interface EditorApi {
   // No `status`/`scheduledAt`: the store decides status and nothing consumes
   // scheduled_at, so the editor sends neither (#121).
   buildPayload(): Omit<PostPair, 'status'> & { updatedAt?: string };
+}
+/** What `WriteRecovery.exportState()` stores with a DraftGuard record (#305). */
+interface StashRecovery {
+  version: 1;
+  expectedOwnerId: string;
+  kind: 'posts';
+  resource: string;
+  createKey: string;
+  baseUpdatedAt: string | null;
+  attempts: unknown[];
+}
+/** One owner-scoped DraftGuard record as `localStorage` holds it. */
+interface StashRecord {
+  key: string;
+  resource: string;
+  savedAt: string;
+  payload: StashPayload & { updatedAt?: string };
+  recovery: StashRecovery | null;
 }
 
 
@@ -85,6 +127,10 @@ async function loadEditor(options: EditorOptions = {}) {
   };
   const navigator = { onLine: true };
   const requests: { url: string; options: RequestInit }[] = [];
+  const galleryRequests: { url: string; options: RequestInit }[] = [];
+  const timers = new Map<number, () => void>();
+  let nextTimer = 0;
+  const prompts: ConfirmPrompt[] = [];
   const galleryPickers: GalleryPicker[] = [];
   const el = (id: string): Element => {
     const element = dom.document.getElementById(id);
@@ -103,13 +149,16 @@ async function loadEditor(options: EditorOptions = {}) {
   const local = storage(options.storage);
   if (options.stash) {
     const context = webcrypto.randomUUID(), recordId = webcrypto.randomUUID(), createKey = webcrypto.randomUUID();
-    const resource = 'post:' + options.stash.key.replace(/^swl:draft:/, '');
+    const isNew = options.stash.key === 'swl:draft:new';
+    const resource = isNew ? 'new' : 'post:' + options.stash.key.replace(/^swl:draft:/, '');
     const key = `swl:draft:u:${EDITOR_OWNER}:${resource}:${context}:record:${recordId}`;
+    const recovery: StashRecovery | null = options.stash.recovery === null ? null : {
+      version: 1, expectedOwnerId: EDITOR_OWNER, kind: 'posts', resource: isNew ? createKey : resource.slice(5), createKey,
+      baseUpdatedAt: null, attempts: [], ...options.stash.recovery,
+    };
     local.setItem(key, JSON.stringify({
       version: 1, ownerUserId: EDITOR_OWNER, resource, context, recordId, generation: 1,
-      savedAt: '2026-10-01T12:00:00Z', payload: options.stash.payload,
-      recovery: { version: 1, expectedOwnerId: EDITOR_OWNER, kind: 'posts', resource: resource.slice(5), createKey,
-        baseUpdatedAt: null, attempts: [] },
+      savedAt: '2026-10-01T12:00:00Z', payload: options.stash.payload, recovery,
     }));
   }
   class EasyMDE {
@@ -117,14 +166,24 @@ async function loadEditor(options: EditorOptions = {}) {
     private readonly changes: (() => void)[] = [];
     private readonly markers = new Set<{ start: number; end: number; cleared: boolean }>();
     private documentVersion = 0;
+    readonly undoHistory: string[] = [];
     input = dom.document.createElement('textarea');
     cursor: { line: number; ch: number } | null = null;
     selection: { from: { line: number; ch: number }; to: { line: number; ch: number } } | null = null;
     focusCalls = 0;
     codemirror = {
+      getCursor: () => this.cursor ?? { line: 0, ch: 0 },
+      undo: () => {
+        const previous = this.undoHistory.pop();
+        if (previous !== undefined) {
+          this.text = previous;
+          for (const callback of this.changes) callback();
+        }
+      },
       on: (event: string, callback: () => void) => { if (event === 'change' || event === 'changes') this.changes.push(callback); },
       refresh() {},
       getValue: () => this.text,
+      getLine: (line: number) => this.text.split('\n')[line] ?? '',
       setValue: (value: string) => { this.value(value); },
       getInputField: () => this.input,
       setCursor: (position: { line: number; ch: number }) => { this.cursor = position; },
@@ -162,6 +221,7 @@ async function loadEditor(options: EditorOptions = {}) {
       replaceRange: (value: string, from: { line: number; ch: number }, to: { line: number; ch: number }) => {
         const start = this.codemirror.indexFromPos(from);
         const end = this.codemirror.indexFromPos(to);
+        this.undoHistory.push(this.text);
         this.text = this.text.slice(0, start) + value + this.text.slice(end);
         const delta = value.length - (end - start);
         for (const marker of this.markers) {
@@ -185,12 +245,20 @@ async function loadEditor(options: EditorOptions = {}) {
   }
   const editors: EasyMDE[] = [];
   const ctx: Record<string, unknown> = {
+    ...galleryCodecBindings,
     document: dom.document,
+    SiteIdentity: { canonicalOrigin: options.canonicalOrigin ?? null },
     location: { search: options.search ?? '', pathname: '/admin/editor.html', href: 'http://localhost/admin/editor.html' + (options.search ?? ''), origin: 'http://localhost', host: 'localhost' },
     history: { replaceState() {} },
     sessionStorage: storage(),
     localStorage: local,
     fetch: async (url: string, init: RequestInit = {}) => {
+      if (String(url) === '/gallery/analyze') {
+        galleryRequests.push({ url: String(url), options: init });
+        if (options.galleryFetch) return options.galleryFetch(String(url), init);
+        const { bodyMarkdown } = JSON.parse(String(init.body)) as { bodyMarkdown: string };
+        return response(await analyzeGallerySource(bodyMarkdown));
+      }
       // Authentication uses the production validator; feature requests stay in
       // their own ledger so unrelated consumer assertions remain scoped.
       if (url === '/auth/me') return options.auth ? options.auth() : response({
@@ -213,8 +281,18 @@ async function loadEditor(options: EditorOptions = {}) {
       }
       return reply;
     },
-    setTimeout: options.clock ? setTimeout : () => 0,
-    clearTimeout: options.clock ? clearTimeout : () => {},
+    // Advance only the gallery debounce at the next microtask; deadline and
+    // draft-backup timers remain controlled as in the original harness. A
+    // `clock` fixture drives real (fake-timer) scheduling for refresh cases.
+    setTimeout: options.clock ? setTimeout : (callback: () => void, delay: number) => {
+      const id = ++nextTimer;
+      if (delay === 250) {
+        timers.set(id, callback);
+        queueMicrotask(() => { const run = timers.get(id); timers.delete(id); run?.(); });
+      }
+      return id;
+    },
+    clearTimeout: options.clock ? clearTimeout : (id: number) => { timers.delete(id); },
     setInterval: options.clock ? setInterval : () => 0,
     clearInterval: options.clock ? clearInterval : () => {},
     addEventListener: dom.document.addEventListener,
@@ -239,9 +317,16 @@ async function loadEditor(options: EditorOptions = {}) {
         super();
         settings.element.parentElement!.appendChild(this.input);
         editors.push(this);
+        options.onEditor?.(this, editors.length - 1);
       }
     },
-    AdminConfirm: { ask: async () => options.confirm === true, liveUrls: () => ({ de: '', en: '' }), urlsPlain: () => '' },
+    AdminConfirm: {
+      ask: async (prompt: ConfirmPrompt) => {
+        prompts.push(prompt);
+        return typeof options.confirm === 'function' ? options.confirm(prompt) : options.confirm === true;
+      },
+      liveUrls: () => ({ de: '', en: '' }), urlsPlain: () => '',
+    },
     MediaPicker: { open(settings: PickerSettings) {
       // A gallery picker is kept for the test to drive; a single-photo picker
       // answers with `pickImage` at once, as it always has.
@@ -274,7 +359,7 @@ async function loadEditor(options: EditorOptions = {}) {
     ])),
     GpxCopy: { en: new Proxy({}, { get: (_target, key) => String(key) }) },
     GpxMap: { create: async () => ({ render() {}, destroy() {}, resize() {} }) },
-    GpxEditor: { wire: () => ({ refresh: async () => {}, publishVersion: options.publishVersion ?? (() => null), publishError: () => null, noteCreated() {}, hasPreview: () => false, discard() {}, revisionNotice() {}, guardAction: () => true }) },
+    GpxEditor: { wire: () => ({ refresh: options.routeRefresh ?? (async () => true), publishVersion: options.publishVersion ?? (() => null), publishError: () => null, noteCreated() {}, hasPreview: () => false, discard() {}, revisionNotice() {}, guardAction: () => true }) },
     EditorGalleryImageOrigin: 'https://img',
     AltSuggest: { wire() {}, suggestHosted: options.caption ?? (() => Promise.reject(new Error('no model in test'))) },
   };
@@ -303,14 +388,17 @@ async function loadEditor(options: EditorOptions = {}) {
     guard.redirectToLogin = () => { redirects += 1; redirect(); };
     return guard;
   };
-  for (const file of ['waypoint-lookup.js', 'posts-filter.js', 'editor-title-image.js', 'gallery-fence.js', 'media-api.js', 'gallery-library.js', 'editor-galleries.js', 'editor-linter.js', 'llm.js', 'editor-excerpt.js', 'country-centers.js', 'country-coordinates.js', 'tabs.js', 'editor-review.js', 'editor-inspector.js']) {
-    vm.runInContext(readFileSync('public/' + file, 'utf8'), ctx, { filename: file });
+  for (const file of ['waypoint-lookup.js', 'posts-filter.js', 'editor-title-image.js', 'gallery-fence.js', 'gallery-metadata-warnings.js', 'media-api.js', 'gallery-library.js', 'editor-galleries.js', 'editor-linter.js', 'llm.js', 'editor-excerpt.js', 'country-centers.js', 'country-coordinates.js', 'tabs.js', 'editor-review.js', 'editor-inspector.js']) {
+    vm.runInContext(browserScript(file), ctx, {
+      filename: resolve('public/' + file),
+      importModuleDynamically: vm.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER,
+    });
   }
   if (options.review) (ctx.LLM as { reviewStory: Review }).reviewStory = options.review;
   await vm.runInContext(script, ctx);
   const api = vm.runInContext('({ populateForm, buildPayload, loadPost, doSaveDraft, renderAltAudit })', ctx) as EditorApi;
   return {
-    api, el, editors, created: dom.created, document: dom.document, requests, local, galleryPickers,
+    api, el, editors, created: dom.created, document: dom.document, requests, galleryRequests, prompts, local, galleryPickers,
     ctx,
     flushDialogEvents: dom.flushDialogEvents,
     logout: () => {
@@ -325,6 +413,27 @@ async function loadEditor(options: EditorOptions = {}) {
     setMobile(mobile: boolean) { media.matches = mobile; mediaChanged?.(); },
     dirtyCalls: () => dirty, redirects: () => redirects,
   };
+}
+interface StashStorage { readonly length: number; key(index: number): string | null; getItem(key: string): string | null }
+
+/** Every owner-scoped DraftGuard record the editor owner can read, newest first. */
+function stashRecords(local: StashStorage, resource?: string): StashRecord[] {
+  const prefix = `swl:draft:u:${EDITOR_OWNER}:`;
+  return Array.from({ length: local.length }, (_, index) => local.key(index)!)
+    .filter((key) => key.startsWith(prefix))
+    .map((key) => ({ ...JSON.parse(local.getItem(key)!) as Omit<StashRecord, 'key'>, key }))
+    .filter((record) => resource === undefined || record.resource === resource)
+    .sort((a, b) => b.savedAt.localeCompare(a.savedAt));
+}
+/** The record `DraftGuard.tryRestore()` would offer for `resource` (`post:<tk>` or `new`). */
+const latestStash = (local: StashStorage, resource: string): StashRecord | undefined => stashRecords(local, resource)[0];
+
+/** WriteRecovery's stored-version comparison (#305) — what replaced the "Reload the latest version?" dialog. */
+function storedComparison(h: { document: { querySelector(selector: string): Element | null } }) {
+  const panel = h.document.querySelector('.write-recovery');
+  if (!panel) throw new Error('editor.html mounted no write-recovery panel');
+  const compare = required(panel, 'details');
+  return { compare, status: required(panel, '[role="status"]'), useStored: required(compare, 'button') };
 }
 
 function fullPair(): PostPair {
@@ -363,7 +472,28 @@ describe('editor language modes and translation coverage', () => {
     expect(h.el(primary + 'Included').parentElement!.parentElement!.hidden).toBe(true);
     expect(h.el('publishBtn').disabled).toBe(false);
     expect(h.api.buildPayload()[secondary].omitted).toBe(true);
-    expect(h.el(primary === 'de' ? 'slugBaseDe' : 'slugBaseEn').textContent).toBe('localhost/');
+    expect(h.el(primary === 'de' ? 'slugBaseDe' : 'slugBaseEn').textContent).toBe('/');
+  });
+
+  it.each([
+    { primary: 'de', locales: ['de'] },
+    { primary: 'en', locales: ['en'] },
+    { primary: 'de', locales: ['de', 'en'] },
+    { primary: 'en', locales: ['de', 'en'] },
+  ] as const)('uses the canonical host and port with $primary-primary $locales previews', async (mode) => {
+    for (const canonicalOrigin of ['https://xn--bcher-kva.example:8443', 'http://localhost:3000', null]) {
+      const h = await loadEditor({
+        language: { primary: mode.primary, locales: [...mode.locales] }, canonicalOrigin, isAdmin: true,
+        fetch: async () => response({ images: [] }),
+      });
+      await settle();
+      await settle();
+      const host = canonicalOrigin ? new URL(canonicalOrigin).host : '';
+      for (const locale of mode.locales) {
+        expect(h.el(locale === 'de' ? 'slugBaseDe' : 'slugBaseEn').textContent)
+          .toBe(host + (locale === mode.primary ? '/' : '/' + locale + '/'));
+      }
+    }
   });
 
   it.each(['de', 'en'] as const)('lets %s-primary authors omit and retain an unfinished secondary', async (primary) => {
@@ -422,6 +552,347 @@ function minimalPair(): StashPayload {
   const loc = (locale: 'de' | 'en') => ({ locale, slug: 'x', title: 'X', excerpt: '', country: '', bodyMarkdown: '', images: {} });
   return { translationKey: 'tk1', status: 'draft', shared: {}, de: loc('de'), en: loc('en') };
 }
+
+describe('serialized writes in the real editor', () => {
+  const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
+  // `/posts`, `/posts/:tk`, `/posts/:tk/publish|unpublish` against a real store.
+  // A new post arrives under the client's own key (#305); the server assigns none.
+  function storeFetch(posts: PostStore): Fetch {
+    return async (url, options) => {
+      const route = /^\/posts(?:\/([^/]+)(?:\/(publish|unpublish))?)?$/.exec(url);
+      const tk = route?.[1];
+      try {
+        if (route && !route[2] && ['POST', 'PUT'].includes(options?.method ?? '')) {
+          const payload = JSON.parse(String(options!.body)) as PostPair & { updatedAt?: string };
+          return response(await posts.upsertDraft(
+            { ...payload, translationKey: payload.translationKey || tk! },
+            payload.updatedAt ? new Date(payload.updatedAt) : undefined,
+          ));
+        }
+        if (route?.[2] === 'publish') {
+          const tokens = JSON.parse(String(options!.body)) as { baseUpdatedAt: string; baseRouteVersion: string | null; baseLanguageUpdatedAt: string };
+          // The harness serves one fixed SiteLanguage revision; it stands for the
+          // store's current one here. Language-token refusal is pinned in posts/server tests.
+          expect(tokens.baseLanguageUpdatedAt).toBe('2026-10-27T00:00:00.000Z');
+          const baseLanguageUpdatedAt = (await posts.language.get()).updatedAt;
+          // The real route's acknowledgement shape (#297): published + updatedAt + build attempt.
+          return response({ published: true, ...await posts.publish(tk!, { ...tokens, baseUpdatedAt: new Date(tokens.baseUpdatedAt), baseLanguageUpdatedAt }), build: { ok: true, attemptId: 'r1', release: 'r1' } });
+        }
+        if (route?.[2] === 'unpublish') return response({ unpublished: true, ...await posts.unpublish(tk!), build: { ok: true, attemptId: 'r1', release: 'r1' } });
+        return response(route && tk ? await posts.get(tk) : []);
+      } catch (error) {
+        if (error instanceof PostError) return response({ error: error.message, code: error.code }, 409);
+        throw error;
+      }
+    };
+  }
+
+  it.each([false, true])('persists both rapid save intents without saving later typing (new post: %s)', async (newPost) => {
+    const posts = memoryPostStore();
+    if (!newPost) await posts.upsertDraft(fullPair());
+    const send = storeFetch(posts);
+    const held = Promise.withResolvers<void>();
+    const savedTitles: string[] = [];
+    // The key a new post is created under: the client's, bound at send time (#305).
+    let tk = 'tk1';
+    const h = await loadEditor({ fetch: async (url, options) => {
+      const res = await send(url, options);
+      if (options?.method === 'PUT' || options?.method === 'POST') {
+        if (options.method === 'POST') tk = JSON.parse(String(options.body)).translationKey;
+        savedTitles.push((await posts.get(tk))!.de.title);
+        if (savedTitles.length === 1) await held.promise;
+      }
+      return res;
+    } });
+    if (newPost) h.api.populateForm(fullPair());
+    else await h.api.loadPost('tk1');
+    h.el('deTitle').value = 'First click';
+    h.el('deTitle').fire('input');
+    const first = h.api.doSaveDraft();
+    h.el('deTitle').value = 'Second click';
+    h.el('deTitle').fire('input');
+    const second = h.api.doSaveDraft();
+    h.el('deTitle').value = 'Not saved yet';
+    h.el('deTitle').fire('input');
+    await settle();
+    expect(savedTitles).toEqual(['First click']);
+    expect(h.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveSaving']);
+    held.resolve();
+    expect(await Promise.all([first, second])).toEqual([true, true]);
+    expect(savedTitles).toEqual(['First click', 'Second click']);
+    expect((await posts.get(tk))!.de.title).toBe('Second click');
+    expect(await posts.list()).toHaveLength(1);
+    expect(h.el('deTitle').value).toBe('Not saved yet');
+    expect(h.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveUnsaved']);
+    expect(h.prompts.map((prompt) => prompt.title)).toEqual([]);
+    const writes = h.requests.filter(({ options }) => options.method === 'POST' || options.method === 'PUT');
+    expect(writes.map(({ options }) => options.method)).toEqual(newPost ? ['POST', 'PUT'] : ['PUT', 'PUT']);
+    if (newPost) expect(tk).toMatch(UUID);
+    // The queued intent follows the created identity, never a second create.
+    expect(writes[1]!.url).toBe('/posts/' + tk);
+    expect(JSON.parse(String(writes[1]!.options.body)).translationKey).toBe(tk);
+    expect(h.el('actionError').textContent).toBe('');
+  });
+
+  it.each([
+    { action: 'publish', buildOk: true },
+    { action: 'publish', buildOk: false },
+    { action: 'unpublish', buildOk: true },
+  ])('waits for a held $action response before saving with its committed token (build: $buildOk)', async ({ action, buildOk }) => {
+    const posts = memoryPostStore();
+    await posts.upsertDraft(fullPair());
+    if (action === 'unpublish') await posts.publish('tk1', await publishTokens(posts, 'tk1'));
+    const send = storeFetch(posts);
+    const held = Promise.withResolvers<void>();
+    let actionToken: string | undefined;
+    const h = await loadEditor({ confirm: true, fetch: async (url, options) => {
+      const res = await send(url, options);
+      if (url === '/posts/tk1/' + action) {
+        actionToken = (await posts.get('tk1'))!.updatedAt.toISOString();
+        await held.promise;
+        if (!buildOk) return response({ [action === 'publish' ? 'published' : 'unpublished']: true, updatedAt: actionToken, build: { ok: false, attemptId: 'failed', code: 'build_failed', error: 'build failed' } });
+      }
+      return res;
+    } });
+    await h.api.loadPost('tk1');
+    h.el(action + 'Btn').click();
+    await settle();
+    expect(actionToken).toBeDefined();
+    h.el('deTitle').value = 'Typo corrected';
+    h.el('deTitle').fire('input');
+    const saving = h.api.doSaveDraft();
+    await settle();
+    const savesBeforeReply = h.requests.filter(({ options }) => options.method === 'PUT').length;
+    expect(savesBeforeReply).toBe(action === 'publish' ? 1 : 0);
+    held.resolve();
+    expect(await saving).toBe(true);
+    const finalSave = h.requests.filter(({ options }) => options.method === 'PUT').at(-1)!;
+    expect(JSON.parse(String(finalSave.options.body)).updatedAt).toBe(actionToken);
+    expect((await posts.get('tk1'))!.de.title).toBe('Typo corrected');
+    expect(h.prompts.map((prompt) => prompt.title)).not.toContain('Reload the latest version?');
+    expect(h.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveSaved']);
+  });
+
+  it('keeps the publish save and publish request together ahead of a later Save intent', async () => {
+    const posts = memoryPostStore();
+    await posts.upsertDraft(fullPair());
+    const send = storeFetch(posts);
+    const held = Promise.withResolvers<void>();
+    let saves = 0;
+    const h = await loadEditor({ confirm: true, fetch: async (url, options) => {
+      const res = await send(url, options);
+      if (options?.method === 'PUT' && ++saves === 1) await held.promise;
+      return res;
+    } });
+    await h.api.loadPost('tk1');
+    h.el('deTitle').value = 'Publish this version';
+    h.el('deTitle').fire('input');
+    h.el('publishBtn').click();
+    h.el('deTitle').value = 'Save this later version';
+    h.el('deTitle').fire('input');
+    const saving = h.api.doSaveDraft();
+    await settle();
+    expect((await posts.get('tk1'))!.de.title).toBe('Publish this version');
+    held.resolve();
+    expect(await saving).toBe(true);
+    expect(h.requests.filter(({ options }) => options.method === 'PUT' || options.method === 'POST')
+      .map(({ url }) => url)).toEqual(['/posts/tk1', '/posts/tk1/publish', '/posts/tk1']);
+    expect((await posts.get('tk1'))!.de.title).toBe('Save this later version');
+    expect(h.prompts.map((prompt) => prompt.title)).not.toContain('Reload the latest version?');
+  });
+
+  it('releases the chain after a request failure without retrying the failed intent', async () => {
+    const posts = memoryPostStore();
+    await posts.upsertDraft(fullPair());
+    const send = storeFetch(posts);
+    const held = Promise.withResolvers<Response>();
+    let saves = 0;
+    const h = await loadEditor({ fetch: async (url, options) => {
+      if (options?.method === 'PUT' && ++saves === 1) return held.promise;
+      return send(url, options);
+    } });
+    await h.api.loadPost('tk1');
+    h.el('deTitle').value = 'Failed intent';
+    h.el('deTitle').fire('input');
+    const first = h.api.doSaveDraft();
+    h.el('deTitle').value = 'Next explicit intent';
+    h.el('deTitle').fire('input');
+    const second = h.api.doSaveDraft();
+    await settle();
+    expect(saves).toBe(1);
+    held.reject(new Error('connection failed'));
+    expect(await Promise.all([first, second])).toEqual([false, true]);
+    expect(saves).toBe(2);
+    expect((await posts.get('tk1'))!.de.title).toBe('Next explicit intent');
+    expect(h.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveSaved']);
+  });
+
+  it.each([false, true])('does not overwrite a foreign writer when queued saves conflict (use stored: %s)', async (useStored) => {
+    const posts = memoryPostStore();
+    await posts.upsertDraft(fullPair());
+    const send = storeFetch(posts);
+    const held = Promise.withResolvers<void>();
+    let saves = 0;
+    const h = await loadEditor({ fetch: async (url, options) => {
+      if (options?.method === 'PUT' && ++saves === 1) await held.promise;
+      return send(url, options);
+    } });
+    await h.api.loadPost('tk1');
+    h.el('deTitle').value = 'My first intent';
+    h.el('deTitle').fire('input');
+    const first = h.api.doSaveDraft();
+    h.el('deTitle').value = 'My queued intent';
+    h.el('deTitle').fire('input');
+    const second = h.api.doSaveDraft();
+    await settle();
+    const latest = (await posts.get('tk1'))!;
+    const foreign = await posts.upsertDraft({ ...latest, de: { ...latest.de, title: 'Foreign writer' } }, latest.updatedAt);
+    held.resolve();
+    expect(await Promise.all([first, second])).toEqual([false, false]);
+    expect((await posts.get('tk1'))!.de.title).toBe('Foreign writer');
+    // The conflict's probe found a changed stored version: the comparison is held
+    // open and the queued intent is refused locally, never replayed (#305).
+    expect(saves).toBe(1);
+    const comparison = storedComparison(h);
+    expect(comparison.compare.hidden).toBe(false);
+    expect(comparison.status.textContent).toBe(ui.en['editor.chrome.writeChanged']);
+    expect(h.prompts).toEqual([]);
+    expect(h.el('deTitle').value).toBe('My queued intent');
+    expect(h.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveUnsaved']);
+    if (!useStored) return;
+    comparison.useStored.click();
+    await settle();
+    expect(saves).toBe(1);
+    expect(comparison.compare.hidden).toBe(true);
+    expect(h.el('deTitle').value).toBe('Foreign writer');
+    expect(h.api.buildPayload().updatedAt).toBe(foreign.updatedAt.toISOString());
+    expect(h.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveSaved']);
+  });
+
+  it('rejects Publish during a held conflict reload without replaying the old form against the foreign version', async () => {
+    const posts = memoryPostStore();
+    await posts.upsertDraft(fullPair());
+    const reload = Promise.withResolvers<boolean>();
+    let holdReload = false;
+    const h = await loadEditor({ confirm: true, fetch: storeFetch(posts),
+      // "Use stored" reloads through loadPost, whose route-refresh barrier is held here.
+      routeRefresh: () => holdReload ? reload.promise : Promise.resolve(true) });
+    await h.api.loadPost('tk1');
+    const initial = (await posts.get('tk1'))!;
+    const foreign = await posts.upsertDraft({
+      ...initial,
+      de: { ...initial.de, title: 'Foreign DE', bodyMarkdown: 'Foreign German body' },
+      en: { ...initial.en, title: 'Foreign EN', bodyMarkdown: 'Foreign English body' },
+    }, initial.updatedAt);
+    h.el('deTitle').value = 'Stale local title';
+    h.el('deTitle').fire('input');
+    const saving = h.api.doSaveDraft();
+    const olderQueuedSave = h.api.doSaveDraft();
+    expect(await Promise.all([saving, olderQueuedSave])).toEqual([false, false]);
+    expect(h.el('deTitle').value).toBe('Stale local title');
+    expect(h.prompts).toEqual([]);
+    const comparison = storedComparison(h);
+    expect(comparison.compare.hidden).toBe(false);
+
+    holdReload = true;
+    comparison.useStored.click();
+    await settle();
+    expect(h.el('deTitle').value).toBe('Foreign DE');
+    // The barrier disables Publish (#284); a click is inert, no prompt, no replay.
+    expect(h.el('publishBtn').disabled).toBe(true);
+    h.el('publishBtn').click();
+    await settle();
+    expect(h.prompts).toEqual([]);
+    reload.resolve(true);
+    await settle();
+    expect(h.requests.filter(({ options }) => options.method === 'PUT' || options.method === 'POST')
+      .map(({ url }) => url)).toEqual(['/posts/tk1']);
+    // The save response adds its gallery warnings; the stored pair does not carry them.
+    const { galleryWarnings, ...foreignStored } = foreign;
+    expect(galleryWarnings).toEqual([]);
+    expect(await posts.get('tk1')).toEqual(foreignStored);
+    expect(h.el('deTitle').value).toBe('Foreign DE');
+    expect(h.el('enTitle').value).toBe('Foreign EN');
+    expect(h.editors.map((editor) => editor.value())).toEqual(['Foreign German body', 'Foreign English body']);
+    expect(h.api.buildPayload().updatedAt).toBe(foreign.updatedAt.toISOString());
+    expect(h.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveSaved']);
+    expect(comparison.compare.hidden).toBe(true);
+    expect(h.el('publishBtn').disabled).toBe(false);
+
+    // A new explicit action after the completed reload uses the accepted form.
+    h.el('publishBtn').click();
+    await settle();
+    expect(h.prompts.map((prompt) => prompt.title)).toEqual(['Publish to the live site?']);
+    expect((await posts.get('tk1'))!.status).toBe('published');
+    expect((await posts.get('tk1'))!.en.bodyMarkdown).toBe('Foreign English body');
+  });
+});
+
+describe('unpublish concurrency token in the real editor', () => {
+  it.each(['none', 'before', 'after'] as const)('preserves version ownership (other writer: %s)', async (otherWriter) => {
+    const posts = memoryPostStore();
+    await posts.upsertDraft(fullPair());
+    await posts.publish('tk1', await publishTokens(posts, 'tk1'));
+    let unpublishToken: string | undefined;
+    const h = await loadEditor({ confirm: true, fetch: async (url, options) => {
+      if (url === '/posts/tk1/unpublish') {
+        const committed = await posts.unpublish('tk1');
+        unpublishToken = committed.updatedAt.toISOString();
+        if (otherWriter === 'after') {
+          const pair = (await posts.get('tk1'))!;
+          await posts.upsertDraft({ ...pair, de: { ...pair.de, title: 'Another tab' } }, pair.updatedAt);
+        }
+        return response({ unpublished: true, ...committed, build: { ok: true } });
+      }
+      if (url === '/posts/tk1' && options?.method === 'PUT') {
+        const payload = JSON.parse(String(options.body)) as PostPair & { updatedAt: string };
+        try {
+          return response(await posts.upsertDraft(payload, new Date(payload.updatedAt)));
+        } catch (error) {
+          if (error instanceof PostError) return response({ error: error.message, code: error.code }, 409);
+          throw error;
+        }
+      }
+      return response(url === '/posts/tk1' ? await posts.get('tk1') : []);
+    } });
+    expect(await h.api.loadPost('tk1')).toBe(true);
+    const loadedToken = h.api.buildPayload().updatedAt;
+    if (otherWriter === 'before') {
+      const pair = (await posts.get('tk1'))!;
+      await posts.upsertDraft({ ...pair, de: { ...pair.de, title: 'Another tab' } }, pair.updatedAt);
+    }
+    h.el('unpublishBtn').click();
+    await settle();
+    expect(h.api.buildPayload().updatedAt).toBe(otherWriter === 'before' ? loadedToken : unpublishToken);
+    h.el('deTitle').value = 'My edit after unpublish';
+    h.el('deTitle').fire('input');
+    expect(await h.api.doSaveDraft()).toBe(otherWriter === 'none');
+    // Only the unpublish confirm asked; a stale save surfaces the stored-version comparison (#305).
+    expect(h.prompts).toHaveLength(1);
+    expect(storedComparison(h).compare.hidden).toBe(otherWriter === 'none');
+    expect((await posts.get('tk1'))!.de.title).toBe(otherWriter === 'none' ? 'My edit after unpublish' : 'Another tab');
+  });
+
+  it('keeps the loaded token and published state when unpublish fails', async () => {
+    const published = { publishedAt: '2026-10-24T10:00:00.000Z' };
+    const post = { ...fullPair(), status: 'published', updatedAt: '2026-10-25T10:00:00.000Z',
+      de: { ...fullPair().de, ...published }, en: { ...fullPair().en, ...published } };
+    const h = await loadEditor({ confirm: true, fetch: async (url) => {
+      if (url === '/posts/tk1/unpublish') return response({
+        error: 'storage_read_only', updatedAt: '2026-10-25T11:00:00.000Z',
+      }, 503);
+      return response(url === '/posts/tk1' ? post : []);
+    } });
+    await h.api.loadPost('tk1');
+    h.el('unpublishBtn').click();
+    await settle();
+    expect(h.api.buildPayload().updatedAt).toBe(post.updatedAt);
+    expect(h.el('slugFieldDe').disabled).toBe(true);
+    expect(h.el('unpublishBtn').disabled).toBe(false);
+    // #297: a 5xx is an unknown outcome; the raw server error is never shown.
+    expect(h.el('actionError').textContent).toBe(ui.en['admin.build.unknown']);
+  });
+});
 
 describe('complete bilingual conflict reload', () => {
   it('reloads both locales before using the new token on the next save', async () => {
@@ -1223,17 +1694,51 @@ describe('editor.html inline script against its own markup', () => {
   describe('slug auto-derivation', () => {
     const type = (el: (id: string) => Element, id: string, value: string) => { el(id).value = value; el(id).fire('input'); };
 
+    it.each(['de', 'en'] as const)('bounds only newly derived %s slugs after ASCII normalization, in parity with the server', async (locale) => {
+      const { el } = await loadEditor();
+      const field = locale === 'de' ? 'slugFieldDe' : 'slugFieldEn';
+      for (const length of [250, 251, 252, 8192]) {
+        type(el, locale + 'Title', 'Ä'.repeat(length));
+        const slug = el(field).value;
+        expect(slug).toBe('a'.repeat(Math.min(length, MAX_SLUG_BYTES)));
+        if (typeof slug !== 'string') throw new TypeError('Expected a string slug value');
+        expect(isSafeSlug(slug)).toBe(true);
+      }
+      type(el, locale + 'Title', 'a'.repeat(250) + ' b');
+      expect(el(field).value).toBe('a'.repeat(250));
+      type(el, locale + 'Title', '!!!');
+      expect(el(field).value).toBe('untitled');
+      const manual = 'm'.repeat(252);
+      type(el, field, manual);
+      type(el, locale + 'Title', 'Changed title');
+      expect(el(field).value).toBe(manual);
+    });
+
+    it.each(['draft', 'published'] as const)('does not truncate loaded/restored %s URLs on title edits or serialization', async (status) => {
+      const { api, el } = await loadEditor();
+      const loaded = fullPair();
+      loaded.status = status;
+      loaded.de.slug = 'd'.repeat(252);
+      loaded.en.slug = 'e'.repeat(8192);
+      api.populateForm(loaded);
+      type(el, 'deTitle', 'Changed DE');
+      type(el, 'enTitle', 'Changed EN');
+      const payload = api.buildPayload();
+      expect(payload.de.slug).toBe(loaded.de.slug);
+      expect(payload.en.slug).toBe(loaded.en.slug);
+    });
+
     it('derives from the title on a new post, stops once the slug is hand-edited, resumes when cleared', async () => {
-        const { el } = await loadEditor();
-        type(el, 'deTitle', 'Vier Tage in Bukarest');
-        expect(el('slugFieldDe').value).toBe('vier-tage-in-bukarest');
-        type(el, 'slugFieldDe', 'bukarest');
-        type(el, 'deTitle', 'Vier Tage in Bukarest!');
-        expect(el('slugFieldDe').value).toBe('bukarest');
-        type(el, 'slugFieldDe', '');
-        type(el, 'deTitle', 'Bukarest im Herbst');
-        expect(el('slugFieldDe').value).toBe('bukarest-im-herbst');
-      });
+      const { el } = await loadEditor();
+      type(el, 'deTitle', 'Vier Tage in Bukarest');
+      expect(el('slugFieldDe').value).toBe('vier-tage-in-bukarest');
+      type(el, 'slugFieldDe', 'bukarest');
+      type(el, 'deTitle', 'Vier Tage in Bukarest!');
+      expect(el('slugFieldDe').value).toBe('bukarest');
+      type(el, 'slugFieldDe', '');
+      type(el, 'deTitle', 'Bukarest im Herbst');
+      expect(el('slugFieldDe').value).toBe('bukarest-im-herbst');
+    });
 
     it('never re-derives a slug loaded from the server, even when the title is edited', async () => {
         const { api, el } = await loadEditor();
@@ -1307,37 +1812,38 @@ function required(root: Element, selector: string): Element {
 
 describe('Story review in the real editor', () => {
   it('opens an accessible dialog and renders all quick checks before configuration resolves', async () => {
-      const config = Promise.withResolvers<Response>();
-      const h = await loadEditor({ fetch: () => config.promise });
-      h.api.populateForm(fullPair());
-      h.el('deTitle').value = 'A long enough fictional trip title';
-      h.el('deExcerpt').value = 'Short';
-      h.editors[0]!.value('## Walking route\n\nOrdinary draft prose.');
-      const dirtyBefore = h.dirtyCalls();
-      const before = h.api.buildPayload();
-      h.el('reviewStory').focus();
-      h.el('reviewStory').click();
-  
-      const dialog = h.el('storyReviewDialog');
-      expect(dialog.tagName).toBe('DIALOG');
-      expect(dialog.open).toBe(true);
-      expect(dialog.getAttribute('aria-labelledby')).toBe(h.el('storyReviewHeading').id);
-      expect(h.el('reviewStatus').getAttribute('role')).toBe('status');
-      expect(h.el('reviewStatus').getAttribute('aria-live')).toBe('polite');
-      expect(h.document.activeElement).toBe(h.el('closeReview'));
-      expect(h.el('reviewInstant').querySelectorAll('[data-review-criterion]').map((node) => node.dataset.reviewCriterion))
-        .toEqual(['title', 'excerpt', 'headings', 'altText', 'internalLinks']);
-      expect(required(h.el('reviewInstant'), '[data-review-criterion="title"]').textContent).toContain('Pass');
-      expect(required(h.el('reviewInstant'), '[data-review-criterion="excerpt"]').textContent).toContain('Warning');
-      expect(h.el('reviewSemantic').getAttribute('aria-busy')).toBe('true');
-      expect(h.el('reviewSemantic').children).toHaveLength(0);
-      expect(h.dirtyCalls()).toBe(dirtyBefore);
-      expect(h.api.buildPayload()).toEqual(before);
-      expect(h.el('saveDraft').disabled).toBe(false);
-      expect(h.el('publishBtn').disabled).toBe(false);
-      h.el('closeReview').click();
-      h.flushDialogEvents();
-    });
+    const config = Promise.withResolvers<Response>();
+    const h = await loadEditor({ fetch: () => config.promise });
+    h.api.populateForm(fullPair());
+    h.el('deTitle').value = 'A long enough fictional trip title';
+    h.el('deExcerpt').value = 'Short';
+    h.editors[0]!.value('## Walking route\n\nOrdinary draft prose.');
+    const dirtyBefore = h.dirtyCalls();
+    const before = h.api.buildPayload();
+    h.el('reviewStory').focus();
+    h.el('reviewStory').click();
+    await settle();
+
+    const dialog = h.el('storyReviewDialog');
+    expect(dialog.tagName).toBe('DIALOG');
+    expect(dialog.open).toBe(true);
+    expect(dialog.getAttribute('aria-labelledby')).toBe(h.el('storyReviewHeading').id);
+    expect(h.el('reviewStatus').getAttribute('role')).toBe('status');
+    expect(h.el('reviewStatus').getAttribute('aria-live')).toBe('polite');
+    expect(h.document.activeElement).toBe(h.el('closeReview'));
+    expect(h.el('reviewInstant').querySelectorAll('[data-review-criterion]').map((node) => node.dataset.reviewCriterion))
+      .toEqual(['title', 'excerpt', 'headings', 'altText', 'internalLinks']);
+    expect(required(h.el('reviewInstant'), '[data-review-criterion="title"]').textContent).toContain('Pass');
+    expect(required(h.el('reviewInstant'), '[data-review-criterion="excerpt"]').textContent).toContain('Warning');
+    expect(h.el('reviewSemantic').getAttribute('aria-busy')).toBe('true');
+    expect(h.el('reviewSemantic').children).toHaveLength(0);
+    expect(h.dirtyCalls()).toBe(dirtyBefore);
+    expect(h.api.buildPayload()).toEqual(before);
+    expect(h.el('saveDraft').disabled).toBe(false);
+    expect(h.el('publishBtn').disabled).toBe(false);
+    h.el('closeReview').click();
+    h.flushDialogEvents();
+  });
 
   it.each(['de', 'en'] as const)('reviews the unsaved %s fields and CodeMirror body, then renders semantic suggestions without applying them', async (locale) => {
     const provider = Promise.withResolvers<Response>();
@@ -1386,6 +1892,7 @@ describe('Story review in the real editor', () => {
   ])('preserves instant checks and offers recovery after $name', async ({ provider }) => {
     const h = await loadEditor({ fetch: reviewNetwork(provider) });
     h.el('reviewStory').click();
+    await settle();
     const quickChecks = h.el('reviewInstant').textContent;
     await settle();
 
@@ -1406,6 +1913,7 @@ describe('Story review in the real editor', () => {
     const h = await loadEditor({ isAdmin: false, fetch: reviewNetwork(async () => completion(reviewResult()), { ...reviewConfig, aiProvider }) });
     await settle();
     h.el('reviewStory').click();
+    await settle();
     const instant = h.el('reviewInstant').textContent;
     await settle();
 
@@ -1423,6 +1931,7 @@ describe('Story review in the real editor', () => {
     const h = await loadEditor({ isAdmin: true, fetch: async () => response({ error: 'private-config-detail' }, 503) });
     await settle();
     h.el('reviewStory').click();
+    await settle();
     const instant = h.el('reviewInstant').textContent;
     await settle();
 
@@ -1497,33 +2006,36 @@ describe('Story review in the real editor', () => {
   });
 
   it('jumps to real inline and gallery lines, then hero alt, without a queued close stealing focus', async () => {
-      const config = Promise.withResolvers<Response>();
-      const h = await loadEditor({ fetch: () => config.promise });
-      h.el('tabbtn-en').click();
-      h.el('enHeroSrc').value = 'https://img.invalid/hero';
-      h.el('enHeroAlt').value = '';
-      h.editors[1]!.value([
-        '## Route', '', '![](https://img.invalid/inline)', '',
-        '```gallery', '#layout: column', '', 'https://img.invalid/gallery | 640x480', '```',
-      ].join('\n'));
-  
-      for (const [line, cursor] of [[3, 2], [8, 7]]) {
-        h.el('reviewStory').click();
-        required(h.el('reviewInstant'), `[data-review-action="jump"][data-line="${line}"]`).click();
-        expect(h.el('storyReviewDialog').open).toBe(false);
-        expect(h.editors[1]!.cursor).toEqual({ line: cursor, ch: 0 });
-        expect(h.document.activeElement).toBe(h.editors[1]!.input);
-        h.flushDialogEvents();
-        expect(h.document.activeElement).toBe(h.editors[1]!.input);
-      }
+    const config = Promise.withResolvers<Response>();
+    const h = await loadEditor({ fetch: () => config.promise });
+    h.el('tabbtn-en').click();
+    h.el('enHeroSrc').value = 'https://img.invalid/hero';
+    h.el('enHeroAlt').value = '';
+    h.editors[1]!.value([
+      '## Route', '', '![](https://img.invalid/inline)', '',
+      '```gallery', '#layout: column', '', 'https://img.invalid/gallery | 640x480', '```',
+    ].join('\n'));
+
+    for (const [line, cursor] of [[3, 2], [8, 7]]) {
       h.el('reviewStory').click();
-      required(h.el('reviewInstant'), '[data-review-action="jump"][data-target="hero"]').click();
+      await settle();
+      required(h.el('reviewInstant'), `[data-review-action="jump"][data-line="${line}"]`).click();
+      await settle();
       expect(h.el('storyReviewDialog').open).toBe(false);
-      expect(h.document.activeElement).toBe(h.el('enHeroAlt'));
+      expect(h.editors[1]!.cursor).toEqual({ line: cursor, ch: 0 });
+      expect(h.document.activeElement).toBe(h.editors[1]!.input);
       h.flushDialogEvents();
-      expect(h.document.activeElement).toBe(h.el('enHeroAlt'));
-      expect(h.editors[0]!.focusCalls).toBe(0);
-    });
+      expect(h.document.activeElement).toBe(h.editors[1]!.input);
+    }
+    h.el('reviewStory').click();
+    await settle();
+    required(h.el('reviewInstant'), '[data-review-action="jump"][data-target="hero"]').click();
+    expect(h.el('storyReviewDialog').open).toBe(false);
+    expect(h.document.activeElement).toBe(h.el('enHeroAlt'));
+    h.flushDialogEvents();
+    expect(h.document.activeElement).toBe(h.el('enHeroAlt'));
+    expect(h.editors[0]!.focusCalls).toBe(0);
+  });
 
   it('wraps keyboard focus including asynchronous actions and restores the trigger on Escape or Close', async () => {
     const h = await loadEditor({ fetch: reviewNetwork(async () => completion(reviewResult())) });
@@ -1871,6 +2383,218 @@ describe('inline gallery editing', () => {
   }
   const settleAll = async () => { for (let i = 0; i < 12; i++) await settle(); };
 
+  const pickerOptions = { layout: 'column', captions: { visible: true, overrides: {} } };
+  const pickedPhoto = { ...mediaRow('replacement', { de: 'A & <view>', en: 'View' }, { de: '', en: '' }), width: 900, height: 600 };
+  const analyzeRequest: Fetch = async (_url, init) => {
+    const { bodyMarkdown } = JSON.parse(String(init?.body)) as { bodyMarkdown: string };
+    return response(await analyzeGallerySource(bodyMarkdown));
+  };
+  interface PickerHarness {
+    editors: { codemirror: {
+      setCursor(position: { line: number; ch: number }): void;
+      posFromIndex(index: number): { line: number; ch: number };
+    } }[];
+    el(id: string): Element;
+    galleryPickers: GalleryPicker[];
+  }
+  async function openPicker(h: PickerHarness, cursor: number) {
+    h.editors[0]!.codemirror.setCursor(h.editors[0]!.codemirror.posFromIndex(cursor));
+    h.el('deGallery').click();
+    await settleAll();
+    const picker = h.galleryPickers.at(-1);
+    if (!picker) throw new Error('The authenticated analysis did not open a gallery picker');
+    return picker;
+  }
+
+  it('sends the exact unsaved snapshot once per debounced change, not once per photo', async () => {
+    const h = await loadEditor({ fetch: mediaNetwork([]) });
+    await settleAll();
+    const count = h.galleryRequests.length;
+    const editor = h.editors[0]!;
+    editor.value('A first unsaved edit');
+    editor.value('A newer edit');
+    const body = '🧭 Current\r\n\r\n> ~~~gallery extra\r\n> https://img/photo\r\n> https://img/photo\r\n> ~~~';
+    editor.value(body);
+    expect(h.galleryRequests).toHaveLength(count);
+    await settleAll();
+    const requests = h.galleryRequests.slice(count);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.url).toBe('/gallery/analyze');
+    expect(requests[0]!.options).toMatchObject({
+      method: 'POST', credentials: 'same-origin', cache: 'no-store',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    expect(JSON.parse(String(requests[0]!.options.body))).toEqual({ bodyMarkdown: body });
+    expect(h.document.querySelectorAll('.editor-gallery')).toHaveLength(1);
+    expect(h.document.querySelectorAll('.editor-gallery__alt')).toHaveLength(2);
+    expect(editor.value()).toBe(body);
+    expect(editor.undoHistory).toEqual([]);
+  });
+
+  it('discards a late analysis of old source instead of installing stale widget ranges', async () => {
+    const old = '~~~gallery\nhttps://img/old\n~~~';
+    const current = '> ~~~gallery extra\n> https://img/current\n> ~~~';
+    const late = Promise.withResolvers<Response>();
+    const h = await loadEditor({
+      fetch: mediaNetwork([]),
+      galleryFetch: (url, init) => JSON.parse(String(init?.body)).bodyMarkdown === old
+        ? late.promise : analyzeRequest(url, init),
+    });
+    const pair = fullPair();
+    pair.de.bodyMarkdown = old;
+    h.api.populateForm(pair);
+    await settleAll();
+    expect(h.document.querySelectorAll('.editor-gallery')).toEqual([]);
+    h.editors[0]!.value(current);
+    await settleAll();
+    expect(h.document.querySelectorAll('.editor-gallery')).toHaveLength(1);
+    const before = h.api.buildPayload();
+    const dirty = h.dirtyCalls();
+    late.resolve(response(await analyzeGallerySource(old)));
+    await settleAll();
+    expect(h.api.buildPayload()).toEqual(before);
+    expect(h.dirtyCalls()).toBe(dirty);
+    expect(h.editors[0]!.undoHistory).toEqual([]);
+    expect(h.document.querySelectorAll('.editor-gallery')).toHaveLength(1);
+    expect(h.document.querySelector('.editor-gallery')!.textContent).not.toContain('old');
+    const picker = await openPicker(h, current.indexOf('https://img/current'));
+    await picker.onPick([pickedPhoto], pickerOptions);
+    expect(h.editors[0]!.value()).toContain('https://img/replacement');
+    expect(h.editors[0]!.value()).not.toContain('https://img/old');
+  });
+
+  it('leaves raw source and undo untouched offline, with localized retry and no lexical fallback', async () => {
+    let offline = true;
+    const h = await loadEditor({
+      fetch: mediaNetwork([]),
+      galleryFetch: (url, init) => offline ? Promise.reject(new Error('offline')) : analyzeRequest(url, init),
+    });
+    const pair = pairWithGallery();
+    h.api.populateForm(pair);
+    const before = h.api.buildPayload();
+    const dirty = h.dirtyCalls();
+    await settleAll();
+    expect(h.document.querySelectorAll('.editor-gallery')).toEqual([]);
+    for (const locale of ['de', 'en'] as const) {
+      const status = h.el(locale + 'GalleryView').parentElement!;
+      expect(status.textContent).toContain(ui[locale]['editor.gallery.analysisFailed']);
+      expect(status.querySelectorAll('button').some((button) =>
+        !button.hidden && button.textContent === ui[locale]['editor.gallery.retry'])).toBe(true);
+    }
+    h.editors[0]!.codemirror.setCursor({ line: 3, ch: 0 });
+    h.el('deGallery').click();
+    await settleAll();
+    expect(h.galleryPickers).toEqual([]);
+    expect(h.el('deBodyImgStatus').textContent).toContain(ui.de['editor.gallery.analysisFailed']);
+    expect(h.api.buildPayload()).toEqual(before);
+    expect(h.dirtyCalls()).toBe(dirty);
+    expect(h.editors[0]!.undoHistory).toEqual([]);
+    offline = false;
+    required(h.el('deBodyImgStatus'), 'button').click();
+    await settleAll();
+    expect(h.galleryPickers).toHaveLength(1);
+    expect(h.api.buildPayload()).toEqual(before);
+  });
+
+  it.each(['new source', 'edited then restored'] as const)('refuses picker application after %s while analyzing the current snapshot', async (change) => {
+    const h = await loadEditor({ fetch: mediaNetwork([]) });
+    const pair = pairWithGallery();
+    h.api.populateForm(pair);
+    await settleAll();
+    const picker = await openPicker(h, pair.de.bodyMarkdown.indexOf('https://img/photo'));
+    const editor = h.editors[0]!;
+    editor.value('A newly typed paragraph\n\n' + pair.de.bodyMarkdown);
+    if (change === 'edited then restored') editor.value(pair.de.bodyMarkdown);
+    const before = h.api.buildPayload();
+    const dirty = h.dirtyCalls();
+    const requests = h.galleryRequests.length;
+    await picker.onPick([pickedPhoto], pickerOptions);
+    expect(h.api.buildPayload()).toEqual(before);
+    expect(h.dirtyCalls()).toBe(dirty);
+    expect(editor.undoHistory).toEqual([]);
+    expect(h.el('deBodyImgStatus').textContent).toBe(ui.de['editor.gallery.stale']);
+    expect(h.galleryRequests.slice(requests).some((request) =>
+      JSON.parse(String(request.options.body)).bodyMarkdown === before.de.bodyMarkdown)).toBe(true);
+  });
+
+  it('opening and cancelling a picker never commits source or metadata or creates undo history', async () => {
+    const h = await loadEditor({ fetch: mediaNetwork([]) });
+    const pair = pairWithGallery();
+    h.api.populateForm(pair);
+    await settleAll();
+    const before = h.api.buildPayload();
+    const dirty = h.dirtyCalls();
+    const picker = await openPicker(h, pair.de.bodyMarkdown.indexOf('https://img/photo'));
+    expect(picker.multiple).toBe(true);
+    // MediaPicker's cancellation contract closes without invoking onPick.
+    // Discard that open picker, then open a fresh one against the same draft.
+    h.galleryPickers.pop();
+    await openPicker(h, pair.de.bodyMarkdown.indexOf('https://img/photo'));
+    expect(h.api.buildPayload()).toEqual(before);
+    expect(h.dirtyCalls()).toBe(dirty);
+    expect(h.editors[0]!.undoHistory).toEqual([]);
+  });
+
+  it.each([
+    { name: 'nested CRLF tilde', body: '🧭 Before\r\n\r\n> ~~~gallery extra\r\n> https://img/photo\r\n> ~~~\r\n>\r\n> Neighbor\r\n\r\nTail',
+      opener: '> ~~~gallery extra\r\n> ', closer: '\r\n> ~~~\r\n>\r\n> Neighbor\r\n\r\nTail' },
+    { name: 'raw HTML', body: '🧭 Before\n\n<pre><code class="language-gallery">https://img/photo | alt="A &amp; B"</code></pre>\n\nNeighbor',
+      opener: '<pre><code class="language-gallery">', closer: '</code></pre>\n\nNeighbor' },
+  ])('edits and removes $name galleries without losing wrappers or neighbors, with one undoable range edit', async ({ body, opener, closer }) => {
+    const h = await loadEditor({ fetch: mediaNetwork([]) });
+    const pair = fullPair();
+    pair.de.bodyMarkdown = body;
+    pair.de.images = { 'https://img/photo': { width: 900, height: 600, alt: 'Original' } };
+    h.api.populateForm(pair);
+    await settleAll();
+    const block = (await analyzeGallerySource(body)).blocks.find((entry) => entry.isGallery)!;
+    const picker = await openPicker(h, body.indexOf('https://img/photo'));
+    await picker.onPick([pickedPhoto], pickerOptions);
+    const editor = h.editors[0]!;
+    const edited = editor.value();
+    expect(edited).toContain(opener);
+    expect(edited.endsWith(closer)).toBe(true);
+    expect(edited.slice(0, block.start)).toBe(body.slice(0, block.start));
+    expect(edited).toContain('https://img/replacement');
+    expect(edited).not.toContain('https://img/photo');
+    expect(h.api.buildPayload().de.images).toEqual(pair.de.images);
+    expect(h.api.buildPayload().en).toEqual({ ...pair.en, omitted: false });
+    const logical = (await analyzeGallerySource(edited)).blocks.find((entry) => entry.isGallery)!.content;
+    expect(logical).toContain('alt="A &amp; &lt;view&gt;"');
+    expect(editor.undoHistory).toEqual([body]);
+    editor.codemirror.undo();
+    expect(editor.value()).toBe(body);
+    await settleAll();
+    const removal = await openPicker(h, body.indexOf('https://img/photo'));
+    await removal.onPick([], pickerOptions);
+    expect(editor.value()).toBe(body.slice(0, block.start) + body.slice(block.end));
+    expect(editor.undoHistory).toEqual([body]);
+    editor.codemirror.undo();
+    expect(editor.value()).toBe(body);
+  });
+
+  it('refuses picker editing of an unterminated gallery without changing source, metadata or undo history', async () => {
+    const h = await loadEditor({ fetch: mediaNetwork([]) });
+    const pair = fullPair();
+    pair.de.bodyMarkdown = '> ~~~gallery\n> https://img/photo';
+    h.api.populateForm(pair);
+    await settleAll();
+    expect(h.document.querySelectorAll('.editor-gallery')).toEqual([]);
+    const before = h.api.buildPayload();
+    const dirty = h.dirtyCalls();
+    h.editors[0]!.codemirror.setCursor(
+      h.editors[0]!.codemirror.posFromIndex(pair.de.bodyMarkdown.indexOf('https://img/photo')));
+    h.el('deGallery').click();
+    await settleAll();
+    // Refusal happens before opening: neither replacement nor removal can
+    // acquire a picker callback for the unsafe range.
+    expect(h.galleryPickers).toEqual([]);
+    expect(h.el('deBodyImgStatus').textContent).toBe(ui.de['editor.gallery.unterminated']);
+    expect(h.dirtyCalls()).toBe(dirty);
+    expect(h.api.buildPayload()).toEqual(before);
+    expect(h.editors[0]!.undoHistory).toEqual([]);
+  });
+
   it('keeps post-local alt editing for photos with no Media row: every occurrence, clears on save, survives reload', async () => {
     const h = await loadEditor({ fetch: mediaNetwork([]) });
     const pair = pairWithGallery();
@@ -1883,25 +2607,218 @@ describe('inline gallery editing', () => {
     expect(h.document.querySelectorAll('.editor-gallery__source').map((note) => note.hidden)).toEqual([true, true, true, true]);
     fields[0]!.value = 'A \"quote\" | and\nnewline';
     fields[0]!.dispatchEvent(new EditorEvent('input', { bubbles: true }));
+    await settleAll();
     expect(fields[1]!.value).toBe(fields[0]!.value);
     expect(h.api.buildPayload().en).toEqual({ ...pair.en, omitted: false });
-    expect(normalizeGalleryFences(h.api.buildPayload().de.bodyMarkdown, pair.de.images).images['https://img/photo']?.alt)
+    expect((await normalizeGalleryFences(h.api.buildPayload().de.bodyMarkdown, pair.de.images)).images['https://img/photo']?.alt)
       .toBe('A \"quote\" | and\nnewline');
     fields[0]!.value = '';
     fields[0]!.dispatchEvent(new EditorEvent('input', { bubbles: true }));
-    const saved = normalizeGalleryFences(h.api.buildPayload().de.bodyMarkdown, pair.de.images);
+    await settleAll();
+    const saved = await normalizeGalleryFences(h.api.buildPayload().de.bodyMarkdown, pair.de.images);
     expect(saved.images['https://img/photo']).toEqual({ ...pair.de.images['https://img/photo'], alt: '' });
     expect(saved.bodyMarkdown).toBe(pair.de.bodyMarkdown);
     pair.de = { ...pair.de, ...saved };
     h.api.populateForm(pair);
+    await settleAll();
     expect(h.document.querySelectorAll('.editor-gallery__alt').map((field) => field.value))
       .toEqual(['', '', 'English', 'English']);
+  });
+
+  it('flushes every pending manual photo description before saving, across locale switches', async () => {
+    const pair = pairWithGallery();
+    pair.de.bodyMarkdown = pair.de.bodyMarkdown.replace('https://img/photo\n```', 'https://img/other\n```');
+    pair.de.images['https://img/other'] = { width: 900, height: 600, alt: 'Other' };
+    const network = mediaNetwork([]);
+    let hold = false;
+    const waiting: { body: string; reply: PromiseWithResolvers<Response> }[] = [];
+    const h = await loadEditor({
+      fetch: async (url, init) => {
+        if (url.startsWith('/media')) return network(url, init);
+        if (url.endsWith('/revisions')) return response([]);
+        if (url.endsWith('/alt-audit')) return response(null);
+        return response({ ...pair, translationKey: 'saved' });
+      },
+      galleryFetch: (url, init) => {
+        if (!hold) return analyzeRequest(url, init);
+        const reply = Promise.withResolvers<Response>();
+        waiting.push({ body: JSON.parse(String(init?.body)).bodyMarkdown, reply });
+        return reply.promise;
+      },
+    });
+    h.api.populateForm(pair);
+    await settleAll();
+    hold = true;
+    const fields = h.document.querySelectorAll('.editor-gallery__alt');
+    fields[0]!.value = 'First draft';
+    fields[0]!.dispatchEvent(new EditorEvent('input', { bubbles: true }));
+    await settle();
+    fields[1]!.value = 'Second photo';
+    fields[1]!.dispatchEvent(new EditorEvent('input', { bubbles: true }));
+    fields[0]!.value = 'Latest first photo';
+    fields[0]!.dispatchEvent(new EditorEvent('input', { bubbles: true }));
+    const saving = h.api.doSaveDraft();
+    await settle();
+    h.el('tabbtn-en').click();
+    fields[2]!.value = 'English description';
+    fields[2]!.dispatchEvent(new EditorEvent('input', { bubbles: true }));
+    await settleAll();
+    expect(h.requests.filter((request) => request.options.method === 'POST')).toEqual([]);
+    hold = false;
+    for (const request of waiting.filter((request) => request.body !== pair.en.bodyMarkdown)) {
+      request.reply.resolve(response(await analyzeGallerySource(request.body)));
+    }
+    await settleAll();
+    // EN was edited after its first flush returned, while DE was still pending.
+    expect(h.requests.some((request) => request.options.method === 'POST')).toBe(false);
+    for (const request of waiting.filter((request) => request.body === pair.en.bodyMarkdown)) {
+      request.reply.resolve(response(await analyzeGallerySource(request.body)));
+    }
+    expect(await saving).toBe(true);
+    const request = h.requests.find((entry) => entry.url === '/posts' && entry.options.method === 'POST')!;
+    const sent = JSON.parse(String(request.options.body)) as PostPair;
+    const de = await normalizeGalleryFences(sent.de.bodyMarkdown, sent.de.images);
+    const en = await normalizeGalleryFences(sent.en.bodyMarkdown, sent.en.images);
+    expect(de.images['https://img/photo']?.alt).toBe('Latest first photo');
+    expect(de.images['https://img/other']?.alt).toBe('Second photo');
+    expect(en.images['https://img/photo']?.alt).toBe('English description');
+    expect(h.api.buildPayload().de.bodyMarkdown).toBe(sent.de.bodyMarkdown);
+  });
+
+  it('recovers every pending description after analysis expires the session, before saving', async () => {
+    const pair = pairWithGallery();
+    pair.de.bodyMarkdown = pair.de.bodyMarkdown.replace('https://img/photo\n```', 'https://img/other\n```');
+    pair.de.images['https://img/other'] = { width: 900, height: 600, alt: 'Other' };
+    const network = mediaNetwork([]);
+    const fetch: Fetch = async (url, init) => {
+      if (url.startsWith('/media')) return network(url, init);
+      if (url.endsWith('/revisions')) return response([]);
+      if (url.endsWith('/alt-audit')) return response(null);
+      return response({ ...pair, updatedAt: '2026-10-01T12:00:00Z' });
+    };
+    let hold = false;
+    let expired = false;
+    const waiting: PromiseWithResolvers<Response>[] = [];
+    const h = await loadEditor({
+      search: '?tk=tk1', fetch,
+      galleryFetch: (url, init) => {
+        if (expired) return Promise.resolve(response({}, 401));
+        if (!hold) return analyzeRequest(url, init);
+        const reply = Promise.withResolvers<Response>();
+        waiting.push(reply);
+        return reply.promise;
+      },
+    });
+    await h.api.loadPost('tk1');
+    await settleAll();
+    hold = true;
+    const fields = h.document.querySelectorAll('.editor-gallery__alt');
+    for (const [index, value] of [[0, 'First draft'], [1, 'Second photo'], [0, 'Latest first photo'], [2, '']] as const) {
+      fields[index]!.value = value;
+      fields[index]!.dispatchEvent(new EditorEvent('input', { bubbles: true }));
+    }
+    await settleAll();
+    expect(h.api.buildPayload().de.bodyMarkdown).toBe(pair.de.bodyMarkdown);
+    expired = true;
+    waiting.forEach((reply) => reply.resolve(response({}, 401)));
+    await settleAll();
+    // The expired session stashed the form with its save base (#305); offer both to a fresh editor.
+    const stash = latestStash(h.local, 'post:tk1');
+    if (!stash) throw new Error('the expired session left no recovery stash');
+    const recovered = await loadEditor({
+      isAdmin: true, search: '?tk=tk1', confirm: true, fetch,
+      stash: { key: 'swl:draft:tk1', payload: stash.payload, recovery: stash.recovery },
+    });
+    await settleAll();
+    expect(await recovered.api.doSaveDraft()).toBe(true);
+    const request = recovered.requests.find((entry) => entry.url === '/posts/tk1' && entry.options.method === 'PUT')!;
+    const sent = JSON.parse(String(request.options.body)) as PostPair;
+    const de = await normalizeGalleryFences(sent.de.bodyMarkdown, sent.de.images);
+    const en = await normalizeGalleryFences(sent.en.bodyMarkdown, sent.en.images);
+    expect(de.images['https://img/photo']?.alt).toBe('Latest first photo');
+    expect(de.images['https://img/other']?.alt).toBe('Second photo');
+    expect(en.images['https://img/photo']?.alt).toBe('');
+    expect(de.bodyMarkdown).toBe(pair.de.bodyMarkdown);
+    expect(en.bodyMarkdown).toBe(pair.en.bodyMarkdown);
+    expect(sent).not.toHaveProperty('galleryAlts');
+    expect(latestStash(recovered.local, 'post:tk1')).toBeUndefined();
+  });
+
+  it('reanalyzes pending manual descriptions after unrelated source shifts', async () => {
+    let hold = false;
+    const waiting: { body: string; reply: PromiseWithResolvers<Response> }[] = [];
+    const h = await loadEditor({
+      fetch: mediaNetwork([]),
+      galleryFetch: (url, init) => {
+        if (!hold) return analyzeRequest(url, init);
+        const reply = Promise.withResolvers<Response>();
+        waiting.push({ body: JSON.parse(String(init?.body)).bodyMarkdown, reply });
+        return reply.promise;
+      },
+    });
+    const pair = pairWithGallery();
+    h.api.populateForm(pair);
+    await settleAll();
+    hold = true;
+    const field = h.document.querySelector('.editor-gallery__alt')!;
+    field.value = 'Retained description';
+    field.dispatchEvent(new EditorEvent('input', { bubbles: true }));
+    await settle();
+    h.editors[0]!.value('New introduction\n\n' + pair.de.bodyMarkdown);
+    await settle();
+    hold = false;
+    for (const request of waiting) request.reply.resolve(response(await analyzeGallerySource(request.body)));
+    await settleAll();
+    const current = h.api.buildPayload();
+    expect(current.de.bodyMarkdown.startsWith('New introduction\n\nIntro')).toBe(true);
+    expect((await normalizeGalleryFences(current.de.bodyMarkdown, current.de.images)).images['https://img/photo']?.alt)
+      .toBe('Retained description');
+    expect(current.en).toEqual({ ...pair.en, omitted: false });
+  });
+
+  it('does not carry pending descriptions or an awaiting Save into a deliberately loaded post', async () => {
+    let hold = false;
+    const waiting: { body: string; reply: PromiseWithResolvers<Response> }[] = [];
+    const h = await loadEditor({
+      fetch: mediaNetwork([]),
+      galleryFetch: (url, init) => {
+        if (!hold) return analyzeRequest(url, init);
+        const reply = Promise.withResolvers<Response>();
+        waiting.push({ body: JSON.parse(String(init?.body)).bodyMarkdown, reply });
+        return reply.promise;
+      },
+    });
+    h.api.populateForm(pairWithGallery());
+    await settleAll();
+    hold = true;
+    const field = h.document.querySelector('.editor-gallery__alt')!;
+    field.value = 'Former post edit';
+    field.dispatchEvent(new EditorEvent('input', { bubbles: true }));
+    await settle();
+    const saving = h.api.doSaveDraft();
+    const next = pairWithGallery();
+    next.de.images['https://img/photo']!.alt = 'New post description';
+    h.api.populateForm(next);
+    await settle();
+    hold = false;
+    for (const request of waiting) request.reply.resolve(response(await analyzeGallerySource(request.body)));
+    await settleAll();
+    expect(await saving).toBe(false);
+    expect(h.requests.some((request) => request.options.method === 'POST')).toBe(false);
+    expect(h.api.buildPayload().de).toEqual({ ...next.de, omitted: false });
+    expect(h.editors[0]!.undoHistory).toEqual([]);
   });
 
   it('requires explicit AI acceptance and ignores a late answer after manual input or a locale change', async () => {
     let pending = Promise.withResolvers<string>();
     const calls: { lang: string; signal: AbortSignal }[] = [];
-    const h = await loadEditor({ fetch: mediaNetwork([]), caption: (options) => { calls.push(options); return pending.promise; } });
+    let holdAnalysis = false;
+    const analysis = Promise.withResolvers<Response>();
+    const h = await loadEditor({
+      fetch: mediaNetwork([]),
+      galleryFetch: (url, init) => holdAnalysis ? analysis.promise : analyzeRequest(url, init),
+      caption: (options) => { calls.push(options); return pending.promise; },
+    });
     h.api.populateForm(pairWithGallery());
     await settleAll();
     const field = h.document.querySelector('.editor-gallery__alt')!;
@@ -1912,17 +2829,32 @@ describe('inline gallery editing', () => {
     expect(h.document.querySelector('.editor-gallery__suggestion')!.hidden).toBe(false);
     expect(field.value).toBe('Original');
     h.document.querySelector('.editor-gallery__suggestion')!.querySelector('button')!.click();
+    await settleAll();
     expect(field.value).toBe('Suggested description');
     expect(calls[0]?.lang).toBe('de');
+    const beforeManual = h.api.buildPayload();
+    const dirty = h.dirtyCalls();
+    const undo = [...h.editors[0]!.undoHistory];
+    holdAnalysis = true;
     pending = Promise.withResolvers<string>();
     suggest.click();
     field.value = 'My current edit';
     field.dispatchEvent(new EditorEvent('input'));
     expect(calls[1]?.signal.aborted).toBe(true);
+    expect(h.api.buildPayload()).toEqual(beforeManual);
+    expect(h.dirtyCalls()).toBe(dirty);
+    expect(h.editors[0]!.undoHistory).toEqual(undo);
     pending.resolve('Obsolete answer');
     await settle();
     expect(field.value).toBe('My current edit');
     expect(h.document.querySelector('.editor-gallery__suggestion')!.hidden).toBe(true);
+    expect(h.api.buildPayload()).toEqual(beforeManual);
+    holdAnalysis = false;
+    analysis.resolve(response(await analyzeGallerySource(beforeManual.de.bodyMarkdown)));
+    await settleAll();
+    expect((await normalizeGalleryFences(h.api.buildPayload().de.bodyMarkdown, beforeManual.de.images))
+      .images['https://img/photo']?.alt).toBe('My current edit');
+    const beforeLocaleChange = h.api.buildPayload();
     pending = Promise.withResolvers<string>();
     suggest.click();
     h.el('tabbtn-en').click();
@@ -1930,19 +2862,99 @@ describe('inline gallery editing', () => {
     pending.resolve('Wrong locale answer');
     await settle();
     expect(field.value).toBe('My current edit');
+    expect(h.api.buildPayload()).toEqual(beforeLocaleChange);
+  });
+
+  it('cancels AI for every occurrence immediately when a manual alt edit cannot be analyzed', async () => {
+    let offline = false;
+    const analysis = Promise.withResolvers<Response>();
+    const answer = Promise.withResolvers<string>();
+    const signals: AbortSignal[] = [];
+    const h = await loadEditor({
+      fetch: mediaNetwork([]),
+      galleryFetch: (url, init) => offline ? analysis.promise : analyzeRequest(url, init),
+      caption: ({ signal }) => { signals.push(signal); return answer.promise; },
+    });
+    h.api.populateForm(pairWithGallery());
+    await settleAll();
+    const before = h.api.buildPayload();
+    const dirty = h.dirtyCalls();
+    const fields = h.document.querySelectorAll('.editor-gallery__alt');
+    const buttons = h.document.querySelectorAll('.editor-gallery__suggest');
+    buttons[0]!.click();
+    buttons[1]!.click();
+    expect(signals).toHaveLength(2);
+    offline = true;
+    fields[0]!.value = 'My unsaved description';
+    fields[0]!.dispatchEvent(new EditorEvent('input'));
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
+    answer.resolve('Late description');
+    analysis.reject(new Error('offline'));
+    await settleAll();
+    expect(fields[0]!.value).toBe('My unsaved description');
+    expect(h.document.querySelectorAll('.editor-gallery__suggestion').every((node) => node.hidden)).toBe(true);
+    expect(h.api.buildPayload()).toEqual(before);
+    expect(h.dirtyCalls()).toBe(dirty);
+    expect(h.editors[0]!.undoHistory).toEqual([]);
+    const status = h.el('deGalleryView').parentElement!;
+    expect(status.textContent).toContain(ui.de['editor.gallery.analysisFailed']);
+    expect(status.querySelectorAll('button').some((button) =>
+      !button.hidden && button.textContent === ui.de['editor.gallery.retry'])).toBe(true);
+    expect(await h.api.doSaveDraft()).toBe(false);
+    expect(h.requests.some((request) => request.options.method === 'POST')).toBe(false);
+    expect(h.api.buildPayload()).toEqual(before);
+    offline = false;
+    status.querySelectorAll('button').find((button) =>
+      !button.hidden && button.textContent === ui.de['editor.gallery.retry'])!.click();
+    await settleAll();
+    const restored = h.api.buildPayload();
+    expect((await normalizeGalleryFences(restored.de.bodyMarkdown, restored.de.images)).images['https://img/photo']?.alt)
+      .toBe('My unsaved description');
+  });
+
+  // #351: a reply cut off at the token limit names that limit; other failures keep the general hint.
+  it('shows the token-limit hint for a truncated suggestion and leaves the alt text untouched', async () => {
+    let failure = new Error('Caption response was truncated');
+    const h = await loadEditor({ fetch: mediaNetwork([]), caption: () => Promise.reject(failure) });
+    h.api.populateForm(pairWithGallery());
+    await settleAll();
+    // The gallery-level lookup line shares `.editor-gallery__status`; read the photo card's own.
+    const card = h.document.querySelector('.editor-gallery__photo')!;
+    const field = card.querySelector('.editor-gallery__alt')!;
+    const status = card.querySelector('.editor-gallery__status')!;
+    const suggest = card.querySelector('.editor-gallery__suggest')!;
+    suggest.click();
+    await settle();
+    expect(status.textContent).toBe(ui.de['editor.gallery.truncated']);
+    expect(field.value).toBe('Original');
+    expect(card.querySelector('.editor-gallery__suggestion')!.hidden).toBe(true);
+    failure = new Error('Caption request failed. Check the provider, API key, vision model and browser CORS access.');
+    suggest.click();
+    await settle();
+    expect(status.textContent).toBe(ui.de['editor.gallery.failed']);
+    expect(field.value).toBe('Original');
   });
 
   it('shows current Media alt and caption per locale read-only, links to Media, and never edits the article', async () => {
     const row = mediaRow('photo', { de: 'Neu aus der Mediathek', en: 'Fresh from Media' }, { de: '', en: 'Morning light' });
-    const h = await loadEditor({ fetch: mediaNetwork([row]) });
+    const pending = Promise.withResolvers<Response>();
+    const network = mediaNetwork([row]);
+    let waiting = true;
+    const h = await loadEditor({ fetch: (url, init) =>
+      waiting && url === '/media/items/photo' ? pending.promise : network(url, init) });
     const pair = pairWithGallery();
     h.api.populateForm(pair);
     const before = h.api.buildPayload();
-    // Until Media answers nobody knows which text applies, so nothing is editable.
-    expect(h.document.querySelectorAll('.editor-gallery__alt').map((field) => field.readOnly)).toEqual([true, true, true, true]);
-    expect(h.document.querySelector('.editor-gallery__lookup')!.textContent).toBe(ui.de['editor.gallery.checking']);
+    // Source analysis completes before any widget exists; until then no
+    // editable photo field may be shown from guessed lexical ranges.
+    expect(h.document.querySelectorAll('.editor-gallery__alt')).toEqual([]);
     await settleAll();
     const fields = h.document.querySelectorAll('.editor-gallery__alt');
+    expect(fields.map((field) => field.readOnly)).toEqual([true, true, true, true]);
+    expect(h.document.querySelector('.editor-gallery__lookup')!.textContent).toBe(ui.de['editor.gallery.checking']);
+    waiting = false;
+    pending.resolve(response(row));
+    await settleAll();
     expect(fields.map((field) => field.value))
       .toEqual(['Neu aus der Mediathek', 'Neu aus der Mediathek', 'Fresh from Media', 'Fresh from Media']);
     expect(fields.map((field) => field.readOnly)).toEqual([true, true, true, true]);
@@ -2023,6 +3035,7 @@ describe('inline gallery editing', () => {
     h.api.populateForm(pair);
     await settleAll();
     h.el('reviewStory').click();
+    await settleAll();
     // The post still carries a copied alt, but Media's empty one is what renders.
     expect(h.el('reviewInstant').textContent).toContain('Add alt text to this gallery image.');
     h.el('closeReview').click();
@@ -2031,21 +3044,24 @@ describe('inline gallery editing', () => {
     h.api.populateForm(pair);
     await settleAll();
     h.el('reviewStory').click();
+    await settleAll();
     expect(h.el('reviewInstant').textContent).not.toContain('Add alt text to this gallery image.');
   });
 
   it('leaves nested examples and unfinished fences editable, and cancels previews when showing raw Markdown', async () => {
-      const h = await loadEditor();
-      const pair = pairWithGallery();
-      pair.de.bodyMarkdown += '\n\n````markdown\n```gallery\nhttps://img/example\n```\n````\n\n```gallery\nhttps://img/unfinished';
-      h.api.populateForm(pair);
-      expect(h.document.querySelectorAll('.editor-gallery')).toHaveLength(2);
-      h.el('deGalleryView').click();
-      expect(h.document.querySelectorAll('.editor-gallery')).toHaveLength(1);
-      expect(h.api.buildPayload().de.bodyMarkdown).toBe(pair.de.bodyMarkdown);
-      h.el('deGalleryView').click();
-      expect(h.document.querySelectorAll('.editor-gallery')).toHaveLength(2);
-    });
+    const h = await loadEditor();
+    const pair = pairWithGallery();
+    pair.de.bodyMarkdown += '\n\n````markdown\n```gallery\nhttps://img/example\n```\n````\n\n```gallery\nhttps://img/unfinished';
+    h.api.populateForm(pair);
+    await settleAll();
+    expect(h.document.querySelectorAll('.editor-gallery')).toHaveLength(2);
+    h.el('deGalleryView').click();
+    expect(h.document.querySelectorAll('.editor-gallery')).toHaveLength(1);
+    expect(h.api.buildPayload().de.bodyMarkdown).toBe(pair.de.bodyMarkdown);
+    h.el('deGalleryView').click();
+    await settleAll();
+    expect(h.document.querySelectorAll('.editor-gallery')).toHaveLength(2);
+  });
 
   // docs/superpowers/specs/2026-10-19-gallery-library-metadata-design.md,
   // "Gallery-local caption controls": the widget must show what the build
@@ -2069,8 +3085,8 @@ describe('inline gallery editing', () => {
     pair.en.images = { 'https://img/photo': { width: 900, height: 600 } };
     h.api.populateForm(pair);
     const before = h.api.buildPayload();
-    // Neither a local caption nor a hidden gallery waits for Media.
-    expect(shownCaptions(h).slice(0, 3)).toEqual([null, 'Nur hier | "lokal" <b>', null]);
+    // Local captions and hidden galleries need source analysis, not a
+    // successful Media description, before the widget can display them.
     await settleAll();
     expect(shownCaptions(h)).toEqual([null, 'Nur hier | "lokal" <b>', null, 'Aus der Mediathek', 'Morning light']);
     expect(h.document.querySelectorAll('.editor-gallery__caption').flatMap((caption) => caption.querySelectorAll('b'))).toEqual([]);
@@ -2097,8 +3113,9 @@ describe('inline gallery editing', () => {
     };
     h.api.populateForm(pair);
     await settleAll();
-    const editGallery = (index: number) => {
+    const editGallery = async (index: number) => {
       h.document.querySelectorAll('.editor-gallery')[index]!.querySelector('.editor-gallery__head')!.querySelector('button')!.click();
+      await settleAll();
       const picker = h.galleryPickers.at(-1);
       if (!picker) throw new Error('Edit did not open the gallery picker');
       return picker;
@@ -2106,12 +3123,12 @@ describe('inline gallery editing', () => {
     const fences = (body: string) => body.split(/\n\n(?:Middle\n\n)?/).filter((part) => part.startsWith('```gallery'));
     const lineOf = (fence: string, src: string) => fence.split('\n').find((line) => line.split('|')[0]!.trim() === src) ?? '';
 
-    const first = editGallery(0);
+    const first = await editGallery(0);
     expect(first.captions).toMatchObject({ locale: 'de', visible: true, overrides: { [photo]: '' } });
     expect(first.captions?.fallback[other]).toBe('Gespeichert');
     // The author resets the photo to Media, edits the other one, and hides captions.
     const local = 'Nur | "hier"\nzwei';
-    first.onPick([row, placeholder], { layout: 'slider', captions: { visible: false, overrides: { [other]: local } } });
+    await first.onPick([row, placeholder], { layout: 'slider', captions: { visible: false, overrides: { [other]: local } } });
 
     const edited = h.api.buildPayload().de;
     // The caret is parked past the blank line after the updated gallery — on
@@ -2120,7 +3137,7 @@ describe('inline gallery editing', () => {
     const caret = h.editors[0]!.codemirror.indexFromPos(h.editors[0]!.cursor!);
     expect(edited.bodyMarkdown.slice(caret, caret + 'Middle'.length)).toBe('Middle');
     expect(edited.bodyMarkdown.slice(0, caret).endsWith('```\n\n')).toBe(true);
-    const saved = normalizeGalleryFences(edited.bodyMarkdown, edited.images);
+    const saved = await normalizeGalleryFences(edited.bodyMarkdown, edited.images);
     // The shared images map keeps Media's / the stored caption: the edit is not in it.
     expect(saved.images[other]).toEqual({ width: 300, height: 200, alt: 'Andere', caption: 'Gespeichert' });
     expect(saved.images[photo]).toMatchObject({ alt: 'Markt', caption: 'Aus der Mediathek' });
@@ -2137,12 +3154,12 @@ describe('inline gallery editing', () => {
     h.api.populateForm({ ...pair, de: { ...pair.de, ...saved } });
     await settleAll();
     expect(shownCaptions(h)).toEqual([null, null, 'Aus der Mediathek']);
-    const reopened = editGallery(0);
+    const reopened = await editGallery(0);
     expect(reopened.captions).toMatchObject({ locale: 'de', visible: false, overrides: { [other]: local } });
     expect(reopened.captions?.overrides).not.toHaveProperty(photo);
 
     // Showing captions again removes only the captions directive and keeps the text.
-    reopened.onPick([row, placeholder], { layout: 'slider', captions: { visible: true, overrides: { [other]: local } } });
+    await reopened.onPick([row, placeholder], { layout: 'slider', captions: { visible: true, overrides: { [other]: local } } });
     const [shownFence] = fences(h.api.buildPayload().de.bodyMarkdown);
     expect(readCaptionsVisible(shownFence!)).toBe(true);
     expect(shownFence).not.toMatch(/#\s*captions/i);
@@ -2205,54 +3222,58 @@ describe('manuscript-first editor refinements', () => {
     });
 
   it('opens the warned locale and targets the matching photo across galleries, including raw Markdown mode', async () => {
-      const h = await loadEditor({ mobile: true });
-      const pair = fullPair();
-      pair.en.bodyMarkdown = '```gallery\nhttps://img/first\n```\n\nText\n\n```gallery\nhttps://img/target\n```';
-      pair.en.images = {
-        'https://img/first': { width: 900, height: 600, alt: 'First' },
-        'https://img/target': { width: 900, height: 600, alt: 'Target' },
-      };
-      h.api.populateForm(pair);
-      h.el('tabbtn-en').click();
-      h.el('enGalleryView').click();
-      h.el('tabbtn-de').click();
-      const before = h.api.buildPayload();
-      h.api.renderAltAudit({ count: 1, images: [{ locale: 'en', kind: 'gallery', src: 'https://img/target', reason: 'filename' }] }, false);
-      h.el('altAudit').open = true;
-      h.el('altAuditList').querySelector('button')!.click();
-      h.flushDialogEvents();
-      expect(h.el('tab-en').hidden).toBe(false);
-      expect(h.el('enGalleryView').getAttribute('aria-pressed')).toBe('false');
-      expect(h.document.activeElement?.classList.contains('editor-gallery__alt')).toBe(true);
-      expect(h.document.activeElement?.value).toBe('Target');
-      expect(h.api.buildPayload()).toEqual(before);
-    });
+    const h = await loadEditor({ mobile: true });
+    const pair = fullPair();
+    pair.en.bodyMarkdown = '```gallery\nhttps://img/first\n```\n\nText\n\n```gallery\nhttps://img/target\n```';
+    pair.en.images = {
+      'https://img/first': { width: 900, height: 600, alt: 'First' },
+      'https://img/target': { width: 900, height: 600, alt: 'Target' },
+    };
+    h.api.populateForm(pair);
+    await settle();
+    h.el('tabbtn-en').click();
+    h.el('enGalleryView').click();
+    h.el('tabbtn-de').click();
+    const before = h.api.buildPayload();
+    h.api.renderAltAudit({ count: 1, images: [{ locale: 'en', kind: 'gallery', src: 'https://img/target', reason: 'filename' }] }, false);
+    h.el('altAudit').open = true;
+    h.el('altAuditList').querySelector('button')!.click();
+    await settle();
+    h.flushDialogEvents();
+    expect(h.el('tab-en').hidden).toBe(false);
+    expect(h.el('enGalleryView').getAttribute('aria-pressed')).toBe('false');
+    expect(h.document.activeElement?.classList.contains('editor-gallery__alt')).toBe(true);
+    expect(h.document.activeElement?.value).toBe('Target');
+    expect(h.api.buildPayload()).toEqual(before);
+  });
 
   it('selects the real body image alt instead of matching a code example or ordinary link', async () => {
-      const h = await loadEditor();
-      const pair = fullPair();
-      pair.de.bodyMarkdown = '`![example](https://img/body)`\n\n[Link](https://img/body)\n\n![file\\]name](<https://img/body> "title")';
-      h.api.populateForm(pair);
-      h.api.renderAltAudit({ count: 1, images: [{ locale: 'de', kind: 'body', src: 'https://img/body', reason: 'filename' }] }, false);
-      h.el('altAuditList').querySelector('button')!.click();
-      const editor = h.editors[0]!;
-      expect(h.document.activeElement).toBe(editor.input);
-      expect(editor.codemirror.getRange(editor.selection!.from, editor.selection!.to)).toBe('file\\]name');
-      expect(editor.value()).toBe(pair.de.bodyMarkdown);
-    });
+    const h = await loadEditor();
+    const pair = fullPair();
+    pair.de.bodyMarkdown = '`![example](https://img/body)`\n\n[Link](https://img/body)\n\n![file\\]name](<https://img/body> "title")';
+    h.api.populateForm(pair);
+    h.api.renderAltAudit({ count: 1, images: [{ locale: 'de', kind: 'body', src: 'https://img/body', reason: 'filename' }] }, false);
+    h.el('altAuditList').querySelector('button')!.click();
+    await settle();
+    const editor = h.editors[0]!;
+    expect(h.document.activeElement).toBe(editor.input);
+    expect(editor.codemirror.getRange(editor.selection!.from, editor.selection!.to)).toBe('file\\]name');
+    expect(editor.value()).toBe(pair.de.bodyMarkdown);
+  });
 
   it.each(['gallery', 'hero'] as const)('does not jump to a different %s photo when a saved warning is stale', async (kind) => {
-      const h = await loadEditor();
-      h.api.populateForm(fullPair());
-      h.api.renderAltAudit({ count: 1, images: [{ locale: 'de', kind, src: 'https://img/removed', reason: 'empty' }] }, false);
-      const before = h.api.buildPayload();
-      h.el('altAuditList').querySelector('button')!.click();
-      expect(h.el('altAuditFeedback').hidden).toBe(false);
-      expect(h.el('altAuditFeedback').textContent).toBe(copy['editor.chrome.auditMissing']);
-      expect(h.document.activeElement).not.toBe(h.el('deGallery'));
-      expect(h.document.activeElement).not.toBe(h.el('deHeroAlt'));
-      expect(h.api.buildPayload()).toEqual(before);
-    });
+    const h = await loadEditor();
+    h.api.populateForm(fullPair());
+    h.api.renderAltAudit({ count: 1, images: [{ locale: 'de', kind, src: 'https://img/removed', reason: 'empty' }] }, false);
+    const before = h.api.buildPayload();
+    h.el('altAuditList').querySelector('button')!.click();
+    await settle();
+    expect(h.el('altAuditFeedback').hidden).toBe(false);
+    expect(h.el('altAuditFeedback').textContent).toBe(copy['editor.chrome.auditMissing']);
+    expect(h.document.activeElement).not.toBe(h.el('deGallery'));
+    expect(h.document.activeElement).not.toBe(h.el('deHeroAlt'));
+    expect(h.api.buildPayload()).toEqual(before);
+  });
 
   it('normalizes pasted title line breaks without renaming a loaded slug or interrupting composition', async () => {
       const h = await loadEditor();
@@ -2279,10 +3300,11 @@ describe('manuscript-first editor refinements', () => {
 
   it('reports loaded, edited, in-flight and saved states without clearing edits made during a save', async () => {
     const pending = Promise.withResolvers<Response>();
+    const started = Promise.withResolvers<void>();
     let firstSave = true;
     const h = await loadEditor({ fetch: async (url, options) => {
       if (options?.method !== 'PUT') return readPost(url, options);
-      if (firstSave) { firstSave = false; return pending.promise; }
+      if (firstSave) { firstSave = false; started.resolve(); return pending.promise; }
       return response(saved);
     } });
     await h.api.loadPost('tk1');
@@ -2292,6 +3314,7 @@ describe('manuscript-first editor refinements', () => {
     h.el('deTitle').fire('input');
     expect(h.el('draftSaveState').textContent).toBe(copy['editor.chrome.saveUnsaved']);
     const saving = h.api.doSaveDraft();
+    await started.promise;
     expect(h.el('draftSaveState').textContent).toBe(copy['editor.chrome.saveSaving']);
     h.el('deTitle').value = 'Newer edit';
     h.el('deTitle').fire('input');
@@ -2344,12 +3367,20 @@ describe('manuscript-first editor refinements', () => {
   it('offers the existing recovery stash after loading and keeps the restored draft unsaved', async () => {
     const restored = fullPair();
     restored.de.title = 'Recovered local title';
+    restored.de.slug = 'd'.repeat(252);
+    restored.en.slug = 'e'.repeat(8192);
     const h = await loadEditor({ isAdmin: true, search: '?tk=tk1', confirm: true,
       stash: { key: 'swl:draft:tk1', payload: restored }, fetch: readPost });
     await settle();
     expect(h.el('deTitle').value).toBe('Recovered local title');
     expect(h.el('draftSaveState').textContent).toBe(copy['editor.chrome.saveUnsaved']);
     expect(Array.from({ length: h.local.length }, (_, i) => h.local.key(i)).some(key => key?.startsWith(`swl:draft:u:${EDITOR_OWNER}:post:tk1:`))).toBe(true);
+    h.el('deTitle').value = 'Edited after stash restoration';
+    h.el('deTitle').fire('input');
+    h.el('enTitle').value = 'Edited after stash restoration';
+    h.el('enTitle').fire('input');
+    expect(h.api.buildPayload().de.slug).toBe(restored.de.slug);
+    expect(h.api.buildPayload().en.slug).toBe(restored.en.slug);
   });
 });
 
@@ -2590,4 +3621,505 @@ it('keeps a fresh editor publication observation when optional admin build histo
     expect(h.el('publicationState').textContent).toBe('Live');
     vm.runInContext('publicationRefresh.stop()', h.ctx);
   } finally { vi.useRealTimers(); }
+});
+
+describe('lossless gallery metadata warning flow', () => {
+  const malformed = 'https://img/photo | 900x600 | alt="Lake" | capton="<img src=x onerror=alert(1)>"';
+  const source = '<BodyImage\n  src="https://img/intro"\n  width={900}\n  height={600}\n/>\n\n> - ~~~gallery extra\n>   ' + malformed + '\n>   ~~~';
+  const drain = async () => { for (let i = 0; i < 12; i++) await settle(); };
+  function pair() {
+    const value = fullPair();
+    value.de.bodyMarkdown = source;
+    value.en.bodyMarkdown = source.replace('Lake', 'English lake');
+    return value;
+  }
+  async function saved(payload: Omit<PostPair, 'status'>) {
+    return { ...payload, galleryWarnings: [
+      ...galleryWarnings(await analyzeGallerySource(payload.de.bodyMarkdown), 'de'),
+      ...galleryWarnings(await analyzeGallerySource(payload.en.bodyMarkdown), 'en'),
+    ] };
+  }
+  function warningButton(h: { el(id: string): Element }, locale: 'de' | 'en') {
+    const button = h.el('galleryMetadataWarnings').querySelectorAll('button')
+      .find((node) => node.textContent.startsWith(locale.toUpperCase() + ':'));
+    if (!button) throw new Error('Missing localized gallery warning action');
+    return button;
+  }
+
+  it('reopens both locales with advisory diagnostics, raw source and no lossy picker update', async () => {
+    const h = await loadEditor();
+    h.api.populateForm(pair());
+    await drain();
+    const root = h.el('galleryMetadataWarnings');
+    expect(root.hidden).toBe(false);
+    expect(root.textContent).toContain(ui.de['editor.gallery.metadataAdvisory']);
+    expect(root.textContent).toContain(ui.en['editor.gallery.metadataAdvisory']);
+    expect(root.querySelectorAll('img')).toHaveLength(0);
+    expect(h.document.querySelectorAll('.editor-gallery')).toHaveLength(0);
+    h.editors[0]!.codemirror.setCursor({ line: 7, ch: 10 });
+    h.el('deGallery').click();
+    await drain();
+    expect(h.galleryPickers).toHaveLength(0);
+    expect(h.el('deBodyImgStatus').textContent).toContain(ui.de['editor.gallery.metadataBlocked']);
+    expect(required(h.el('deBodyImgStatus'), 'code').textContent).toContain(malformed);
+    expect(h.el('deBodyImgStatus').querySelectorAll('img')).toHaveLength(0);
+    expect(h.editors[0]!.value()).toBe(source);
+    expect(h.editors[0]!.undoHistory).toEqual([]);
+    warningButton(h, 'en').click();
+    await drain();
+    expect(h.el('tabbtn-en').getAttribute('aria-selected')).toBe('true');
+    expect(h.editors[1]!.selection?.from.line).toBe(7);
+    expect(h.document.activeElement).toBe(h.editors[1]!.input);
+  });
+
+  it('keeps saved warnings through failed saves and clears them only after a clean successful save', async () => {
+    let fail = false;
+    const h = await loadEditor({ fetch: async (_url, init) => {
+      if (init?.method === 'POST' || init?.method === 'PUT') {
+        return fail ? response({ error: 'write refused' }, 409)
+          : response(await saved(JSON.parse(String(init.body))));
+      }
+      return response([]);
+    } });
+    h.api.populateForm(pair());
+    expect(await h.api.doSaveDraft()).toBe(true);
+    const root = h.el('galleryMetadataWarnings');
+    expect(root.textContent).toContain(ui.de['editor.gallery.metadataSaved']);
+    expect(root.textContent).toContain(ui.en['editor.gallery.metadataSaved']);
+    expect(root.textContent).toContain('&quot;');
+    const previous = root.textContent;
+    fail = true;
+    expect(await h.api.doSaveDraft()).toBe(false);
+    expect(root.textContent).toBe(previous);
+    h.editors.forEach((editor) => editor.value('## Repaired\nNo invalid gallery.'));
+    fail = false;
+    expect(await h.api.doSaveDraft()).toBe(true);
+    expect(root.hidden).toBe(true);
+    expect(root.textContent).toBe('');
+  });
+
+  it('reanalyzes newer text typed during save and keeps source and undo intact when focusing', async () => {
+    const pending = Promise.withResolvers<Response>();
+    let captured: Omit<PostPair, 'status'> | undefined;
+    const h = await loadEditor({ fetch: async (_url, init) => {
+      if (init?.method === 'POST') { captured = JSON.parse(String(init.body)); return pending.promise; }
+      return response([]);
+    } });
+    h.api.populateForm(pair());
+    const saving = h.api.doSaveDraft();
+    await drain();
+    const editor = h.editors[0]!;
+    editor.codemirror.replaceRange('New paragraph\n\n', { line: 0, ch: 0 }, { line: 0, ch: 0 });
+    const newer = editor.value();
+    const undo = [...editor.undoHistory];
+    pending.resolve(response(await saved(captured!)));
+    expect(await saving).toBe(true);
+    warningButton(h, 'de').click();
+    await drain();
+    expect(editor.selection?.from).toEqual({ line: 9, ch: newer.split('\n')[9]!.indexOf('capton=') });
+    expect(editor.value()).toBe(newer);
+    expect(editor.undoHistory).toEqual(undo);
+    editor.codemirror.undo();
+    expect(editor.value()).toBe(source);
+  });
+
+  it('never jumps to stale coordinates after repair or while current-source analysis is pending', async () => {
+    let hold = false;
+    const pending = Promise.withResolvers<Response>();
+    const h = await loadEditor({
+      galleryFetch: async (_url, init) => {
+        const body = JSON.parse(String(init?.body)).bodyMarkdown as string;
+        return hold ? pending.promise : response(await analyzeGallerySource(body));
+      },
+      fetch: async (_url, init) => init?.method === 'POST'
+        ? response(await saved(JSON.parse(String(init.body)))) : response([]),
+    });
+    h.api.populateForm(pair());
+    expect(await h.api.doSaveDraft()).toBe(true);
+    const editor = h.editors[0]!;
+    editor.value('New prefix\n' + source);
+    hold = true;
+    warningButton(h, 'de').click();
+    await settle();
+    editor.value('Now entirely repaired');
+    pending.resolve(response(await analyzeGallerySource('New prefix\n' + source)));
+    await drain();
+    expect(editor.selection).toBeNull();
+    expect(editor.focusCalls).toBe(0);
+    hold = false;
+    warningButton(h, 'de').click();
+    await drain();
+    expect(editor.selection).toBeNull();
+    expect(h.el('galleryMetadataWarnings').textContent).toContain(ui.de['editor.gallery.metadataCurrent']);
+    expect(editor.value()).toBe('Now entirely repaired');
+  });
+});
+
+describe('revision restore protects unsaved bilingual work (#390)', () => {
+  const loadedAt = '2026-10-27T11:25:00.000Z';
+  const revision = {
+    id: 'revision-1', savedAt: '2026-10-25T09:00:00.000Z',
+    snapshot: {
+      ...fullPair(),
+      shared: { ...fullPair().shared, route: 'Earlier route' },
+      de: { ...fullPair().de, title: 'Earlier DE title', bodyMarkdown: 'Earlier DE body' },
+      en: { ...fullPair().en, title: 'Earlier EN title', bodyMarkdown: 'Earlier EN body' },
+    },
+  };
+  async function open(confirm: boolean) {
+    const h = await loadEditor({ confirm, fetch: async (url) => {
+      if (url === '/posts/tk1') return response({ ...fullPair(), updatedAt: loadedAt });
+      if (url === '/posts/tk1/revisions') return response([
+        { id: revision.id, savedAt: revision.savedAt, titleDe: revision.snapshot.de.title, status: 'draft' },
+      ]);
+      if (url === '/posts/tk1/revisions/' + revision.id) return response(revision);
+      if (url.endsWith('/alt-audit')) return response({ images: [] });
+      throw new Error('Unexpected revision request: ' + url);
+    } });
+    await h.api.loadPost('tk1');
+    await settle();
+    h.el('revisionsCard').open = true;
+    return h;
+  }
+
+  for (const locale of ['de', 'en'] as const) {
+    it(`keeps ${locale.toUpperCase()}-only edits and the open revision list on Cancel`, async () => {
+      const h = await open(false);
+      h.el(locale + 'Title').value = 'Unsaved title';
+      h.el(locale + 'Title').fire('input');
+      h.editors[locale === 'de' ? 0 : 1]!.value('Unsaved manuscript');
+      const before = h.api.buildPayload();
+      const list = h.el('revisionsList').innerHTML;
+      required(h.el('revisionsList'), 'button').click();
+      await settle();
+      expect(h.prompts).toHaveLength(1);
+      expect(h.prompts[0]!.body).toContain(revision.snapshot.de.title);
+      expect(h.prompts[0]!.body).toContain(new Date(revision.savedAt).toLocaleString());
+      expect(h.api.buildPayload()).toEqual(before);
+      expect(h.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveUnsaved']);
+      expect(h.el('revisionsCard').open).toBe(true);
+      expect(h.el('revisionsList').innerHTML).toBe(list);
+      expect(h.requests.every(({ options }) => !options.method || options.method === 'GET')).toBe(true);
+    });
+
+    it(`replaces both locales and shared details only after accepting ${locale.toUpperCase()}-only dirty restore`, async () => {
+      const h = await open(true);
+      h.editors[locale === 'de' ? 0 : 1]!.value('Unsaved manuscript');
+      required(h.el('revisionsList'), 'button').click();
+      await settle();
+      expect(h.prompts).toHaveLength(1);
+      expect(h.api.buildPayload()).toMatchObject({
+        de: revision.snapshot.de, en: revision.snapshot.en, shared: revision.snapshot.shared,
+        updatedAt: loadedAt,
+      });
+      expect(h.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveUnsaved']);
+      expect(h.el('revisionsCard').open).toBe(true);
+      expect(h.requests.every(({ options }) => !options.method || options.method === 'GET')).toBe(true);
+    });
+  }
+
+  it('also protects shared-only unsaved changes', async () => {
+    const h = await open(false);
+    h.el('fmRoute').value = 'Unsaved shared route';
+    h.el('fmRoute').fire('input');
+    const before = h.api.buildPayload();
+    required(h.el('revisionsList'), 'button').click();
+    await settle();
+    expect(h.prompts).toHaveLength(1);
+    expect(h.api.buildPayload()).toEqual(before);
+  });
+
+  it('loads a clean form without a prompt and leaves the restored content unsaved', async () => {
+    const h = await open(false);
+    expect(h.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveSaved']);
+    required(h.el('revisionsList'), 'button').click();
+    await settle();
+    expect(h.prompts).toEqual([]);
+    expect(h.api.buildPayload()).toMatchObject({
+      de: revision.snapshot.de, en: revision.snapshot.en, shared: revision.snapshot.shared,
+      updatedAt: loadedAt,
+    });
+    expect(h.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveUnsaved']);
+    expect(h.requests.every(({ options }) => !options.method || options.method === 'GET')).toBe(true);
+  });
+});
+
+describe('revision restore with both locales dirty', () => {
+  it('keeps both manuscripts, titles, shared details and the drawer when cancelled', async () => {
+    const h = await loadEditor({ confirm: false, fetch: async (url) => {
+      if (url === '/posts/tk1') return response({ ...fullPair(), updatedAt: '2026-10-27T11:25:00.000Z' });
+      if (url === '/posts/tk1/revisions') return response([
+        { id: 'revision-1', savedAt: '2026-10-25T09:00:00.000Z', titleDe: 'Bukarest', status: 'draft' },
+      ]);
+      if (url === '/posts/tk1/revisions/revision-1') return response({
+        snapshot: fullPair(), savedAt: '2026-10-25T09:00:00.000Z',
+      });
+      return response({ images: [] });
+    } });
+    await h.api.loadPost('tk1');
+    await settle();
+    h.el('revisionsCard').open = true;
+    for (const [index, locale] of ['de', 'en'].entries()) {
+      h.el(locale + 'Title').value = 'Unsaved ' + locale;
+      h.el(locale + 'Title').fire('input');
+      h.editors[index]!.value('Unsaved body ' + locale);
+    }
+    h.el('fmRoute').value = 'Unsaved shared route';
+    h.el('fmRoute').fire('input');
+    const before = h.api.buildPayload();
+    required(h.el('revisionsList'), 'button').click();
+    await settle();
+    expect(h.prompts).toHaveLength(1);
+    expect(h.api.buildPayload()).toEqual(before);
+    expect(h.el('revisionsCard').open).toBe(true);
+    expect(h.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveUnsaved']);
+    expect(h.requests.every(({ options }) => !options.method || options.method === 'GET')).toBe(true);
+  });
+});
+
+describe('restoring a local draft keeps the version it was edited against (#345)', () => {
+  const V1 = '2026-10-27T11:20:26.092Z';
+  const V2 = '2026-10-27T11:25:00.000Z';
+  const copy = ui.en;
+  type Stored = PostPair & { updatedAt: string };
+  interface VersionedServer { fetch: Fetch; stored(): Stored; writes: unknown[] }
+  const isPut = (request: { options: RequestInit }) => request.options.method === 'PUT';
+
+  // PUT /posts/:tk as server.ts answers it: the echo is optional (absent skips
+  // the check — the bypass a restore must never produce), an unparsable one is
+  // a 400, and staleness is the store's real rule.
+  function versionedServer(initial: Stored): VersionedServer {
+    let stored = structuredClone(initial);
+    const writes: unknown[] = [];
+    const fetch: Fetch = async (url, options) => {
+      if (url === '/posts/tk1' && options?.method === 'PUT') {
+        const { updatedAt, ...pair } = JSON.parse(String(options.body)) as PostPair & { updatedAt?: unknown };
+        let base: Date | undefined;
+        if (updatedAt !== undefined && updatedAt !== null) {
+          base = new Date(String(updatedAt));
+          if (Number.isNaN(base.getTime())) return response({ error: 'invalid updatedAt' }, 400);
+        }
+        try { assertNotStale(new Date(stored.updatedAt), base); }
+        catch (error) { return response({ error: (error as Error).message, code: 'conflict' }, 409); }
+        stored = { ...stored, ...pair, updatedAt: new Date(Date.parse(stored.updatedAt) + 60_000).toISOString() };
+        writes.push(pair);
+        return response(stored);
+      }
+      if (url === '/posts/tk1') return response(stored);
+      return response(url.endsWith('/alt-audit') ? { count: 0, images: [] } : []);
+    };
+    return { fetch, stored: () => stored, writes };
+  }
+  // v2: another tab or user saved a new EN title after the stash was taken.
+  const serverV2 = (): Stored => {
+    const pair = fullPair();
+    pair.en.title = 'Newer EN saved elsewhere';
+    return { ...pair, updatedAt: V2 };
+  };
+  // What the author's tab stashed. The stored version it was edited against
+  // travels in the record's WriteRecovery state, not in the payload (#305).
+  const stashOf = () => {
+    const pair = fullPair();
+    pair.de.title = 'Stashed DE edit';
+    return pair;
+  };
+  const basedOn = (baseUpdatedAt: unknown) => ({ baseUpdatedAt: baseUpdatedAt as string | null });
+  const restorePrompt = copy['editor.chrome.restoreBody'].replace('{time}', new Date('2026-10-01T12:00:00Z').toLocaleString());
+  // Accept the restore; the editor then probes the stored version on its own.
+  const open = async (server: VersionedServer, payload: unknown, recovery: Partial<StashRecovery> | null) => await loadEditor({
+    isAdmin: true, search: '?tk=tk1', fetch: server.fetch,
+    stash: { key: 'swl:draft:tk1', payload, recovery },
+    confirm: (prompt) => prompt.title === copy['editor.chrome.restoreTitle'],
+  });
+  // Re-stash the restored form the way closing the tab does, and read it back.
+  const restash = (h: { document: { body: Element | null }; local: StashStorage }) => {
+    h.document.body!.dispatchEvent(new EditorEvent('pagehide', { bubbles: true }));
+    return latestStash(h.local, 'post:tk1');
+  };
+
+  it.each([V1, '2999-01-01T00:00:00.000Z'])('keeps the stash base %s, so the draft reaches the stored-version comparison instead of overwriting v2', async (base) => {
+    const server = versionedServer(serverV2());
+    const h = await open(server, stashOf(), basedOn(base));
+    await settle();
+    expect(h.prompts.map((prompt) => prompt.title)).toEqual([copy['editor.chrome.restoreTitle']]);
+    expect(h.prompts[0]!.body).toBe(restorePrompt);
+    expect(h.el('actionStatus').textContent).toBe(copy['editor.chrome.writeRestored']);
+    expect(h.el('deTitle').value).toBe('Stashed DE edit');
+    // The restore's probe judged the base against v2 before any write.
+    const comparison = storedComparison(h);
+    expect(comparison.compare.hidden).toBe(false);
+    expect(comparison.status.textContent).toBe(copy['editor.chrome.writeChanged']);
+    // Also what any re-stash of the restored form records: the base is not laundered.
+    expect(h.api.buildPayload().updatedAt).toBe(base);
+    expect(restash(h)?.recovery?.baseUpdatedAt).toBe(base);
+
+    expect(await h.api.doSaveDraft()).toBe(false);
+    h.el('previewBtn').click();
+    h.el('publishBtn').click();
+    await settle();
+    expect(h.requests.filter(isPut)).toEqual([]);
+    expect(h.requests.filter(({ url }) => url.endsWith('/publish'))).toEqual([]);
+    expect(server.writes).toEqual([]);
+    expect(server.stored().en.title).toBe('Newer EN saved elsewhere');
+    expect(server.stored().de.title).toBe('Bukarest');
+    expect(comparison.compare.hidden).toBe(false);
+    expect(h.el('deTitle').value).toBe('Stashed DE edit');
+  });
+
+  it.each([V1, null])('revision restore cannot refresh a restored stash base of %s', async (base) => {
+    const server = versionedServer(serverV2());
+    const snapshot = fullPair();
+    snapshot.de.title = 'Selected revision DE';
+    snapshot.en.title = 'Selected revision EN';
+    const h = await loadEditor({
+      isAdmin: true, search: '?tk=tk1',
+      // `null`: a record that carries no recovery state at all — its base is unknown.
+      stash: { key: 'swl:draft:tk1', payload: stashOf(), recovery: base === null ? null : basedOn(base) },
+      confirm: (prompt) => [copy['editor.chrome.restoreTitle'], copy['editor.chrome.revisionRestoreTitle']].includes(prompt.title),
+      fetch: async (url, options) => {
+        if (url === '/posts/tk1/revisions') return response([
+          { id: 'revision-1', savedAt: V2, titleDe: snapshot.de.title, status: 'draft' },
+        ]);
+        if (url === '/posts/tk1/revisions/revision-1') return response({ snapshot, savedAt: V2 });
+        return server.fetch(url, options);
+      },
+    });
+    await settle();
+    required(h.el('revisionsList'), 'button').click();
+    await settle();
+    expect(h.el('deTitle').value).toBe(snapshot.de.title);
+    expect(h.el('enTitle').value).toBe(snapshot.en.title);
+    expect(h.requests.filter(isPut)).toEqual([]);
+    expect(await h.api.doSaveDraft()).toBe(false);
+    expect(h.requests.filter(isPut)).toEqual([]);
+    expect(server.writes).toEqual([]);
+    expect(server.stored().en.title).toBe('Newer EN saved elsewhere');
+    if (base === null) {
+      expect(h.el('actionError').textContent).toBe(copy['editor.chrome.reloadFailed']);
+      expect(restash(h)?.recovery?.baseUpdatedAt ?? null).toBeNull();
+    } else {
+      expect(h.api.buildPayload().updatedAt).toBe(base);
+      expect(storedComparison(h).compare.hidden).toBe(false);
+    }
+  });
+
+  it('restores and saves both locales when the stash base is the stored version', async () => {
+    const server = versionedServer({ ...fullPair(), updatedAt: V1 });
+    const stash = stashOf();
+    stash.en.title = 'Stashed EN edit';
+    const h = await open(server, stash, basedOn(V1));
+    await settle();
+    expect(h.prompts[0]!.body).toBe(restorePrompt);
+    expect(h.el('actionStatus').textContent).toBe(copy['editor.chrome.writeRestored']);
+    expect(h.el('actionError').textContent).toBe('');
+    expect(storedComparison(h).compare.hidden).toBe(true);
+    expect(await h.api.doSaveDraft()).toBe(true);
+    expect(server.stored().de.title).toBe('Stashed DE edit');
+    expect(server.stored().en.title).toBe('Stashed EN edit');
+    expect(latestStash(h.local, 'post:tk1')).toBeUndefined();
+    h.el('deTitle').value = 'Edited after the restore';
+    h.el('deTitle').fire('input');
+    expect(await h.api.doSaveDraft()).toBe(true); // the token followed the save
+    expect(server.stored().de.title).toBe('Edited after the restore');
+  });
+
+  it.each([
+    ['missing (a record without recovery state)', null],
+    ['unparsable', basedOn('not-a-date')],
+    ['not a string', basedOn(Date.parse(V1))],
+    ['empty', basedOn('')],
+  ])('blocks saving a restored draft whose base is %s, without sending a write', async (_label, recovery) => {
+    const server = versionedServer(serverV2());
+    const h = await open(server, stashOf(), recovery);
+    await settle();
+    expect(h.prompts[0]!.body).toBe(restorePrompt);
+    expect(h.el('actionError').textContent).toBe(copy['editor.chrome.writeUnsafeBase']);
+    expect(h.el('actionStatus').textContent).toBe(copy['editor.chrome.writeRestored']);
+    // The text is on screen to copy out.
+    expect(h.el('deTitle').value).toBe('Stashed DE edit');
+    expect(await h.api.doSaveDraft()).toBe(false);
+    expect(h.el('actionError').textContent).toBe(copy['editor.chrome.reloadFailed']);
+    h.el('previewBtn').click();
+    h.el('publishBtn').click();
+    await settle();
+    expect(h.requests.filter(isPut)).toEqual([]);
+    expect(h.requests.filter(({ url }) => url.endsWith('/publish'))).toEqual([]);
+    expect(server.writes).toEqual([]);
+    expect(server.stored().en.title).toBe('Newer EN saved elsewhere');
+    expect(latestStash(h.local, 'post:tk1')?.payload.de.title).toBe('Stashed DE edit');
+    // A re-stash records no judgeable base either: otherwise the loaded v2 token
+    // would become a base that matches, and the next restore would save (#345).
+    const again = restash(h);
+    expect(again?.payload.de.title).toBe('Stashed DE edit');
+    expect(again?.recovery?.baseUpdatedAt ?? null).toBeNull();
+  });
+
+  it('keeps a new-post stash tokenless, so its first save still creates', async () => {
+    // JSON drops the undefined key: what a never-saved post's stash holds.
+    const payload = { ...minimalPair(), translationKey: undefined };
+    const h = await loadEditor({ isAdmin: true, confirm: true, stash: { key: 'swl:draft:new', payload } });
+    await settle();
+    expect(h.prompts[0]!.body).toBe(restorePrompt);
+    expect(h.el('actionError').hidden).toBe(true);
+    expect(h.el('deTitle').value).toBe('X');
+    expect(h.api.buildPayload().updatedAt).toBeUndefined();
+    expect(h.api.buildPayload().translationKey).toBeUndefined();
+  });
+
+  it('keeps the live slugs of a post published since the stash, not stash slugs the author cannot edit', async () => {
+    const live = serverV2();
+    // Published locales carry their publication time (#284 locks slugs per locale).
+    const server = versionedServer({ ...live, status: 'published',
+      de: { ...live.de, publishedAt: new Date(V1) }, en: { ...live.en, publishedAt: new Date(V1) } });
+    const stash = stashOf();
+    stash.de.slug = 'alter-entwurf';
+    stash.en.slug = 'old-draft';
+    const h = await open(server, stash, basedOn(V1));
+    await settle();
+    expect([h.el('slugFieldDe').value, h.el('slugFieldEn').value]).toEqual(['bukarest', 'bucharest']);
+    expect(h.el('slugFieldDe').disabled).toBe(true);
+    expect(h.el('actionStatus').textContent).toBe(copy['editor.chrome.writeRestored'] + ' ' + copy['editor.chrome.restoreSlugsKept']);
+    expect(h.el('deTitle').value).toBe('Stashed DE edit');
+    // Published since the stash: the comparison holds the save, and what it would
+    // send — and what a re-stash keeps — carries the live slugs.
+    expect(storedComparison(h).compare.hidden).toBe(false);
+    expect(await h.api.doSaveDraft()).toBe(false);
+    expect(h.requests.filter(isPut)).toEqual([]);
+    const payload = h.api.buildPayload();
+    expect([payload.de.slug, payload.en.slug]).toEqual(['bukarest', 'bucharest']);
+    const again = restash(h);
+    expect([again?.payload.de.slug, again?.payload.en.slug]).toEqual(['bukarest', 'bucharest']);
+    expect(server.writes).toEqual([]);
+  });
+
+  it('blocks saving and keeps the untouched stash when the restore fails part-way (#332)', async () => {
+    const server = versionedServer({ ...fullPair(), updatedAt: V1 });
+    const stash = stashOf();
+    stash.de.bodyMarkdown = 'Stashed German body';
+    stash.en.title = 'Stashed EN title';
+    const h = await loadEditor({
+      isAdmin: true, search: '?tk=tk1', fetch: server.fetch,
+      stash: { key: 'swl:draft:tk1', payload: stash, recovery: basedOn(V1) },
+      confirm: (prompt) => prompt.title === copy['editor.chrome.restoreTitle'],
+      onEditor: (editor, index) => {
+        if (index !== 0) return;
+        const value = editor.value.bind(editor);
+        editor.value = (text?: string) => {
+          const result = value(text); // DE fields already replaced, EN not yet
+          if (text === 'Stashed German body') throw new Error('forced restore failure');
+          return result;
+        };
+      },
+    });
+    await settle();
+    expect(h.el('deTitle').value).toBe('Stashed DE edit'); // the mixed form stays on screen to copy from
+    expect(h.el('enTitle').value).toBe('Bucharest');
+    expect(h.el('actionError').textContent).toBe(ui.en['editor.chrome.reloadFailed']);
+    expect(await h.api.doSaveDraft()).toBe(false);
+    h.el('publishBtn').click();
+    await settle();
+    expect(h.requests.filter(isPut)).toEqual([]);
+    expect(h.requests.filter(({ url }) => url.endsWith('/publish'))).toEqual([]);
+    expect(latestStash(h.local, 'post:tk1')?.payload).toEqual(JSON.parse(JSON.stringify(stash)));
+  });
 });
