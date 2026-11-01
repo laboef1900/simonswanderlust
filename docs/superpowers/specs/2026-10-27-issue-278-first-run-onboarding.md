@@ -846,3 +846,21 @@ refused an early finish (409), advanced photo/story/publish from real upload, dr
 publish requests, finished to `retired` and then refused resume (409). The Desk in managed
 Chromium at 1280 px showed the checklist, build status and unset-domain notice without
 horizontal overflow.
+
+## #280 current-dev integration (2026-11-01)
+
+Merged `dev` after #279 landed. #280 had carried its own copy of the bootstrap catalog's
+`site_language`/`posts.omitted` admission; the merge keeps one copy of each entry and #280's
+stricter language-row check (validated dates, `DEFAULT_LANGUAGE`). Desk keeps #280's loader,
+which reads the language mode inside the authenticated-context load so its failure is
+retryable, plus dev's admin build status. The map page keeps #280's empty state (no "0 pins"
+badge, no map island) together with dev's singular/plural pin label; dev's count-label test
+now asserts the empty state for zero trips. MapPage's lazy `await import()` of the map
+module is resolved to the module under test by the WebGL fallback test harness.
+
+Verification at the merge: uploader `tsc` 0 and the PostgreSQL-enabled suite 4028/4028
+(including the real `pg_dump`/`psql` recovery test); site 693/693 plus the four-mode
+`empty-build` PostgreSQL integration 4/4; `astro check` 0 errors; `astro build` OK. The real
+app built an empty install whose DE/EN map pages showed the empty state with no map island;
+after one real publish, managed Chromium loaded the lazily imported map module, rendered the
+canvas and pin and labelled it "1 Pin-Standort".
