@@ -1106,6 +1106,11 @@ blog/
   deployed container answered 503 on every comment route while every suite (which injects stores
   directly) stayed green. `uploader/test/main-boot.integration.test.ts` now boots the real
   `src/main.ts` against Postgres and walks a comment from `POST` to moderation to public list.
+- **In progress:** Phone authoring (#300, epic #299) — the owner-approved mobile acceptance
+  matrix (`docs/superpowers/specs/2026-10-27-mobile-acceptance-matrix-design.md`, decisions
+  2026-10-29, rebased 2026-11-01 onto `976f31a`) and the G5 operator run sheet
+  (`docs/superpowers/plans/2026-11-01-issue-300-device-test-script.md`). Physical-device
+  execution is an owner gate and has **not** happened; no cell has passed.
 - **Remaining:** Phase 4 = DNS cutover. See `docs/superpowers/plans/` for phase details. Not
   started, deliberately: #67 (AI authoring — design spec landed 2026-07-28, implementation not
   started), #72 (Traefik timeouts). #68 (production EXIF audit) was **closed as obsolete**

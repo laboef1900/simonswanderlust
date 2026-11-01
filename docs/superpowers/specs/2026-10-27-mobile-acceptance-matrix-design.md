@@ -9,8 +9,13 @@ audit or device finding is claimed, and no D5 exception has been granted.
 has occurred. Ownership of both phones is not required.
 Part of epic #299. It blocks #301 (Media on a phone) and #302 (compose/preview/publish on a phone).
 Historical drafting baseline: `dev` at `11e16d1` (v0.17.1); the issues were planned against
-`9e400f9`. Source/host observations below are the original drafting record, not a new audit or
-verification of the eventual test build. Record that build and recheck hypotheses when executing.
+`9e400f9`. **Rebased 2026-11-01 onto `dev` at `976f31a`** (still v0.17.1 in `uploader/package.json`):
+every `[STATIC]` citation below was re-read on that base and §15 records which hypotheses the
+resilience epic (#303–#306, all merged) has already changed. Source/host observations remain a
+drafting record, not a device audit or a verification of the eventual test build. Record that build
+and recheck hypotheses when executing. The physical-device run itself is scripted step by step in
+[`docs/superpowers/plans/2026-11-01-issue-300-device-test-script.md`](../plans/2026-11-01-issue-300-device-test-script.md)
+(gate G5 of the held-PR plan).
 
 This is the durable in-repo support-matrix and harness-decision record required by #300/#299.
 The findings summary remains pending physical execution. Detailed evidence (screenshots,
@@ -34,7 +39,7 @@ git (Golden Rule 5).
 
 | Label | Meaning |
 |---|---|
-| `[STATIC]` | Read in the source at `11e16d1`; file and line cited. |
+| `[STATIC]` | Read in the source at `11e16d1` and re-read at `976f31a` (2026-11-01); file and line cited for `976f31a`. |
 | `[HOST]` | Reproduced on the drafting Mac **outside the app**: library-level, not through a route, not on a phone. |
 | `[EXTERNAL]` | Vendor or platform documentation; the link is given. |
 | `[INFERENCE]` | Expected platform behaviour, not observed for this app. The device run must confirm or reject it. |
@@ -179,7 +184,7 @@ a single-language run is additional coverage, not a substitute or authorization 
 | **P2 Background/discard** | Add a unique unsaved marker in the last 2 s before (a) switching apps for 60 s, (b) locking for 5 min, and (c) backgrounding then closing/discarding the browser process and reopening the same draft. Candidate methods are iOS app-switcher close and Android `adb shell am kill com.android.chrome`; record the actual lifecycle observed, not an assumed equivalence to OS discard. Distinguish a still-live page from a new document. On the recovery path capture the offered stash, accept it and check the final marker plus edited locale fields. If the method does not discard, that probe remains open. Do not press Save or wait out the normal debounce before backgrounding. | H2 |
 | **P3 Keyboard geometry** | With the on-screen keyboard open: focus the last field in the drawer, the EN title, and the body near the bottom. Record whether the sticky command bar stays visible and whether the page pans. Repeat with a Bluetooth keyboard (no on-screen keyboard) and in landscape (non-gating). | H4, H5 |
 | **P4 Hardware keyboard** | Pair a Bluetooth keyboard. Tab through J2–J12; record the order and any trap or invisible focus. Try EasyMDE shortcuts (Cmd/Ctrl-B, -I). | J2–J12 |
-| **P5 Session** | (a) Log out in a second tab mid-edit, then Save → expect a stash plus a `?next=` round trip. (b) Log out mid-upload on Media → expect a bare `/login` (known; #305). (c) Open an admin URL from a link in another app or site (the session cookie is `SameSite=Strict`, `uploader/src/authn.ts:24-31`). Record whether the session is used. | H8, H14 |
+| **P5 Session** | (a) Log out in a second tab mid-edit, then Save → expect a stash plus a `?next=` round trip. (b) Log out mid-upload on Media → since #305 the queue pauses and shows a sign-in banner (`media-browser.js:50,325-338`, `?next=/admin/` in a new tab) with Resume; record whether resuming after re-login settles the paused items without re-sending stored files. (c) Open an admin URL from a link in another app or site (the session cookie is `SameSite=Strict`, `uploader/src/authn.ts:25-32`). Record whether the session is used. | H8, H14 |
 | **P6 Photo formats and limits** | For each special file and acquisition path, record client name/type/byte size, whether any `/upload` request starts, HTTP result if one exists, actual stored format/extension and media status/reason. **Oversized where determinable: no upload request, clear refusal.** Known unsupported formats need clear pre-upload refusal where determinable; accepted files must exercise the actual image's decoder and visibly reach `ready` or terminal failure. Capture transfer completion separately from readiness, including the intermediate `processing` state if observed; never infer encoding success from 2xx or a queue label. Server validation remains authoritative. | H6, H7 |
 | **P7 Storage persistence** | iOS: leave an unsaved stash, do not open the admin for 8 days, then reopen. Optional, because it takes long. Record whether the stash survived. | H13 |
 
@@ -190,9 +195,12 @@ a single-language run is additional coverage, not a substitute or authorization 
   Do not change the admin-only routes. Preserve Media dirty guards.
 - **#301 desktop:** retain desktop drag-and-drop and multi-select behavior, with Media DOM/queue
   regression coverage and desktop evidence. A phone result does not establish either.
-- **#302 lifecycle:** add behavioral regression coverage for `visibilitychange`/`pagehide` stashing
-  and recovery of final edits in `editor-dom.test.ts` or the DraftGuard VM coverage in
-  `admin-pages.test.ts`. Preserve tab isolation, user scoping and `markClean` generation semantics.
+- **#302 lifecycle:** `pagehide` stashing already has DOM coverage on `dev`
+  (`editor-dom.test.ts`, the `pagehide` dispatch near line 3952 on `976f31a`). If the device run
+  shows a platform path that discards without `pagehide`, add `visibilitychange` stashing with
+  behavioral coverage of recovering the final edits in `editor-dom.test.ts` or the DraftGuard VM
+  coverage in `admin-pages.test.ts`. Preserve tab isolation, #306 user scoping and `markClean`
+  generation semantics.
 - **#302 desktop:** keep editor DOM, linter and review consumer-visible regressions covered.
   Adapt behavioral tests to approved changes; remove incidental wording/implementation assertions,
   not meaningful checks. No mobile-only editor, desktop restyle or weakened publish gate/permission.
@@ -207,21 +215,21 @@ confirms the row (§7).
 
 | ID | Hypothesis | Evidence so far | Device test | Proposed owner if confirmed |
 |---|---|---|---|---|
-| H1 | Preview calls `window.open` only after `await doSaveDraft()`, so a browser may treat it as an unrequested popup. | `[STATIC]` `uploader/public/editor.html:1803-1807`. | P1, J10 | **#302** |
-| H2 | Draft stashing relies on a 5 s debounce plus `beforeunload`; there is no `pagehide`/`visibilitychange` stash. A tab killed in the background loses up to the last 5 s of typing, or everything since the last stash. | `[STATIC]` `draft-guard.js:44` (default `debounceMs` 5000; `editor.html:594-604` passes none), `:186-191` (the only lifecycle listener). `uploader/public/` has no `pagehide` listener; the only `visibilitychange` is the GPX notice in `editor-gpx.js:495`. | P2, J11 | **#302** (lifecycle stash). Key shape and user isolation stay with **#306** (§7 sequencing). |
-| H3 | EasyMDE uses `contenteditable` on a mobile UA, and CodeMirror 5 touch selection and autocorrect may misbehave. The toolbar (9 buttons, 3 separators) may wrap rather than overflow at 320. | `[STATIC]` `easymde.js:2205` (UA-detected `inputStyle`); `editor.html:563-576`; toolbar `flex-wrap: wrap` at `admin.css:1240-1251`. | J6, P4 | **#302** |
-| H4 | The shell is `100dvh` with one inner scroll container and a sticky command bar. The viewport meta sets no `interactive-widget`, so the keyboard is expected to shrink only the visual viewport `[INFERENCE]`. The command bar or the active field may then sit under the keyboard or pan away. | `[STATIC]` `admin.css:1373-1379`, `:2094-2097`; `editor.html:5` (`width=device-width, initial-scale=1` only). | P3 | **#302** (editor); **#301** for the Media detail panel |
-| H5 | Inputs render at 14 px (`0.875rem`); iOS Safari zooms on focus below 16 px, shifting the layout and causing horizontal panning. | `[STATIC]` `admin.css:163-174` (no coarse-pointer font override; `:72-74` changes only heights). `[INFERENCE]` for the zoom. | J1, J5, J6 | **#302**: shared `admin.css`, landed once; #301 rebases. It is a documented-token change, so `DESIGN.md` is updated with the fix. |
-| H6 | An HEVC HEIC that reaches the server untranscoded passes the `/upload` probe, is stored as `-orig.avif`, then fails encoding with code `encode_failed`. | `[HOST]` See §6.1. `[STATIC]` probe and classification: `pipeline.ts:31-33,112-120`, `server.ts:487-497`, `encode-queue.ts:157-158,200`. **Open:** whether iOS/Android hand the page HEIC or a JPEG. | P6 | **#301** (refuse clearly before or at upload; the terminal state is visible) |
-| H7 | No client-side size check: a > 25 MiB photo transfers fully, then the server answers 413. The visible reason is whatever the 413 body's `error` says. | `[STATIC]` `media-api.js:174-200` (no `file.size` check, no XHR timeout); `server.ts:322-324`. | P6 | **#301** |
-| H8 | A 401 on Media goes to `/login` with no `?next`, so the author lands on the Desk afterwards. | `[STATIC]` `media-browser.js:42`, `media-picker.js:67`. | P5(b) | **#305** (already decided in #301 *Out*) |
-| H9 | A locked screen or backgrounding mid-upload fails XHRs with `network error` even when the server may have stored the file. `retryFailed()` then re-sends every failed item. | `[STATIC]` `media-api.js:196,290-295`. `[INFERENCE]` for the iOS suspension behaviour. | J4 | **#305** (outcome-unknown); **#301** for the "keep this tab open" copy |
+| H1 | Preview calls `window.open` only after `await doSaveDraft()`, so a browser may treat it as an unrequested popup. **Unchanged on `976f31a`.** | `[STATIC]` `uploader/public/editor.html:2044-2048`. | P1, J10 | **#302** |
+| H2 | Draft stashing relies on a 5 s debounce plus `beforeunload`, with a `pagehide` stash **added by #306**; there is still no `visibilitychange` stash, so a tab discarded without `pagehide` (an OS kill of a backgrounded browser is `[INFERENCE]` for both platforms) can lose up to the last 5 s of typing. The device run must establish whether `pagehide` fires on each platform's background/lock/kill path. | `[STATIC]` `draft-guard.js:46` (default `debounceMs` 5000; `editor.html:653-656` passes none), `:127-131` (`beforeunload` + `pagehide` stash). The only `visibilitychange` listeners in `uploader/public/` are the GPX notice (`editor-gpx.js:529`) and the publication-state refresher (`publication-refresh.js:81`), neither of which stashes. | P2, J11 | **#302** (`visibilitychange` stash if a device shows `pagehide` missing). Key shape and user isolation landed with **#306**; rebase onto them. |
+| H3 | EasyMDE uses `contenteditable` on a mobile UA, and CodeMirror 5 touch selection and autocorrect may misbehave. The toolbar (9 buttons, 3 separators) may wrap rather than overflow at 320. | `[STATIC]` `easymde.js:2205` (EasyMDE 2.21.0, UA-detected `inputStyle`); `editor.html:624-640`; toolbar `flex-wrap: wrap` at `admin.css:1248-1266`. | J6, P4 | **#302** |
+| H4 | The shell is `100dvh` with one inner scroll container and a sticky command bar. The viewport meta sets no `interactive-widget`, so the keyboard is expected to shrink only the visual viewport `[INFERENCE]`. The command bar or the active field may then sit under the keyboard or pan away. | `[STATIC]` `admin.css:1377-1382` (`--cms-workspace-h: calc(100dvh - …)`), `:2113-2116` (sticky `.editor-commandbar`); `editor.html:5` and `media.html:5` (`width=device-width, initial-scale=1` only). | P3 | **#302** (editor); **#301** for the Media detail panel |
+| H5 | Inputs render at 14 px (`0.875rem`); iOS Safari zooms on focus below 16 px, shifting the layout and causing horizontal panning. | `[STATIC]` `admin.css:163-174` (`font: 400 0.875rem/1.4`; no coarse-pointer font override; `:72-74` changes only heights). `[INFERENCE]` for the zoom. | J1, J5, J6 | **#302**: shared `admin.css`, landed once; #301 rebases. It is a documented-token change, so `DESIGN.md` is updated with the fix. |
+| H6 | An HEVC HEIC that reaches the server untranscoded passes the `/upload` probe, is stored as `-orig.avif`, then fails encoding with code `encode_failed`. **Unchanged on `976f31a`**: `probeImage` still maps `heif` → `avif` and the classifier has no HEVC pattern. | `[HOST]` See §6.1. `[STATIC]` probe and classification: `pipeline.ts:31-33,112-120`, `upload-service.ts:275-282` (the `/upload` path now lives in `upload-service.ts`, #305), `encode-queue.ts:179-182`. **Open:** whether iOS/Android hand the page HEIC or a JPEG. | P6 | **#301** (refuse clearly before or at upload; the terminal state is visible) |
+| H7 | No client-side size check: a > 25 MiB photo transfers fully, then the server answers 413. The visible reason is whatever the 413 body's `error` says. **Still no `file.size` check on `976f31a`**; #305 added a 120 s stall watchdog and classifies 413 as a terminal (non-`unknown`) failure. | `[STATIC]` `media-api.js:285-336` (`uploadOne`: no `file.size` check; `upload_stalled` watchdog at `:302-308`; `:326-329` status classification); `server.ts:350` (`fileSize: 25 * 1024 * 1024`). | P6 | **#301** |
+| H8 | A 401 on Media goes to `/login` with no `?next`, so the author lands on the Desk afterwards. **Resolved by #305 on `dev`:** a 401 pauses the queue (`needs-auth`) and offers a sign-in link carrying `?next=%2Fadmin%2F` in a new tab plus Resume; `media-picker.js:68` redirects with `?next=` to the current page. The device run records the actual round trip instead of the old bare redirect. | `[STATIC]` `media-browser.js:50,325-338`, `media-picker.js:68`. | P5(b) | Record only; a demonstrated loss of queued items after re-login is **#301**. |
+| H9 | A locked screen or backgrounding mid-upload fails XHRs with `network_error` even when the server may have stored the file. **Changed by #305 on `dev`:** such failures are tagged `unknown`, reconciled through `GET /upload/receipts/:id` (`checking` → settled or `unknown`), and `retryFailed()` re-sends only items that did not settle. | `[STATIC]` `media-api.js:331-332` (`network_error`/`upload_aborted` carry `unknown: true`), `:349` (receipt lookup), `:403-405`, `:519` (`retryFailed`). `[INFERENCE]` for the iOS suspension behaviour. | J4 | **#305** behaviour is to be recorded, not re-opened; **#301** for the "keep this tab open" copy |
 | H10 | A local AI provider configured as `http://localhost:…` (or plain HTTP from an HTTPS admin) is unreachable from a phone. | `[INFERENCE]` from the browser-direct design (CLAUDE.md §4) and mixed-content rules. | J5 | **#301** for a reproduced failure of configured AI or unclear/hanging feedback. Optional unconfigured AI needs no waiver. |
-| H11 | `env(safe-area-inset-*)` paddings evaluate to 0 because `viewport-fit=cover` is not set, so notch handling is the browser's letterboxing. | `[STATIC]` `admin.css:2737,2776-2777,2880`; viewport meta above. | J2, P3 landscape | **#302** only if observed overlap violates a requirement. Working letterboxing needs no exception. |
+| H11 | `env(safe-area-inset-*)` paddings evaluate to 0 because `viewport-fit=cover` is not set, so notch handling is the browser's letterboxing. | `[STATIC]` `admin.css:2756,2795-2796,2899`; viewport meta above. | J2, P3 landscape | **#302** only if observed overlap violates a requirement. Working letterboxing needs no exception. |
 | H12 | Dynamic Type does not change the admin's text. | `[INFERENCE]` (§4 DT). | DT run | Record actual scaling/usability; **#302** if a demonstrated result violates the agreed scaling/accessibility requirement. Lack of this optional mechanism alone is not a waived requirement; T200 still needs proof. |
-| H13 | iOS Safari's 7-day cap on script-writable storage can delete a DraftGuard stash after a week without a visit. | `[EXTERNAL]` [WebKit: Full Third-Party Cookie Blocking and More](https://webkit.org/blog/10218/full-third-party-cookie-blocking-and-more/) (cap on all script-writeable storage). | P7 (optional) | **#304** "Limits" section / **#306** `docs/authoring-workflow.md` |
+| H13 | iOS Safari's 7-day cap on script-writable storage can delete a DraftGuard stash after a week without a visit. #304 §6 (Limits) and `docs/authoring-workflow.md` (browser storage eviction, lines ~217-219 on `976f31a`) now document eviction generically; the 7-day WebKit cap is not named there. | `[EXTERNAL]` [WebKit: Full Third-Party Cookie Blocking and More](https://webkit.org/blog/10218/full-third-party-cookie-blocking-and-more/) (cap on all script-writeable storage). | P7 (optional) | If observed, a one-line addition to the `docs/authoring-workflow.md` Limits text; no app change. |
 | H14 | Entering the admin from a link in another site or app may not send the `SameSite=Strict` cookie on that first navigation. | `[STATIC]` `authn.ts:27`. `[INFERENCE]` for each browser's same-site classification of the navigation. | P5(c) | Record navigation/recovery behavior. Expected secure-cookie behavior needs no waiver; attribute only a demonstrated unmet requirement. Not phone-specific; weakening the cookie is out of scope. |
-| H15 | 44 px coarse-pointer controls meet SC 2.5.8, but icon-only or `--control-h-sm` buttons with fixed sizes outside the token may not. | `[STATIC]` `admin.css:72-74`. Not measured. | J2–J12 (tier B measurement first) | Whichever of **#301**/**#302** owns the page |
+| H15 | 44 px coarse-pointer controls meet SC 2.5.8, but icon-only or `--control-h-sm` buttons with fixed sizes outside the token may not. | `[STATIC]` `admin.css:72-74` (`--control-h-sm` is raised to `2.75rem` under `pointer: coarse`; fixed-size exceptions are not inventoried). Not measured. | J2–J12 (tier B measurement first) | Whichever of **#301**/**#302** owns the page |
 
 Documentation discrepancy found while drafting (not a phone finding): `PRODUCT.md` says "WCAG 2.1
 AA minimum". `CLAUDE.md` (*Accessibility*) is authoritative and targets **WCAG 2.2 AA**, which this
@@ -236,10 +244,10 @@ separate documentation change, not an owner decision.
 - **Fixture:** a 640×480 JPEG generated with sharp and converted with macOS
   `sips -s format heic`. `file` reports "HEIF Image HEVC Main or Main Still Picture Profile".
 - **`metadata()` (as in `probeImage`):** succeeds, with `format: 'heif'`, `compression: 'hevc'`,
-  640×480. By `pipeline.ts:118-119` the probe's extension is therefore `avif`.
+  640×480. By `pipeline.ts:116-119` the probe's extension is therefore `avif`.
 - **Resize + `.webp()` encode (as in `encodeVariant`):** throws
   "heif: Error while loading plugin: Support for this compression format has not been built in".
-  That message does not match the `decode_failed` pattern at `encode-queue.ts:157`, so it would
+  That message does not match the `decode_failed` patterns at `encode-queue.ts:179-181`, so it would
   be recorded as `encode_failed` (`[STATIC]` reading, not run through the queue).
 - **Limits:** the container's Linux sharp build was not checked; it is `[INFERENCE]` that it
   matches the darwin prebuilt's codec set. The run did not go through `/upload` or the encode
@@ -257,20 +265,22 @@ separate documentation change, not an owner decision.
 | Shared shell/`admin.css` tokens (e.g. H5) | The first of #301/#302 to land (default **#302**); the other rebases |
 | A demonstrated unmet acceptance/support requirement or required cell unavailable after documented attempts, which the owner elects to leave unresolved | **Explicit owner exception record** here: precise waived requirement/cell, evidence and substituted coverage, reason, risk, compensating controls, approver, review/expiry date, device/build and date. Not a pass. Passing behavior, unconfirmed hypotheses, optional unconfigured AI and out-of-support observations need no waiver. |
 
-Sequencing (from #299/#302/#306): whichever of #302 and #306 lands second rebases onto the other's
-`draft-guard.js` invariants (#138 tab keys, #22 `markClean` generations, #306 user scoping). The
-same rule applies to #301 and #306 on `media-browser.js`.
+Sequencing: #306 has landed on `dev` (`draft-guard.js` owner scoping, `media-browser.js`
+sign-in banner), so #301 and #302 rebase onto its invariants (#138 tab keys, #22 `markClean`
+generations, #306 user scoping) rather than the reverse.
 
 ## 8. Test environment, trust boundaries and misuse
 
 - **Never production, never owner content.** A disposable database and `/data`, and the two audit
   accounts. Nothing is restored from a production dump.
-- **Reachability.** Compose publishes only `127.0.0.1:3000` (`docker-compose.yml:15`; #108), so a
+- **Reachability.** Compose publishes only `127.0.0.1:3000` (`docker-compose.yml:16`; #108), so a
   phone cannot reach a default stack. **Do not edit `docker-compose.yml` for the audit.** The
   choices are:
   1. **Recommended:** a disposable instance behind TLS at a test hostname (e.g. a staging
      reverse proxy). This keeps parity with production: a secure context, and a `Secure` cookie,
-     because `trustProxy: 1` (`server.ts:189`) reads `X-Forwarded-Proto`.
+     because the app trusts exactly one proxy hop for `X-Forwarded-Proto` (`TRUSTED_PROXY`
+     `loopback` or `docker-gateway`, `uploader/src/trusted-proxy.ts`, `main.ts:49`, `server.ts:212`;
+     compose sets `docker-gateway`).
   2. **Local TLS reverse proxy on a trusted LAN**, using an existing owner-provided proxy/tool
      and a certificate trusted by both phones (temporary local CA installed only with permission).
      Terminate HTTPS there and forward to the disposable app bound to **loopback**, not
@@ -279,19 +289,20 @@ same rule applies to #301 and #306 on `media-browser.js`.
      client-supplied forwarded headers, and set `X-Forwarded-Proto: https`. Verify the served
      origin is a secure context and the session cookie is Secure. Do not expose the backend or
      Postgres to the LAN. Remove temporary phone CA trust/certificates and stop the proxy/app
-     after the audit. This proposes no new app dependency or purchased service.
-  3. Plain HTTP on the LAN is acceptable **only for non-gating smoke**. It is not a secure context
-     (e.g. `crypto.randomUUID` is absent, so `draft-guard.js:29-31` takes its fallback), and the
-     cookie is not `Secure`, so its results can differ from production.
+     after the audit. This proposes no new app dependency or purchased service. With
+     `TRUSTED_PROXY=loopback` the proxy must forward from the same host as the app.
+  3. Plain HTTP on the LAN is **not usable even for smoke** on `976f31a`: `draft-guard.js:13`
+     calls `crypto.randomUUID()` unconditionally, which is absent outside a secure context, so the
+     editor's draft guard throws on load; and the cookie is not `Secure`. Only option 1 or 2.
 
   In every case `PUBLIC_BASE_URL`/`IMG_HOST` must name the host the phone uses, or variants will
-  not load (`main.ts:76-79`). The LAN-exposed instance is stopped when the run ends.
+  not load (`main.ts:124-129`). The LAN-exposed instance is stopped when the run ends.
 - **Remote inspection** (a manual tool, not a dependency): Safari Web Inspector from the Mac for
   the iPhone (Settings → Safari → Advanced → Web Inspector), and `chrome://inspect` over USB for
   Android. These read the §4/§9 numbers and the P6 file metadata. No probe code is added to the
   app.
 - **Location privacy in evidence.** The admin Media detail shows GPS for admins
-  (`media-browser.js:298-310`). Fixture photos are taken with location off or at a non-sensitive
+  (`media-browser.js:491-503`). Fixture photos are taken with location off or at a non-sensitive
   place, and every screenshot is checked for GPS, usernames and URLs of non-test hosts before it
   is attached to the issue.
 - **Credentials.** The audit passwords are generated, never typed on camera, and never pasted
@@ -409,3 +420,33 @@ The owner answered **Approve proposed matrix**, **Documented manual audit**, and
 | Findings name device, browser, viewport, text size and repro | §9 record. Filled **only** by the tier-A run, which has not happened. |
 | Matrix written and approved; both decisions recorded in the issue and in-repo | §3/§4/§10 (approved), §13 (exact 2026-10-29 owner answers). Physical execution remains blocked. |
 | Each finding assigned to #301, #302 or the resilience epic, or accepted | §6 proposed owners, §7 rules. "Accepted" means an owner exception record, never a default. |
+
+## 15. Rebase recheck (2026-11-01, `dev` at `976f31a`) and the G5 device script
+
+The branch was merged with `dev` (709 commits since `11e16d1`, including the whole resilience
+epic #303–#306). Every `[STATIC]` citation in §5–§8 was re-read on the new base. Nothing below is
+a device observation; the `[DEVICE]` label still has no entries and no cell has passed.
+
+| Hypothesis | Status on `976f31a` | Consequence for the run |
+|---|---|---|
+| H1 preview popup | Unchanged (`editor.html:2044-2048`). | P1/J10 unchanged. |
+| H2 lifecycle stash | Partly addressed: `pagehide` stash exists (`draft-guard.js:131`), no `visibilitychange`. | P2 now distinguishes "`pagehide` fired" from "discarded without `pagehide`"; only the latter is a #302 finding. |
+| H6 HEIC | Unchanged; `/upload` moved into `upload-service.ts`. | P6 unchanged. |
+| H7 size check | Unchanged; 413 is now classified terminal and a 120 s stall watchdog exists. | P6 unchanged; record the watchdog if it fires. |
+| H8 401 on Media | Resolved by #305 (paused queue, `?next=` sign-in banner). | P5(b) records the new round trip. |
+| H9 lost upload outcome | Changed by #305 (receipt reconciliation, `unknown` state). | J4 records which items reconcile and which stay `unknown`. |
+| H13 7-day storage cap | Generic eviction wording landed in `docs/authoring-workflow.md`. | P7 optional; a one-line doc addition if observed. |
+| H3, H4, H5, H10, H11, H12, H14, H15 | Unchanged apart from line numbers. | Unchanged. |
+
+**Option 3 (plain HTTP) is now ruled out even for smoke:** `draft-guard.js:13` requires
+`crypto.randomUUID()`, which only a secure context provides. The disposable instance must sit
+behind trusted TLS (§8 options 1 or 2).
+
+**G5 execution script:** the step-by-step operator script (device/build recording, TLS instance
+bring-up with `TRUSTED_PROXY`, fixture preparation, the J1–J12 journey per cell and role, probe
+procedures, what to capture and the pass/fail rule per row) is
+[`docs/superpowers/plans/2026-11-01-issue-300-device-test-script.md`](../plans/2026-11-01-issue-300-device-test-script.md).
+It refers to the #301/#302 behaviours generically (per-file upload outcomes, preview fallback,
+background stash) because both implementation PRs are being prepared in parallel; the script is
+run against whichever build the owner names, and that build's SHA is the `app_build` in every §9
+record.
