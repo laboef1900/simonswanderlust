@@ -596,6 +596,32 @@ maybe('pgPostStore (integration)', () => {
     expect(await indexDef()).toBe(before);
     await pool.end();
   });
+
+  // The migration decision reads only this schema's index: a migrated schema
+  // elsewhere in the same database must not mask a pre-#119 index here.
+  it('migrates the pre-#119 index even when another schema already has the partial form', async () => {
+    const owner = createPool(url!);
+    const migrated = `slugidx_a_${randomUUID().replaceAll('-', '')}`;
+    const legacy = `slugidx_b_${randomUUID().replaceAll('-', '')}`;
+    const scoped = (schema: string) => { const u = new URL(url!); u.searchParams.set('options', `-c search_path=${schema}`); return createPool(u.href); };
+    await owner.query(`CREATE SCHEMA ${migrated}`); await owner.query(`CREATE SCHEMA ${legacy}`);
+    const a = scoped(migrated); const b = scoped(legacy);
+    try {
+      await ensureSchema(a);
+      await ensureSchema(b);
+      await b.query(`DROP INDEX posts_locale_slug_idx`);
+      await b.query(`CREATE UNIQUE INDEX posts_locale_slug_idx ON posts (locale, slug)`);
+      await ensureSchema(b);
+      const def = (await owner.query<{ indexdef: string }>(
+        `SELECT indexdef FROM pg_indexes WHERE schemaname=$1 AND indexname='posts_locale_slug_idx'`, [legacy],
+      )).rows[0]?.indexdef ?? '';
+      expect(def).toMatch(/WHERE \(?slug <> ''/);
+    } finally {
+      await a.end(); await b.end();
+      await owner.query(`DROP SCHEMA ${migrated} CASCADE`); await owner.query(`DROP SCHEMA ${legacy} CASCADE`);
+      await owner.end();
+    }
+  });
 });
 
 maybe('pgPostStore revisions + optimistic concurrency (integration)', () => {
