@@ -617,3 +617,10 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
   native amd64/arm64 ext4 runners; the run sheet
   `docs/superpowers/plans/2026-11-01-g6-deployment-mount-qualification.md` applies again if
   `/data` moves to another filesystem, network/FUSE storage or another server.
+- **Implemented (2026-11-02, branch `feature/editor-inspector-visibility`):** editor Story details
+  moved inside the manuscript's ruled frame as a tinted, flush-pinned column (tinted rail when
+  collapsed; drawer unchanged below 74rem, its header no longer lets content show above it).
+  Hero image and title image are collapsible sections with one shared box (preview, alt,
+  status, Replace photo, Adjust framing) and a summary thumbnail; title image gains the
+  `editor.titleImage.replace` copy key. Excerpt textareas auto-fit their text (`fitTextarea`,
+  shared with the title). No route, schema or payload change.

@@ -175,7 +175,7 @@
               </div>
 
               <label for="deExcerpt">Excerpt / summary (DE)</label>
-              <textarea id="deExcerpt" rows="3" placeholder="Eine kurze Zusammenfassung des Reiseberichts…"></textarea>
+              <textarea id="deExcerpt" class="editor-autofit" rows="3" placeholder="Eine kurze Zusammenfassung des Reiseberichts…"></textarea>
               <p class="muted editor-field-help" id="deExcerptHelp"></p>
               <div id="deExcerptAssist"></div>
 
@@ -186,8 +186,11 @@
               </div>
             </div>
 
-            <section class="editor-inspector-group" id="deHeroDetails" aria-labelledby="deHeroLabel">
-              <h3 class="editor-card-title" id="deHeroLabel">Hero image (DE)</h3>
+            <details class="editor-inspector-group editor-image-section" id="deHeroDetails">
+              <summary class="editor-card-title" id="deHeroLabel">
+                <span class="editor-image-section__title">Hero image (DE)</span>
+                <span class="editor-image-section__thumb" id="deHeroThumb" hidden><img id="deHeroThumbImg" alt="" /></span>
+              </summary>
               <div class="hero-picker hero-banner-zone">
                 <div class="hero-compact-preview" id="deHeroPreview" hidden>
                   <img id="deHeroPreviewImg" alt="" />
@@ -199,12 +202,10 @@
                 </div>
                 <p id="deHeroStatus" class="muted" role="status"></p>
 
-                <details class="editor-disclosure hero-replace" id="deHeroReplace">
+                <details class="editor-disclosure hero-replace" id="deHeroReplace" open>
                   <summary>Replace photo</summary>
-                  <label class="hero-drop" for="deHeroFile">
-                    <span class="hero-drop-copy">Drop a photo or browse</span>
-                    <input id="deHeroFile" type="file" accept="image/*" class="hero-drop-input" />
-                  </label>
+                  <label for="deHeroFile">Hero image file (DE)</label>
+                  <input id="deHeroFile" type="file" accept="image/*" class="hero-file-input" />
                   <div class="hero-actions-row">
                     <button type="button" id="deHeroUpload" class="btn-secondary">Upload hero</button>
                     <button type="button" id="deHeroLibrary" class="btn-secondary">Choose from library</button>
@@ -235,8 +236,8 @@
                 <input id="deHeroHeight" type="hidden" />
                 <input id="deHeroFormat" type="hidden" />
               </div>
-            </section>
-            <section class="editor-inspector-group title-image-editor" id="deTitleImage"></section>
+            </details>
+            <details class="editor-inspector-group editor-image-section title-image-editor" id="deTitleImage"></details>
           </section>
 
           <section class="editor-inspector-locale" data-inspector-locale="en" aria-labelledby="enStoryDetailsHeading" hidden>
@@ -253,7 +254,7 @@
               </div>
 
               <label for="enExcerpt">Excerpt / summary (EN)</label>
-              <textarea id="enExcerpt" rows="3" placeholder="A short summary of the trip report…"></textarea>
+              <textarea id="enExcerpt" class="editor-autofit" rows="3" placeholder="A short summary of the trip report…"></textarea>
               <p class="muted editor-field-help" id="enExcerptHelp"></p>
               <div id="enExcerptAssist"></div>
 
@@ -264,8 +265,11 @@
               </div>
             </div>
 
-            <section class="editor-inspector-group" id="enHeroDetails" aria-labelledby="enHeroLabel">
-              <h3 class="editor-card-title" id="enHeroLabel">Hero image (EN)</h3>
+            <details class="editor-inspector-group editor-image-section" id="enHeroDetails">
+              <summary class="editor-card-title" id="enHeroLabel">
+                <span class="editor-image-section__title">Hero image (EN)</span>
+                <span class="editor-image-section__thumb" id="enHeroThumb" hidden><img id="enHeroThumbImg" alt="" /></span>
+              </summary>
               <div class="hero-picker hero-banner-zone">
                 <div class="hero-compact-preview" id="enHeroPreview" hidden>
                   <img id="enHeroPreviewImg" alt="" />
@@ -277,12 +281,10 @@
                 </div>
                 <p id="enHeroStatus" class="muted" role="status"></p>
 
-                <details class="editor-disclosure hero-replace" id="enHeroReplace">
+                <details class="editor-disclosure hero-replace" id="enHeroReplace" open>
                   <summary>Replace photo</summary>
-                  <label class="hero-drop" for="enHeroFile">
-                    <span class="hero-drop-copy">Drop a photo or browse</span>
-                    <input id="enHeroFile" type="file" accept="image/*" class="hero-drop-input" />
-                  </label>
+                  <label for="enHeroFile">Hero image file (EN)</label>
+                  <input id="enHeroFile" type="file" accept="image/*" class="hero-file-input" />
                   <div class="hero-actions-row">
                     <button type="button" id="enHeroUpload" class="btn-secondary">Upload hero</button>
                     <button type="button" id="enHeroLibrary" class="btn-secondary">Choose from library</button>
@@ -313,8 +315,8 @@
                 <input id="enHeroHeight" type="hidden" />
                 <input id="enHeroFormat" type="hidden" />
               </div>
-            </section>
-            <section class="editor-inspector-group title-image-editor" id="enTitleImage"></section>
+            </details>
+            <details class="editor-inspector-group editor-image-section title-image-editor" id="enTitleImage"></details>
           </section>
 
           <details class="editor-inspector-group" id="expeditionDetails">
@@ -772,13 +774,18 @@
 
       // Wrap visually without widening the stored single-line title contract.
       function singleLineTitle(value) { return value.replace(/[\r\n]+/g, ' '); }
-      function resizeTitle(title) {
-        if (!title.clientWidth) return; // inactive locale; resized when revealed
-        title.style.height = 'auto';
-        title.style.height = (title.scrollHeight + title.offsetHeight - title.clientHeight) + 'px';
+      // Titles and excerpts grow with their text instead of scrolling inside
+      // a fixed box; their CSS hides the overflow and disables manual resize.
+      function fitTextarea(field) {
+        if (!field.clientWidth) return; // inactive locale; fitted when revealed
+        field.style.height = 'auto';
+        field.style.height = (field.scrollHeight + field.offsetHeight - field.clientHeight) + 'px';
       }
       const titleFields = [$('deTitle'), $('enTitle')];
-      const resizeTitles = () => titleFields.forEach(resizeTitle);
+      const excerptFields = [$('deExcerpt'), $('enExcerpt')];
+      const fittedFields = [...titleFields, ...excerptFields];
+      const fitTextareas = () => fittedFields.forEach(fitTextarea);
+      excerptFields.forEach((excerpt) => excerpt.addEventListener('input', () => fitTextarea(excerpt)));
       titleFields.forEach((title) => {
         title.placeholder = editorCopy.titlePlaceholder;
         const update = (event) => {
@@ -791,7 +798,7 @@
               title.setSelectionRange(start, end);
             }
           }
-          resizeTitle(title);
+          fitTextarea(title);
         };
         title.addEventListener('input', update);
         title.addEventListener('compositionend', update);
@@ -805,14 +812,14 @@
           entries.forEach(({ target, contentRect }) => {
             if (widths.get(target) === contentRect.width) return;
             widths.set(target, contentRect.width);
-            resizeTitle(target);
+            fitTextarea(target);
           });
         });
-        titleFields.forEach((title) => observer.observe(title));
+        fittedFields.forEach((field) => observer.observe(field));
       }
-      window.addEventListener('resize', resizeTitles);
-      document.fonts?.ready.then(resizeTitles);
-      resizeTitles();
+      window.addEventListener('resize', fitTextareas);
+      document.fonts?.ready.then(fitTextareas);
+      fitTextareas();
 
       // ---- responsive story inspector ----
       const inspectorApi = EditorInspector.wire({
@@ -856,7 +863,7 @@
         activeTab = tab;
         syncInspectorLocale(tab);
         (tab === 'en' ? enMDE : deMDE).codemirror.refresh();
-        resizeTitle($(tab + 'Title'));
+        fitTextarea($(tab + 'Title'));
       }
       const tabsApi = Tabs.wire(document.querySelector('[role="tablist"]'), {
         onChange: activateLocale,
@@ -1239,12 +1246,15 @@
           guard.markDirty();
         }
 
-        /** Sync both the compact preview and framing disclosure to the stored hero. */
+        /** Sync the compact preview, the collapsed section's thumbnail and the
+            framing disclosure to the stored hero. */
         function sync(locale) {
           var wrap = $(locale + 'HeroFocus');
           var img = $(locale + 'HeroFocusImg');
           var preview = $(locale + 'HeroPreview');
           var previewImg = $(locale + 'HeroPreviewImg');
+          var thumb = $(locale + 'HeroThumb');
+          var thumbImg = $(locale + 'HeroThumbImg');
           var url = PostsFilter.thumbUrl({
             heroSrc: $(locale + 'HeroSrc').value,
             heroWidth: parseInt($(locale + 'HeroWidth').value, 10),
@@ -1253,20 +1263,25 @@
           if (!url) {
             wrap.hidden = true;
             preview.hidden = true;
+            thumb.hidden = true;
             img.removeAttribute('src');
             previewImg.removeAttribute('src');
+            thumbImg.removeAttribute('src');
             return;
           }
           // A wrong-but-plausible stored width still 404s (see thumbUrl's own
-          // note), so both views hide rather than showing a broken photo.
-          var hideBroken = function () { wrap.hidden = true; preview.hidden = true; };
+          // note), so every view hides rather than showing a broken photo.
+          var hideBroken = function () { wrap.hidden = true; preview.hidden = true; thumb.hidden = true; };
           img.onerror = hideBroken;
           previewImg.onerror = hideBroken;
+          thumbImg.onerror = hideBroken;
           img.onload = function () { paint(locale); };
           if (img.getAttribute('src') !== url) img.src = url;
           if (previewImg.getAttribute('src') !== url) previewImg.src = url;
+          if (thumbImg.getAttribute('src') !== url) thumbImg.src = url;
           wrap.hidden = false;
           preview.hidden = false;
+          thumb.hidden = false;
           paint(locale);
         }
 
@@ -2212,9 +2227,10 @@
       function populateLocale(loc, data) {
         data = data || {};
         $(loc + 'Title').value = singleLineTitle(data.title || '');
-        resizeTitle($(loc + 'Title'));
+        fitTextarea($(loc + 'Title'));
         $(loc + 'Country').value = data.country || '';
         $(loc + 'Excerpt').value = data.excerpt || '';
+        fitTextarea($(loc + 'Excerpt'));
         populateKeyFacts(loc, data.keyFacts);
         const mde = loc === 'de' ? deMDE : enMDE;
         // Written unconditionally: buildPayload() omits heroImage when unset, so
@@ -2227,6 +2243,8 @@
         $(loc + 'HeroFormat').value = hero.format || '';
         $(loc + 'HeroAlt').value = hero.alt || '';
         $(loc + 'HeroStatus').textContent = hero.src ? 'Hero: ' + hero.src : '';
+        // A loaded story opens the picker only when it has no hero yet.
+        $(loc + 'HeroReplace').open = !hero.src;
         // Same no-field-resurrection rule as the fields above: a payload with
         // no `focus` must recentre, not keep whatever was last on screen.
         const focus = hero.focus && typeof hero.focus === 'object' ? hero.focus : {};
