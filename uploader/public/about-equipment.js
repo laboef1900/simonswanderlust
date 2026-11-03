@@ -212,7 +212,8 @@ window.AboutEquipment = (function () {
         title: copy.aboutGearReload, body: copy.aboutGearReloadConfirm, confirmLabel: copy.aboutGearReload,
       })) return;
       await load();
-      settleFocus(origin, state === 'ready' ? $(locale + 'Gear') : null);
+      // A refusal hides Retry and leaves nothing to operate; its message takes focus instead.
+      settleFocus(origin, state === 'ready' ? $(locale + 'Gear') : state === 'forbidden' ? $(locale + 'GearError') : null);
     }
 
     paint();

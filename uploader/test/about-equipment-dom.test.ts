@@ -314,6 +314,17 @@ describe('About editor equipment line (#514)', () => {
     expect(h.el('deGearError').hidden).toBe(true);
   });
 
+  it('moves focus to the refusal when a retry is forbidden, since Retry disappears', async () => {
+    const replies: Reply[] = [{ status: 503, body: {} }, { status: 403, body: { error: 'Forbidden' } }];
+    const h = await editor({ route: stubbed({ get: () => replies.shift() }).route });
+    h.el('deGearReload').focus();
+    await h.click('deGearReload');
+    expect(h.el('deGearReload').hidden).toBe(true);
+    expect(h.el('deGear').disabled).toBe(true);
+    expect(h.el('deGearError').textContent).toBe(copy.aboutGearForbidden);
+    expect(h.dom.document.activeElement).toBe(h.el('deGearError'));
+  });
+
   it.each([['another page kind', { key: 'contact' }], ['translation preparation', { prepare: true, locales: ['de'] as LanguageConfig['locales'] }]])('stays out of %s', async (_name, extra) => {
     const h = await editor({ ...extra, route: stubbed(extra && 'locales' in extra ? { locales: extra.locales } : {}).route });
     expect(h.el('deGearSection').hidden).toBe(true);
