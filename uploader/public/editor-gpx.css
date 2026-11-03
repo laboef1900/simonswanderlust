@@ -1,4 +1,6 @@
 .gpx-route__actions { display: grid; gap: .5rem; }
+.gpx-route__caption { margin-top: 1rem; }
+.gpx-route__caption .notice-warn { margin-top: .5rem; }
 .gpx-dialog { width: min(74rem, calc(100vw - 2rem)); max-width: none; max-height: min(92dvh, 58rem); padding: 0; border: 1px solid var(--admin-border, #ccd2d9); border-radius: .8rem; color: inherit; background: var(--admin-surface, #fff); }
 .gpx-dialog[open] { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; }
 .gpx-dialog::backdrop { background: rgb(11 24 38 / .58); }

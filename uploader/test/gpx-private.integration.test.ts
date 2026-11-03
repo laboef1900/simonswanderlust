@@ -215,7 +215,7 @@ maybe('private GPX API and real PostgreSQL transactions', () => {
   it('stages privately for its author, attaches explicitly, bumps BOTH locale tokens and retains original after detach', async () => {
     const f = await fixture(); const preview = await upload(f);
     const read = await f.app.inject({ url: `/posts/${f.tk}/route`, cookies: f.other });
-    expect(read.json()).toEqual({ version: null, geometry: null, originalAvailable: false, sourceBytes: null });
+    expect(read.json()).toEqual({ version: null, geometry: null, originalAvailable: false, sourceBytes: null, published: false });
     expect((await f.app.inject({ method: 'DELETE', url: `/gpx/imports/${preview.importId}`, cookies: f.other })).statusCode).toBe(204);
     const foreignAttach = await f.app.inject({ method: 'PUT', url: `/posts/${f.tk}/route`, cookies: f.other, payload: { importId: preview.importId, baseVersion: null, baseUpdatedAt: f.token, selection, confirmReplace: false } });
     expect(foreignAttach.statusCode).toBe(404);

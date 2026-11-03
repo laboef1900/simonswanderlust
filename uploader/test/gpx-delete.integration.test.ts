@@ -215,9 +215,12 @@ maybe('private GPX post deletion and durable cleanup', () => {
   });
 
   it('returns storage_read_only 503 when unpublish loses ownership after HTTP admission, without changing the published pair', async () => {
-    const { tk, record } = await seed();
+    const { tk } = await seed();
     await posts.publish(tk, await publishTokens(posts, tk));
     const before = await posts.get(tk);
+    // Captured after Publish: the route record reports that it is now live (#512).
+    const record = await pgGpxStore(pool).get(tk);
+    expect(record?.published).toBe(true);
     const get = posts.get.bind(posts);
     vi.spyOn(posts, 'get').mockImplementationOnce(async key => {
       const pair = await get(key);

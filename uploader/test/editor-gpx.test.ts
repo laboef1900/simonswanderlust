@@ -62,8 +62,8 @@ function manualCandidates() {
   return { jobs, Worker: ManualWorker };
 }
 const settle = async () => { for (let i = 0; i < 8; i++) await new Promise<void>((resolve) => setImmediate(resolve)); };
-const emptyRoute = { version: null, geometry: null, originalAvailable: false, sourceBytes: null };
-const attachedRoute = { version: 'c'.repeat(36), geometry: preview.geometry, originalAvailable: true, sourceBytes: 2048 };
+const emptyRoute = { version: null, geometry: null, originalAvailable: false, sourceBytes: null, published: false };
+const attachedRoute = { version: 'c'.repeat(36), geometry: preview.geometry, originalAvailable: true, sourceBytes: 2048, published: false };
 interface Reply { status: number; ok: boolean; json(): Promise<unknown> }
 type RequestRecord = { url: string; options: RequestInit };
 interface SetupOptions {
@@ -122,7 +122,7 @@ function setup(options: SetupOptions = {}) {
     if (url === '/gpx/imports' && request.method === 'POST') return response(candidate, 201);
     if (url.endsWith('/route') && request.method === 'PUT') return options.failAttach
       ? response({ error: 'gpx_conflict' }, 409)
-      : response({ version: 'b'.repeat(36), geometry: preview.geometry, originalAvailable: true, sourceBytes: 2048, updatedAt: '2026-10-24T10:01:00.000Z', cleanupPending: false });
+      : response({ version: 'b'.repeat(36), geometry: preview.geometry, originalAvailable: true, sourceBytes: 2048, published: false, updatedAt: '2026-10-24T10:01:00.000Z', cleanupPending: false });
     if (url.endsWith('/route') && request.method === 'DELETE') return response({ ...emptyRoute, version: 'd'.repeat(36), updatedAt: '2026-10-24T10:02:00.000Z' });
     if (url.startsWith('/gpx/imports/') && request.method === 'DELETE') return response({}, 204);
     throw new Error('unexpected request ' + url);
@@ -1625,4 +1625,143 @@ it('keeps failed initialization in recovery mode without a route-only read after
   expect(draftWrites(h)).toEqual([]);
   expect(h.editor.guard.isDirty()).toBe(true);
   expect(stashedPayloads(h).some((stored) => stored.includes('Recover this draft'))).toBe(true);
+});
+
+// #512: the public story renders the route caption only beside a published track.
+describe('route caption advisory', () => {
+  const advisory = (h: { element(id: string): EditorElement }) => h.element('gpxCaptionWarning');
+  function typeCaption(h: { element(id: string): EditorElement }, value: string) {
+    h.element('fmRoute').value = value;
+    h.element('fmRoute').fire('input');
+  }
+  const publishedRoute = { ...attachedRoute, published: true };
+
+  it.each([
+    { name: 'no route', route: emptyRoute, key: 'captionNoRoute' },
+    { name: 'a detached route', route: { ...emptyRoute, version: 'd'.repeat(36) }, key: 'captionNoRoute' },
+    { name: 'an attached, unpublished route', route: attachedRoute, key: 'captionUnpublished' },
+    { name: 'a published route', route: publishedRoute, key: null },
+  ])('warns about a non-blank caption only without a published track: $name', async ({ route, key }) => {
+    const h = setup({ route });
+    await h.api.refresh();
+    h.element('fmRoute').focus();
+    for (const blank of ['', '   ']) {
+      typeCaption(h, blank);
+      expect(advisory(h).hidden).toBe(true);
+      expect(advisory(h).textContent).toBe('');
+    }
+    typeCaption(h, 'Athens → Rhodes');
+    expect(advisory(h).hidden).toBe(key === null);
+    expect(advisory(h).textContent).toBe(key ?? '');
+    // Advisory only: focus stays in the field and the reviewed route stays publishable.
+    expect(h.focused).toBe(h.element('fmRoute'));
+    expect(h.api.publishVersion()).toBe(route.version);
+    typeCaption(h, '');
+    expect(advisory(h).hidden).toBe(true);
+  });
+
+  it('labels and describes the caption from the GPX copy', () => {
+    const h = setup({ locale: 'de' });
+    expect(h.element('gpxCaptionLabel').textContent).toBe(ui.de['gpx.captionLabel']);
+    expect(h.element('gpxCaptionHelp').textContent).toBe(ui.de['gpx.captionHelp']);
+    expect(h.element('fmRoute').getAttribute('placeholder')).toBe(ui.de['gpx.captionPlaceholder']);
+  });
+
+  it('follows attach, publication, detach and refresh outcomes without taking focus', async () => {
+    let read: Promise<Reply> | Reply = response(emptyRoute);
+    const h = setup({ fetch: async (url, request) => url.endsWith('/route') && request.method === 'GET' ? read : undefined });
+    await h.api.refresh();
+    h.element('fmRoute').focus();
+    typeCaption(h, 'Athens → Rhodes');
+    expect(advisory(h).textContent).toBe('captionNoRoute');
+
+    await importPreview(h);
+    h.element('gpxAttach').click();
+    await settle();
+    expect(advisory(h).textContent).toBe('captionUnpublished');
+
+    // A pending read keeps the last known answer instead of flickering.
+    const pending = Promise.withResolvers<Reply>();
+    read = pending.promise;
+    h.element('fmRoute').focus();
+    const refreshing = h.api.refresh();
+    expect(advisory(h).textContent).toBe('captionUnpublished');
+    pending.resolve(response({ ...publishedRoute, version: 'b'.repeat(36) }));
+    expect(await refreshing).toBe(true);
+    expect(advisory(h).hidden).toBe(true);
+    expect(h.focused).toBe(h.element('fmRoute'));
+
+    h.element('gpxDetach').click();
+    await settle();
+    expect(advisory(h).hidden).toBe(false);
+    expect(advisory(h).textContent).toBe('captionNoRoute');
+
+    // An unknown route state makes no claim either way.
+    read = response({ version: '' });
+    expect(await h.api.refresh()).toBe(false);
+    expect(advisory(h).hidden).toBe(true);
+  });
+
+  it('re-reads publication after Publish and Unpublish and after the form is repopulated', async () => {
+    const caption = 'Athens → Rhodes';
+    let stored = { ...reloadPostFixture(), shared: { ...reloadPostFixture().shared, route: caption } };
+    let route: typeof attachedRoute = attachedRoute;
+    const h = fullEditor(preview, async (url, options) => {
+      if (url.endsWith('/route') && options.method === 'GET') return response(route);
+      if (url === '/posts/pair-1' && options.method === 'PUT') return response({ ...stored, updatedAt: '2026-10-28T10:02:00.000Z' });
+      if (url === '/posts/pair-1') return response(stored);
+      if (url.endsWith('/publish')) return response({ published: true, updatedAt: '2026-10-28T10:03:00.000Z', publication: publication('published'), build: { ok: true, attemptId: 'r1', release: 'r1' } });
+      if (url.endsWith('/unpublish')) return response({ unpublished: true, previousUpdatedAt: '2026-10-28T10:03:00.000Z', updatedAt: '2026-10-28T10:04:00.000Z', publication: publication('draft'), build: { ok: true, attemptId: 'r2', release: 'r2' } });
+      return undefined;
+    });
+    await h.editor.loadPost('pair-1');
+    expect(h.element('fmRoute').value).toBe(caption);
+    expect(advisory(h).textContent).toBe(ui.en['gpx.captionUnpublished']);
+
+    route = { ...attachedRoute, published: true };
+    h.element('publishBtn').click();
+    await settle();
+    expect(publicationWrites(h)).toHaveLength(1);
+    expect(advisory(h).hidden).toBe(true);
+
+    route = attachedRoute;
+    h.element('unpublishBtn').click();
+    await settle();
+    expect(publicationWrites(h)).toHaveLength(2);
+    expect(advisory(h).textContent).toBe(ui.en['gpx.captionUnpublished']);
+
+    // Repopulating without a caption (reload, revision or stash restore) clears it.
+    stored = { ...stored, shared: { ...stored.shared, route: '' } };
+    await h.editor.loadPost('pair-1');
+    expect(h.element('fmRoute').value).toBe('');
+    expect(advisory(h).hidden).toBe(true);
+  });
+
+  it('makes no claim after Publish when its route re-read fails, and keeps publishing gated', async () => {
+    const stored = { ...reloadPostFixture(), shared: { ...reloadPostFixture().shared, route: 'Athens → Rhodes' } };
+    let routeFails = false;
+    const h = fullEditor(preview, async (url, options) => {
+      if (url.endsWith('/route') && options.method === 'GET') return routeFails ? response({ error: 'synthetic' }, 500) : response(attachedRoute);
+      if (url === '/posts/pair-1' && options.method === 'PUT') return response({ ...stored, updatedAt: '2026-10-28T10:02:00.000Z' });
+      if (url === '/posts/pair-1') return response(stored);
+      if (url.endsWith('/publish')) return response({ published: true, updatedAt: '2026-10-28T10:03:00.000Z', publication: publication('published'), build: { ok: true, attemptId: 'r1', release: 'r1' } });
+      return undefined;
+    });
+    await h.editor.loadPost('pair-1');
+    expect(advisory(h).hidden).toBe(false);
+    routeFails = true;
+    h.element('publishBtn').click();
+    await settle();
+    expect(publicationWrites(h)).toHaveLength(1);
+    // The pre-publish answer is now stale and the new one unknown: neither is shown.
+    expect(advisory(h).hidden).toBe(true);
+    // Publish succeeded: the message says so instead of describing a failed page load.
+    expect(h.element('gpxRouteFeedback').textContent).toBe(ui.en['gpx.routeRefreshAfterPublication']);
+    expect(() => h.api.publishVersion()).toThrow();
+    // The next successful read clears it and ungates publishing.
+    routeFails = false;
+    expect(await h.api.refresh()).toBe(true);
+    expect(h.element('gpxRouteFeedback').hidden).toBe(true);
+    expect(h.api.publishVersion()).toBe(attachedRoute.version);
+  });
 });

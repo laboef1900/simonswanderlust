@@ -638,3 +638,10 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
   status, Replace photo, Adjust framing) and a summary thumbnail; title image gains the
   `editor.titleImage.replace` copy key. Excerpt textareas auto-fit their text (`fitTextarea`,
   shared with the title). No route, schema or payload change.
+- **Implemented, PR pending (#512, owner decision 2026-11-03: options 1+2):** the editor's
+  Route caption (`fmRoute`) moved from Expedition details into the GPX route section, with help
+  text naming its only public placement ("Published route", beside a published GPX track) and a
+  live, non-blocking advisory when a non-blank caption has no published track (none attached,
+  attached but unpublished, or detached). `GET/PUT/DELETE /posts/:tk/route` add a read-only
+  `published` flag; the editor re-reads it after Publish/Unpublish. Payload, storage, snapshot,
+  MDX export and public rendering are unchanged (option 3 out of scope).

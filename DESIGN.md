@@ -1247,6 +1247,10 @@ and the `<dialog>`s appended to `<body>` share one set:
   The retained original remains private, and attachment is draft-only until Publish.
   Published story maps add a localized per-run textual alternative with public-precision
   endpoints and approximate lengths; routeless stories gain no empty panel.
+  The **Route caption** field sits below the section's actions (#512): help text names its
+  only public placement, under “Published route”. A non-blank caption without a published
+  track gets a `.notice-warn` advisory in a polite live region that never takes focus or
+  blocks Save/Publish; a pending route read keeps the last known state.
 - Country assistance and excerpt generation sit next to the relevant fields in Story
   details. Coordinate approximation is explicit. Excerpt suggestions have a plain-text
   preview, character count, and separate accept/dismiss actions; generation never looks

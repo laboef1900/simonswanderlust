@@ -93,6 +93,12 @@ Story URLs, shared stops and the free-text `route` label are unchanged.
 - Story mini-maps render the public runs below pin/stop markers and fit all their bounds.
   Localized per-run lengths/endpoints remain usable without JavaScript, tiles or WebGL.
   Overview maps remain pin-only; routeless stories keep their existing fallback unchanged.
+- The free-text `route` caption renders only under the mini-map's published-route heading,
+  so the editor edits it inside the GPX route section (#512). The route read and mutation
+  responses carry a read-only `published` flag: the attached draft route is the track a
+  published snapshot already carries (`published_at` not older than the route's last change).
+  Without it, a non-blank caption shows a non-blocking, polite advisory that never takes
+  focus or gates Save/Publish. Storage, validation, snapshots, MDX and public output are unchanged.
 - Private dump v10 includes route rows; a full, manifest-matched private route archive
   includes retained originals. The archive is completed before the matching dump becomes
   visible; manifest references pair retention independently of filename timestamps.

@@ -8,7 +8,8 @@ import { sourceDigest, type GpxFiles, type OriginalSource } from './gpx-files.js
 import { GpxCommitUnknownError, pgGpxStore, type PrivateRouteRecord, type RouteTokens } from './gpx-store.js';
 
 const HOUR = 60 * 60 * 1000;
-export interface RouteState { version: string | null; geometry: PrivateGeometry | null; originalAvailable: boolean; sourceBytes: number | null }
+/** `published`: the attached draft route is already live; false when none is attached (#512). */
+export interface RouteState { version: string | null; geometry: PrivateGeometry | null; originalAvailable: boolean; sourceBytes: number | null; published: boolean }
 export interface RouteMutation extends RouteState { updatedAt: string; cleanupPending: boolean }
 export interface ImportPreview extends GpxPreview { importId: string; expiresAt: string }
 export interface AttachRouteInput extends RouteTokens { importId: string; selection: TrimSelection; confirmReplace: boolean }
@@ -68,9 +69,9 @@ export function createGpxService({ pool, files, worker, backupDir: _backupDir, i
     return entry;
   }
   async function state(row: PrivateRouteRecord | null): Promise<RouteState> {
-    if (!row) return { version: null, geometry: null, originalAvailable: false, sourceBytes: null };
+    if (!row) return { version: null, geometry: null, originalAvailable: false, sourceBytes: null, published: false };
     const inspected = await files.inspectOriginal(row.source);
-    return { version: row.version, geometry: row.geometry, originalAvailable: inspected.state === 'present', sourceBytes: row.source.bytes };
+    return { version: row.version, geometry: row.geometry, originalAvailable: inspected.state === 'present', sourceBytes: row.source.bytes, published: row.published };
   }
   async function original(tk: string): Promise<Buffer> {
     const row = await store.get(tk);
