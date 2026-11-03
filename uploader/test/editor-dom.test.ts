@@ -4,6 +4,8 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { resolve } from 'node:path';
 import { MAX_SLUG_BYTES, isSafeSlug, assertNotStale, memoryPostStore, PostError, type PostPair, type PostStore } from '../src/posts.js';
+import type { RouteStop, StoredStopRoute } from '../public/stop-route.js';
+import { storedRouteFor } from './stop-route-fixture.js';
 import type { EditorialReviewResult } from '../src/editorial-review.js';
 import { editorDocument, EditorElement, EditorEvent } from './editor-dom-harness.js';
 import { ui } from '../../site/src/i18n/ui.js';
@@ -79,6 +81,8 @@ interface EditorOptions {
   pickImage?: { src: string; width: number; height: number; alt: { de: string; en: string }; format?: 'jpeg' };
   caption?: (options: { url: string; lang: string; signal: AbortSignal }) => Promise<string>;
   upload?: (options: { ownerId: string; fields: Record<string, string>; file: File }) => Promise<{ src: string; key: string; width: number; height: number; status: string }>;
+  /** #513 `/posts/:tk/stop-route` answers; default: every profile off, no stored route. */
+  stopRouteFetch?: Fetch;
 }
 interface ConfirmPrompt { title: string; body: string; confirmLabel?: string }
 /** What editor.html passes to MediaPicker.open for a gallery, as far as these tests read it. */
@@ -130,6 +134,7 @@ async function loadEditor(options: EditorOptions = {}) {
   const navigator = { onLine: true };
   const requests: { url: string; options: RequestInit }[] = [];
   const galleryRequests: { url: string; options: RequestInit }[] = [];
+  const stopRouteRequests: { url: string; options: RequestInit }[] = [];
   const timers = new Map<number, () => void>();
   let nextTimer = 0;
   const prompts: ConfirmPrompt[] = [];
@@ -261,6 +266,11 @@ async function loadEditor(options: EditorOptions = {}) {
         const { bodyMarkdown } = JSON.parse(String(init.body)) as { bodyMarkdown: string };
         return response(await analyzeGallerySource(bodyMarkdown));
       }
+      if (/^\/posts\/[^/]+\/stop-route$/.test(String(url))) {
+        stopRouteRequests.push({ url: String(url), options: init });
+        if (options.stopRouteFetch) return options.stopRouteFetch(String(url), init);
+        return response({ profiles: { car: false, bike: false, foot: false }, route: null });
+      }
       // Authentication uses the production validator; feature requests stay in
       // their own ledger so unrelated consumer assertions remain scoped.
       if (url === '/auth/me') return options.auth ? options.auth() : response({
@@ -341,6 +351,11 @@ async function loadEditor(options: EditorOptions = {}) {
         .filter(([key]) => key.startsWith('editor.waypoint.'))
         .map(([key, value]) => [key.slice('editor.waypoint.'.length), value])),
     ])),
+    StopRouteCopy: Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [
+      locale, Object.fromEntries(Object.entries(strings)
+        .filter(([key]) => key.startsWith('editor.stopRoute.'))
+        .map(([key, value]) => [key.slice('editor.stopRoute.'.length), value])),
+    ])),
     EditorImageCopy: Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [
       locale, Object.fromEntries(Object.entries(strings)
         .filter(([key]) => key.startsWith('editor.titleImage.'))
@@ -391,7 +406,7 @@ async function loadEditor(options: EditorOptions = {}) {
     guard.redirectToLogin = () => { redirects += 1; redirect(); };
     return guard;
   };
-  for (const file of ['journeys-ui.js', 'waypoint-lookup.js', 'posts-filter.js', 'editor-title-image.js', 'gallery-fence.js', 'gallery-metadata-warnings.js', 'media-api.js', 'gallery-library.js', 'editor-galleries.js', 'editor-linter.js', 'llm.js', 'editor-excerpt.js', 'country-centers.js', 'country-coordinates.js', 'tabs.js', 'editor-review.js', 'editor-inspector.js']) {
+  for (const file of ['journeys-ui.js', 'waypoint-lookup.js', 'editor-stop-route.js', 'posts-filter.js', 'editor-title-image.js', 'gallery-fence.js', 'gallery-metadata-warnings.js', 'media-api.js', 'gallery-library.js', 'editor-galleries.js', 'editor-linter.js', 'llm.js', 'editor-excerpt.js', 'country-centers.js', 'country-coordinates.js', 'tabs.js', 'editor-review.js', 'editor-inspector.js']) {
     vm.runInContext(browserScript(file), ctx, {
       filename: resolve('public/' + file),
       importModuleDynamically: vm.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER,
@@ -401,7 +416,7 @@ async function loadEditor(options: EditorOptions = {}) {
   await vm.runInContext(script, ctx);
   const api = vm.runInContext('({ populateForm, buildPayload, loadPost, doSaveDraft, renderAltAudit })', ctx) as EditorApi;
   return {
-    api, el, editors, created: dom.created, document: dom.document, requests, galleryRequests, prompts, local, galleryPickers,
+    api, el, editors, created: dom.created, document: dom.document, requests, galleryRequests, stopRouteRequests, prompts, local, galleryPickers,
     ctx,
     flushDialogEvents: dom.flushDialogEvents,
     logout: () => {
@@ -4201,5 +4216,133 @@ describe('restoring a local draft keeps the version it was edited against (#345)
     expect(h.requests.filter(isPut)).toEqual([]);
     expect(h.requests.filter(({ url }) => url.endsWith('/publish'))).toEqual([]);
     expect(latestStash(h.local, 'post:tk1')?.payload).toEqual(JSON.parse(JSON.stringify(stash)));
+  });
+});
+
+describe('stop routing in the editor (#513)', () => {
+  const ROUTE: RouteStop[] = [
+    { name: 'Athens', lat: 37.9838, lng: 23.7275 },
+    { name: 'Megara', lat: 37.9961, lng: 23.3439, via: true },
+    { name: 'Corinth', lat: 37.9407, lng: 22.9322, profile: 'bike' },
+    { name: 'Patras', lat: 38.2466, lng: 21.7346 },
+  ];
+  const ALL_ON = { car: true, bike: true, foot: true };
+  async function routed(options: { stops?: RouteStop[]; profiles?: Record<string, boolean>; route?: StoredStopRoute | null; post?: Fetch; publish?: () => Response } = {}) {
+    const pair = fullPair();
+    pair.shared.stops = options.stops ?? ROUTE;
+    const h = await loadEditor({
+      isAdmin: true, search: '?tk=tk1', confirm: true,
+      fetch: async (url, init) => {
+        if (url === '/posts/tk1/publish' && options.publish) return options.publish();
+        if (url === '/posts/tk1' && init?.method === 'PUT') return response({ ...pair, ...JSON.parse(String(init.body)), updatedAt: '2026-10-24T09:01:00.000Z' });
+        return response(url === '/posts/tk1' ? pair : url.endsWith('/revisions') ? [] : { images: [] });
+      },
+      stopRouteFetch: async (url, init) => init?.method === 'POST' && options.post ? options.post(url, init)
+        : response({ profiles: options.profiles ?? ALL_ON, route: options.route === undefined ? storedRouteFor(ROUTE) : options.route }),
+    });
+    await settleFor(h, () => h.el('stopRouteStatus').textContent !== '');
+    return h;
+  }
+  type Harness = Awaited<ReturnType<typeof loadEditor>>;
+  async function settleFor(h: Harness, done: () => boolean) {
+    for (let i = 0; i < 40 && !done(); i++) await settle();
+  }
+  const rows = (h: Harness) => h.el('stopsList').querySelectorAll('.stop-row');
+  const status = (h: Harness) => h.el('stopRouteStatus').textContent;
+  const FRESH = /matches the current stops/;
+  const STALE = /Stops changed since the route was calculated/;
+  async function expectStatus(h: Harness, pattern: RegExp) {
+    await settleFor(h, () => pattern.test(status(h)));
+    expect(status(h)).toMatch(pattern);
+  }
+
+  it('round-trips via and leg profile in the canonical form the server stores', async () => {
+    const h = await routed();
+    h.api.populateForm({ ...fullPair(), shared: { ...fullPair().shared, stops: [
+      { name: 'A', lat: 1, lng: 1, profile: 'car' }, { name: 'B', lat: 2, lng: 2, via: true, profile: 'foot' }, { name: 'C', lat: 3, lng: 3, profile: 'bike' },
+    ] } });
+    expect(h.api.buildPayload().shared.stops).toEqual([
+      { name: 'A', lat: 1, lng: 1 }, { name: 'B', lat: 2, lng: 2, via: true, profile: 'foot' }, { name: 'C', lat: 3, lng: 3 },
+    ]);
+    const last = rows(h).at(-1)!;
+    expect(last.querySelector('.stop-leg-field')!.hidden).toBe(true);
+    expect(last.querySelector('.stop-last')!.hidden).toBe(false);
+  });
+
+  it('shows a fresh route and marks it stale on every routing edit, but not on a rename', async () => {
+    const h = await routed();
+    await expectStatus(h, FRESH);
+    const [first, via, corinth] = rows(h);
+    const edit = async (element: Element, apply: () => void, event: string, expected: RegExp) => {
+      apply(); element.fire(event); await expectStatus(h, expected);
+    };
+    const name = first!.querySelector('.stop-name')!;
+    await edit(name, () => { name.value = 'Athína'; }, 'input', FRESH);
+    const lat = corinth!.querySelector('.stop-lat')!;
+    await edit(lat, () => { lat.value = '37.95'; }, 'input', STALE);
+    await edit(lat, () => { lat.value = '37.9407'; }, 'input', FRESH);
+    const checkbox = via!.querySelector('.stop-via')!;
+    await edit(checkbox, () => { checkbox.checked = false; }, 'change', STALE);
+    await edit(checkbox, () => { checkbox.checked = true; }, 'change', FRESH);
+    const select = corinth!.querySelector('.stop-profile')!;
+    await edit(select, () => { select.value = 'straight'; }, 'change', STALE);
+    await edit(select, () => { select.value = 'bike'; }, 'change', FRESH);
+    rows(h).at(-1)!.querySelector('.btn-remove')!.click();
+    await expectStatus(h, STALE);
+  });
+
+  it('calculates from the current stops and flags fallback legs as text, never markup', async () => {
+    const stops: RouteStop[] = [ROUTE[0]!, { name: '<img src=x onerror=alert(1)>', lat: 37.9407, lng: 22.9322 }, { name: 'Rhodes', lat: 36.4341, lng: 28.2278 }];
+    let sent: unknown;
+    const calculated: StoredStopRoute = { ...storedRouteFor(stops), legs: [{ profile: 'car', kind: 'road' }, { profile: 'car', kind: 'straight', fallback: 'no_route' }] };
+    const h = await routed({ stops, route: null, post: async (_url, init) => { sent = JSON.parse(String(init!.body)); return response({ profiles: ALL_ON, route: calculated }); } });
+    expect(status(h)).toMatch(/No route calculated yet/);
+    const dirtyBefore = h.dirtyCalls();
+    h.el('stopRouteCalculate').click();
+    await expectStatus(h, FRESH);
+    expect(sent).toEqual({ stops });
+    expect(h.dirtyCalls()).toBe(dirtyBefore);
+    const legs = h.el('stopRouteLegs').querySelectorAll('li');
+    expect(legs.map((leg) => leg.className.includes('is-fallback'))).toEqual([false, true]);
+    expect(legs[1]!.textContent).toBe('Leg 2: <img src=x onerror=alert(1)> → Rhodes · no road connection found, shown as a dashed straight line');
+    expect(h.el('stopRouteLegs').querySelectorAll('img')).toEqual([]);
+  });
+
+  it.each([
+    [409, { code: 'stop_route_profile_unavailable', profiles: ['bike'] }, /travel mode without a routing service/],
+    [502, { code: 'stop_route_failed' }, /routing service is unavailable/],
+    [429, { code: 'stop_route_busy' }, /already running/],
+    [422, { code: 'stop_route_empty' }, /same coordinates/],
+  ])('explains a %i and keeps the stored route view', async (code, body, message) => {
+    const h = await routed({ post: async () => response(body, code) });
+    await expectStatus(h, FRESH);
+    h.el('stopRouteCalculate').click();
+    await expectStatus(h, message);
+    expect(h.el('stopRouteLegs').querySelectorAll('li')).toHaveLength(3);
+  });
+
+  it('explains a disabled provider and only allows all-straight calculations', async () => {
+    const h = await routed({ profiles: { car: false, bike: false, foot: false } });
+    await settleFor(h, () => !h.el('stopRouteProviders').hidden);
+    expect(h.el('stopRouteProviders').textContent).toMatch(/Street routing is off/);
+    expect(h.el('stopRouteCalculate').disabled).toBe(true);
+    const corinth = rows(h)[2]!;
+    expect(corinth.querySelector('.stop-profile-note')!.textContent).toMatch(/no routing service configured/);
+    expect(corinth.querySelectorAll('option').filter((option) => option.disabled).map((option) => option.value)).toEqual(['car', 'foot']);
+    for (const row of rows(h).slice(0, -1)) {
+      const select = row.querySelector('.stop-profile')!;
+      select.value = 'straight';
+      select.fire('change');
+    }
+    await settleFor(h, () => !h.el('stopRouteCalculate').disabled);
+    expect(h.el('stopRouteCalculate').disabled).toBe(false);
+  });
+
+  it('warns after Publish when the stored route was left out as stale', async () => {
+    const h = await routed({ publish: () => response({ published: true, updatedAt: '2026-10-24T09:02:00.000Z', build: { ok: true }, altAudit: { images: [] }, stopRoute: 'stale' }) });
+    h.el('publishBtn').click();
+    await settleFor(h, () => !h.el('stopRoutePublishNotice').hidden);
+    expect(h.el('stopRoutePublishNotice').textContent).toMatch(/Published without the route along stops/);
+    expect(h.el('actionStatus').textContent).toMatch(/Published without the route along stops/);
   });
 });

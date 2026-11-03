@@ -6,6 +6,7 @@
     <title>Post Editor</title>
     <link rel="stylesheet" href="/admin/admin.css" />
     <link rel="stylesheet" href="/admin/editor-gpx.css" />
+    <link rel="stylesheet" href="/admin/editor-stop-route.css" />
     <link rel="stylesheet" href="/admin/gpx-map.css" />
     <link rel="stylesheet" href="/admin/vendor/easymde.min.css" />
     <link rel="stylesheet" href="/admin/vendor/font-awesome/css/font-awesome.min.css" />
@@ -379,11 +380,26 @@
             <div id="stopsContainer">
               <p class="section-label">Waypoints / stops</p>
               <p id="waypointPrivacy" class="muted"></p>
+              <p id="stopRoutePrivacy" class="muted"></p>
+              <p id="stopRouteViaHelp" class="muted"></p>
               <div id="stopsList"></div>
               <button type="button" id="addStop" class="btn-secondary">Add stop</button>
               <p class="muted"><a id="waypointAttribution" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer"></a></p>
             </div>
           </details>
+          <section class="editor-inspector-group stop-route" id="stopRoutePanel" aria-labelledby="stopRouteHeading">
+            <h3 class="editor-card-title" id="stopRouteHeading"></h3>
+            <p id="stopRouteHelp" class="muted"></p>
+            <p id="stopRouteProviders" class="notice-warn" hidden></p>
+            <div class="stop-route__actions">
+              <button id="stopRouteCalculate" type="button" class="btn-secondary" aria-describedby="stopRouteStatus" disabled></button>
+            </div>
+            <p id="stopRouteStatus" class="muted" role="status"></p>
+            <ol id="stopRouteLegs" class="stop-route__legs" hidden></ol>
+            <p id="stopRoutePublishNotice" class="notice-warn" hidden></p>
+            <p id="stopRoutePrecedence" class="muted"></p>
+            <p class="muted"><a id="stopRouteAttribution" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer"></a></p>
+          </section>
           <section class="editor-inspector-group gpx-route" aria-labelledby="gpxRouteHeading">
             <h3 class="editor-card-title" id="gpxRouteHeading"></h3>
             <p id="gpxRouteStatus" class="muted" role="status"></p>
@@ -527,6 +543,8 @@
     <script src="/admin/journeys-ui.js"></script>
     <script src="/admin/waypoint-copy.js"></script>
     <script src="/admin/waypoint-lookup.js"></script>
+    <script src="/admin/stop-route-copy.js"></script>
+    <script src="/admin/editor-stop-route.js"></script>
     <script src="/admin/gallery-library.js"></script>
     <script src="/admin/editor-galleries.js"></script>
     <script src="/admin/gallery-metadata-warnings.js"></script>
@@ -674,6 +692,7 @@
             storyReview?.invalidate();
             currentTk = body.translationKey;
             gpxEditor.noteCreated(currentTk);
+            stopRouteEditor.refresh();
             guard.setResource('post:' + currentTk);
             const url = new URL(location.href);
             url.searchParams.set('tk', currentTk);
@@ -696,6 +715,7 @@
           loadedSlugs.en = body.en?.slug || '';
           guard.setResource('post:' + currentTk);
           gpxEditor.noteCreated(currentTk);
+          stopRouteEditor.refresh();
           const url = new URL(location.href);
           url.searchParams.set('tk', currentTk);
           history.replaceState(null, '', url.toString());
@@ -708,6 +728,7 @@
           if (loadBlocked || !writeRecovery.canAdopt(body.ownerUserId)) throw new Error(editorCopy.reloadFailed);
           guard.setResource('post:' + currentTk);
           gpxEditor.noteCreated(currentTk);
+          stopRouteEditor.refresh();
           const url = new URL(location.href);
           url.searchParams.set('tk', currentTk);
           history.replaceState(null, '', url.toString());
@@ -1042,7 +1063,16 @@
       const stopLookups = new Map();
       $('waypointPrivacy').textContent = WaypointCopy.en.privacy;
       $('waypointAttribution').textContent = WaypointCopy.en.attribution;
-      function addStopRow(name = '', lat = '', lng = '') {
+      // #513: via/profile controls, the "Route along stops" panel and staleness.
+      const stopRouteEditor = StopRouteEditor.wire({
+        copy: StopRouteCopy.en,
+        list: $('stopsList'),
+        getTk: () => currentTk,
+        collectStops: () => collectStops(),
+        markDirty: () => guard.markDirty(),
+        on401: () => guard.redirectToLogin(),
+      });
+      function addStopRow(name = '', lat = '', lng = '', routing = {}) {
         const row = document.createElement('div');
         row.className = 'stop-row';
 
@@ -1083,6 +1113,7 @@
           stopLookups.delete(row);
           row.remove();
           guard.markDirty();
+          stopRouteEditor.update();
         });
 
         row.appendChild(nameInput);
@@ -1092,24 +1123,30 @@
         $('stopsList').appendChild(row);
         stopLookups.set(row, WaypointLookup.attach({
           row, nameInput, latInput, lngInput, copy: WaypointCopy.en,
-          onChange: () => guard.markDirty(),
+          onChange: () => { guard.markDirty(); stopRouteEditor.update(); },
           onUnauthed: () => guard.redirectToLogin(),
         }));
+        stopRouteEditor.decorateRow(row, routing);
+        stopRouteEditor.update();
       }
 
       $('addStop').addEventListener('click', () => addStopRow());
 
+      // Canonical stops (#513): `via` only when true; `profile` (leg to the next
+      // collected stop) only when not car and never on the last collected stop.
       function collectStops() {
-        const rows = $('stopsList').querySelectorAll('.stop-row');
-        if (!rows.length) return undefined;
-        const stops = [];
-        rows.forEach((r) => {
+        const rows = [...$('stopsList').querySelectorAll('.stop-row')].filter((r) => {
           const name = r.querySelector('.stop-name').value.trim();
-          const lat = parseFloat(r.querySelector('.stop-lat').value);
-          const lng = parseFloat(r.querySelector('.stop-lng').value);
-          if (name && Number.isFinite(lat) && Number.isFinite(lng)) stops.push({ name, lat, lng });
+          return name && Number.isFinite(parseFloat(r.querySelector('.stop-lat').value))
+            && Number.isFinite(parseFloat(r.querySelector('.stop-lng').value));
         });
-        return stops.length ? stops : undefined;
+        if (!rows.length) return undefined;
+        return rows.map((r, index) => ({
+          name: r.querySelector('.stop-name').value.trim(),
+          lat: parseFloat(r.querySelector('.stop-lat').value),
+          lng: parseFloat(r.querySelector('.stop-lng').value),
+          ...stopRouteEditor.rowValues(r, index === rows.length - 1),
+        }));
       }
 
       // A stop row is "partial" when the author entered something but not all
@@ -2134,6 +2171,14 @@
           renderAltAudit(body.altAudit, true);
           updateLocaleChip();
           BuildReporting.renderOutcome($('actionStatus'), 'publish', body);
+          // #513: Publish never blocks on a stale stop route; it says it left it out.
+          const stopRouteWarning = stopRouteEditor.publishOutcome(body.stopRoute);
+          if (stopRouteWarning) {
+            const notice = document.createElement('p');
+            notice.className = 'notice-warn';
+            notice.textContent = stopRouteWarning;
+            $('actionStatus').appendChild(notice);
+          }
         } catch (e) {
           showErr(BuildReporting.text('unknown'));
           setStatus('');
@@ -2203,10 +2248,11 @@
         stopLookups.forEach((dispose) => dispose());
         stopLookups.clear();
         $('stopsList').innerHTML = '';
-        if (!Array.isArray(stops)) return;
+        if (!Array.isArray(stops)) { stopRouteEditor.update(); return; }
         stops.forEach((s) => {
-          if (s && typeof s === 'object') addStopRow(s.name ?? '', s.lat ?? '', s.lng ?? '');
+          if (s && typeof s === 'object') addStopRow(s.name ?? '', s.lat ?? '', s.lng ?? '', { via: s.via === true, profile: s.profile });
         });
+        stopRouteEditor.update();
       }
 
       function populateLocale(loc, data) {
@@ -2396,6 +2442,7 @@
         // Initialization alone defers this read until after local stash recovery.
         // Explicit Reload holds the write queue closed across both reads.
         const routeReady = deferRouteRefresh || await gpxEditor.refresh();
+        stopRouteEditor.refresh();
         if (reloadEpoch === writeEpoch) loadBlocked = !routeReady;
         // Publish availability follows the barrier (#284 disables it while blocked).
         updateLocaleChip();
