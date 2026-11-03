@@ -204,7 +204,7 @@
 
                 <details class="editor-disclosure hero-replace" id="deHeroReplace" open>
                   <summary>Replace photo</summary>
-                  <label for="deHeroFile">Hero image file (DE)</label>
+                  <label for="deHeroFile" id="deHeroFileLabel"></label>
                   <input id="deHeroFile" type="file" accept="image/*" class="hero-file-input" />
                   <div class="hero-actions-row">
                     <button type="button" id="deHeroUpload" class="btn-secondary">Upload hero</button>
@@ -283,7 +283,7 @@
 
                 <details class="editor-disclosure hero-replace" id="enHeroReplace" open>
                   <summary>Replace photo</summary>
-                  <label for="enHeroFile">Hero image file (EN)</label>
+                  <label for="enHeroFile" id="enHeroFileLabel"></label>
                   <input id="enHeroFile" type="file" accept="image/*" class="hero-file-input" />
                   <div class="hero-actions-row">
                     <button type="button" id="enHeroUpload" class="btn-secondary">Upload hero</button>
@@ -986,6 +986,7 @@
       for (const locale of ['de', 'en']) {
         $(locale + 'CountryHelp').textContent = editorCopy.countryHelp;
         $(locale + 'ExcerptHelp').textContent = editorCopy.excerptHelp;
+        $(locale + 'HeroFileLabel').textContent = editorCopy.heroFile.replace('{locale}', locale.toUpperCase());
         $(locale + 'Excerpt').setAttribute('aria-describedby', locale + 'ExcerptHelp');
       }
       $('coordinatesHelp').textContent = editorCopy.coordinatesHelp;
