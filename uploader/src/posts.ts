@@ -10,6 +10,11 @@ import type { PrivateGeometry } from '../public/gpx-geometry.js';
 import type { PublicTrackWorker } from './gpx-public-worker.js';
 import { GpxError } from './gpx-errors.js';
 import { publishedTrackOf, type PublishedTrackRow, type PublishedTrackProjection } from './published-track.js';
+import {
+  StopRouteError, normalizeStopRoutingFields, validateRouteStops, validateStoredStopRoute,
+  type PublicStopRoute, type RouteStop, type StoredStopRoute,
+} from '../public/stop-route.js';
+import { stopRouteFingerprintSync } from './stop-route-fingerprint.js';
 import { DEFAULT_LANGUAGE, assertLanguageNamespace, memoryLanguageStore, pgLanguageStore, readLanguage, type LanguageConfig, type LanguageState, type LanguageStore } from './language.js';
 import { namespaceOf, reservation } from '../../site/src/lib/reserved-routes.js';
 import { lockContentNamespaces, registerMemoryClaims, memorySlugOwner } from './content-namespace.js';
@@ -61,7 +66,8 @@ export interface PostLocale {
 export interface PostShared {
   date: string; countryCode: string; region: string;
   coordinates: { lat: number; lng: number };
-  stops?: { name: string; lat: number; lng: number }[]; route?: string;
+  /** #513: optional `via`/`profile` routing fields, canonicalized on every save. */
+  stops?: RouteStop[]; route?: string;
   categories?: string[];
   tags?: string[];
   scheduledAt?: string | null;
@@ -167,6 +173,12 @@ export interface PublishTokens { baseUpdatedAt: Date; baseRouteVersion: string |
 export interface PublishState { pair: StoredPostPair; routeVersion: string | null; language: LanguageState }
 /** SQL validation must reuse the locked transaction, never borrow another pool connection. */
 export type PublishValidation = (pair: StoredPostPair, language: LanguageState, client?: DbClient) => Promise<void>;
+/**
+ * What Publish did with the stored stop route (#513). `stale` means a stored
+ * route no longer matched the stops and was left out; Publish never blocks on it.
+ */
+export type StopRoutePublishOutcome = 'published' | 'stale' | 'none' | 'superseded';
+export interface PublishResult { updatedAt: Date; stopRoute: StopRoutePublishOutcome }
 
 /** Publish uses exact reviewed tokens, not save's older-than comparison. */
 export function assertPublishTokens(state: PublishState, tokens: PublishTokens): void {
@@ -209,11 +221,18 @@ export interface PostStore {
    * language lock before a newly enabled locale can become writable.
    */
   upsertDraft(pair: PostPair, baseUpdatedAt?: Date, options?: PostSaveOptions): Promise<SavedPostPair>;
-  publish(translationKey: string, tokens: PublishTokens, validate?: PublishValidation): Promise<{ updatedAt: Date }>;
+  publish(translationKey: string, tokens: PublishTokens, validate?: PublishValidation): Promise<PublishResult>;
   /** Flip a pair back to draft (the "emergency brake" — the live site drops it on the next build). */
   unpublish(translationKey: string): Promise<{ previousUpdatedAt: Date; updatedAt: Date }>;
   /** Hard-delete both locale rows, freeing their slugs for reuse. */
   remove(translationKey: string): Promise<void>;
+  /** The pair's stored stop route, or null (none, invalid or DE/EN mismatch). Throws not_found. */
+  getStopRoute(translationKey: string): Promise<StoredStopRoute | null>;
+  /**
+   * Replace the stored stop route on both rows. Never touches `updated_at`: a
+   * calculation is not a content save, and the editor's save token stays valid.
+   */
+  saveStopRoute(translationKey: string, route: StoredStopRoute): Promise<void>;
   /**
    * Every stored locale row, regardless of locale pairing, plus a
    * `source: 'published'` row per locale for each published snapshot.
@@ -260,6 +279,8 @@ interface Stored extends PostPair {
   rowStatus: Record<Locale, PostStatus>;
   publishedSnapshot: Partial<Record<Locale, PostLocale>>;
   snapshotContent: Partial<Record<Locale, Record<string, unknown>>>;
+  /** Private stored stop route (pg: posts.stop_route on both rows). */
+  stopRoute: StoredStopRoute | null;
 }
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
@@ -336,6 +357,7 @@ export function validateDraft(pair: unknown, language: LanguageConfig = DEFAULT_
     if (!isPlainObject(c) || !Number.isFinite(c.lat) || !Number.isFinite(c.lng)) throw new PostError('shared.coordinates must be { lat, lng } numbers');
   }
   if (shared.stops !== undefined && !Array.isArray(shared.stops)) throw new PostError('shared.stops must be an array');
+  if (shared.stops !== undefined) stopRoutingFieldsOrThrow(shared.stops, 'shared.stops');
   optString(shared, 'route', 'shared');
   optStringArray(shared, 'categories', 'shared');
   optStringArray(shared, 'tags', 'shared');
@@ -424,6 +446,7 @@ export function validateForPublish(pair: PostPair, language: LanguageConfig = DE
         throw new PostError(`stops[${i}].lng must be between -180 and 180`);
       }
     });
+    stopRoutingFieldsOrThrow(s.stops, 'stops');
   }
   if (!s.date.trim()) throw new PostError('date required');
   // Rendered-body H1s are refused by the publish gate on the sanitized tree (#375).
@@ -559,6 +582,7 @@ async function draftWithDefaults(pair: PostPair, language: LanguageConfig, exist
     status: pair.status,
     shared: {
       ...s,
+      ...(s.stops !== undefined ? { stops: normalizeStopRoutingFields(s.stops) as RouteStop[] } : {}),
       date: s.date || new Date().toISOString().slice(0, 10),
       countryCode: s.countryCode || PLACEHOLDER_COUNTRY_CODE,
       region: s.region || PLACEHOLDER_REGION,
@@ -596,6 +620,8 @@ function memorySnapshot(pair: PostPair, locale: Locale): Record<string, unknown>
 export function snapshotDraftDiffers(snapshot: Record<string, unknown>, working: Record<string, unknown>): boolean {
   const published = { ...snapshot }, draft = { ...working };
   delete published.track;
+  // #513: like `track`, merged only at Publish; its own signal is stop_route_changed.
+  delete published.stop_route;
   const defaults: Record<string, unknown> = {
     title_image: null, featured: false, categories: [], tags: [], scheduled_at: null,
   };
@@ -668,6 +694,8 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
         has_snapshot: !!snapshot, row_digest: snapshot ? memoryDigest(snapshot) : null,
         draft_differs: !!snapshot && snapshotDraftDiffers(snapshot, memorySnapshot(p, locale)),
         route_changed: false,
+        sr_stops: p.shared.stops ?? null, sr_stored: p.stopRoute,
+        sr_published: p.snapshotContent[locale]?.stop_route ?? null, sr_gpx: false,
       };
     });
     return publicationFact(p.translationKey, rows, mode);
@@ -758,7 +786,9 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
         return publishedTrackOf((['de', 'en'] as const).map((locale) => ({
           locale, status: p.rowStatus[locale], omitted: p[locale].omitted ?? false,
           published_at: p[locale].publishedAt ?? null,
-          published_snapshot: p.publishedSnapshot[locale] ?? null,
+          published_snapshot: p.publishedSnapshot[locale]
+            ? { ...p.publishedSnapshot[locale], ...(p.snapshotContent[locale]?.stop_route ? { stop_route: p.snapshotContent[locale]!.stop_route } : {}) }
+            : null,
         })), { primary: mode.primary, locales: [...mode.locales] });
       });
     },
@@ -767,6 +797,19 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
         const p = byKey.get(tk);
         if (!p || p.rowStatus[mode.primary] !== 'published' || !p.publishedSnapshot[mode.primary]) return [];
         return mode.locales.filter((locale) => p.rowStatus[locale] === 'published' && !!p.publishedSnapshot[locale]);
+      });
+    },
+    async getStopRoute(tk) {
+      const p = byKey.get(tk);
+      if (!p) throw new PostError('post not found', 'not_found');
+      return structuredClone(p.stopRoute);
+    },
+    async saveStopRoute(tk, route) {
+      const valid = storedStopRouteOrThrow(route);
+      return withPair(tk, () => {
+        const p = byKey.get(tk);
+        if (!p) throw new PostError('post not found', 'not_found');
+        p.stopRoute = structuredClone(valid);
       });
     },
     async usageRows() {
@@ -826,6 +869,7 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
           rowStatus: existing?.rowStatus ?? { de: 'draft', en: 'draft' },
           publishedSnapshot: existing?.publishedSnapshot ?? {},
           snapshotContent: existing?.snapshotContent ?? {},
+          stopRoute: existing?.stopRoute ?? null,
         };
         byKey.set(key, stored);
         if (receipt) receipts.set(key, receipt);
@@ -843,14 +887,18 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
         await language.markPublished();
         p.updatedAt = nextTime(p.updatedAt);
         receipts.delete(tk);
+        const stopRoute = stopRouteForPublish(p.shared.stops, [p.stopRoute, p.stopRoute], false);
         for (const locale of requestedLocales(p, mode)) {
           p.rowStatus[locale] = 'published';
           p[locale].publishedAt = new Date(p.updatedAt);
           p.publishedSnapshot[locale] = structuredClone(p[locale]);
-          p.snapshotContent[locale] = memorySnapshot(p, locale);
+          p.snapshotContent[locale] = {
+            ...memorySnapshot(p, locale),
+            ...(stopRoute.route ? { stop_route: structuredClone(stopRoute.route) } : {}),
+          };
         }
         p.status = p.rowStatus[mode.primary];
-        return { updatedAt: new Date(p.updatedAt) };
+        return { updatedAt: new Date(p.updatedAt), stopRoute: stopRoute.outcome };
       }));
     },
     async unpublish(tk) {
@@ -932,6 +980,7 @@ interface PostRow extends PublicationRow {
   hero_image: HeroImage; coordinates: { lat: number; lng: number };
   title_image: HeroImage | null;
   stops: PostShared['stops'] | null; route: string | null; key_facts: Record<string, string> | null;
+  stop_route: unknown;
   body_markdown: string; images: Record<string, ImageDims>; status: PostStatus; updated_at: Date;
   published_at: Date | null;
   omitted: boolean;
@@ -961,6 +1010,8 @@ interface PublicationRow {
   locale: Locale; status: PostStatus; omitted: boolean;
   has_snapshot: boolean; draft_differs: boolean; route_changed: boolean;
   row_digest: string | null;
+  /** #513 inputs for the stop-route publish candidate (see stopRouteChanged). */
+  sr_stops: unknown; sr_stored: unknown; sr_published: unknown; sr_gpx: boolean;
 }
 
 // Missing legacy keys equal their loader defaults, never a non-default working
@@ -977,10 +1028,58 @@ const PUBLICATION_COLUMNS_SQL = `
   published_snapshot IS NOT NULL AS has_snapshot,
   ${PUBLISHED_SNAPSHOT_DIGEST_SQL} AS row_digest,
   (status = 'published' AND published_snapshot IS NOT NULL AND
-    ((published_snapshot - 'track') - ${ABSENT_DEFAULTS_SQL})
+    ((published_snapshot - ARRAY['track','stop_route']::text[]) - ${ABSENT_DEFAULTS_SQL})
       IS DISTINCT FROM (${POST_SNAPSHOT_SQL} - ${ABSENT_DEFAULTS_SQL})) AS draft_differs,
   COALESCE((SELECT r.updated_at FROM post_routes r WHERE r.translation_key=posts.translation_key)
-    > published_at, false) AS route_changed`;
+    > published_at, false) AS route_changed,
+  stops AS sr_stops, stop_route AS sr_stored, published_snapshot->'stop_route' AS sr_published,
+  EXISTS (SELECT 1 FROM post_routes r WHERE r.translation_key=posts.translation_key AND r.geometry IS NOT NULL) AS sr_gpx`;
+
+function stopRoutingFieldsOrThrow(stops: unknown, path: string): void {
+  try { normalizeStopRoutingFields(stops); }
+  catch (error) {
+    if (!(error instanceof StopRouteError)) throw error;
+    const field = error.code === 'stop_via_invalid' ? 'via must be a boolean' : 'profile must be one of car, bike, foot, straight';
+    throw new PostError(`${path}[${error.index ?? 0}].${field}`, 'invalid_post');
+  }
+}
+
+function storedStopRouteOrThrow(route: unknown): StoredStopRoute {
+  try { return validateStoredStopRoute(route); }
+  catch { throw new PostError('invalid stop route', 'invalid_stop_route'); }
+}
+
+/**
+ * The stored route Publish may copy for these stops: valid, ≥2 stops, one leg
+ * per stop gap and a fingerprint equal to the current stops' basis. Anything
+ * else (absent, corrupt, stale) is null; staleness is never an error.
+ * @ai-note Freshness is decided against the LOCKED saved stops at Publish, never
+ * against what the editor last showed — see the 2026-11-03 stop-routing spec.
+ */
+export function freshStopRoute(stops: unknown, stored: unknown): StoredStopRoute | null {
+  if (stored === null || stored === undefined) return null;
+  try {
+    const route = validateStoredStopRoute(stored);
+    const current = validateRouteStops(stops);
+    if (current.length < 2 || route.legs.length !== current.length - 1) return null;
+    return stopRouteFingerprintSync(current) === route.fingerprint ? route : null;
+  } catch { return null; }
+}
+
+/** GPX precedence first, then freshness; both rows must carry the same value. */
+function stopRouteForPublish(stops: unknown, stored: readonly unknown[], hasTrack: boolean): { route?: PublicStopRoute; outcome: StopRoutePublishOutcome } {
+  if (stored.every((value) => value === null || value === undefined)) return { outcome: 'none' };
+  if (hasTrack) return { outcome: 'superseded' };
+  const fresh = stored.every((value) => isDeepStrictEqual(value, stored[0])) ? freshStopRoute(stops, stored[0]) : null;
+  return fresh ? { route: fresh.route, outcome: 'published' } : { outcome: 'stale' };
+}
+
+/** Would Publish change the public stop route? Only the primary row's inputs matter (shared fields). */
+function stopRouteChanged(row: PublicationRow | undefined): boolean {
+  if (!row) return false;
+  const candidate = row.sr_gpx ? null : freshStopRoute(row.sr_stops, row.sr_stored)?.route ?? null;
+  return !isDeepStrictEqual(candidate, row.sr_published ?? null);
+}
 
 function publicationFact(tk: string, rows: PublicationRow[], language: LanguageConfig): PublicationFact {
   const primary = rows.find((row) => row.locale === language.primary);
@@ -994,7 +1093,8 @@ function publicationFact(tk: string, rows: PublicationRow[], language: LanguageC
     draftDiffers: status === 'published' && (
       requestedLocales.join(',') !== committedLocales.join(',')
       || requested.some((row) => row.status === 'published' && row.has_snapshot && row.draft_differs)
-      || !!primary?.route_changed),
+      || !!primary?.route_changed
+      || stopRouteChanged(primary)),
     rowDigest: {
       de: rows.find((row) => row.locale === 'de')?.row_digest ?? null,
       en: rows.find((row) => row.locale === 'en')?.row_digest ?? null,
@@ -1238,6 +1338,33 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
         return locales.includes(language.primary) ? language.locales.filter((locale) => locales.includes(locale)) : [];
       });
     },
+    async getStopRoute(tk) {
+      const { rows } = await pool.query<{ stop_route: unknown }>(
+        "SELECT stop_route FROM posts WHERE translation_key=$1 AND locale IN ('de','en') ORDER BY locale", [tk],
+      );
+      if (rows.length !== 2) throw new PostError('post not found', 'not_found');
+      const [de, en] = rows as [{ stop_route: unknown }, { stop_route: unknown }];
+      if (de.stop_route === null || !isDeepStrictEqual(de.stop_route, en.stop_route)) return null;
+      try { return validateStoredStopRoute(de.stop_route); } catch { return null; }
+    },
+    async saveStopRoute(tk, route) {
+      writable();
+      const valid = storedStopRouteOrThrow(route);
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await lockPostPair(client, tk);
+        const res = await client.query(
+          "UPDATE posts SET stop_route=$2::jsonb WHERE translation_key=$1 AND locale IN ('de','en')", [tk, JSON.stringify(valid)],
+        );
+        if (res.rowCount !== 2) throw new PostError('post not found', 'not_found');
+        writable();
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw error;
+      } finally { client.release(); }
+    },
     async usageRows() {
       // The second SELECT mirrors the site loader's filter (postgres-loader.ts:
       // `status = 'published' AND published_snapshot IS NOT NULL`) so the
@@ -1359,17 +1486,23 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
         validateForPublish(pair, language);
         await validate?.(pair, language, client);
         const updatedAt = await touchPostPair(client, tk);
+        const stored = await client.query<{ stop_route: unknown }>(
+          "SELECT stop_route FROM posts WHERE translation_key=$1 AND locale IN ('de','en') ORDER BY locale", [tk],
+        );
+        const stopRoute = stopRouteForPublish(pair.shared.stops, stored.rows.map((row) => row.stop_route), track !== undefined);
         // This merge exists ONLY at explicit Publish; legacy backfills stay route-free.
+        // At most one of track / stop_route: a published GPX track always wins (#513).
         await client.query(
           `UPDATE posts SET status='published',
              published_snapshot=${POST_SNAPSHOT_SQL} || $3::jsonb, published_at=$2
            WHERE translation_key=$1 AND locale=ANY($4::text[]) AND NOT omitted`,
-          [tk, updatedAt, JSON.stringify(track ? { track } : {}), requestedLocales(pair, language)],
+          [tk, updatedAt, JSON.stringify({ ...(track ? { track } : {}), ...(stopRoute.route ? { stop_route: stopRoute.route } : {}) }),
+            requestedLocales(pair, language)],
         );
         await client.query('UPDATE site_language SET locked_at=COALESCE(locked_at, now()) WHERE id=true');
         writable();
         await client.query('COMMIT');
-        return { updatedAt };
+        return { updatedAt, stopRoute: stopRoute.outcome };
       } catch (error) {
         await client.query('ROLLBACK').catch(() => {});
         throw error;

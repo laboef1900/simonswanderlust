@@ -1,4 +1,5 @@
 import { validatePublicTrack, type PublicTrack } from '../public/gpx-public-track.js';
+import { validatePublicStopRoute, type PublicStopRoute } from '../public/stop-route.js';
 import type { LanguageConfig } from './language.js';
 
 export interface PublishedTrackRow {
@@ -14,10 +15,12 @@ export interface PublishedTrackProjection {
   /** Retained snapshot membership, not working coverage or public visibility. */
   locales: ('de' | 'en')[];
   track?: PublicTrack;
+  /** #513: never together with `track` (a published GPX track always wins). */
+  stopRoute?: PublicStopRoute;
 }
 
-function hasTrack(snapshot: unknown): snapshot is { track: unknown } {
-  return snapshot !== null && typeof snapshot === 'object' && Object.hasOwn(snapshot, 'track');
+function hasKey<K extends string>(snapshot: unknown, key: K): snapshot is Record<K, unknown> {
+  return snapshot !== null && typeof snapshot === 'object' && Object.hasOwn(snapshot, key);
 }
 
 /** Validate the complete physical pair before interpreting an absent counterpart. */
@@ -41,12 +44,25 @@ export function publishedTrackOf(rows: readonly PublishedTrackRow[], language: L
     }
     if (primary.omitted || (snapshots.length && primary.published_snapshot === null)) throw new Error();
     const result: PublishedTrackProjection = { language, locales: snapshots.map(row => row.locale as 'de' | 'en') };
-    if (!snapshots.some(row => hasTrack(row.published_snapshot))) return result;
+    // Each geometry key is all-or-nothing across the retained snapshots, identical, strict.
     for (const row of snapshots) {
-      if (!hasTrack(row.published_snapshot)) throw new Error();
-      const track = validatePublicTrack(row.published_snapshot.track);
-      if (result.track && JSON.stringify(result.track.coordinates) !== JSON.stringify(track.coordinates)) throw new Error();
-      result.track = track;
+      if (hasKey(row.published_snapshot, 'track') && hasKey(row.published_snapshot, 'stop_route')) throw new Error();
+    }
+    if (snapshots.some(row => hasKey(row.published_snapshot, 'track'))) {
+      for (const row of snapshots) {
+        if (!hasKey(row.published_snapshot, 'track')) throw new Error();
+        const track = validatePublicTrack(row.published_snapshot.track);
+        if (result.track && JSON.stringify(result.track.coordinates) !== JSON.stringify(track.coordinates)) throw new Error();
+        result.track = track;
+      }
+    }
+    if (snapshots.some(row => hasKey(row.published_snapshot, 'stop_route'))) {
+      for (const row of snapshots) {
+        if (!hasKey(row.published_snapshot, 'stop_route')) throw new Error();
+        const stopRoute = validatePublicStopRoute(row.published_snapshot.stop_route);
+        if (result.stopRoute && JSON.stringify(result.stopRoute) !== JSON.stringify(stopRoute)) throw new Error();
+        result.stopRoute = stopRoute;
+      }
     }
     return result;
   } catch {
