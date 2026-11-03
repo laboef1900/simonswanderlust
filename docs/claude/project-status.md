@@ -617,3 +617,10 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
   native amd64/arm64 ext4 runners; the run sheet
   `docs/superpowers/plans/2026-11-01-g6-deployment-mount-qualification.md` applies again if
   `/data` moves to another filesystem, network/FUSE storage or another server.
+- **Implemented, review pending (#514):** the About editor edits the equipment line
+  (`identity.aboutGear`) per enabled locale in its own section with its own Save. UI-only:
+  it reads `GET /settings/identity` and writes the full loaded identity back through the
+  unchanged admin-only `PUT /settings/identity` with its revision, so normalization, the
+  200-code-point limit, retained disabled-locale text, 409 conflicts and the next-build
+  publication timing are the existing #274 contract. No schema, route, snapshot or public
+  rendering change; Settings → Site identity keeps editing the same value.
