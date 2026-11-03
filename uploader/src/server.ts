@@ -34,7 +34,7 @@ import {
   isProviderId, isProviderKind, isRemoteKind, newProviderId, providerNameError, providerUrlError, resolveProvider, slotFor,
   type AiProvider, type AiProviderKind,
 } from './ai-providers.js';
-import { validateDraft, validateForPublish, PostError, type PostStore, type PostPair, type StoredPostPair, type PostUsageRow, type SaveReceipt, assertNotStale, assertPublishTokens, type PublishTokens } from './posts.js';
+import { validateDraft, validateForPublish, PostError, type PostStore, type PostPair, type StoredPostPair, type PostUsageRow, type SaveReceipt, assertNotStale, assertPublishTokens, type PublishTokens, type PublishResult, type StopRoutePublishOutcome } from './posts.js';
 import { GpxError } from './gpx-errors.js';
 import { analyzeBodyContent, bodyImageKey } from './publish-gate.js';
 import { auditAltText } from './alt-audit.js';
@@ -62,6 +62,9 @@ import { compressionHook } from './compress.js';
 import { CommentError, isCommentStatus, isModerationOffset, withPublicLocaleMetadata, UUID_RE as COMMENT_ID_RE, type CommentAdminStore } from './comments-admin.js';
 import { ui } from '../../site/src/i18n/ui.js';
 import { createGeocoder, GeocodingError } from './geocoding.js';
+import { createStopRouter, StopRoutingError, type StopRouter } from './stop-routing.js';
+import { STOP_ROUTE_LIMITS, StopRouteError, validateRouteStops } from '../public/stop-route.js';
+import { renderStopRouteCopy } from './stop-route-copy.js';
 import { registerGpxRoutes } from './gpx-routes.js';
 import type { GpxService } from './gpx-service.js';
 import { renderGpxCopy } from './gpx-copy.js';
@@ -110,6 +113,10 @@ export interface ServerConfig {
   accountLimiter?: AccountLimiter;
   /** Per-account failure limiter for POST /users/me/password, keyed on the session's user id. */
   passwordLimiter?: AccountLimiter;
+  /** #513: injectable like `loginLimiter`; defaults to the OSRM router over `settings`. */
+  stopRouter?: StopRouter;
+  /** Per-user Calculate limiter (default 20 per 10 minutes). */
+  stopRouteLimiter?: RateLimiter;
   media: MediaStore;
   encodeQueue: EncodeQueue;
   uploads?: UploadService;
@@ -835,6 +842,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
       importDelayMs: s.importDelayMs, importRetries: s.importRetries,
       commentsEnabled: s.commentsEnabled,
       geocodingSearchUrl: s.geocodingSearchUrl,
+      routingCarUrl: s.routingCarUrl, routingBikeUrl: s.routingBikeUrl, routingFootUrl: s.routingFootUrl,
     };
   }
   // No raw database/crypto error reaches the global logger (driver detail can
@@ -1028,6 +1036,9 @@ export function buildServer(cfg: ServerConfig): AppServer {
       if (Object.hasOwn(b, field)) partial[field] = b[field];
     }
     if (Object.hasOwn(b, 'geocodingSearchUrl')) partial.geocodingSearchUrl = b.geocodingSearchUrl;
+    for (const field of ['routingCarUrl', 'routingBikeUrl', 'routingFootUrl'] as const) {
+      if (Object.hasOwn(b, field)) partial[field] = b[field];
+    }
     const next = checkCandidate({ ...cfg.settings.get(), ...partial }, reply);
     if (!next) return reply;
     let views: ProviderView[];
@@ -1422,6 +1433,65 @@ export function buildServer(cfg: ServerConfig): AppServer {
     }
   });
 
+  // #513 stop routing: authoring-time only, server-side, authenticated authors.
+  // Draft coordinates leave the server only here, only to the admin-configured
+  // endpoints, only through safeFetch (see stop-routing.ts). URLs never reach authors.
+  const stopRouter = cfg.stopRouter ?? createStopRouter({
+    endpoints: () => {
+      const s = cfg.settings.get();
+      return { car: s.routingCarUrl, bike: s.routingBikeUrl, foot: s.routingFootUrl };
+    },
+    canonicalOrigin: () => cfg.identityStore?.get().identity.canonicalOrigin ?? null,
+  });
+  const stopRouteLimiter = cfg.stopRouteLimiter ?? fixedWindowLimiter({ max: 20, windowMs: 600_000 });
+  app.get<{ Params: { tk: string } }>('/posts/:tk/stop-route', { preHandler: requireAuth }, async (req, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    try {
+      return reply.send({ profiles: stopRouter.profiles(), route: await posts.getStopRoute(req.params.tk) });
+    } catch (e) {
+      if (e instanceof PostError && e.code === 'not_found') return reply.code(404).send({ code: 'not_found' });
+      throw e;
+    }
+  });
+  app.post<{ Params: { tk: string } }>('/posts/:tk/stop-route', { preHandler: requireAuth, bodyLimit: 16384 }, async (req, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    const tk = req.params.tk;
+    const body: unknown = req.body;
+    const input = body !== null && typeof body === 'object' && 'stops' in body ? body.stops : undefined;
+    let stops;
+    try { stops = validateRouteStops(input); }
+    catch (e) {
+      if (e instanceof StopRouteError) return reply.code(400).send({ code: e.code, ...(e.index !== undefined ? { index: e.index } : {}) });
+      throw e;
+    }
+    if (stops.length < 2) return reply.code(400).send({ code: 'stop_route_too_few' });
+    if (stops.length > STOP_ROUTE_LIMITS.stops) return reply.code(400).send({ code: 'stop_route_too_many', max: STOP_ROUTE_LIMITS.stops });
+    if (!isWritable()) return readOnly(reply);
+    // Existence first: an unknown story must never trigger an outbound request.
+    try { await posts.getStopRoute(tk); }
+    catch (e) {
+      if (e instanceof PostError && e.code === 'not_found') return reply.code(404).send({ code: 'not_found' });
+      throw e;
+    }
+    if (!stopRouteLimiter.check(req.authUser!.id)) {
+      return reply.code(429).header('Retry-After', '600').send({ code: 'stop_route_rate_limited' });
+    }
+    let route;
+    try { route = await stopRouter.calculate(stops); }
+    catch (e) {
+      if (!(e instanceof StopRoutingError)) throw e;
+      if (e.status === 429) reply.header('Retry-After', '5');
+      return reply.code(e.status).send({ code: e.code, ...(e.profiles ? { profiles: e.profiles } : {}) });
+    }
+    try { await posts.saveStopRoute(tk, route); }
+    catch (e) {
+      if (e instanceof PostError && e.code === 'not_found') return reply.code(404).send({ code: 'not_found' });
+      if (e instanceof PostError && e.code === 'storage_read_only') return readOnly(reply);
+      throw e;
+    }
+    return reply.send({ profiles: stopRouter.profiles(), route });
+  });
+
   // Unsaved source analysis only: inherit the same JSON body ceiling as /posts.
   app.post('/gallery/analyze', {
     onRequest: async (_req, reply) => { reply.header('Cache-Control', 'no-store'); },
@@ -1449,6 +1519,9 @@ export function buildServer(cfg: ServerConfig): AppServer {
     ]));
     return reply.type('application/javascript').send(`window.WaypointCopy = ${JSON.stringify(copy)};`);
   });
+
+  // #513 editor + Settings copy, from the same bilingual dictionary. No secrets.
+  app.get('/admin/stop-route-copy.js', async (_req, reply) => reply.type('application/javascript').send(renderStopRouteCopy()));
 
   // Static editor copy shares the site's bilingual dictionary, not a second
   // hand-maintained translation file. Like /admin/*.js, this contains no secrets.
@@ -1828,7 +1901,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     // mutation; successfully computed warnings remain advisory.
     const galleryMetadata = await loadGalleryMetadata(pair, cfg.media, imageBase);
     const audit = await auditAltText(pair, galleryMetadata, state.language.locales);
-    let committed: { updatedAt: Date };
+    let committed: PublishResult;
     try { committed = await posts.publish(tk, tokens, publicationReadiness(analysis.keys)); }
     catch (e) {
       if (e instanceof PublicationImageError) return reply.code(409).send({
@@ -1855,6 +1928,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
       published: true,
       build,
       updatedAt: committed.updatedAt,
+      stopRoute: committed.stopRoute,
       publication: await publication.one(tk),
       altAudit: { count: audit.count, images: audit.images },
     });
@@ -1908,7 +1982,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     const keys = [...new Set(b.keys.map((k) => String(k)))].filter((k) => k !== '');
     if (keys.length === 0) return reply.code(400).send({ error: 'keys must not be empty' });
 
-    const results: { key: string; ok: boolean; updatedAt?: Date; previousUpdatedAt?: Date; error?: string; code?: string; counts?: GpxError['counts'] }[] = [];
+    const results: { key: string; ok: boolean; updatedAt?: Date; previousUpdatedAt?: Date; stopRoute?: StopRoutePublishOutcome; error?: string; code?: string; counts?: GpxError['counts'] }[] = [];
     // Whether anything that was actually LIVE changed — a bulk delete of drafts
     // only needs no rebuild, mirroring DELETE /posts/:tk's `wasPublished` rule.
     let liveChanged = false;
@@ -1918,7 +1992,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
         const state = action === 'publish' ? await posts.getPublishState(tk) : null;
         const pair = action === 'publish' ? state?.pair : await posts.get(tk);
         if (!pair) throw new PostError('post not found');
-        let committed: { updatedAt: Date; previousUpdatedAt?: Date } | undefined;
+        let committed: { updatedAt: Date; previousUpdatedAt?: Date; stopRoute?: StopRoutePublishOutcome } | undefined;
         if (action === 'publish') {
           validateForPublish(pair, state!.language);
           const analysis = await publicationBody(pair, state!.language);

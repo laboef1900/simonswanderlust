@@ -15,7 +15,7 @@ export class PublicTrackError extends Error {
 
 export const PUBLIC_TRACK_LIMITS = Object.freeze({ runs: 100, vertices: 2000, bytes: 65536 });
 const radius = 6371008.8;
-const tolerance = 25 / radius;
+const DEFAULT_TOLERANCE_METRES = 25;
 const radians = Math.PI / 180;
 const encoder = new TextEncoder();
 const fail = (code, counts) => { throw new PublicTrackError(code, counts); };
@@ -84,7 +84,19 @@ function angle(ax, ay, az, bx, by, bz) {
     ax * bx + ay * by + az * bz);
 }
 
-function simplify(points) {
+/**
+ * Great-circle Douglas–Peucker plus 4-decimal rounding and duplicate removal.
+ * GPX always uses the 25 m default; stop routing (#513) widens it until a
+ * route fits the public limits.
+ * @param {{lat: number, lng: number}[]} points
+ * @param {number} [toleranceMetres]
+ * @returns {[number, number][]}
+ */
+export function simplifyRun(points, toleranceMetres = DEFAULT_TOLERANCE_METRES) {
+  return simplify(points, toleranceMetres / radius);
+}
+
+function simplify(points, tolerance) {
   const count = points.length;
   const vectors = new Float64Array(count * 3);
   for (let i = 0; i < count; i++) {
@@ -164,7 +176,7 @@ export function createPublicTrack(geometry) {
   let collapsedRuns = 0;
   let vertices = 0;
   for (const run of geometry.segments) {
-    const positions = simplify(run.points);
+    const positions = simplifyRun(run.points);
     if (positions.length < 2) { collapsedRuns++; continue; }
     vertices += positions.length;
     coordinates.push(positions);
