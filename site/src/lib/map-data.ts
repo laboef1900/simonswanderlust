@@ -2,6 +2,7 @@ import type { Locale } from '../i18n/ui';
 import type { Region } from './paths';
 import { byLocale, pathOf, type Trip } from './trips';
 import type { PublicTrack } from './public-track';
+import type { PublicStopRoute } from './public-stop-route';
 
 export interface PinFeature {
   type: 'Feature';
@@ -14,7 +15,8 @@ export interface StopFeature {
   geometry: { type: 'Point'; coordinates: [number, number] };
   properties: { name: string };
 }
-export interface TripGeometry { pin: PinFeature; stops: StopFeature[]; track?: PublicTrack }
+/** At most one line: a published GPX `track` always wins over a `stopRoute` (#513). */
+export interface TripGeometry { pin: PinFeature; stops: StopFeature[]; track?: PublicTrack; stopRoute?: PublicStopRoute }
 
 function pinOf(trip: Trip): PinFeature {
   const { lat, lng } = trip.data.coordinates;
@@ -30,10 +32,13 @@ export function tripPins(trips: Trip[], locale: Locale): PinCollection {
 }
 
 export function tripGeometry(trip: Trip): TripGeometry {
-  const stops: StopFeature[] = (trip.data.stops ?? []).map((s) => ({
+  // @ai-note Via points shape the stop route only. Dropping them HERE keeps their
+  // names out of pins, the stop list and the serialized `data-geometry` alike.
+  const stops: StopFeature[] = (trip.data.stops ?? []).filter((s) => s.via !== true).map((s) => ({
     type: 'Feature',
     geometry: { type: 'Point', coordinates: [s.lng, s.lat] },
     properties: { name: s.name },
   }));
-  return { pin: pinOf(trip), stops, ...(trip.data.track ? { track: trip.data.track } : {}) };
+  const line = trip.data.track ? { track: trip.data.track } : trip.data.stopRoute ? { stopRoute: trip.data.stopRoute } : {};
+  return { pin: pinOf(trip), stops, ...line };
 }

@@ -25,7 +25,7 @@ import { memorySecretsStore } from '../src/secrets.js';
 // vendor/ and fonts/ are third-party npm copies; legal/ holds the generated
 // #291 license/notice texts — all gitignored build products outside this scan.
 const publicRoot = fileURLToPath(new URL('../public/', import.meta.url));
-const GENERATED = ['/admin/editor-image-copy.js', '/admin/waypoint-copy.js', '/admin/gpx-copy.js'];
+const GENERATED = ['/admin/editor-image-copy.js', '/admin/waypoint-copy.js', '/admin/gpx-copy.js', '/admin/stop-route-copy.js'];
 
 async function servedFiles(dir: string): Promise<string[]> {
   const out: string[] = [];

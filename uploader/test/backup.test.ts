@@ -78,7 +78,7 @@ describe('dumpDatabase', () => {
     const dump = JSON.parse(gunzipSync(await readFile(join(dir, name))).toString('utf8'));
     expect(dump.tables.comments).toEqual([{ id: 'c1', translation_key: 'p1', locale: 'de', name: 'R', body: 'hi', status: 'pending', is_author: false }]);
     expect(dump.tables.users).toEqual([{ id: 'u1', username: 'simon' }]);
-    expect(dump.version).toBe(14);
+    expect(dump.version).toBe(15);
     expect(dump.tables.journeys).toEqual([]);
     expect(dump.tables.journey_locales).toEqual([]);
     expect(dump.tables.journey_members).toEqual([]);
@@ -251,7 +251,7 @@ describe('dumpDatabase', () => {
     };
     const file = join(dir, await dumpDatabase(db, dir, new Date(), { preLanguageMigration: true }));
     const dump = readDump(file);
-    expect(dump.version).toBe(14);
+    expect(dump.version).toBe(15);
     expect(dump.tables.site_language?.[0]).toMatchObject({
       primary_locale: 'en', enabled_locales: ['en'], locked_at: '2026-10-27T12:00:00.000Z',
     });

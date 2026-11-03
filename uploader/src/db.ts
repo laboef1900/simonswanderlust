@@ -143,7 +143,7 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
       region text NOT NULL CONSTRAINT posts_region_check CHECK (region IN (${REGION_SQL_LIST})),
       excerpt text NOT NULL, hero_image jsonb NOT NULL, coordinates jsonb NOT NULL,
       title_image jsonb,
-      stops jsonb, route text, key_facts jsonb, body_markdown text NOT NULL,
+      stops jsonb, stop_route jsonb, route text, key_facts jsonb, body_markdown text NOT NULL,
       images jsonb NOT NULL DEFAULT '{}', status text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','published')),
       featured boolean NOT NULL DEFAULT false,
       comments_enabled boolean NOT NULL DEFAULT true,
@@ -638,5 +638,9 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
   await pool.query('ALTER TABLE posts ADD COLUMN IF NOT EXISTS last_save_by uuid');
   await pool.query('ALTER TABLE pages ADD COLUMN IF NOT EXISTS last_save_id uuid');
   await pool.query('ALTER TABLE pages ADD COLUMN IF NOT EXISTS last_save_by uuid');
+  // #513: the private stored stop route (validated StoredStopRoute), identical on
+  // both rows of a pair. Never part of POST_SNAPSHOT_SQL: Publish merges only its
+  // public projection, and only while fresh. See the 2026-11-03 stop-routing spec.
+  await pool.query('ALTER TABLE posts ADD COLUMN IF NOT EXISTS stop_route jsonb');
   await ensureOnboardingSchema(pool);
 }

@@ -13,6 +13,14 @@ export type BackupSchedule = 'off' | 'daily' | 'weekly';
 export interface Settings {
   /** Nominatim-compatible HTTPS endpoint; empty disables editor lookup. */
   geocodingSearchUrl: string;
+  /**
+   * #513: OSRM-compatible HTTPS base URLs, one per routed profile (an OSRM
+   * server serves only the profile its graph was built with). Empty disables
+   * that profile. Deliberately no default: public demo servers forbid this use.
+   */
+  routingCarUrl: string;
+  routingBikeUrl: string;
+  routingFootUrl: string;
   /** Non-sensitive AI destinations; keys live per provider in `app_secrets`. */
   aiProviders: AiProvider[];
   aiDefaultProviderId: string;
@@ -73,6 +81,9 @@ export interface FileSettingsStore extends SettingsStore {
 export function defaultSettings(): Settings {
   return {
     geocodingSearchUrl: 'https://nominatim.openstreetmap.org/search',
+    routingCarUrl: '',
+    routingBikeUrl: '',
+    routingFootUrl: '',
     aiProviders: defaultProviders(),
     aiDefaultProviderId: 'lm-studio',
     reviewProviderId: null,
@@ -103,16 +114,11 @@ export function defaultSettings(): Settings {
  * The key order is the order `validate()` reports errors in.
  */
 const FIELD_CHECKS: { [K in keyof Settings]: (v: unknown) => string | null } = {
-  geocodingSearchUrl: (v) => {
-    if (v === '') return null;
-    if (typeof v === 'string' && !/[\p{C}\s]/u.test(v)) {
-      try {
-        const url = new URL(v);
-        if (url.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash) return null;
-      } catch { /* Fixed error below: never echo a supplied URL. */ }
-    }
-    return 'Geocoding endpoint must be an HTTPS URL without credentials, query, or fragment; leave empty to disable.';
-  },
+  geocodingSearchUrl: (v) => httpsEndpoint(v)
+    ? null : 'Geocoding endpoint must be an HTTPS URL without credentials, query, or fragment; leave empty to disable.',
+  routingCarUrl: (v) => httpsEndpoint(v) ? null : routingUrlError('Car'),
+  routingBikeUrl: (v) => httpsEndpoint(v) ? null : routingUrlError('Bike'),
+  routingFootUrl: (v) => httpsEndpoint(v) ? null : routingUrlError('Foot'),
   aiProviders: validateProviders,
   aiDefaultProviderId: (v) => (isProviderId(v) ? null : 'Default AI provider must be a provider id.'),
   reviewProviderId: (v) => (v === null || isProviderId(v)
@@ -151,6 +157,20 @@ const SETTINGS_KEYS = Object.keys(FIELD_CHECKS) as (keyof Settings)[];
 
 function intInRange(v: unknown, min: number, max: number): boolean {
   return typeof v === 'number' && Number.isInteger(v) && v >= min && v <= max;
+}
+
+/** Empty (disabled) or an HTTPS URL without credentials, query or fragment. Never echo the value. */
+function httpsEndpoint(v: unknown): boolean {
+  if (v === '') return true;
+  if (typeof v !== 'string' || /[\p{C}\s]/u.test(v)) return false;
+  try {
+    const url = new URL(v);
+    return url.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash;
+  } catch { return false; }
+}
+
+function routingUrlError(profile: string): string {
+  return `${profile} routing URL must be an HTTPS URL without credentials, query, or fragment; leave empty to disable.`;
 }
 
 /** Shallow copy with a private provider array, so no caller can mutate the cache. */

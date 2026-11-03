@@ -17,6 +17,8 @@ can upload images inline from the editor without visiting a separate page.
 Open **Settings → Site identity** to edit the public name, author, localized text and social
 links. The About page's body remains separate content. Save stores identity without
 rebuilding; the public site changes at the next **Publish** or **Rebuild site now**.
+The About equipment line can also be edited in the About editor (see **Editable pages**);
+both places edit the same saved value.
 
 Logo and favicon have their own upload/remove actions, separate from the text Save:
 
@@ -870,6 +872,17 @@ published page blockers are complete. A revision loads into the editor for revie
 saving it still checks slug locks, completeness, image safety and the loaded token.
 If someone saved elsewhere, reload only after explicitly choosing to discard your
 unsaved fields.
+
+**Equipment on the About page.** Each enabled language's About panel ends with an
+**Equipment** section: the one-line text shown in the About page's equipment box and in
+the footer of every page in that language. It is the Site identity equipment value, not
+page text, so it has its own **Save equipment** button and never rides on the page's
+Save. Plain text, at most 200 characters; leave it empty and save to hide both the box
+and the footer line for that language. Saving rebuilds nothing: the public site shows
+the saved line after the next rebuild (**Save & rebuild** or **Publish** on this page, or
+**Rebuild site now** in Site identity settings). If Site identity was saved elsewhere
+since the editor loaded, the save is refused with your text kept; **Load saved
+equipment** replaces it after confirmation. Translation preparation does not show it.
 
 Delete names both locale paths/titles, the revisions being removed, navigation
 references and a best-effort count of links in bodies. Those body links are not

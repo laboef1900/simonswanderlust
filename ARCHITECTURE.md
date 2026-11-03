@@ -681,6 +681,33 @@ same JSON response format and OpenStreetMap data attribution. Do not run multipl
 independent app replicas against the public service without a shared request budget.
 See the [provider usage policy](https://operations.osmfoundation.org/policies/nominatim/).
 
+## Stop routing (#513)
+
+When a story has no published GPX track, its mini-map can connect the stops in editor order
+with a line along roads. Data and flow:
+
+- **Stops** (`posts.stops`, shared DE/EN) gain optional `via: true` (shapes the route, never
+  shown publicly) and `profile` (`bike` | `foot` | `straight` for the leg to the next stop;
+  absent = car). Draft saves canonicalize them (`uploader/public/stop-route.js`).
+- **Calculate** (editor button) → authenticated `POST /posts/:tk/stop-route` →
+  `uploader/src/stop-routing.ts`: one OSRM `route/v1` request per routed leg via `safeFetch`
+  (paced 1.1 s app-wide, single flight, 60 s budget), straight fallbacks flagged per leg,
+  antimeridian split, great-circle simplification widened until the public GPX limits hold.
+  The result is stored as `posts.stop_route` (identical on both rows, `{fingerprint, computedAt,
+  legs, route}`) without touching `updated_at`.
+- **Settings** → *Street routing*: `routingCarUrl` / `routingBikeUrl` / `routingFootUrl`
+  (`settings.json`), one OSRM base URL per profile; empty (the default) disables a profile.
+- **Publish** fingerprints the locked saved stops; only a fresh route is merged as
+  `published_snapshot.stop_route`, and never when a GPX `track` is published (track wins). The
+  editor shows fresh/stale per the same fingerprint and warns when Publish left a stale route out.
+- **Build** (`postgres-loader.ts`) passes `stop_route` as the entry's `stopRoute`
+  (`site/src/lib/public-stop-route.ts`, strict Zod); `tripGeometry` drops via stops and prefers a
+  track; the mini-map draws road runs like a GPX track and straight runs dashed, with OSM
+  attribution on the route source. No routing request happens at build or in the browser.
+- **Backups** v15, MDX export (`stops` with via/profile, `stopRoute`). Journey maps stay GPX-only.
+
+Spec: `docs/superpowers/specs/2026-11-03-issue-513-stop-routing-design.md`.
+
 ## AI alt-text (browser-direct providers)
 
 The post editor and photo uploader offer a "Suggest alt text" button per alt field.

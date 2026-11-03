@@ -474,6 +474,27 @@
         <p id="routeArchivesHeading" class="section-label"></p>
         <ul id="routeArchives"></ul>
       </section>
+      <section class="card" id="routingSettings" aria-labelledby="routingHeading">
+        <h2 id="routingHeading" class="card-heading"></h2>
+        <p id="routingHelp" class="muted"></p>
+        <p id="routingPrivacy" class="muted"></p>
+        <div>
+          <label for="routingCarUrl" id="routingCarLabel"></label>
+          <input id="routingCarUrl" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://" aria-describedby="routingHelp routingPrivacy" />
+        </div>
+        <div>
+          <label for="routingBikeUrl" id="routingBikeLabel"></label>
+          <input id="routingBikeUrl" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://" aria-describedby="routingHelp routingPrivacy" />
+        </div>
+        <div>
+          <label for="routingFootUrl" id="routingFootLabel"></label>
+          <input id="routingFootUrl" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://" aria-describedby="routingHelp routingPrivacy" />
+        </div>
+        <div class="form-actions">
+          <button id="saveRouting" type="button"></button>
+        </div>
+        <p id="routingOut" class="page-status" role="status"></p>
+      </section>
       </section>
 
       <p id="out" class="page-status" role="status"></p>
@@ -485,6 +506,7 @@
     <script src="/admin/publication-state.js"></script>
     <script src="/admin/publication-refresh.js"></script>
     <script src="/admin/gpx-copy.js"></script>
+    <script src="/admin/stop-route-copy.js"></script>
     <script src="/admin/auth.js"></script>
     <script src="/admin/admin-confirm.js"></script>
     <script src="/admin/llm.js"></script>
@@ -1356,11 +1378,46 @@
         $('importRetries').value = s.importRetries ?? 3;
       }
 
+      // #513 street routing: one OSRM base URL per travel mode; empty disables it.
+      const routingCopy = StopRouteCopy.en;
+      $('routingHeading').textContent = routingCopy.settingsHeading;
+      $('routingHelp').textContent = routingCopy.settingsHelp;
+      $('routingPrivacy').textContent = routingCopy.settingsPrivacy;
+      $('routingCarLabel').textContent = routingCopy.settingsCar;
+      $('routingBikeLabel').textContent = routingCopy.settingsBike;
+      $('routingFootLabel').textContent = routingCopy.settingsFoot;
+      $('saveRouting').textContent = routingCopy.settingsSave;
+      const ROUTING_FIELDS = ['routingCarUrl', 'routingBikeUrl', 'routingFootUrl'];
+      function fillRouting(s) {
+        for (const field of ROUTING_FIELDS) $(field).value = typeof s[field] === 'string' ? s[field] : '';
+      }
+      $('saveRouting').addEventListener('click', async () => {
+        const btn = $('saveRouting');
+        btn.disabled = true;
+        $('routingOut').textContent = routingCopy.settingsSaving;
+        try {
+          const body = Object.fromEntries(ROUTING_FIELDS.map((field) => [field, $(field).value.trim()]));
+          const res = await fetch('/settings', {
+            method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+          });
+          if (res.status === 401) { location.href = '/login'; return; }
+          const r = await res.json().catch(() => ({}));
+          if (!res.ok) { $('routingOut').textContent = res.status === 400 ? routingCopy.settingsInvalid : routingCopy.settingsFailed; return; }
+          fillRouting(r);
+          $('routingOut').textContent = routingCopy.settingsSaved;
+        } catch {
+          $('routingOut').textContent = routingCopy.settingsFailed;
+        } finally {
+          btn.disabled = false;
+        }
+      });
+
       function fill(s) {
         applyAi(s, true);
         fillImages(s);
         fillComments(s);
         fillSite(s);
+        fillRouting(s);
       }
 
       $('saveComments').addEventListener('click', async () => {

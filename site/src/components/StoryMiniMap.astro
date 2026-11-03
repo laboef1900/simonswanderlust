@@ -10,6 +10,7 @@ const { trip, locale } = Astro.props;
 const t = useTranslations(locale);
 const geometry = tripGeometry(trip);
 const routeRuns = geometry.track ? publicTrackSummary(geometry.track, locale) : [];
+const straightLegs = geometry.stopRoute?.runs.some((run) => run.kind === 'straight') ?? false;
 ---
 {/* A disclosure like Key Facts, so it can sit in the story rail (open there,
     collapsed on narrow screens ahead of the body). The map mounts lazily on
@@ -20,7 +21,7 @@ const routeRuns = geometry.track ? publicTrackSummary(geometry.track, locale) : 
   <summary class="min-h-[44px] cursor-pointer py-3 text-sm font-semibold text-navy marker:text-brand-red hover:text-brand-red focus-visible:outline-2 focus-visible:outline-brand-red focus-visible:outline-offset-2">
     {t('map.miniLabel')}
   </summary>
-  <div id="mini-map" class="mt-2 mb-5 h-64 w-full rounded-lg bg-navy/5" data-geometry={JSON.stringify(geometry)}>
+  <div id="mini-map" class="mt-2 mb-5 h-64 w-full rounded-lg bg-navy/5" data-geometry={JSON.stringify(geometry)} data-route-attribution={t('map.routeAttribution')}>
     {!geometry.track && <a class="block p-4 text-brand-red hover:underline" href={mapPath(locale)}>{t('map.viewOnMap')}</a>}
   </div>
   {geometry.track && (
@@ -48,6 +49,21 @@ const routeRuns = geometry.track ? publicTrackSummary(geometry.track, locale) : 
       <a class="mt-3 inline-flex min-h-[44px] items-center text-brand-red underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-brand-red focus-visible:outline-offset-2" href={mapPath(locale)}>{t('map.viewOnMap')}</a>
     </section>
   )}
+  {/* #513: without a GPX track the ordered stops stay readable (via points are
+      already gone from `geometry`); the Route caption remains GPX-only (#512). */}
+  {!geometry.track && geometry.stops.length > 0 && (
+    <section class="mb-5 text-sm text-ink" aria-labelledby="public-stops-heading">
+      <h3 id="public-stops-heading" class="font-semibold text-navy">{t('map.stopsHeading')}</h3>
+      {geometry.stopRoute && (
+        <p class="mt-2 text-xs leading-relaxed">
+          {t('map.stopRouteNote')}{straightLegs && ` ${t('map.stopRouteStraightNote')}`}
+        </p>
+      )}
+      <ol class="mt-3 list-inside list-decimal space-y-1">
+        {geometry.stops.map((stop) => <li class="break-words">{stop.properties.name}</li>)}
+      </ol>
+    </section>
+  )}
 </details>
 <script>
   import { initMiniMap } from '../scripts/travel-map';
@@ -70,7 +86,7 @@ const routeRuns = geometry.track ? publicTrackSummary(geometry.track, locale) : 
             o.disconnect();
             el.innerHTML = '';  // clear the fallback link before mounting the map
             try {
-              initMiniMap(el, geometry!);
+              initMiniMap(el, geometry!, el.dataset.routeAttribution ?? '');
             } catch (err) {
               console.error('mini-map: init failed', err);
               el.innerHTML = fallbackHTML;  // restore the fallback link

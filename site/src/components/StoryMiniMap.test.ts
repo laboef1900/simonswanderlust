@@ -5,6 +5,7 @@ import StoryMiniMap from './StoryMiniMap.astro';
 import type { Locale } from '../i18n/ui';
 import type { Trip } from '../lib/trips';
 import type { PublicTrack } from '../lib/public-track';
+import type { PublicStopRoute } from '../lib/public-stop-route';
 
 const track: PublicTrack = {
   version: 1, type: 'MultiLineString',
@@ -65,5 +66,48 @@ describe('story route text without client enhancement', () => {
     const map = root.querySelector('#mini-map')!;
     expect(map.querySelector('a')?.getAttribute('href')).toBe('/karte/');
     expect(JSON.parse(map.getAttribute('data-geometry')!)).not.toHaveProperty('track');
+  });
+});
+
+describe('stops and stop routes without a GPX track (#513)', () => {
+  const stopRoute: PublicStopRoute = { version: 1, runs: [
+    { kind: 'road', coordinates: [[23.7275, 37.9838], [22.9322, 37.9407]] },
+    { kind: 'straight', coordinates: [[21.7346, 38.2466], [28.2278, 36.4341]] },
+  ] };
+  const stops = [
+    { name: 'Athens', lat: 37.9838, lng: 23.7275 },
+    { name: 'Secret via shortcut', lat: 37.9961, lng: 23.3439, via: true },
+    { name: '<img src=x onerror=alert(1)>', lat: 37.9407, lng: 22.9322 },
+    { name: 'Rhodes', lat: 36.4341, lng: 28.2278 },
+  ];
+
+  it.each(['de', 'en'] as const)('lists non-via stops in order with the route note in %s, and never the via name', async (locale) => {
+    const root = await render(locale, { stops, stopRoute, route: 'Caption stays GPX-only' });
+    const section = root.querySelector('section[aria-labelledby="public-stops-heading"]')!;
+    expect([...section.querySelectorAll('ol > li')].map((li) => li.textContent)).toEqual(['Athens', '<img src=x onerror=alert(1)>', 'Rhodes']);
+    expect(section.querySelector('img')).toBeNull();
+    expect(section.querySelector('p')?.textContent).toContain(locale === 'de' ? 'Gestrichelte' : 'Dashed');
+    expect(root.outerHTML).not.toContain('Secret via shortcut');
+    expect(root.textContent).not.toContain('Caption stays GPX-only');
+    expect(root.querySelector('#public-route-heading')).toBeNull();
+    const map = root.querySelector('#mini-map')!;
+    expect(JSON.parse(map.getAttribute('data-geometry')!).stopRoute).toEqual(stopRoute);
+    expect(map.getAttribute('data-route-attribution')).toContain('OpenStreetMap');
+  });
+
+  it('omits the dashed-section note when every leg follows roads, and shows the plain list without a route', async () => {
+    const roadOnly = await render('en', { stops, stopRoute: { version: 1, runs: [stopRoute.runs[0]!] } });
+    expect(roadOnly.querySelector('section p')?.textContent).not.toContain('Dashed');
+    const listOnly = await render('en', { stops });
+    expect(listOnly.querySelector('section p')).toBeNull();
+    expect(listOnly.querySelectorAll('section ol > li')).toHaveLength(3);
+  });
+
+  it('keeps one stop list and the GPX section when a track is published, ignoring the stop route', async () => {
+    const root = await render('en', { track, stopRoute, stops });
+    expect(root.querySelector('section[aria-labelledby="public-stops-heading"]')).toBeNull();
+    expect(root.querySelector('#public-route-heading')).not.toBeNull();
+    expect(JSON.parse(root.querySelector('#mini-map')!.getAttribute('data-geometry')!)).not.toHaveProperty('stopRoute');
+    expect(root.outerHTML).not.toContain('Secret via shortcut');
   });
 });
