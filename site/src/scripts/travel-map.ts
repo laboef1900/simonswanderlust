@@ -126,10 +126,18 @@ export function initFullMap(
   });
 }
 
-export function initMiniMap(container: HTMLElement, geometry: TripGeometry): void {
+const escapeHtml = (text: string) => text.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
+
+/**
+ * `routeAttribution` is the active locale's `map.routeAttribution`. It rides on
+ * the stop-route source itself, so it stays visible when the basemap falls back
+ * to the source-less style (#513: OSM attribution wherever a routed line shows).
+ */
+export function initMiniMap(container: HTMLElement, geometry: TripGeometry, routeAttribution = ''): void {
   const feats = [geometry.pin, ...geometry.stops];
   const frame = mapFrame([
     ...(geometry.track?.coordinates ?? []),
+    ...(geometry.stopRoute?.runs.map((run) => run.coordinates) ?? []),
     ...feats.map((feature) => [feature.geometry.coordinates]),
   ]);
   const position = ([lng, lat]: [number, number]): [number, number] => [frame.longitude(lng), lat];
@@ -163,6 +171,31 @@ export function initMiniMap(container: HTMLElement, geometry: TripGeometry): voi
         paint: { 'line-color': '#142a42', 'line-width': 3 },
       });
     }
+    const stopRoute = geometry.stopRoute;
+    if (stopRoute) {
+      const kinds = ['road', 'straight'] as const;
+      map.addSource('stop-route', {
+        type: 'geojson',
+        attribution: `<a href="https://www.openstreetmap.org/copyright">${escapeHtml(routeAttribution)}</a>`,
+        data: { type: 'FeatureCollection', features: kinds.map((kind) => ({
+          type: 'Feature', properties: { kind }, geometry: {
+            type: 'MultiLineString',
+            coordinates: stopRoute.runs.filter((run) => run.kind === kind).map((run) => run.coordinates.map(position)),
+          },
+        })) },
+      });
+      // Road legs share the GPX line style; straight fallbacks (sea, no road) are dashed.
+      for (const kind of kinds) {
+        map.addLayer({
+          id: `stop-route-${kind}`,
+          type: 'line',
+          source: 'stop-route',
+          filter: ['==', ['get', 'kind'], kind],
+          layout: { 'line-cap': kind === 'road' ? 'round' : 'butt', 'line-join': 'round' },
+          paint: { 'line-color': '#142a42', 'line-width': 3, ...(kind === 'straight' ? { 'line-dasharray': [2, 2] } : {}) },
+        });
+      }
+    }
     map.addSource('trip', {
       type: 'geojson',
       data: { type: 'FeatureCollection', features: feats.map((feature) => ({
@@ -182,7 +215,7 @@ export function initMiniMap(container: HTMLElement, geometry: TripGeometry): voi
     });
 
     if (!framed) {
-      if (feats.length === 1 && !geometry.track) {
+      if (feats.length === 1 && !geometry.track && !geometry.stopRoute) {
         map.setCenter(geometry.pin.geometry.coordinates);
         map.setZoom(5);
       } else if (frame.bounds) {

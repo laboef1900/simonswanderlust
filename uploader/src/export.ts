@@ -4,6 +4,7 @@ import { galleryFencesToMdx, rewriteOutsideGalleries, unescapeAltText } from './
 import { markdownImages } from './wp-content.js';
 import { checkSlug, type HeroImage, type Locale, type PostLocale, type PostPair } from './posts.js';
 import { validatePublicTrack, type PublicTrack } from '../public/gpx-public-track.js';
+import { validatePublicStopRoute, type PublicStopRoute } from '../public/stop-route.js';
 import type { PublishedTrackProjection } from './published-track.js';
 import { analyzeGallerySource } from '../../site/src/lib/gallery-source.js';
 import { galleryDiagnostics } from '../public/gallery-photo-line.js';
@@ -56,7 +57,7 @@ async function bodyToMdx(p: PostLocale): Promise<string> {
   });
 }
 
-export async function renderPostToMdx(pair: PostPair, locale: Locale, track?: PublicTrack): Promise<string> {
+export async function renderPostToMdx(pair: PostPair, locale: Locale, track?: PublicTrack, stopRoute?: PublicStopRoute): Promise<string> {
   const p = locale === 'de' ? pair.de : pair.en;
   const s = pair.shared;
   const lines = [
@@ -73,8 +74,10 @@ export async function renderPostToMdx(pair: PostPair, locale: Locale, track?: Pu
     `coordinates: { lat: ${s.coordinates.lat}, lng: ${s.coordinates.lng} }`,
   ];
   if (s.route) lines.push(`route: ${q(s.route)}`);
+  // `via`/`profile` travel inside each stop object (#513).
   if (s.stops?.length) lines.push(`stops: ${JSON.stringify(s.stops)}`);
   if (track !== undefined) lines.push(`track: ${JSON.stringify(validatePublicTrack(track))}`);
+  if (stopRoute !== undefined) lines.push(`stopRoute: ${JSON.stringify(validatePublicStopRoute(stopRoute))}`);
   // Zod has it as `featured: z.boolean().optional()` (site/src/content.config.ts):
   // absent = not the cover. Writing `featured: false` would be valid but would
   // change every existing backup file, so the key is omitted when unset.
@@ -99,6 +102,7 @@ export async function exportPost(pair: PostPair, baseDir: string, projection: Pu
   // failure must not export half a pair, and a newly requested translation must
   // not inherit the primary's retained track.
   const track = projection.track === undefined ? undefined : validatePublicTrack(projection.track);
+  const stopRoute = projection.stopRoute === undefined ? undefined : validatePublicStopRoute(projection.stopRoute);
   const locales = projection.language.locales.filter(locale => !pair[locale].omitted && pair[locale].slug !== '');
   for (const locale of locales) checkSlug(pair[locale].slug, locale);
   const artifacts: { locale: Locale; slug: string; content: string }[] = [];
@@ -106,7 +110,8 @@ export async function exportPost(pair: PostPair, baseDir: string, projection: Pu
     artifacts.push({
       locale,
       slug: pair[locale].slug,
-      content: await renderPostToMdx(pair, locale, projection.locales.includes(locale) ? track : undefined),
+      content: await renderPostToMdx(pair, locale, projection.locales.includes(locale) ? track : undefined,
+        projection.locales.includes(locale) ? stopRoute : undefined),
     });
   }
   const out: string[] = [];

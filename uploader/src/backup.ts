@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { gzipSync, gunzipSync } from 'node:zlib';
+import { isDeepStrictEqual } from 'node:util';
 import {
   closeSync, constants, createWriteStream, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync,
 } from 'node:fs';
@@ -24,6 +25,7 @@ import { LEGACY_IDENTITY } from './site-identity-legacy.js';
 import { IDENTITY_ASSET_ROLES, validateIdentityAsset, validateIdentityAssetMetadata, type StoredIdentityAsset } from './site-identity-assets.js';
 import { DEFAULT_LANGUAGE, type LanguageConfig } from './language.js';
 import { validatePublicTrack } from '../public/gpx-public-track.js';
+import { validatePublicStopRoute, validateStoredStopRoute } from '../public/stop-route.js';
 import { validateNavigation, type Navigation } from '../../site/src/lib/navigation.js';
 import { isPageKind } from '../../site/src/lib/page-kinds.js';
 import { isSafePageKey } from './pages.js';
@@ -47,6 +49,8 @@ import { configuredOriginRoles, validateCanonicalRoles, type OriginRoles } from 
  * v12 adds language configuration and explicit per-row omission.
  * v13 adds page lifecycle metadata and site navigation.
  * v14 adds journeys, locale publication history and ordered membership.
+ * v15 adds the private `posts.stop_route` (#513) and allows `published_snapshot.stop_route`;
+ * older dumps restore it as NULL and must not carry either.
  * v7 added media `format` + `encoding`, preserving JPEG-only sets and their
  * snapped retry/recovery profile across restore.
  * v6 added encrypted `app_secrets` (never the encryption master key);
@@ -54,7 +58,9 @@ import { configuredOriginRoles, validateCanonicalRoles, type OriginRoles } from 
  * v3 added `media` + `media_folders`; v2 added `pages`.
  * @ai-warning Bumping this ALSO requires widening the allow-list guard below.
  */
-export const DUMP_VERSION = 14;
+export const DUMP_VERSION = 15;
+/** First version carrying `posts.stop_route` and `published_snapshot.stop_route`. */
+export const STOP_ROUTE_DUMP_VERSION = 15;
 export const JOURNEYS_DUMP_VERSION = 14;
 export const PAGES_NAV_DUMP_VERSION = 13;
 export const LANGUAGE_DUMP_VERSION = 12;
@@ -63,7 +69,7 @@ export const IDENTITY_DUMP_VERSION = 11;
 /** First version carrying the private `post_routes` table. */
 export const ROUTES_DUMP_VERSION = 10;
 /** Every version `readDump` accepts — an allow-list, not a minimum. */
-export const SUPPORTED_DUMP_VERSIONS: readonly number[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
+export const SUPPORTED_DUMP_VERSIONS: readonly number[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 export const BACKUP_FILE_RE = /^db-\d{8}-\d{6}\.json\.gz$/;
 export const IMAGES_ARCHIVE_RE = /^images-\d{8}-\d{6}\.tar$/;
 /**
@@ -101,6 +107,47 @@ function validatePublishedTracks(posts: readonly Record<string, unknown>[], lang
     }
   } catch {
     throw new BackupError('Invalid public route snapshots in backup.');
+  }
+}
+
+/**
+ * #513 stop routes, checked before any write. Stored routes are strict and
+ * identical on both rows; published projections are strict, identical across a
+ * pair and never share a snapshot with a GPX `track`.
+ * Freshness is NOT re-judged here: a stale stored route is legitimate data. That
+ * includes a leg count that no longer matches the saved stops (Calculate stores
+ * the editor's current stops; a later draft save may add or remove one). Publish
+ * alone decides freshness (`freshStopRoute`), so capture and restore accept it.
+ */
+export function validateStopRoutes(posts: readonly Record<string, unknown>[], version: number): void {
+  const snapshotRoute = (snapshot: unknown): unknown => snapshot !== null && typeof snapshot === 'object' && Object.hasOwn(snapshot, 'stop_route')
+    ? (snapshot as Record<string, unknown>).stop_route : undefined;
+  try {
+    const pairs = new Map<string, Record<string, unknown>[]>();
+    for (const post of posts) {
+      const published = snapshotRoute(post.published_snapshot);
+      if (version < STOP_ROUTE_DUMP_VERSION) {
+        // Version decides semantics: an older set restores NULL, so it may carry no route data.
+        if ((post.stop_route ?? null) !== null || published !== undefined) throw new Error();
+        continue;
+      }
+      const stored = post.stop_route ?? null;
+      if (stored !== null) validateStoredStopRoute(stored);
+      if (published !== undefined) {
+        validatePublicStopRoute(published);
+        if (Object.hasOwn(post.published_snapshot as object, 'track')) throw new Error();
+      }
+      const key = String(post.translation_key);
+      pairs.set(key, [...pairs.get(key) ?? [], post]);
+    }
+    for (const rows of pairs.values()) {
+      if (!rows.every((row) => isDeepStrictEqual(row.stop_route ?? null, rows[0]!.stop_route ?? null))) throw new Error();
+      const published = rows.filter((row) => row.published_snapshot !== null && row.published_snapshot !== undefined)
+        .map((row) => snapshotRoute(row.published_snapshot) ?? null);
+      if (!published.every((route) => isDeepStrictEqual(route, published[0]))) throw new Error();
+    }
+  } catch {
+    throw new BackupError('Invalid stop routes in backup.');
   }
 }
 
@@ -237,11 +284,16 @@ async function captureDatabase(db: Connectable, dir: string, now: Date, options:
     // west of UTC (e.g. Europe/Berlin: 2026-01-01 -> "2025-12-31T23:00:00.000Z").
     // Export it as text via to_char so the dump — and the eventual restore — carry
     // the exact calendar date instead of a shifted timestamp.
+    // #513: a pre-migration recovery set taken before the stop_route column exists.
+    const stopRouteColumnExists = !options.preLanguageMigration || (await client.query(
+      "SELECT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid='posts'::regclass AND attname='stop_route' AND NOT attisdropped) AS present",
+    )).rows[0]?.present === true;
+    if (!stopRouteColumnExists) version = Math.min(version, STOP_ROUTE_DUMP_VERSION - 1);
     posts = (await client.query(
       `SELECT id, translation_key, locale, slug, title, to_char(date, 'YYYY-MM-DD') AS date, country,
          country_code, region, excerpt, hero_image, coordinates, stops, route, key_facts, body_markdown,
          images, status, created_at, updated_at, published_snapshot, published_at,
-         categories, tags, scheduled_at, featured, comments_enabled, title_image${hasLanguage ? ', omitted' : ''}
+         categories, tags, scheduled_at, featured, comments_enabled, title_image${hasLanguage ? ', omitted' : ''}${stopRouteColumnExists ? ', stop_route' : ''}
        FROM posts ORDER BY created_at`,
     )).rows;
     validatePublishedTracks(posts, dumpLanguage({ version, createdAt: now.toISOString(),
@@ -338,6 +390,14 @@ async function captureDatabase(db: Connectable, dir: string, now: Date, options:
       if (routeRows.length && !options.routeFiles) throw new BackupError('Private route storage is required for a complete backup.');
       if (options.routeFiles) routeArchive = await createRouteArchive(options.routeFiles, dir, routeRows, now, options.isWritable);
     }
+    if (version < STOP_ROUTE_DUMP_VERSION) {
+      // A downgraded (legacy-labelled) recovery set cannot carry stop routes.
+      for (const post of posts) {
+        if (post.stop_route !== null && post.stop_route !== undefined) throw new BackupError('Cannot capture stop routes as a legacy recovery set.');
+        delete post.stop_route;
+      }
+    }
+    validateStopRoutes(posts, version);
     writable();
     await client.query('COMMIT');
   } catch (e) {
@@ -1117,6 +1177,7 @@ export function readDump(filePath: string): Dump {
   }
   const language = dumpLanguage(dump);
   validatePublishedTracks(dump.tables.posts, language, dump.version < LANGUAGE_DUMP_VERSION);
+  validateStopRoutes(dump.tables.posts, dump.version);
   if (dump.version < LANGUAGE_DUMP_VERSION) {
     // Explicitly discard any undeclared language/omission metadata. History is
     // finalized after route-free legacy backfill inside the restore transaction.
@@ -1309,16 +1370,18 @@ async function restoreDatabaseContents(pool: DbPool, filePath: string, options: 
       await client.query(
         `INSERT INTO posts (id, translation_key, locale, slug, title, date, country, country_code, region,
            excerpt, hero_image, coordinates, stops, route, key_facts, body_markdown, images, status, created_at, updated_at,
-           published_snapshot, published_at, categories, tags, scheduled_at, featured, comments_enabled, title_image, omitted)
+           published_snapshot, published_at, categories, tags, scheduled_at, featured, comments_enabled, title_image, omitted, stop_route)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13::jsonb,$14,$15::jsonb,$16,$17::jsonb,$18,$19,$20,$21::jsonb,$22,
-           $23::text[],$24::text[],$25,$26,$27,$28::jsonb,$29)`,
+           $23::text[],$24::text[],$25,$26,$27,$28::jsonb,$29,$30::jsonb)`,
         [p.id, p.translation_key, p.locale, p.slug, p.title, p.date, p.country, p.country_code, p.region,
          p.excerpt, asJsonb(p.hero_image), asJsonb(p.coordinates), asJsonb(p.stops), p.route,
          asJsonb(p.key_facts), p.body_markdown, asJsonb(p.images), p.status, p.created_at, p.updated_at,
          asJsonb(p.published_snapshot), p.published_at ?? null,
          asTextArray(p.categories), asTextArray(p.tags), p.scheduled_at ?? null, p.featured === true,
          // absent from v<=7 dumps → true (the column default); only an explicit false disables
-         p.comments_enabled !== false, asJsonb(p.title_image), p.omitted],
+         p.comments_enabled !== false, asJsonb(p.title_image), p.omitted,
+         // #513: validated by validateStopRoutes; absent before v15 → NULL.
+         dump.version >= STOP_ROUTE_DUMP_VERSION ? asJsonb(p.stop_route) : null],
       );
     }
     for (const row of dump.tables.journeys ?? []) {

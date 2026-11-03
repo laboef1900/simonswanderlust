@@ -1,0 +1,55 @@
+/* #513 stop routing: per-row via/leg controls and the "Route along stops"
+   panel. Reuses admin.css tokens; the leg list echoes the public map's line
+   language (solid = along roads, dashed = straight) beside text that says it. */
+
+.stop-routing {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  min-width: 0;
+}
+.stop-routing .stop-via-field { margin: 0; }
+.stop-leg-field {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+.stop-leg-field[hidden] { display: none; }
+.stop-leg-field select { width: auto; min-width: 9.5rem; min-height: var(--control-h); color: var(--ink); }
+.stop-leg-field select[aria-invalid="true"] { border-color: var(--warn-line); }
+.stop-last { margin: 0; font-size: 0.8125rem; }
+.stop-last[hidden], .stop-profile-note[hidden] { display: none; }
+.stop-profile-note { flex-basis: 100%; margin: 0; color: var(--warn-ink); }
+
+.stop-route__actions { display: grid; gap: 0.5rem; margin-top: 0.75rem; }
+.stop-route__legs {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+.stop-route__legs[hidden] { display: none; }
+.stop-route__leg {
+  display: grid;
+  grid-template-columns: 1.75rem minmax(0, 1fr);
+  gap: 0.5rem;
+  align-items: baseline;
+  overflow-wrap: anywhere;
+}
+.stop-route__leg::before {
+  content: "";
+  align-self: center;
+  border-top: 3px solid var(--ink);
+}
+.stop-route__leg--straight::before { border-top-style: dashed; }
+.stop-route__leg.is-fallback { color: var(--warn-ink); }
+.stop-route__leg.is-fallback::before { border-top-color: var(--warn-ink); }

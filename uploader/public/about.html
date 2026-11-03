@@ -48,6 +48,20 @@
           </div>
           <p id="deBodyImgStatus" class="muted" role="status"></p>
         </div>
+        <section id="deGearSection" class="about-gear" aria-labelledby="deGearHeading" hidden>
+          <h2 id="deGearHeading" class="section-label"></h2>
+          <p id="deGearHelp" class="muted"></p>
+          <label id="deGearLabel" for="deGear"></label>
+          <input id="deGear" type="text" lang="de" autocomplete="off" aria-describedby="deGearHelp deGearCount deGearError" disabled>
+          <p id="deGearCount" class="muted about-gear__count"></p>
+          <p id="deGearError" class="err" role="alert" tabindex="-1" hidden></p>
+          <div class="form-actions">
+            <button id="deGearSave" type="button" disabled></button>
+            <button id="deGearReload" type="button" class="btn-secondary" hidden></button>
+          </div>
+          <p id="deGearStatus" class="muted" role="status"></p>
+          <p class="muted about-gear__timing"><span id="deGearTiming"></span> <a id="deGearSettings" href="/admin/settings.html#identity"></a></p>
+        </section>
       </section>
 
       <section id="tab-en" class="card locale-tab" role="tabpanel" aria-labelledby="tabbtn-en" hidden>
@@ -66,6 +80,20 @@
           </div>
           <p id="enBodyImgStatus" class="muted" role="status"></p>
         </div>
+        <section id="enGearSection" class="about-gear" aria-labelledby="enGearHeading" hidden>
+          <h2 id="enGearHeading" class="section-label"></h2>
+          <p id="enGearHelp" class="muted"></p>
+          <label id="enGearLabel" for="enGear"></label>
+          <input id="enGear" type="text" lang="en" autocomplete="off" aria-describedby="enGearHelp enGearCount enGearError" disabled>
+          <p id="enGearCount" class="muted about-gear__count"></p>
+          <p id="enGearError" class="err" role="alert" tabindex="-1" hidden></p>
+          <div class="form-actions">
+            <button id="enGearSave" type="button" disabled></button>
+            <button id="enGearReload" type="button" class="btn-secondary" hidden></button>
+          </div>
+          <p id="enGearStatus" class="muted" role="status"></p>
+          <p class="muted about-gear__timing"><span id="enGearTiming"></span> <a id="enGearSettings" href="/admin/settings.html#identity"></a></p>
+        </section>
       </section>
 
       <section class="card" id="revisionsCard" hidden aria-labelledby="revisionsHeading">
@@ -89,6 +117,7 @@
     <script src="/admin/tabs.js"></script>
     <script src="/admin/image-markdown.js"></script>
     <script src="/admin/pages-ui.js"></script>
+    <script src="/admin/about-equipment.js"></script>
     <script src="/admin/gallery-metadata-warnings.js"></script>
     <script type="module">
       import './gallery-fence.js';
@@ -393,6 +422,11 @@
             $('languageSettingsLink').hidden = false;
             $('saveBtn').textContent = SiteLanguage.text('PrepSave');
             $('saveBtn').className = '';
+          }
+          // Equipment is site identity, saved on its own (#514); a translation being
+          // prepared has no identity locale to write, so that view leaves it out.
+          if (KEY === 'about' && !prepareLocale) {
+            void AboutEquipment.init({ locales: language.locales, onUnauthed: () => guard.redirectToLogin() });
           }
           await loadPage();
         } catch (e) {

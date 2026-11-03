@@ -15,3 +15,5 @@ export class PublicTrackError extends Error {
 export const PUBLIC_TRACK_LIMITS: Readonly<{ runs: 100; vertices: 2000; bytes: 65536 }>;
 export function createPublicTrack(geometry: PrivateGeometry): PublicTrackResult;
 export function validatePublicTrack(value: unknown): PublicTrack;
+/** Great-circle Douglas–Peucker (default 25 m) with 4-decimal rounding and duplicate removal. */
+export function simplifyRun(points: readonly { lat: number; lng: number }[], toleranceMetres?: number): [number, number][];

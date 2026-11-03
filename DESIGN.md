@@ -1125,6 +1125,10 @@ and the `<dialog>`s appended to `<body>` share one set:
   editor hosts each page kind: title/status above, lifecycle controls in the title
   row, and title/slug/body within the existing locale panel. About hides inapplicable
   slug/delete/unpublish controls. A never-public locale's slug stays editable.
+  About ends each enabled locale panel with a hairline-divided **Equipment** section
+  (the identity equipment line, #514): label, code-point counter, inline error, its own
+  navy **Save equipment**, and a timing note that saving never rebuilds. Conflicts keep
+  the input and offer **Load saved equipment**; preparation views omit it.
   Ordinary views show enabled locales only; the explicit Prepare translations
   entry shows one inactive locale with a notice and return to Language settings.
   Deletion uses the existing scoped confirmation dialog, never a second modal
