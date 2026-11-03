@@ -334,7 +334,9 @@
       } catch (e) { if (myEpoch === epoch && !e.handled && e.name !== 'AbortError') fail(errorKey(e)); }
       finally { if (myEpoch === epoch) { controller = null; setBusy(false); } }
     }
-    async function refreshRoute() {
+    // `afterPublication`: the host re-reads after Publish/Unpublish succeeded, so a
+    // failure must not read like the initial load failing.
+    async function refreshRoute({ afterPublication = false } = {}) {
       const tk = host.getPost().tk;
       const current = ++routeEpoch;
       routeLoaded = false;
@@ -352,14 +354,14 @@
         if (loaded.version !== route.version) $('gpxReplaceConfirm').checked = false;
         route = loaded; routeTk = tk; routeLoaded = true;
         // A read reconciles only route state, never an uncertain write or preview.
-        if (errorCode === 'routeRefreshFailed' || errorCode === 'routeNotReviewed') clearError();
+        if (errorCode === 'routeRefreshFailed' || errorCode === 'routeRefreshAfterPublication' || errorCode === 'routeNotReviewed') clearError();
         renderRoute(); setBusy(busy);
         return true;
       } catch (e) {
         if (current === routeEpoch && tk === host.getPost().tk) {
           routeRefreshFailed = true;
           renderRoute(); setBusy(busy);
-          if (!e.handled && !outcomeUnknown) fail('routeRefreshFailed');
+          if (!e.handled && !outcomeUnknown) fail(afterPublication ? 'routeRefreshAfterPublication' : 'routeRefreshFailed');
         }
         return false;
       }

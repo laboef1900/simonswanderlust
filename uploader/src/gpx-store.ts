@@ -25,6 +25,9 @@ interface RouteRow {
 const COLUMNS = 'translation_key, version, geometry, source_id, source_sha256, source_bytes, updated_at';
 // Inverse of publication's `route_changed`: a published snapshot carries a track
 // written at or after the route's last attach/detach. Read-only; `r` is post_routes.
+// `route_changed` reads only the primary row, this EXISTS reads any locale row.
+// They agree because Publish stamps `published_at` on every requested row in one
+// UPDATE; per-locale publishing would have to restrict this to the primary row.
 const PUBLISHED_SQL = `(r.geometry IS NOT NULL AND EXISTS (SELECT 1 FROM posts s
   WHERE s.translation_key=r.translation_key AND s.status='published'
     AND s.published_snapshot ? 'track' AND s.published_at >= r.updated_at)) AS published`;

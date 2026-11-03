@@ -2140,7 +2140,7 @@
           updateLocaleChip();
           BuildReporting.renderOutcome($('actionStatus'), 'publish', body);
           // The route caption's advisory follows the newly published track (#512).
-          await gpxEditor.refresh();
+          await gpxEditor.refresh({ afterPublication: true });
         } catch (e) {
           showErr(BuildReporting.text('unknown'));
           setStatus('');
@@ -2182,7 +2182,7 @@
           publicationRefresh.accept({ publication: body.publication });
           for (const locale of ['de', 'en']) slugFieldFor(locale).disabled = publishedLocales[locale];
           BuildReporting.renderOutcome($('actionStatus'), 'unpublish', body, { title });
-          await gpxEditor.refresh();
+          await gpxEditor.refresh({ afterPublication: true });
           updateLocaleChip();
         } catch (e) {
           showErr(BuildReporting.text('unknown'));

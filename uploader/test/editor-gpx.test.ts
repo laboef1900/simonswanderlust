@@ -1752,7 +1752,13 @@ describe('route caption advisory', () => {
     expect(publicationWrites(h)).toHaveLength(1);
     // The pre-publish answer is now stale and the new one unknown: neither is shown.
     expect(advisory(h).hidden).toBe(true);
-    expect(h.element('gpxRouteFeedback').textContent).toBe(ui.en['gpx.routeRefreshFailed']);
+    // Publish succeeded: the message says so instead of describing a failed page load.
+    expect(h.element('gpxRouteFeedback').textContent).toBe(ui.en['gpx.routeRefreshAfterPublication']);
     expect(() => h.api.publishVersion()).toThrow();
+    // The next successful read clears it and ungates publishing.
+    routeFails = false;
+    expect(await h.api.refresh()).toBe(true);
+    expect(h.element('gpxRouteFeedback').hidden).toBe(true);
+    expect(h.api.publishVersion()).toBe(attachedRoute.version);
   });
 });
