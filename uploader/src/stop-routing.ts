@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { safeFetch, type LookupFn } from './safe-fetch.js';
+import { routingEndpointUsable } from './routing-origins.js';
 import { normalizeCanonicalOrigin } from '../../site/src/lib/site-identity.js';
 import { simplifyRun } from '../public/gpx-public-track.js';
 import {
@@ -56,6 +57,8 @@ export interface StopRouterOptions {
   /** Transport under safeFetch; tests inject it together with `lookup`. */
   fetchImpl?: typeof fetch;
   lookup?: LookupFn;
+  /** ROUTING_INTERNAL_ORIGINS: the only origins reachable over plain HTTP or on a private network. */
+  internalOrigins?: ReadonlySet<string>;
 }
 
 type Position = [number, number];
@@ -155,12 +158,14 @@ export function createStopRouter({
   request = safeFetch,
   fetchImpl = fetch,
   lookup,
+  internalOrigins = new Set<string>(),
 }: StopRouterOptions): StopRouter {
   let nextStart = 0;
   let busy = false;
+  // A hand-edited or stale plain-HTTP URL whose origin is not listed counts as unconfigured.
   const configured = () => {
     const urls = endpoints();
-    return Object.fromEntries(ROUTED_PROFILES.map((profile) => [profile, urls[profile] !== ''])) as Record<RoutedProfile, boolean>;
+    return Object.fromEntries(ROUTED_PROFILES.map((profile) => [profile, routingEndpointUsable(urls[profile], internalOrigins)])) as Record<RoutedProfile, boolean>;
   };
 
   async function routeLeg(profile: RoutedProfile, from: RouteStop, to: RouteStop, deadline: number): Promise<LegOutcome> {
@@ -179,6 +184,7 @@ export function createStopRouter({
         maxBytes: ROUTING_MAX_BYTES,
         maxRedirects: 0,
         ...(lookup ? { lookup } : {}),
+        allowedInternalOrigins: internalOrigins,
         // @ai-note OSRM reports NoRoute/NoSegment as HTTP 400 with a JSON `code`.
         // Only 400 is relabelled, so the body still streams through safeFetch's
         // byte cap and the parsed `code` (never the status) decides the outcome.

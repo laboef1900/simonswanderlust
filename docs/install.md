@@ -37,6 +37,7 @@ about it cannot be answered.
 | Image disk | App image ~1.13 GB uncompressed, Postgres ~0.30 GB, on either architecture | [Local images](2026-10-29-clean-install-rehearsal.md#amd64-local-images) |
 | Photo disk | Each uploaded photo keeps its **original** plus 8 variant files. The synthetic, highly compressible PNGs used ~0.66 MB allocated per photo; real camera photos will use more. Measure your own corpus before sizing | [Corpus and disk](2026-10-29-clean-install-rehearsal.md#corpus-and-disk) |
 | Backups | In-app dumps and image archives are written to the **same disk** under `/data/backup`; image archives are never pruned automatically. Budget space for them and for an offsite copy | [Backups & DR](../ARCHITECTURE.md#backups--disaster-recovery) |
+| Street routing (OSRM) | Three graphs (car, bike, foot) built from `OSRM_PBF_URL` into the `osrm` volume. Preparation needs several times the extract size in RAM and disk, per mode; pick the smallest region covering your stories. Not measured here beyond a Berlin extract | [Bundled OSRM design](superpowers/specs/2026-11-03-osrm-compose-routing-design.md) |
 
 ## 3. Licensing in one paragraph
 
@@ -69,6 +70,7 @@ POSTGRES_PASSWORD=<output of: openssl rand -hex 32>
 PUBLIC_BASE_URL=https://img.example.com
 IMG_HOST=img.example.com
 IMAGE_TAG=<version>
+OSRM_PBF_URL=https://download.geofabrik.de/europe/germany/berlin-latest.osm.pbf
 # Optional, only for remote AI providers (see 4f):
 # ENCRYPTION_KEY=<output of: openssl rand -hex 32>
 ```
@@ -79,6 +81,8 @@ IMAGE_TAG=<version>
   `set PUBLIC_BASE_URL in .env` / `set IMG_HOST in .env` when either is missing or empty. They
   name the **image** domain only. The blog domain is set later in Settings (4e).
 - `IMAGE_TAG` is required as well; there is no default.
+- `OSRM_PBF_URL` is required: the HTTPS OpenStreetMap extract the bundled street-routing
+  servers route over (see 4g).
 
 Prepare the data directory. The app runs as uid/gid 1000; without this step the rehearsal
 observed `EACCES`, exit code 1 and a restart loop
@@ -115,7 +119,7 @@ legal page; see the licensing note in section 3.
 
 ```bash
 docker compose config --quiet && docker compose up -d
-docker compose ps                      # app and db should become "healthy"
+docker compose ps                      # app and db "healthy"; osrm-fetch/osrm-prepare "exited (0)"; osrm-* "healthy"
 curl -fsS http://127.0.0.1:3000/health
 ```
 
@@ -198,6 +202,21 @@ it with `openssl rand -hex 32`, store it **separately from your backups** (key e
 `docker compose up -d` to recreate the app. Losing the key loses the stored provider keys,
 not your content. See [Connect an optional AI provider](../README.md#connect-an-optional-ai-provider).
 
+### 4g. Street routing (bundled OSRM)
+
+`docker compose up -d` also downloads `OSRM_PBF_URL` (`osrm-fetch`), builds one routing graph
+per travel mode (`osrm-prepare`, one mode at a time) and starts `osrm-car`, `osrm-bike` and
+`osrm-foot`. The first build takes minutes for a city, much longer for a country; follow it with
+`docker compose logs -f osrm-prepare`. The app does not wait for it.
+
+Then, in **Settings → Site & backups → Street routing**, set the three base URLs to
+`http://osrm-car:5000`, `http://osrm-bike:5000` and `http://osrm-foot:5000`. These are the only
+plain-HTTP, private-network addresses the app accepts, because `docker-compose.yml` lists them
+in `ROUTING_INTERNAL_ORIGINS`.
+
+To change the region, edit `OSRM_PBF_URL`, run `docker compose up -d`, wait for
+`osrm-prepare` to exit, then `docker compose up -d --force-recreate osrm-car osrm-bike osrm-foot`.
+
 ## 5. Verify the installation
 
 - `https://blog.example.com/` and `https://blog.example.com/en/` (or your secondary-language
@@ -232,6 +251,9 @@ not your content. See [Connect an optional AI provider](../README.md#connect-an-
 | App restarts repeatedly, log shows `EACCES` / permission denied | `uploader/data` is not owned by uid/gid 1000; run the `chown` in 4a |
 | App exits with `ENCRYPTION_KEY must contain exactly 64 hexadecimal characters.` | Remove the line or set a valid key (4f) |
 | App exits with `TRUSTED_PROXY=docker-gateway requires one unambiguous default gateway.` (or `cannot read /proc/net/route`) | The Compose network or `network_mode` was changed; only the shipped bridge topology is supported |
+| `docker compose` stops with `set OSRM_PBF_URL in .env` | Set an HTTPS `.osm.pbf` extract URL (4g) |
+| Editor says "no routing service configured" | Settings URLs empty, or `osrm-prepare` failed (`docker compose logs osrm-prepare`, often out of memory or disk for the region) |
+| App exits with `ROUTING_INTERNAL_ORIGINS entry N must be an http(s) origin …` | The compose value was edited; each entry must be `scheme://host:port` only |
 | Images show the blog or a 404 | The proxy rewrote `Host`, or `IMG_HOST` does not match the image domain |
 | Comments are refused (403) | The public domain is unset, or does not exactly match the page's origin |
 | Publish shows a timeout in the browser while the build continues | The proxy's read timeout is below the 900-second build deadline |

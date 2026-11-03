@@ -928,14 +928,24 @@ built with). **All three default to empty (disabled).** No public demo server is
 default, no API key exists, and no `app_secrets` slot is used.
 
 - **Outbound requests** go only through `safeFetch`: the existing IP/DNS SSRF guards (no
-  loopback, RFC1918, link-local, CGNAT, …; no private-network opt-in was added), no redirects,
-  10 s per leg, a 4 MiB streamed cap, one request at a time app-wide, starts ≥ 1.1 s apart, and a
-  60 s budget per calculation. A refused/failed provider stores nothing; the previously stored
-  and published routes stay unchanged. `straight` legs never touch the network.
+  loopback, RFC1918, link-local, CGNAT, …), no redirects, 10 s per leg, a 4 MiB streamed cap,
+  one request at a time app-wide, starts ≥ 1.1 s apart, and a 60 s budget per calculation. A
+  refused/failed provider stores nothing; the previously stored and published routes stay
+  unchanged. `straight` legs never touch the network.
+- **Private-network opt-in (owner decision 2026-11-03):** the environment variable
+  `ROUTING_INTERNAL_ORIGINS` (comma-separated exact origins; the shipped compose file sets
+  `http://osrm-car:5000,http://osrm-bike:5000,http://osrm-foot:5000`) is the only exemption. A
+  routing request whose URL origin is listed skips the private-address checks for that first hop
+  only and may use plain HTTP; every redirect hop is judged in full and routing sets no redirects.
+  Settings can select a listed origin but never add one; any other plain-HTTP routing URL is
+  refused on save (400) and treated as unconfigured at run time. An invalid list refuses boot.
+  Geocoding and WXR import never receive the list. Residual: an admin can point a profile at a
+  listed origin that is not an OSRM server; only operator-listed services are reachable.
 - **Inputs:** session required; 16 KiB body; ≤ 25 stops validated like Publish (name, ranges,
   `via` boolean, `profile` enum); 20 calculations per user per 10 minutes, spent only once the
   unavailable-profile and in-flight refusals have passed. An unknown story is refused before any
-  request. Only admins change the endpoints (HTTPS, no credentials, query or fragment); authors
+  request. Only admins change the endpoints (HTTPS, or HTTP to a listed origin; no credentials,
+  query or fragment); authors
   see availability booleans, never URLs.
 - **Provider output is untrusted:** parsed in a try block, `code`/`LineString`/position count
   and every coordinate checked, then simplified and re-validated against the public GPX track
@@ -953,8 +963,10 @@ default, no API key exists, and no `app_secrets` slot is used.
 - **Backups:** dump v15 carries the private `posts.stop_route` and validates it (strict shape,
   DE/EN equality) and any published `stop_route` before any write. A stale stored route, including
   one whose leg count no longer matches the saved stops, is legitimate data and always captured.
-- **Containment:** clear the three URLs in Settings. See the
-  [design, misuse cases and rollback](docs/superpowers/specs/2026-11-03-issue-513-stop-routing-design.md).
+- **Containment:** clear the three URLs in Settings; remove `ROUTING_INTERNAL_ORIGINS` from the
+  compose file to withdraw the private-network exemption. See the
+  [design, misuse cases and rollback](docs/superpowers/specs/2026-11-03-issue-513-stop-routing-design.md)
+  and the [bundled OSRM design](docs/superpowers/specs/2026-11-03-osrm-compose-routing-design.md).
 
 ## SSRF protection (WordPress import)
 

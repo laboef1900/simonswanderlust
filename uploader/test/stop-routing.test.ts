@@ -134,6 +134,31 @@ describe('createStopRouter (#513)', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it('routes through an operator-listed compose origin over plain HTTP via the real safeFetch', async () => {
+    const fetched: string[] = [];
+    const fetchImpl = vi.fn(async (input: URL | string) => { fetched.push(String(input)); return new Response(ok([[23, 37], [23.1, 37.1]])); }) as unknown as typeof fetch;
+    const c = clock();
+    const router = createStopRouter({
+      endpoints: () => ({ car: 'http://osrm-car:5000', bike: '', foot: '' }), now: c.now, sleep: c.sleep, fetchImpl,
+      lookup: async () => [{ address: '172.18.0.4', family: 4 }], internalOrigins: new Set(['http://osrm-car:5000']),
+    });
+    expect(router.profiles()).toEqual({ car: true, bike: false, foot: false });
+    const stored = await router.calculate(stops({}, {}));
+    expect(stored.legs).toEqual([{ profile: 'car', kind: 'road' }]);
+    expect(new URL(fetched[0]!).origin).toBe('http://osrm-car:5000');
+  });
+
+  it('treats a plain-HTTP URL whose origin is not listed as unconfigured, before any request', () => {
+    const request = vi.fn();
+    const router = createStopRouter({
+      endpoints: () => ({ car: 'http://osrm-car:5000', bike: 'http://osrm.example', foot: '' }), request,
+      internalOrigins: new Set(['http://osrm-car:5001']),
+    });
+    expect(router.profiles()).toEqual({ car: false, bike: false, foot: false });
+    expect(router.refusal(stops({}, {}))).toMatchObject({ code: 'stop_route_profile_unavailable', profiles: ['car'] });
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it('spaces outbound requests at least 1.1 s apart, across calculations', async () => {
     const c = clock();
     const starts: number[] = [];

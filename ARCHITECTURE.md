@@ -697,6 +697,15 @@ with a line along roads. Data and flow:
   legs, route}`) without touching `updated_at`.
 - **Settings** → *Street routing*: `routingCarUrl` / `routingBikeUrl` / `routingFootUrl`
   (`settings.json`), one OSRM base URL per profile; empty (the default) disables a profile.
+  HTTPS, or plain HTTP only to an exact origin in the operator env `ROUTING_INTERNAL_ORIGINS`
+  (`uploader/src/routing-origins.ts`), which is also the only origin set `safeFetch` exempts
+  from its private-address checks (first hop only).
+- **Bundled OSRM** (`docker-compose.yml`): `osrm-fetch` (curl, one-shot) downloads
+  `OSRM_PBF_URL` into the `osrm` volume when the URL changes; `osrm-prepare` (one-shot) builds
+  the MLD graph per mode sequentially (`car.lua`, `bicycle.lua`, `foot.lua`) only when stale;
+  `osrm-car` / `osrm-bike` / `osrm-foot` run `osrm-routed` on port 5000 with no host port.
+  `app` does not depend on them: a failed download or build leaves routing unavailable, the
+  blog and admin up. Spec: `docs/superpowers/specs/2026-11-03-osrm-compose-routing-design.md`.
 - **Publish** fingerprints the locked saved stops; only a fresh route is merged as
   `published_snapshot.stop_route`, and never when a GPX `track` is published (track wins). The
   editor shows fresh/stale per the same fingerprint and warns when Publish left a stale route out.
@@ -1663,6 +1672,7 @@ is the reference behind it.
 | `DATABASE_URL` | app | Postgres connection (content + auth) |
 | `ENCRYPTION_KEY` | app | Optional 64-hex master key for encrypted AI credentials; unset permits local workflows, malformed values refuse boot; escrow separately |
 | `TRUSTED_PROXY` | app / compose literal | Unset or `loopback`: loopback peers only. Compose sets `docker-gateway`: also trust the single discovered IPv4 default gateway, at hop zero only. Empty/unknown values or failed gateway discovery refuse boot. Not an `.env` setting; changing bridge/proxy topology requires a new trust spec. |
+| `ROUTING_INTERNAL_ORIGINS` | app / compose literal | Comma-separated exact `http(s)` origins (no path) that street routing may reach over plain HTTP on a private network; the only `safeFetch` private-address exemption, first hop only. Compose sets the three bundled OSRM origins. Unset = none; an invalid entry refuses boot. |
 | `PUBLIC_BASE_URL` | app | Public base for image URLs (e.g. `https://img.example.com`); required by Compose (`:?`, no owner default), optional for a bare `node` run (falls back to `http://localhost:3000`); not the allowed blog-comment origin. Its image authority is excluded from the temporary comment-origin fallback except in single-origin loopback development. |
 | `IMG_HOST` | app | Hostname routed to the image-variant static handler (the app defaults it to the host of `PUBLIC_BASE_URL`; Compose requires it explicitly); also excluded from the comment-origin fallback, with the same loopback exception. |
 | `SITE_APP_DIR` | app | Path to the Astro project the builder spawns (`/app/site`) |
@@ -1676,6 +1686,7 @@ is the reference behind it.
 | `PORT` | app | Listen port (default `3000`) |
 | `PROTOMAPS_BUILD` / `MAP_MAXZOOM` / `PMTILES_VERSION` | Dockerfile (build args) | Pin the map basemap fetched + baked into the image at build (see `docs/map-assets.md`) |
 | `IMAGE_TAG` | compose | Released GHCR image version to run |
+| `OSRM_PBF_URL` | compose (`osrm-fetch`) | Required HTTPS OpenStreetMap `.osm.pbf` extract the bundled OSRM servers route over; a change re-downloads and rebuilds the graphs |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | db | Database bootstrap |
 
 Origin roles remain distinct: `PUBLIC_BASE_URL` supplies image URLs and the body/gallery
