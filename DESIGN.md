@@ -1125,6 +1125,10 @@ and the `<dialog>`s appended to `<body>` share one set:
   editor hosts each page kind: title/status above, lifecycle controls in the title
   row, and title/slug/body within the existing locale panel. About hides inapplicable
   slug/delete/unpublish controls. A never-public locale's slug stays editable.
+  About ends each enabled locale panel with a hairline-divided **Equipment** section
+  (the identity equipment line, #514): label, code-point counter, inline error, its own
+  navy **Save equipment**, and a timing note that saving never rebuilds. Conflicts keep
+  the input and offer **Load saved equipment**; preparation views omit it.
   Ordinary views show enabled locales only; the explicit Prepare translations
   entry shows one inactive locale with a notice and return to Language settings.
   Deletion uses the existing scoped confirmation dialog, never a second modal
@@ -1201,14 +1205,24 @@ and the `<dialog>`s appended to `<body>` share one set:
   the caret with the inserted text, not at the fence or trailing padding, so
   continued typing stays in the same paragraph. Consecutive typing remains one
   undo group.
-- Story details sits beside the manuscript on desktop. Its header carries one
+- Story details sits beside the manuscript on desktop, inside the same ruled frame: one
+  `--line` border and 12px radius hold both columns, and the inspector is the frame's
+  tinted column (`--canvas`, divided by `--line-strong`) so white fields read against it.
+  It pins flush under the command bar and scrolls on its own. Its header carries one
   icon-only panel toggle (`panel-right-close` / `panel-right-open`, named Collapse /
-  Expand story details); collapsing slides the panel right into a slim rail that
+  Expand story details); collapsing slides the panel right into a slim tinted rail that
   keeps only that toggle, and the writing column widens into the freed space. The
   collapsed content is inert and hidden from assistive technology; the slide honours
   reduced motion. At 74rem and below it is a modal drawer opened by an icon button
   after More actions; the same header toggle closes it, and it traps Tab, closes on
-  Escape or the scrim, and restores focus to its opener.
+  Escape or the scrim, and restores focus to its opener. The frame then holds the
+  manuscript alone.
+- Hero image and title image are collapsible inspector sections (closed by default) with
+  one box: a white panel with preview, alt text, status, then **Replace photo** (native
+  file input with a dashed drop edge, upload, library) and **Adjust framing**. A closed
+  section shows a small thumbnail of its photo beside Show. A loaded story opens Replace
+  photo only when that image is missing; author actions never fold it under focus.
+- Excerpts grow with their text; no inner scrollbar or resize grip.
 - GPX editing is a flat section in Story details, not another dashboard. Its scoped native
   dialog closes the phone inspector first, then restores that drawer and the exact opener
   on dismissal. A fixed header/footer frame one scrollable body; touch actions are at least
@@ -1233,6 +1247,10 @@ and the `<dialog>`s appended to `<body>` share one set:
   The retained original remains private, and attachment is draft-only until Publish.
   Published story maps add a localized per-run textual alternative with public-precision
   endpoints and approximate lengths; routeless stories gain no empty panel.
+  The **Route caption** field sits below the section's actions (#512): help text names its
+  only public placement, under “Published route”. A non-blank caption without a published
+  track gets a `.notice-warn` advisory in a polite live region that never takes focus or
+  blocks Save/Publish; a pending route read keeps the last known state.
 - Country assistance and excerpt generation sit next to the relevant fields in Story
   details. Coordinate approximation is explicit. Excerpt suggestions have a plain-text
   preview, character count, and separate accept/dismiss actions; generation never looks

@@ -13,6 +13,15 @@ export type BackupSchedule = 'off' | 'daily' | 'weekly';
 export interface Settings {
   /** Nominatim-compatible HTTPS endpoint; empty disables editor lookup. */
   geocodingSearchUrl: string;
+  /**
+   * #513: OSRM-compatible base URLs, one per routed profile (an OSRM server
+   * serves only the profile its graph was built with). HTTPS, or plain HTTP to
+   * an origin listed in ROUTING_INTERNAL_ORIGINS (the bundled compose OSRM).
+   * Empty disables that profile. Deliberately no default: public demo servers forbid this use.
+   */
+  routingCarUrl: string;
+  routingBikeUrl: string;
+  routingFootUrl: string;
   /** Non-sensitive AI destinations; keys live per provider in `app_secrets`. */
   aiProviders: AiProvider[];
   aiDefaultProviderId: string;
@@ -73,6 +82,9 @@ export interface FileSettingsStore extends SettingsStore {
 export function defaultSettings(): Settings {
   return {
     geocodingSearchUrl: 'https://nominatim.openstreetmap.org/search',
+    routingCarUrl: '',
+    routingBikeUrl: '',
+    routingFootUrl: '',
     aiProviders: defaultProviders(),
     aiDefaultProviderId: 'lm-studio',
     reviewProviderId: null,
@@ -103,16 +115,13 @@ export function defaultSettings(): Settings {
  * The key order is the order `validate()` reports errors in.
  */
 const FIELD_CHECKS: { [K in keyof Settings]: (v: unknown) => string | null } = {
-  geocodingSearchUrl: (v) => {
-    if (v === '') return null;
-    if (typeof v === 'string' && !/[\p{C}\s]/u.test(v)) {
-      try {
-        const url = new URL(v);
-        if (url.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash) return null;
-      } catch { /* Fixed error below: never echo a supplied URL. */ }
-    }
-    return 'Geocoding endpoint must be an HTTPS URL without credentials, query, or fragment; leave empty to disable.';
-  },
+  geocodingSearchUrl: (v) => endpoint(v, HTTPS_ONLY)
+    ? null : 'Geocoding endpoint must be an HTTPS URL without credentials, query, or fragment; leave empty to disable.',
+  // Shape only: plain HTTP is usable solely for an operator-listed origin
+  // (routing-origins.ts); POST /settings and the router enforce that.
+  routingCarUrl: (v) => endpoint(v, HTTP_OR_HTTPS) ? null : routingUrlError('Car'),
+  routingBikeUrl: (v) => endpoint(v, HTTP_OR_HTTPS) ? null : routingUrlError('Bike'),
+  routingFootUrl: (v) => endpoint(v, HTTP_OR_HTTPS) ? null : routingUrlError('Foot'),
   aiProviders: validateProviders,
   aiDefaultProviderId: (v) => (isProviderId(v) ? null : 'Default AI provider must be a provider id.'),
   reviewProviderId: (v) => (v === null || isProviderId(v)
@@ -151,6 +160,23 @@ const SETTINGS_KEYS = Object.keys(FIELD_CHECKS) as (keyof Settings)[];
 
 function intInRange(v: unknown, min: number, max: number): boolean {
   return typeof v === 'number' && Number.isInteger(v) && v >= min && v <= max;
+}
+
+const HTTPS_ONLY: readonly string[] = ['https:'];
+const HTTP_OR_HTTPS: readonly string[] = ['https:', 'http:'];
+
+/** Empty (disabled) or a URL of an allowed scheme without credentials, query or fragment. Never echo the value. */
+function endpoint(v: unknown, protocols: readonly string[]): boolean {
+  if (v === '') return true;
+  if (typeof v !== 'string' || /[\p{C}\s]/u.test(v)) return false;
+  try {
+    const url = new URL(v);
+    return protocols.includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash;
+  } catch { return false; }
+}
+
+function routingUrlError(profile: string): string {
+  return `${profile} routing URL must be an HTTP(S) URL without credentials, query, or fragment; leave empty to disable.`;
 }
 
 /** Shallow copy with a private provider array, so no caller can mutate the cache. */

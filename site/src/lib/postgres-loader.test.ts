@@ -3,6 +3,7 @@ import type { Loader } from 'astro/loaders';
 import { classifyRow, postgresTripsLoader, rowToEntryInput } from './postgres-loader';
 import { renderMarkdown } from './render-markdown.js';
 import { publicTrackSchema, type PublicTrack } from './public-track';
+import { publicStopRouteSchema, type PublicStopRoute } from './public-stop-route';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -130,6 +131,13 @@ describe('rowToEntryInput', () => {
     // Invalid present data must reach the strict schema, not disappear as if absent.
     expect(rowToEntryInput({ ...row, track: null }, 'https://img').data).toHaveProperty('track', null);
   });
+  it('passes only the snapshot stop route, keyed apart from the GPX track', () => {
+    const stopRoute: PublicStopRoute = { version: 1, runs: [{ kind: 'straight', coordinates: [[1, 2], [3, 4]] }] };
+    const data = rowToEntryInput({ ...row, stop_route: stopRoute }, 'https://img').data;
+    expect(data.stopRoute).toEqual(stopRoute);
+    expect(data).not.toHaveProperty('track');
+    expect(rowToEntryInput(row, 'https://img').data).not.toHaveProperty('stopRoute');
+  });
 });
 
 describe('classifyRow shared loader path', () => {
@@ -195,6 +203,7 @@ function fakeLoadContext(): { entries: Map<string, StoredEntry>; ctx: LoaderCont
     },
     parseData: async ({ data }: { id: string; data: Record<string, unknown> }) => {
       if ('track' in data) publicTrackSchema.parse(data.track);
+      if ('stopRoute' in data) publicStopRouteSchema.parse(data.stopRoute);
       return data;
     },
     renderMarkdown: async (md: string) => ({ html: await renderMarkdown(md) }),
@@ -458,6 +467,26 @@ describe('postgresTripsLoader load()', () => {
     const { entries, ctx } = fakeLoadContext();
     await expect(postgresTripsLoader().load(ctx)).rejects.toThrow();
     expect(entries.size).toBe(0);
+  });
+
+  it('renders only the published stop route, never the working one, and makes no network request (#513)', async () => {
+    vi.stubEnv('DATABASE_URL', 'postgres://mocked/never-dialed');
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    try {
+      const published: PublicStopRoute = { version: 1, runs: [{ kind: 'road', coordinates: [[23.7, 37.9], [22.9, 37.9]] }, { kind: 'straight', coordinates: [[22.9, 37.9], [28.2, 36.4]] }] };
+      const working = { version: 1, fingerprint: 'f'.repeat(64), computedAt: '2026-11-03T10:00:00.000Z', legs: [], route: published };
+      db.rows = ['de', 'en'].map((locale) => ({
+        ...row, locale, stop_route: working, status: 'published', published_snapshot: { ...row, locale, stop_route: published },
+      }));
+      const { entries, ctx } = fakeLoadContext();
+      await postgresTripsLoader().load(ctx);
+      for (const locale of ['de', 'en']) expect(entries.get(`${locale}/${row.slug}`)?.data?.stopRoute).toEqual(published);
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(db.sql.every((sql) => !/post_routes|\bstop_route\b/i.test(sql))).toBe(true);
+      db.rows = [{ ...row, status: 'published', published_snapshot: { ...row, stop_route: working } }];
+      await expect(postgresTripsLoader().load(ctx)).rejects.toThrow();
+    } finally { vi.unstubAllGlobals(); }
   });
 
   it('refreshes localized library descriptions on rebuild without publishing working edits', async () => {

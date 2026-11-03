@@ -12,10 +12,13 @@ export interface PostRow {
   hero_image: RemoteHeroImage;
   title_image?: RemoteHeroImage | null;
   coordinates: { lat: number; lng: number };
-  stops: { name: string; lat: number; lng: number }[] | null; route: string | null;
+  stops: { name: string; lat: number; lng: number; via?: boolean; profile?: string }[] | null; route: string | null;
   key_facts: Record<string, string> | null; body_markdown: string; images: Record<string, ImageDims>;
   // Only published_snapshot.track, never the attached working route.
   track?: unknown;
+  // #513: only published_snapshot.stop_route (the public projection), never the
+  // working posts.stop_route. The build never computes or fetches a route.
+  stop_route?: unknown;
   /**
    * "Use as homepage cover" (uploader `PostShared.featured`, column
    * `featured boolean NOT NULL DEFAULT false`). Optional here because a
@@ -76,6 +79,7 @@ export function rowToEntryInput(row: PostRow, imageHost: string) {
       ...(row.stops ? { stops: row.stops } : {}),
       ...(row.route ? { route: row.route } : {}),
       ...(row.track !== undefined ? { track: row.track } : {}),
+      ...(row.stop_route !== undefined ? { stopRoute: row.stop_route } : {}),
       ...(row.key_facts ? { keyFacts: row.key_facts } : {}),
       // Emitted only when true: the Zod field is `.optional()` and NOT
       // defaulted, so a false/absent flag must produce no key at all — that is

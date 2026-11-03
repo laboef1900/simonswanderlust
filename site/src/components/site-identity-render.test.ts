@@ -6,7 +6,7 @@ import HomePage from './pages/HomePage.astro';
 import RegionPage from './pages/RegionPage.astro';
 import FeaturedHero from './FeaturedHero.astro';
 import { identity } from '../lib/build-identity';
-import { parseIdentitySnapshot } from '../lib/site-identity';
+import { neutralIdentity, parseIdentitySnapshot, toIdentitySnapshot } from '../lib/site-identity';
 import { blogPostingJsonLd } from '../lib/seo';
 import { GET as feed } from '../pages/[...locale]/rss.xml';
 import type { Locale } from '../i18n/ui';
@@ -125,6 +125,20 @@ describe('configured identity rendered at public escaping boundaries', () => {
     expect(document.querySelector('footer')?.textContent).toContain('Travel stories');
     expect(document.body.textContent).not.toContain('Private');
     expect(document.body.textContent).not.toContain('German only');
+  });
+
+  it('drops a cleared locale’s equipment box and footer line through the build snapshot, keeping the other locale’s', async () => {
+    // The About editor (#514) clears a locale by saving an empty line; the build hand-off carries it as such.
+    const saved = { ...neutralIdentity(), ...legacy, canonicalOrigin: null, aboutGear: { de: 'Leica M6 · Kodak Portra', en: '' } };
+    Object.assign(identity, parseIdentitySnapshot(JSON.stringify(toIdentitySnapshot(saved, ['de', 'en']))));
+    const german = await about('de');
+    expect(german.querySelector('main')?.textContent).toContain('Ausrüstung');
+    expect(german.querySelector('main')?.textContent).toContain('Leica M6 · Kodak Portra');
+    expect(german.querySelector('footer')?.textContent).toContain('Leica M6 · Kodak Portra');
+    const english = await about('en');
+    expect(english.querySelector('main')?.textContent).toContain(legacy.aboutRole.en);
+    expect(english.querySelector('main')?.textContent).not.toContain('Equipment');
+    expect(english.body.textContent).not.toContain('Leica');
   });
 
   it('carries the configured tagline into home, regional descriptions and the featured heading', async () => {

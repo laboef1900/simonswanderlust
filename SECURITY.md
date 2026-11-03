@@ -918,6 +918,65 @@ remain usable during failures; setting the endpoint to empty contains the featur
 without changing stored content. See the
 [design and recovery plan](docs/superpowers/specs/2026-10-16-waypoint-location-lookup-design.md).
 
+## Editor stop routing (#513)
+
+Owner decisions (2026-11-03): authenticated `GET`/`POST /posts/:tk/stop-route` compute a
+route along a story's ordered stops **at authoring time only**, server-side, per leg, through
+the admin-configured OSRM-compatible endpoints (`routingCarUrl`, `routingBikeUrl`,
+`routingFootUrl`; one per profile because `osrm-routed` serves only the profile its graph was
+built with). **All three default to empty (disabled).** No public demo server is shipped as a
+default, no API key exists, and no `app_secrets` slot is used.
+
+- **Outbound requests** go only through `safeFetch`: the existing IP/DNS SSRF guards (no
+  loopback, RFC1918, link-local, CGNAT, …), no redirects, 10 s per leg, a 4 MiB streamed cap,
+  one request at a time app-wide, public endpoints started ≥ 1.1 s apart (operator-listed
+  internal origins are not paced), and a 60 s budget per calculation. A
+  refused/failed provider stores nothing; the previously stored and published routes stay
+  unchanged. `straight` legs never touch the network.
+- **Private-network opt-in (owner decision 2026-11-03):** the environment variable
+  `ROUTING_INTERNAL_ORIGINS` (comma-separated exact origins; the shipped compose file sets
+  `http://osrm-car:5000,http://osrm-bike:5000,http://osrm-foot:5000`) is the only exemption. A
+  routing request whose URL origin is listed skips the private-address checks for that first hop
+  only and may use plain HTTP; every redirect hop is judged in full and routing sets no redirects.
+  Settings can select a listed origin but never add one; any other plain-HTTP routing URL is
+  refused on save (400) and treated as unconfigured at run time. An invalid list refuses boot.
+  Geocoding and WXR import never receive the list. Residual: an admin can point a profile at a
+  listed origin that is not an OSRM server; only operator-listed services are reachable.
+- **Bundled OSRM data path:** `osrm-fetch` (digest-pinned `debian:trixie-slim`) installs
+  `curl` and `osmium-tool` from Debian's signed archive only when a download is due, with
+  `cap_drop: ALL` plus exactly `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETUID`, `SETGID` for
+  apt/dpkg and `no-new-privileges`. It downloads operator-listed `OSRM_PBF_URLS` over HTTPS only
+  (redirects too) and mounts nothing but the rebuildable `osrm` volume. Residual: package
+  versions float within Debian 13 stable; no third-party osmium image is trusted.
+- **Inputs:** session required; 16 KiB body; ≤ 25 stops validated like Publish (name, ranges,
+  `via` boolean, `profile` enum); 20 calculations per user per 10 minutes, spent only once the
+  unavailable-profile and in-flight refusals have passed. An unknown story is refused before any
+  request. Only admins change the endpoints (HTTPS, or HTTP to a listed origin; no credentials,
+  query or fragment); authors
+  see availability booleans, never URLs.
+- **Provider output is untrusted:** parsed in a try block, `code`/`LineString`/position count
+  and every coordinate checked, then simplified and re-validated against the public GPX track
+  limits (`validateStoredStopRoute`). Per-leg NoRoute/NoSegment or errors become flagged
+  straight fallbacks; legs never reach markup except through `textContent`. Every request
+  bounds snapping with `radiuses` = 5 km, so a stop outside the extract can no longer come back
+  as a road leg ending at the extract's edge.
+- **Publication:** the build and readers make no routing request. Publish copies only a route
+  whose fingerprint matches the locked saved stops into `published_snapshot.stop_route`, never
+  next to a GPX `track` (which always wins); a stale route is omitted, never published. Via
+  stops are dropped before any public render or serialized map data.
+- **Privacy:** calculating sends all stop and via coordinates, including unpublished drafts, to
+  the configured service; the editor and Settings disclose this. Coordinates and request URLs
+  are never logged (`safeFetch` errors embed the URL and are swallowed).
+- **Licensing:** routed geometry derives from OpenStreetMap; the editor panel and every public
+  map that draws a stop route carry OSM attribution.
+- **Backups:** dump v15 carries the private `posts.stop_route` and validates it (strict shape,
+  DE/EN equality) and any published `stop_route` before any write. A stale stored route, including
+  one whose leg count no longer matches the saved stops, is legitimate data and always captured.
+- **Containment:** clear the three URLs in Settings; remove `ROUTING_INTERNAL_ORIGINS` from the
+  compose file to withdraw the private-network exemption. See the
+  [design, misuse cases and rollback](docs/superpowers/specs/2026-11-03-issue-513-stop-routing-design.md)
+  and the [bundled OSRM design](docs/superpowers/specs/2026-11-03-osrm-compose-routing-design.md).
+
 ## SSRF protection (WordPress import)
 
 The importer fetches image URLs taken from an uploaded export — attacker-influenced input. All such

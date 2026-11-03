@@ -23,6 +23,7 @@ import { pgUploadReceiptStore } from './upload-receipts.js';
 import { createUploadService } from './upload-service.js';
 import { createMediaSync, createReconciler } from './media-sync.js';
 import { parseEncryptionKey, pgSecretsStore } from './secrets.js';
+import { parseRoutingInternalOrigins } from './routing-origins.js';
 import { LEGACY_AI_KEY_SLOT, slotFor } from './ai-providers.js';
 import { pgCommentStore } from './comments.js';
 import { pgCommentAdminStore } from './comments-admin.js';
@@ -56,6 +57,16 @@ console.info(`trusted proxy peers: ${proxyPolicy.describe}`);
 // Validate before connecting/migrating. Absence disables only optional remote AI.
 const encryptionKey = parseEncryptionKey(process.env.ENCRYPTION_KEY);
 if (encryptionKey === undefined) console.info('ENCRYPTION_KEY not configured in .env; encrypted remote AI credentials are unavailable.');
+
+// Operator-only private routing origins (the bundled compose OSRM). Invalid → refuse to start.
+let routingInternalOrigins: ReadonlySet<string>;
+try {
+  routingInternalOrigins = parseRoutingInternalOrigins(process.env.ROUTING_INTERNAL_ORIGINS);
+} catch (error) {
+  console.error(error instanceof Error ? error.message : 'ROUTING_INTERNAL_ORIGINS configuration is invalid.');
+  process.exit(1);
+}
+console.info(`routing internal origins: ${routingInternalOrigins.size ? [...routingInternalOrigins].join(', ') : 'none'}`);
 
 // Every app/restore entry point acquires the stable filesystem lock before PG.
 const storageDir = process.env.STORAGE_DIR ?? '/data/images';
@@ -238,6 +249,7 @@ const app = buildServer({
   gpx,
   isWritable: owner.isWritable,
   storageSignal: owner.signal,
+  routingInternalOrigins,
 });
 
 let quiescing: Promise<void> | undefined;

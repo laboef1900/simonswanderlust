@@ -4,6 +4,7 @@ import { postgresTripsLoader } from './lib/postgres-loader';
 import { postgresPagesLoader } from './lib/pages-loader';
 import { regions } from './lib/paths';
 import { publicTrackSchema } from './lib/public-track';
+import { publicStopRouteSchema } from './lib/public-stop-route';
 import { postgresJourneysLoader } from './lib/journeys-loader';
 import { pageDataSchema } from './lib/page-content';
 import { postgresNavigationLoader, navigationSchema } from './lib/navigation-loader';
@@ -31,9 +32,16 @@ const trips = defineCollection({
       heroImage: storyImage,
       titleImage: storyImage.optional(),
       coordinates: z.object({ lat: z.number(), lng: z.number() }),
-      stops: z.array(z.object({ name: z.string(), lat: z.number(), lng: z.number() })).optional(),
+      // #513: `via` rows shape the stop route but are never rendered; `profile`
+      // is authoring metadata (leg i → i+1) the site does not use.
+      stops: z.array(z.object({
+        name: z.string(), lat: z.number(), lng: z.number(),
+        via: z.boolean().optional(), profile: z.enum(['car', 'bike', 'foot', 'straight']).optional(),
+      })).optional(),
       route: z.string().optional(),
       track: publicTrackSchema.optional(),
+      // Stored geometry only (no build-time routing); a published `track` wins in tripGeometry.
+      stopRoute: publicStopRouteSchema.optional(),
       keyFacts: z.record(z.string(), z.string()).optional(),
       // Optional, never defaulted: absent/undefined = not featured, so every
       // entry written before this field stays valid without a migration of

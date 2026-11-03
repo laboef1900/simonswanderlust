@@ -101,6 +101,32 @@ maybe('explicit GPX publication snapshots (real PostgreSQL and admin worker)', (
     for (const row of await f.snapshots()) expect(row.published_snapshot).not.toHaveProperty('track');
   });
 
+  // #512: the editor warns about a route caption unless the draft route is already live.
+  it('reports a draft route as published only while a live snapshot carries that same track', async () => {
+    const f = await fixture();
+    const published = async () => (await f.routes.get(f.tk))?.published ?? false;
+    expect(await published()).toBe(false);
+    expect((await f.attach(geometry())).published).toBe(false);
+    expect(await published()).toBe(false);
+    await f.posts.publish(f.tk, await publishTokens(f.posts, f.tk));
+    expect(await published()).toBe(true);
+    // A text-only draft edit makes the post differ from the live one, not the route.
+    await f.posts.upsertDraft({ ...(await f.posts.get(f.tk))!, de: { ...f.pair.de, title: 'Draft edit' } });
+    expect(await published()).toBe(true);
+    expect((await f.attach(geometry(1))).published).toBe(false);
+    await f.posts.publish(f.tk, await publishTokens(f.posts, f.tk));
+    expect(await published()).toBe(true);
+    const tokens = await publishTokens(f.posts, f.tk);
+    const detached = await f.routes.detach(f.tk, { baseVersion: tokens.baseRouteVersion, baseUpdatedAt: tokens.baseUpdatedAt.toISOString() });
+    expect(detached.published).toBe(false);
+    expect(await published()).toBe(false);
+    await f.attach(geometry(2));
+    await f.posts.publish(f.tk, await publishTokens(f.posts, f.tk));
+    expect(await published()).toBe(true);
+    await f.posts.unpublish(f.tk);
+    expect(await published()).toBe(false);
+  });
+
   it('refuses exact-token mismatches including future times, stale route versions and absent tokens without changing either snapshot', async () => {
     const f = await fixture(); await f.attach(geometry());
     await f.posts.publish(f.tk, await publishTokens(f.posts, f.tk));

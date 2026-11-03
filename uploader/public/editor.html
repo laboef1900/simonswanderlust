@@ -6,6 +6,7 @@
     <title>Post Editor</title>
     <link rel="stylesheet" href="/admin/admin.css" />
     <link rel="stylesheet" href="/admin/editor-gpx.css" />
+    <link rel="stylesheet" href="/admin/editor-stop-route.css" />
     <link rel="stylesheet" href="/admin/gpx-map.css" />
     <link rel="stylesheet" href="/admin/vendor/easymde.min.css" />
     <link rel="stylesheet" href="/admin/vendor/font-awesome/css/font-awesome.min.css" />
@@ -175,7 +176,7 @@
               </div>
 
               <label for="deExcerpt">Excerpt / summary (DE)</label>
-              <textarea id="deExcerpt" rows="3" placeholder="Eine kurze Zusammenfassung des Reiseberichts…"></textarea>
+              <textarea id="deExcerpt" class="editor-autofit" rows="3" placeholder="Eine kurze Zusammenfassung des Reiseberichts…"></textarea>
               <p class="muted editor-field-help" id="deExcerptHelp"></p>
               <div id="deExcerptAssist"></div>
 
@@ -186,8 +187,11 @@
               </div>
             </div>
 
-            <section class="editor-inspector-group" id="deHeroDetails" aria-labelledby="deHeroLabel">
-              <h3 class="editor-card-title" id="deHeroLabel">Hero image (DE)</h3>
+            <details class="editor-inspector-group editor-image-section" id="deHeroDetails">
+              <summary class="editor-card-title" id="deHeroLabel">
+                <span class="editor-image-section__title">Hero image (DE)</span>
+                <span class="editor-image-section__thumb" id="deHeroThumb" hidden><img id="deHeroThumbImg" alt="" /></span>
+              </summary>
               <div class="hero-picker hero-banner-zone">
                 <div class="hero-compact-preview" id="deHeroPreview" hidden>
                   <img id="deHeroPreviewImg" alt="" />
@@ -199,12 +203,10 @@
                 </div>
                 <p id="deHeroStatus" class="muted" role="status"></p>
 
-                <details class="editor-disclosure hero-replace" id="deHeroReplace">
+                <details class="editor-disclosure hero-replace" id="deHeroReplace" open>
                   <summary>Replace photo</summary>
-                  <label class="hero-drop" for="deHeroFile">
-                    <span class="hero-drop-copy">Drop a photo or browse</span>
-                    <input id="deHeroFile" type="file" accept="image/*" class="hero-drop-input" />
-                  </label>
+                  <label for="deHeroFile" id="deHeroFileLabel"></label>
+                  <input id="deHeroFile" type="file" accept="image/*" class="hero-file-input" />
                   <div class="hero-actions-row">
                     <button type="button" id="deHeroUpload" class="btn-secondary">Upload hero</button>
                     <button type="button" id="deHeroLibrary" class="btn-secondary">Choose from library</button>
@@ -235,8 +237,8 @@
                 <input id="deHeroHeight" type="hidden" />
                 <input id="deHeroFormat" type="hidden" />
               </div>
-            </section>
-            <section class="editor-inspector-group title-image-editor" id="deTitleImage"></section>
+            </details>
+            <details class="editor-inspector-group editor-image-section title-image-editor" id="deTitleImage"></details>
           </section>
 
           <section class="editor-inspector-locale" data-inspector-locale="en" aria-labelledby="enStoryDetailsHeading" hidden>
@@ -253,7 +255,7 @@
               </div>
 
               <label for="enExcerpt">Excerpt / summary (EN)</label>
-              <textarea id="enExcerpt" rows="3" placeholder="A short summary of the trip report…"></textarea>
+              <textarea id="enExcerpt" class="editor-autofit" rows="3" placeholder="A short summary of the trip report…"></textarea>
               <p class="muted editor-field-help" id="enExcerptHelp"></p>
               <div id="enExcerptAssist"></div>
 
@@ -264,8 +266,11 @@
               </div>
             </div>
 
-            <section class="editor-inspector-group" id="enHeroDetails" aria-labelledby="enHeroLabel">
-              <h3 class="editor-card-title" id="enHeroLabel">Hero image (EN)</h3>
+            <details class="editor-inspector-group editor-image-section" id="enHeroDetails">
+              <summary class="editor-card-title" id="enHeroLabel">
+                <span class="editor-image-section__title">Hero image (EN)</span>
+                <span class="editor-image-section__thumb" id="enHeroThumb" hidden><img id="enHeroThumbImg" alt="" /></span>
+              </summary>
               <div class="hero-picker hero-banner-zone">
                 <div class="hero-compact-preview" id="enHeroPreview" hidden>
                   <img id="enHeroPreviewImg" alt="" />
@@ -277,12 +282,10 @@
                 </div>
                 <p id="enHeroStatus" class="muted" role="status"></p>
 
-                <details class="editor-disclosure hero-replace" id="enHeroReplace">
+                <details class="editor-disclosure hero-replace" id="enHeroReplace" open>
                   <summary>Replace photo</summary>
-                  <label class="hero-drop" for="enHeroFile">
-                    <span class="hero-drop-copy">Drop a photo or browse</span>
-                    <input id="enHeroFile" type="file" accept="image/*" class="hero-drop-input" />
-                  </label>
+                  <label for="enHeroFile" id="enHeroFileLabel"></label>
+                  <input id="enHeroFile" type="file" accept="image/*" class="hero-file-input" />
                   <div class="hero-actions-row">
                     <button type="button" id="enHeroUpload" class="btn-secondary">Upload hero</button>
                     <button type="button" id="enHeroLibrary" class="btn-secondary">Choose from library</button>
@@ -313,8 +316,8 @@
                 <input id="enHeroHeight" type="hidden" />
                 <input id="enHeroFormat" type="hidden" />
               </div>
-            </section>
-            <section class="editor-inspector-group title-image-editor" id="enTitleImage"></section>
+            </details>
+            <details class="editor-inspector-group editor-image-section title-image-editor" id="enTitleImage"></details>
           </section>
 
           <details class="editor-inspector-group" id="expeditionDetails">
@@ -356,9 +359,6 @@
             <p class="muted editor-field-help" id="countryCoordinatesStatus" role="status"></p>
             <button type="button" id="useCountryCenter" class="btn-secondary" hidden></button>
 
-            <label for="fmRoute">Route</label>
-            <input id="fmRoute" type="text" placeholder="e.g. Athens → Rhodes" />
-
             <label class="check-field" for="fmFeatured">
               <input type="checkbox" id="fmFeatured" aria-describedby="fmFeaturedHint" />
               Use as homepage cover
@@ -379,11 +379,26 @@
             <div id="stopsContainer">
               <p class="section-label">Waypoints / stops</p>
               <p id="waypointPrivacy" class="muted"></p>
+              <p id="stopRoutePrivacy" class="muted"></p>
+              <p id="stopRouteViaHelp" class="muted"></p>
               <div id="stopsList"></div>
               <button type="button" id="addStop" class="btn-secondary">Add stop</button>
               <p class="muted"><a id="waypointAttribution" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer"></a></p>
             </div>
           </details>
+          <section class="editor-inspector-group stop-route" id="stopRoutePanel" aria-labelledby="stopRouteHeading">
+            <h3 class="editor-card-title" id="stopRouteHeading"></h3>
+            <p id="stopRouteHelp" class="muted"></p>
+            <p id="stopRouteProviders" class="notice-warn" hidden></p>
+            <div class="stop-route__actions">
+              <button id="stopRouteCalculate" type="button" class="btn-secondary" aria-describedby="stopRouteStatus" disabled></button>
+            </div>
+            <p id="stopRouteStatus" class="muted" role="status"></p>
+            <ol id="stopRouteLegs" class="stop-route__legs" hidden></ol>
+            <p id="stopRoutePublishNotice" class="notice-warn" hidden></p>
+            <p id="stopRoutePrecedence" class="muted"></p>
+            <p class="muted"><a id="stopRouteAttribution" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer"></a></p>
+          </section>
           <section class="editor-inspector-group gpx-route" aria-labelledby="gpxRouteHeading">
             <h3 class="editor-card-title" id="gpxRouteHeading"></h3>
             <p id="gpxRouteStatus" class="muted" role="status"></p>
@@ -394,6 +409,14 @@
               <button id="gpxReimport" type="button" class="btn-secondary" hidden></button>
               <button id="gpxDownload" type="button" class="btn-secondary" hidden></button>
               <button id="gpxDetach" type="button" class="btn-secondary" hidden></button>
+            </div>
+            <div class="gpx-route__caption">
+              <label for="fmRoute" id="gpxCaptionLabel"></label>
+              <input id="fmRoute" type="text" aria-describedby="gpxCaptionHelp gpxCaptionWarning" />
+              <p class="muted editor-field-help" id="gpxCaptionHelp"></p>
+              <div role="status">
+                <p class="notice-warn" id="gpxCaptionWarning" hidden></p>
+              </div>
             </div>
           </section>
 
@@ -527,6 +550,8 @@
     <script src="/admin/journeys-ui.js"></script>
     <script src="/admin/waypoint-copy.js"></script>
     <script src="/admin/waypoint-lookup.js"></script>
+    <script src="/admin/stop-route-copy.js"></script>
+    <script src="/admin/editor-stop-route.js"></script>
     <script src="/admin/gallery-library.js"></script>
     <script src="/admin/editor-galleries.js"></script>
     <script src="/admin/gallery-metadata-warnings.js"></script>
@@ -674,6 +699,7 @@
             storyReview?.invalidate();
             currentTk = body.translationKey;
             gpxEditor.noteCreated(currentTk);
+            stopRouteEditor.refresh();
             guard.setResource('post:' + currentTk);
             const url = new URL(location.href);
             url.searchParams.set('tk', currentTk);
@@ -696,6 +722,7 @@
           loadedSlugs.en = body.en?.slug || '';
           guard.setResource('post:' + currentTk);
           gpxEditor.noteCreated(currentTk);
+          stopRouteEditor.refresh();
           const url = new URL(location.href);
           url.searchParams.set('tk', currentTk);
           history.replaceState(null, '', url.toString());
@@ -708,6 +735,7 @@
           if (loadBlocked || !writeRecovery.canAdopt(body.ownerUserId)) throw new Error(editorCopy.reloadFailed);
           guard.setResource('post:' + currentTk);
           gpxEditor.noteCreated(currentTk);
+          stopRouteEditor.refresh();
           const url = new URL(location.href);
           url.searchParams.set('tk', currentTk);
           history.replaceState(null, '', url.toString());
@@ -772,13 +800,18 @@
 
       // Wrap visually without widening the stored single-line title contract.
       function singleLineTitle(value) { return value.replace(/[\r\n]+/g, ' '); }
-      function resizeTitle(title) {
-        if (!title.clientWidth) return; // inactive locale; resized when revealed
-        title.style.height = 'auto';
-        title.style.height = (title.scrollHeight + title.offsetHeight - title.clientHeight) + 'px';
+      // Titles and excerpts grow with their text instead of scrolling inside
+      // a fixed box; their CSS hides the overflow and disables manual resize.
+      function fitTextarea(field) {
+        if (!field.clientWidth) return; // inactive locale; fitted when revealed
+        field.style.height = 'auto';
+        field.style.height = (field.scrollHeight + field.offsetHeight - field.clientHeight) + 'px';
       }
       const titleFields = [$('deTitle'), $('enTitle')];
-      const resizeTitles = () => titleFields.forEach(resizeTitle);
+      const excerptFields = [$('deExcerpt'), $('enExcerpt')];
+      const fittedFields = [...titleFields, ...excerptFields];
+      const fitTextareas = () => fittedFields.forEach(fitTextarea);
+      excerptFields.forEach((excerpt) => excerpt.addEventListener('input', () => fitTextarea(excerpt)));
       titleFields.forEach((title) => {
         title.placeholder = editorCopy.titlePlaceholder;
         const update = (event) => {
@@ -791,7 +824,7 @@
               title.setSelectionRange(start, end);
             }
           }
-          resizeTitle(title);
+          fitTextarea(title);
         };
         title.addEventListener('input', update);
         title.addEventListener('compositionend', update);
@@ -805,14 +838,14 @@
           entries.forEach(({ target, contentRect }) => {
             if (widths.get(target) === contentRect.width) return;
             widths.set(target, contentRect.width);
-            resizeTitle(target);
+            fitTextarea(target);
           });
         });
-        titleFields.forEach((title) => observer.observe(title));
+        fittedFields.forEach((field) => observer.observe(field));
       }
-      window.addEventListener('resize', resizeTitles);
-      document.fonts?.ready.then(resizeTitles);
-      resizeTitles();
+      window.addEventListener('resize', fitTextareas);
+      document.fonts?.ready.then(fitTextareas);
+      fitTextareas();
 
       // ---- responsive story inspector ----
       const inspectorApi = EditorInspector.wire({
@@ -856,7 +889,7 @@
         activeTab = tab;
         syncInspectorLocale(tab);
         (tab === 'en' ? enMDE : deMDE).codemirror.refresh();
-        resizeTitle($(tab + 'Title'));
+        fitTextarea($(tab + 'Title'));
       }
       const tabsApi = Tabs.wire(document.querySelector('[role="tablist"]'), {
         onChange: activateLocale,
@@ -979,6 +1012,7 @@
       for (const locale of ['de', 'en']) {
         $(locale + 'CountryHelp').textContent = editorCopy.countryHelp;
         $(locale + 'ExcerptHelp').textContent = editorCopy.excerptHelp;
+        $(locale + 'HeroFileLabel').textContent = editorCopy.heroFile.replace('{locale}', locale.toUpperCase());
         $(locale + 'Excerpt').setAttribute('aria-describedby', locale + 'ExcerptHelp');
       }
       $('coordinatesHelp').textContent = editorCopy.coordinatesHelp;
@@ -1042,7 +1076,16 @@
       const stopLookups = new Map();
       $('waypointPrivacy').textContent = WaypointCopy.en.privacy;
       $('waypointAttribution').textContent = WaypointCopy.en.attribution;
-      function addStopRow(name = '', lat = '', lng = '') {
+      // #513: via/profile controls, the "Route along stops" panel and staleness.
+      const stopRouteEditor = StopRouteEditor.wire({
+        copy: StopRouteCopy.en,
+        list: $('stopsList'),
+        getTk: () => currentTk,
+        collectStops: () => collectStops(),
+        markDirty: () => guard.markDirty(),
+        on401: () => guard.redirectToLogin(),
+      });
+      function addStopRow(name = '', lat = '', lng = '', routing = {}) {
         const row = document.createElement('div');
         row.className = 'stop-row';
 
@@ -1083,6 +1126,7 @@
           stopLookups.delete(row);
           row.remove();
           guard.markDirty();
+          stopRouteEditor.update();
         });
 
         row.appendChild(nameInput);
@@ -1092,24 +1136,30 @@
         $('stopsList').appendChild(row);
         stopLookups.set(row, WaypointLookup.attach({
           row, nameInput, latInput, lngInput, copy: WaypointCopy.en,
-          onChange: () => guard.markDirty(),
+          onChange: () => { guard.markDirty(); stopRouteEditor.update(); },
           onUnauthed: () => guard.redirectToLogin(),
         }));
+        stopRouteEditor.decorateRow(row, routing);
+        stopRouteEditor.update();
       }
 
       $('addStop').addEventListener('click', () => addStopRow());
 
+      // Canonical stops (#513): `via` only when true; `profile` (leg to the next
+      // collected stop) only when not car and never on the last collected stop.
       function collectStops() {
-        const rows = $('stopsList').querySelectorAll('.stop-row');
-        if (!rows.length) return undefined;
-        const stops = [];
-        rows.forEach((r) => {
+        const rows = [...$('stopsList').querySelectorAll('.stop-row')].filter((r) => {
           const name = r.querySelector('.stop-name').value.trim();
-          const lat = parseFloat(r.querySelector('.stop-lat').value);
-          const lng = parseFloat(r.querySelector('.stop-lng').value);
-          if (name && Number.isFinite(lat) && Number.isFinite(lng)) stops.push({ name, lat, lng });
+          return name && Number.isFinite(parseFloat(r.querySelector('.stop-lat').value))
+            && Number.isFinite(parseFloat(r.querySelector('.stop-lng').value));
         });
-        return stops.length ? stops : undefined;
+        if (!rows.length) return undefined;
+        return rows.map((r, index) => ({
+          name: r.querySelector('.stop-name').value.trim(),
+          lat: parseFloat(r.querySelector('.stop-lat').value),
+          lng: parseFloat(r.querySelector('.stop-lng').value),
+          ...stopRouteEditor.rowValues(r, index === rows.length - 1),
+        }));
       }
 
       // A stop row is "partial" when the author entered something but not all
@@ -1239,12 +1289,15 @@
           guard.markDirty();
         }
 
-        /** Sync both the compact preview and framing disclosure to the stored hero. */
+        /** Sync the compact preview, the collapsed section's thumbnail and the
+            framing disclosure to the stored hero. */
         function sync(locale) {
           var wrap = $(locale + 'HeroFocus');
           var img = $(locale + 'HeroFocusImg');
           var preview = $(locale + 'HeroPreview');
           var previewImg = $(locale + 'HeroPreviewImg');
+          var thumb = $(locale + 'HeroThumb');
+          var thumbImg = $(locale + 'HeroThumbImg');
           var url = PostsFilter.thumbUrl({
             heroSrc: $(locale + 'HeroSrc').value,
             heroWidth: parseInt($(locale + 'HeroWidth').value, 10),
@@ -1253,20 +1306,25 @@
           if (!url) {
             wrap.hidden = true;
             preview.hidden = true;
+            thumb.hidden = true;
             img.removeAttribute('src');
             previewImg.removeAttribute('src');
+            thumbImg.removeAttribute('src');
             return;
           }
           // A wrong-but-plausible stored width still 404s (see thumbUrl's own
-          // note), so both views hide rather than showing a broken photo.
-          var hideBroken = function () { wrap.hidden = true; preview.hidden = true; };
+          // note), so every view hides rather than showing a broken photo.
+          var hideBroken = function () { wrap.hidden = true; preview.hidden = true; thumb.hidden = true; };
           img.onerror = hideBroken;
           previewImg.onerror = hideBroken;
+          thumbImg.onerror = hideBroken;
           img.onload = function () { paint(locale); };
           if (img.getAttribute('src') !== url) img.src = url;
           if (previewImg.getAttribute('src') !== url) previewImg.src = url;
+          if (thumbImg.getAttribute('src') !== url) thumbImg.src = url;
           wrap.hidden = false;
           preview.hidden = false;
+          thumb.hidden = false;
           paint(locale);
         }
 
@@ -2134,6 +2192,16 @@
           renderAltAudit(body.altAudit, true);
           updateLocaleChip();
           BuildReporting.renderOutcome($('actionStatus'), 'publish', body);
+          // #513: Publish never blocks on a stale stop route; it says it left it out.
+          const stopRouteWarning = stopRouteEditor.publishOutcome(body.stopRoute);
+          if (stopRouteWarning) {
+            const notice = document.createElement('p');
+            notice.className = 'notice-warn';
+            notice.textContent = stopRouteWarning;
+            $('actionStatus').appendChild(notice);
+          }
+          // The route caption's advisory follows the newly published track (#512).
+          await gpxEditor.refresh({ afterPublication: true });
         } catch (e) {
           showErr(BuildReporting.text('unknown'));
           setStatus('');
@@ -2175,6 +2243,7 @@
           publicationRefresh.accept({ publication: body.publication });
           for (const locale of ['de', 'en']) slugFieldFor(locale).disabled = publishedLocales[locale];
           BuildReporting.renderOutcome($('actionStatus'), 'unpublish', body, { title });
+          await gpxEditor.refresh({ afterPublication: true });
           updateLocaleChip();
         } catch (e) {
           showErr(BuildReporting.text('unknown'));
@@ -2203,18 +2272,20 @@
         stopLookups.forEach((dispose) => dispose());
         stopLookups.clear();
         $('stopsList').innerHTML = '';
-        if (!Array.isArray(stops)) return;
+        if (!Array.isArray(stops)) { stopRouteEditor.update(); return; }
         stops.forEach((s) => {
-          if (s && typeof s === 'object') addStopRow(s.name ?? '', s.lat ?? '', s.lng ?? '');
+          if (s && typeof s === 'object') addStopRow(s.name ?? '', s.lat ?? '', s.lng ?? '', { via: s.via === true, profile: s.profile });
         });
+        stopRouteEditor.update();
       }
 
       function populateLocale(loc, data) {
         data = data || {};
         $(loc + 'Title').value = singleLineTitle(data.title || '');
-        resizeTitle($(loc + 'Title'));
+        fitTextarea($(loc + 'Title'));
         $(loc + 'Country').value = data.country || '';
         $(loc + 'Excerpt').value = data.excerpt || '';
+        fitTextarea($(loc + 'Excerpt'));
         populateKeyFacts(loc, data.keyFacts);
         const mde = loc === 'de' ? deMDE : enMDE;
         // Written unconditionally: buildPayload() omits heroImage when unset, so
@@ -2227,6 +2298,8 @@
         $(loc + 'HeroFormat').value = hero.format || '';
         $(loc + 'HeroAlt').value = hero.alt || '';
         $(loc + 'HeroStatus').textContent = hero.src ? 'Hero: ' + hero.src : '';
+        // A loaded story opens the picker only when it has no hero yet.
+        $(loc + 'HeroReplace').open = !hero.src;
         // Same no-field-resurrection rule as the fields above: a payload with
         // no `focus` must recentre, not keep whatever was last on screen.
         const focus = hero.focus && typeof hero.focus === 'object' ? hero.focus : {};
@@ -2303,6 +2376,7 @@
         countryCoords.reset();
         updateLocaleChip();
         for (const locale of ['de', 'en']) galleryEditors[locale]?.restoreAlts(post.galleryAlts?.[locale]);
+        gpxEditor.syncCaption();
       }
 
       // Returns false only when it redirected to /login (callers must stop);
@@ -2396,6 +2470,7 @@
         // Initialization alone defers this read until after local stash recovery.
         // Explicit Reload holds the write queue closed across both reads.
         const routeReady = deferRouteRefresh || await gpxEditor.refresh();
+        stopRouteEditor.refresh();
         if (reloadEpoch === writeEpoch) loadBlocked = !routeReady;
         // Publish availability follows the barrier (#284 disables it while blocked).
         updateLocaleChip();

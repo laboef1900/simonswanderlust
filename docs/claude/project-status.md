@@ -4,6 +4,19 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Implemented, owner approval pending (High risk):** bundled OSRM street routing. The
+  compose stack downloads and merges every `OSRM_PBF_URLS` extract and runs
+  `osrm-car`/`osrm-bike`/`osrm-foot` (`osrm-backend` v26.11.0, `--mmap=1`);
+  `ROUTING_INTERNAL_ORIGINS` is the operator-only, exact-origin exemption from the `safeFetch`
+  private-address guard for routing; legs bound OSRM snapping to 5 km (`radiuses`). Spec:
+  `docs/superpowers/specs/2026-11-03-osrm-compose-routing-design.md`.
+- **Implemented, owner approval pending (High risk):** #513 stop routing. Stories without a
+  published GPX track can show a line along their ordered stops: per-leg car/bike/foot/straight,
+  via points (never public), straight dashed fallbacks for unroutable legs. Computed only in the
+  admin via `safeFetch` against owner-configured OSRM endpoints (default empty = disabled);
+  stored as `posts.stop_route` with a fingerprint; Publish ships only a fresh route and never
+  beside a GPX track. Dump v15. Spec:
+  `docs/superpowers/specs/2026-11-03-issue-513-stop-routing-design.md`.
 - **Implemented, qualification pending:** #309 journey authoring under the owner-approved
   #308 contract. Separate journey, locale and ordered-member tables; author draft editing,
   admin-only publication/unpublication/deletion; permanent per-locale URL history and explicit
@@ -617,3 +630,24 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
   native amd64/arm64 ext4 runners; the run sheet
   `docs/superpowers/plans/2026-11-01-g6-deployment-mount-qualification.md` applies again if
   `/data` moves to another filesystem, network/FUSE storage or another server.
+- **Implemented, review pending (#514):** the About editor edits the equipment line
+  (`identity.aboutGear`) per enabled locale in its own section with its own Save. UI-only:
+  it reads `GET /settings/identity` and writes the full loaded identity back through the
+  unchanged admin-only `PUT /settings/identity` with its revision, so normalization, the
+  200-code-point limit, retained disabled-locale text, 409 conflicts and the next-build
+  publication timing are the existing #274 contract. No schema, route, snapshot or public
+  rendering change; Settings → Site identity keeps editing the same value.
+- **Implemented (2026-11-02, branch `feature/editor-inspector-visibility`):** editor Story details
+  moved inside the manuscript's ruled frame as a tinted, flush-pinned column (tinted rail when
+  collapsed; drawer unchanged below 74rem, its header no longer lets content show above it).
+  Hero image and title image are collapsible sections with one shared box (preview, alt,
+  status, Replace photo, Adjust framing) and a summary thumbnail; title image gains the
+  `editor.titleImage.replace` copy key. Excerpt textareas auto-fit their text (`fitTextarea`,
+  shared with the title). No route, schema or payload change.
+- **Implemented, PR pending (#512, owner decision 2026-11-03: options 1+2):** the editor's
+  Route caption (`fmRoute`) moved from Expedition details into the GPX route section, with help
+  text naming its only public placement ("Published route", beside a published GPX track) and a
+  live, non-blocking advisory when a non-blank caption has no published track (none attached,
+  attached but unpublished, or detached). `GET/PUT/DELETE /posts/:tk/route` add a read-only
+  `published` flag; the editor re-reads it after Publish/Unpublish. Payload, storage, snapshot,
+  MDX export and public rendering are unchanged (option 3 out of scope).

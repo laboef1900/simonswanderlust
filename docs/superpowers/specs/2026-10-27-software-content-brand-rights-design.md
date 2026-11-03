@@ -438,9 +438,9 @@ Acceptance status against current `dev` (`976f31a`):
 | Decision record with approver and date | Done | This spec (owner approved 2026-10-27) |
 | Inventory from the lockfiles plus manual non-lockfile list | Done; **was stale** | `docs/third-party-inventory.json` recorded an older `site/package-lock.json` digest (package entries unchanged). Regenerated here; `uploader/test/legal-assets.test.ts` now fails whenever either lockfile or evidence file no longer matches the inventory |
 | Repository files match the decision; map attribution vs ODbL | Done | `LICENSE`, `NOTICE`, both `package.json` `license` fields, README section, OSM attribution (#455/#456) |
-| Outcome for `Wanderlust Studio` / `simonswanderlust-app` | Done; rename takes effect at the next release | §4 and the image-name cutover spec |
+| Outcome for `Wanderlust Studio` / `simonswanderlust-app` | Done; first release under the new name is v0.18.1 | §4 and the image-name cutover spec |
 | Content/brand statement distinct from the software license | Done | §3, `NOTICE` |
-| Notices verified in a **published** image (gates 1–3 above) | **Owner gate** | Needs an owner-authorized release; procedure below |
+| Notices verified in a **published** image (gates 1–3 above) | Done — v0.18.1 | Both platform reports `PASS`; see *First release result* below |
 
 Implemented now: OCI `licenses`/`source`/`title` labels in the `Dockerfile`, with the release
 workflow pinning `org.opencontainers.image.licenses=AGPL-3.0-only` (GitHub detects the SPDX id
@@ -483,3 +483,19 @@ node uploader/scripts/check-image-legal.mjs ghcr.io/laboef1900/wanderlust-studio
 the GitHub release body carries the exact-version source directions (gate 3), and the reports'
 digests are recorded here. Any `FAIL` blocks announcing the release for third-party use; the
 fix lands through `feature/* → dev → main` and a new version, never by retagging.
+
+**First release result — v0.18.1, 2026-11-01.** Both reports say `PASS`, 62 passed / 0
+failed, for `ghcr.io/laboef1900/wanderlust-studio:0.18.1` at revision
+`4c715085a944f88133d430b1a654b7de71d4decf`:
+
+| Platform | Platform manifest digest | Report SHA-256 |
+| --- | --- | --- |
+| `linux/amd64` | `sha256:324e68420e53cb52e8ec89250619b9ae3c631ee7d9f212324a7573e28d6170f1` | `169aec22c8fdeebbeaf96beca925761c3cdf201aadd58b12499a57cc5f2a1f34` |
+| `linux/arm64` | `sha256:b385a9d938b094c339f27f4d11ea83582b122025fbaebe1e5174996f5edc72e0` | `c5336fd01138acb04c017039116b82dd08da499e7fea8a7094fcdb8101aa3ee6` |
+
+The GitHub release body carries the exact-revision source archive and tree links (gate 3).
+The first amd64 run on a Docker Desktop containerd store reported the three label checks as
+failed: `docker image inspect` without `--platform` returned the host's arm64 config, not
+the amd64 one. The registry's amd64 config carried all three labels; the script now passes
+`--platform` to `inspect` as it already did to `create`, and the rerun above used it. The
+reports themselves are retained outside the repository (`.local/release-0.18.1/`).
