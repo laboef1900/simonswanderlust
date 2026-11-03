@@ -77,7 +77,8 @@ interface StoredStopRoute {
   deletion, locale omission, revision exclusion and restore ordering for free, needs no orphan
   sweep, cleanup queue or new bootstrap table, and rolls back as an inert nullable column. The
   only cost is the DE/EN duplication, which the single writer (one `UPDATE … WHERE
-  translation_key=$1`) keeps identical; Publish and restore reject a pair whose two values differ.
+  translation_key=$1`) keeps identical. A pair whose two values differ (manual repair) is never
+  published (Publish treats it as stale and `GET` reports no route), and restore refuses it.
 - **Fingerprint basis** (`stopRouteBasis`): `'stop-route-v1:' + JSON.stringify(stops.map((s, i) =>
   [s.lat, s.lng, s.via === true, i === last ? null : (s.profile ?? 'car')]))`. Names are excluded:
   renaming a stop does not change geometry. Browser (`SubtleCrypto`) and server (`node:crypto`) hash
