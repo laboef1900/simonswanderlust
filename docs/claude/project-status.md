@@ -617,3 +617,10 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
   native amd64/arm64 ext4 runners; the run sheet
   `docs/superpowers/plans/2026-11-01-g6-deployment-mount-qualification.md` applies again if
   `/data` moves to another filesystem, network/FUSE storage or another server.
+- **Implemented, PR pending (#512, owner decision 2026-11-03: options 1+2):** the editor's
+  Route caption (`fmRoute`) moved from Expedition details into the GPX route section, with help
+  text naming its only public placement ("Published route", beside a published GPX track) and a
+  live, non-blocking advisory when a non-blank caption has no published track (none attached,
+  attached but unpublished, or detached). `GET/PUT/DELETE /posts/:tk/route` add a read-only
+  `published` flag; the editor re-reads it after Publish/Unpublish. Payload, storage, snapshot,
+  MDX export and public rendering are unchanged (option 3 out of scope).

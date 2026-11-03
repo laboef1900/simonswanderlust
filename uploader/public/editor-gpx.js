@@ -25,6 +25,7 @@
         gpxWaypointWarning: 'waypointWarning', gpxAdopt: 'adoptSelected',
         gpxAdoptionNote: 'adoptionIndependent',
         gpxPublicationNotice: 'publicationNotice',
+        gpxCaptionLabel: 'captionLabel', gpxCaptionHelp: 'captionHelp',
         gpxCandidateHelp: 'candidateHelp',
         gpxDiscard: 'discardPreview', gpxAttach: 'attach', gpxReplaceScope: 'replaceBody',
       };
@@ -38,6 +39,8 @@
       if (adoptLabel) adoptLabel.textContent = copy.adoptConfirm || '';
       const heading = document.getElementById('gpxRouteHeading');
       if (heading) heading.textContent = copy.sectionTitle || '';
+      const caption = document.getElementById('fmRoute');
+      if (caption && copy.captionPlaceholder) caption.setAttribute('placeholder', copy.captionPlaceholder);
     }
     let preview = null;
     let route = { version: null, geometry: null, originalAvailable: false };
@@ -54,6 +57,7 @@
     let outcomeUnknown = false;
     let cleanupUnconfirmed = false;
     let routeLoaded = !host.getPost().tk;
+    let captionRoute = routeLoaded ? 'none' : null;
     let routeTk = null;
     let routeEpoch = 0;
     let routeRefreshFailed = false;
@@ -375,6 +379,23 @@
       $('gpxDownload').hidden = !route.originalAvailable;
       $('gpxDetach').hidden = !route.geometry || outcomeUnknown;
       $('gpxImportOpen').hidden = false;
+      // A pending read keeps the last known answer; a failed one makes it unknown.
+      if (routeLoaded) captionRoute = !route.geometry ? 'none' : route.published === true ? 'published' : 'unpublished';
+      else if (routeRefreshFailed) captionRoute = null;
+      renderCaption();
+    }
+    // #512: the public story shows the caption only beside a published track.
+    // Advisory only: it never disables Save/Publish and never takes focus.
+    function renderCaption() {
+      const input = $('fmRoute');
+      const warning = $('gpxCaptionWarning');
+      if (!input || !warning) return;
+      const key = !input.value.trim() || captionRoute === null || captionRoute === 'published'
+        ? '' : captionRoute === 'none' ? 'captionNoRoute' : 'captionUnpublished';
+      const text = key ? msg(key) : '';
+      // Rewriting identical text would re-announce the polite region per keystroke.
+      if (warning.textContent !== text) warning.textContent = text;
+      warning.hidden = !text;
     }
     function openDialog(button) {
       if (outcomeUnknown) return;
@@ -527,6 +548,7 @@
     $('gpxDownload').addEventListener('click', downloadOriginal);
     $('gpxDiscard').addEventListener('click', () => { teardownPreview(); say(''); });
     document.addEventListener('visibilitychange', () => { if (document.hidden && preview) say('navigationWarning'); });
+    $('fmRoute')?.addEventListener('input', renderCaption);
     window.addEventListener('beforeunload', (event) => { if (preview) { event.preventDefault(); event.returnValue = ''; } });
     const backLink = document.getElementById('backToPosts');
     backLink?.addEventListener('click', (event) => {
@@ -554,6 +576,7 @@
       hasPreview: () => !!preview,
       discard: teardownPreview,
       revisionNotice: () => say('revisionRouteNotice'),
+      syncCaption: renderCaption,
       guardAction: () => {
         if (outcomeUnknown) fail('unknown');
         else if (preview) say('pendingPreviewGuard');

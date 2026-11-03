@@ -356,9 +356,6 @@
             <p class="muted editor-field-help" id="countryCoordinatesStatus" role="status"></p>
             <button type="button" id="useCountryCenter" class="btn-secondary" hidden></button>
 
-            <label for="fmRoute">Route</label>
-            <input id="fmRoute" type="text" placeholder="e.g. Athens → Rhodes" />
-
             <label class="check-field" for="fmFeatured">
               <input type="checkbox" id="fmFeatured" aria-describedby="fmFeaturedHint" />
               Use as homepage cover
@@ -394,6 +391,14 @@
               <button id="gpxReimport" type="button" class="btn-secondary" hidden></button>
               <button id="gpxDownload" type="button" class="btn-secondary" hidden></button>
               <button id="gpxDetach" type="button" class="btn-secondary" hidden></button>
+            </div>
+            <div class="gpx-route__caption">
+              <label for="fmRoute" id="gpxCaptionLabel"></label>
+              <input id="fmRoute" type="text" aria-describedby="gpxCaptionHelp gpxCaptionWarning" />
+              <p class="muted editor-field-help" id="gpxCaptionHelp"></p>
+              <div role="status">
+                <p class="notice-warn" id="gpxCaptionWarning" hidden></p>
+              </div>
             </div>
           </section>
 
@@ -2134,6 +2139,8 @@
           renderAltAudit(body.altAudit, true);
           updateLocaleChip();
           BuildReporting.renderOutcome($('actionStatus'), 'publish', body);
+          // The route caption's advisory follows the newly published track (#512).
+          await gpxEditor.refresh();
         } catch (e) {
           showErr(BuildReporting.text('unknown'));
           setStatus('');
@@ -2175,6 +2182,7 @@
           publicationRefresh.accept({ publication: body.publication });
           for (const locale of ['de', 'en']) slugFieldFor(locale).disabled = publishedLocales[locale];
           BuildReporting.renderOutcome($('actionStatus'), 'unpublish', body, { title });
+          await gpxEditor.refresh();
           updateLocaleChip();
         } catch (e) {
           showErr(BuildReporting.text('unknown'));
@@ -2303,6 +2311,7 @@
         countryCoords.reset();
         updateLocaleChip();
         for (const locale of ['de', 'en']) galleryEditors[locale]?.restoreAlts(post.galleryAlts?.[locale]);
+        gpxEditor.syncCaption();
       }
 
       // Returns false only when it redirected to /login (callers must stop);

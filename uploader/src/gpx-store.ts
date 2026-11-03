@@ -6,7 +6,8 @@ import { GpxError } from './gpx-errors.js';
 import { safePairHash, SOURCE_ID_RE, type OriginalSource } from './gpx-files.js';
 
 export interface RouteTokens { baseVersion: string | null; baseUpdatedAt: string }
-export interface PrivateRouteRecord { version: string; geometry: PrivateGeometry | null; source: OriginalSource; updatedAt: Date }
+/** `published`: this draft route is the one a live published snapshot already carries (#512). */
+export interface PrivateRouteRecord { version: string; geometry: PrivateGeometry | null; source: OriginalSource; updatedAt: Date; published: boolean }
 export interface CleanupIntent { sourceId: string; pairHash: string }
 export interface GpxStore {
   get(tk: string): Promise<PrivateRouteRecord | null>;
@@ -19,13 +20,18 @@ export interface GpxStore {
 }
 interface RouteRow {
   translation_key: string; version: string; geometry: PrivateGeometry | null;
-  source_id: string; source_sha256: string; source_bytes: number; updated_at: Date;
+  source_id: string; source_sha256: string; source_bytes: number; updated_at: Date; published: boolean;
 }
 const COLUMNS = 'translation_key, version, geometry, source_id, source_sha256, source_bytes, updated_at';
+// Inverse of publication's `route_changed`: a published snapshot carries a track
+// written at or after the route's last attach/detach. Read-only; `r` is post_routes.
+const PUBLISHED_SQL = `(r.geometry IS NOT NULL AND EXISTS (SELECT 1 FROM posts s
+  WHERE s.translation_key=r.translation_key AND s.status='published'
+    AND s.published_snapshot ? 'track' AND s.published_at >= r.updated_at)) AS published`;
 function record(row: RouteRow): PrivateRouteRecord {
   if (row.geometry !== null) validateGeometry(row.geometry);
   if (!SOURCE_ID_RE.test(row.source_id) || !/^[0-9a-f]{64}$/.test(row.source_sha256) || !Number.isInteger(row.source_bytes) || row.source_bytes < 1 || row.source_bytes > 5 * 1024 * 1024) throw new GpxError('gpx_invalid_source', 500);
-  return { version: row.version, geometry: row.geometry, source: { translationKey: row.translation_key, sourceId: row.source_id, sha256: row.source_sha256, bytes: row.source_bytes }, updatedAt: row.updated_at };
+  return { version: row.version, geometry: row.geometry, source: { translationKey: row.translation_key, sourceId: row.source_id, sha256: row.source_sha256, bytes: row.source_bytes }, updatedAt: row.updated_at, published: row.published === true };
 }
 
 /** Only a lost COMMIT can produce this error. Callers MUST retain both originals. */
@@ -49,7 +55,7 @@ export function pgGpxStore(pool: DbPool): GpxStore {
       await lockPostPair(client, tk);
       const posts = await client.query<{ locale: string; updated_at: Date }>("SELECT locale, updated_at FROM posts WHERE translation_key=$1 ORDER BY locale FOR UPDATE", [tk]);
       if (posts.rows.length !== 2 || posts.rows[0]?.locale !== 'de' || posts.rows[1]?.locale !== 'en') throw new GpxError('gpx_post_not_found', 404);
-      const old = (await client.query<RouteRow>(`SELECT ${COLUMNS} FROM post_routes WHERE translation_key=$1 FOR UPDATE`, [tk])).rows[0];
+      const old = (await client.query<Omit<RouteRow, 'published'>>(`SELECT ${COLUMNS} FROM post_routes WHERE translation_key=$1 FOR UPDATE`, [tk])).rows[0];
       const updated = Math.max(...posts.rows.map((row) => row.updated_at.getTime()));
       if ((old?.version ?? null) !== tokens.baseVersion || updated !== Date.parse(tokens.baseUpdatedAt)) throw new GpxError('gpx_conflict', 409);
       if (change && old && !change.confirmReplace) throw new GpxError('gpx_replace_unconfirmed', 409);
@@ -65,7 +71,7 @@ export function pgGpxStore(pool: DbPool): GpxStore {
       } else {
         await client.query('UPDATE post_routes SET version=$2,geometry=NULL,updated_at=$3 WHERE translation_key=$1', [tk, version, updatedAt]);
       }
-      const row = (await client.query<RouteRow>(`SELECT ${COLUMNS} FROM post_routes WHERE translation_key=$1`, [tk])).rows[0]!;
+      const row = (await client.query<RouteRow>(`SELECT ${COLUMNS}, ${PUBLISHED_SQL} FROM post_routes r WHERE translation_key=$1`, [tk])).rows[0]!;
       if (!isWritable()) throw new GpxError('storage_read_only', 503);
       committing = true;
       await client.query('COMMIT');
@@ -76,7 +82,7 @@ export function pgGpxStore(pool: DbPool): GpxStore {
         released = true;
         // A fresh connection, not the failed transaction, resolves only positive evidence.
         try {
-          const current = (await pool.query<RouteRow>(`SELECT ${COLUMNS} FROM post_routes WHERE translation_key=$1`, [tk])).rows[0];
+          const current = (await pool.query<RouteRow>(`SELECT ${COLUMNS}, ${PUBLISHED_SQL} FROM post_routes r WHERE translation_key=$1`, [tk])).rows[0];
           if (current?.version === version && (!change || current.source_id === change.source.sourceId)) return record(current);
         } catch { /* Retain files when the database cannot resolve the outcome. */ }
         throw new GpxCommitUnknownError();
@@ -87,7 +93,7 @@ export function pgGpxStore(pool: DbPool): GpxStore {
   }
   return {
     async get(tk) {
-      const rows = await pool.query<RouteRow & { post_count: number }>(`SELECT r.*, p.post_count FROM
+      const rows = await pool.query<RouteRow & { post_count: number }>(`SELECT r.*, ${PUBLISHED_SQL}, p.post_count FROM
         (SELECT count(*)::int AS post_count FROM posts WHERE translation_key=$1 AND locale IN ('de','en')) p
         LEFT JOIN post_routes r ON r.translation_key=$1`, [tk]);
       const row = rows.rows[0];

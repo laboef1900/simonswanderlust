@@ -362,7 +362,7 @@ async function loadEditor(options: EditorOptions = {}) {
     ])),
     GpxCopy: { en: new Proxy({}, { get: (_target, key) => String(key) }) },
     GpxMap: { create: async () => ({ render() {}, destroy() {}, resize() {} }) },
-    GpxEditor: { wire: () => ({ refresh: options.routeRefresh ?? (async () => true), publishVersion: options.publishVersion ?? (() => null), publishError: () => null, noteCreated() {}, hasPreview: () => false, discard() {}, revisionNotice() {}, guardAction: () => true }) },
+    GpxEditor: { wire: () => ({ refresh: options.routeRefresh ?? (async () => true), publishVersion: options.publishVersion ?? (() => null), publishError: () => null, noteCreated() {}, hasPreview: () => false, discard() {}, revisionNotice() {}, syncCaption() {}, guardAction: () => true }) },
     EditorGalleryImageOrigin: 'https://img',
     AltSuggest: { wire() {}, suggestHosted: options.caption ?? (() => Promise.reject(new Error('no model in test'))) },
   };
@@ -1749,6 +1749,29 @@ describe('editor.html inline script against its own markup', () => {
       for (const id of ['fmDate', 'fmCountryCode', 'fmRegion', 'fmLat', 'fmLng', 'fmRoute', 'fmCategories', 'fmTags',
         'deCountry', 'enCountry', 'deHeroSrc', 'enHeroSrc', 'deHeroAlt', 'enHeroAlt']) {
         expect(el(id).value, id).toBe('');
+      }
+    });
+
+  // #512: the public site renders the caption only beside a published GPX track,
+  // so the field lives in the GPX route section; storage and payload are unchanged.
+  it('keeps the route caption in the GPX route section with described help and an unchanged payload', async () => {
+      const { api, el } = await loadEditor();
+      const input = el('fmRoute');
+      const section = input.closest('section.gpx-route');
+      expect(section).not.toBeNull();
+      expect(input.closest('#expeditionDetails')).toBeNull();
+      const described = (input.getAttribute('aria-describedby') || '').split(/\s+/).filter(Boolean)
+        .map((id) => el(id));
+      expect(described.length).toBeGreaterThanOrEqual(2);
+      for (const target of described) expect(section!.contains(target)).toBe(true);
+      // Help is always rendered; the advisory sits in a polite live region and starts hidden.
+      expect(described.some((target) => target.classList.contains('editor-field-help') && !target.hidden)).toBe(true);
+      const advisory = described.find((target) => target.closest('[role=status]') && target.classList.contains('notice-warn'));
+      expect(advisory?.hidden).toBe(true);
+      for (const [typed, sent] of [['  Athens → Rhodes  ', 'Athens → Rhodes'], ['   ', undefined]] as const) {
+        input.value = typed;
+        input.fire('input');
+        expect(api.buildPayload().shared.route).toBe(sent);
       }
     });
 
