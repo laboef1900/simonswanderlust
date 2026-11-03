@@ -942,6 +942,12 @@ default, no API key exists, and no `app_secrets` slot is used.
   refused on save (400) and treated as unconfigured at run time. An invalid list refuses boot.
   Geocoding and WXR import never receive the list. Residual: an admin can point a profile at a
   listed origin that is not an OSRM server; only operator-listed services are reachable.
+- **Bundled OSRM data path:** `osrm-fetch` (digest-pinned `debian:trixie-slim`) installs
+  `curl` and `osmium-tool` from Debian's signed archive only when a download is due, with
+  `cap_drop: ALL` plus exactly `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETUID`, `SETGID` for
+  apt/dpkg and `no-new-privileges`. It downloads operator-listed `OSRM_PBF_URLS` over HTTPS only
+  (redirects too) and mounts nothing but the rebuildable `osrm` volume. Residual: package
+  versions float within Debian 13 stable; no third-party osmium image is trusted.
 - **Inputs:** session required; 16 KiB body; ≤ 25 stops validated like Publish (name, ranges,
   `via` boolean, `profile` enum); 20 calculations per user per 10 minutes, spent only once the
   unavailable-profile and in-flight refusals have passed. An unknown story is refused before any
@@ -950,8 +956,10 @@ default, no API key exists, and no `app_secrets` slot is used.
   see availability booleans, never URLs.
 - **Provider output is untrusted:** parsed in a try block, `code`/`LineString`/position count
   and every coordinate checked, then simplified and re-validated against the public GPX track
-  limits (`validateStoredStopRoute`). Per-leg NoRoute or errors become flagged straight
-  fallbacks; legs never reach markup except through `textContent`.
+  limits (`validateStoredStopRoute`). Per-leg NoRoute/NoSegment or errors become flagged
+  straight fallbacks; legs never reach markup except through `textContent`. Every request
+  bounds snapping with `radiuses` = 5 km, so a stop outside the extract can no longer come back
+  as a road leg ending at the extract's edge.
 - **Publication:** the build and readers make no routing request. Publish copies only a route
   whose fingerprint matches the locked saved stops into `published_snapshot.stop_route`, never
   next to a GPX `track` (which always wins); a stale route is omitted, never published. Via

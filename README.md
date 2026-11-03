@@ -139,9 +139,9 @@ cp uploader/.env.example .env
 Edit your private `.env`: set `POSTGRES_PASSWORD` to the output of `openssl rand -hex 32`,
 `PUBLIC_BASE_URL=http://localhost:3000`, `IMG_HOST=localhost:3000`, `IMAGE_TAG` (a
 version published under `ghcr.io/laboef1900/wanderlust-studio`, or `local` after
-[building the current source](#build-the-current-source)) and `OSRM_PBF_URL` (the
-OpenStreetMap extract the bundled street-routing servers use, e.g.
-`https://download.geofabrik.de/europe/germany/berlin-latest.osm.pbf`; see
+[building the current source](#build-the-current-source)) and `OSRM_PBF_URLS` (one or more
+OpenStreetMap extracts the bundled street-routing servers merge and use, e.g.
+`https://download.geofabrik.de/central-america/costa-rica-latest.osm.pbf`; see
 [docs/install.md](docs/install.md#4g-street-routing-bundled-osrm)). All five are required; Compose
 stops with `set … in .env` when one is missing. `PUBLIC_BASE_URL`/`IMG_HOST` name the image
 host only; a server's blog domain is set later in **Settings → Site identity**.

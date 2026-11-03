@@ -12,33 +12,48 @@
 | # | Decision |
 |---|---|
 | 1 | **Modes:** the stack ships three OSRM servers: car, bike, foot. |
-| 2 | **Map data:** auto-downloaded from `OSRM_PBF_URL` in `.env` (an HTTPS `.osm.pbf`, e.g. Geofabrik). |
-| 3 | **Default:** always on, part of every `docker compose up -d`; `OSRM_PBF_URL` is required like `IMAGE_TAG`. |
+| 2 | **Map data:** auto-downloaded from `OSRM_PBF_URLS` in `.env` (one or more HTTPS `.osm.pbf`, e.g. Geofabrik), merged into **one** graph per mode (follow-up decision, same day). |
+| 3 | **Default:** always on, part of every `docker compose up -d`; `OSRM_PBF_URLS` is required like `IMAGE_TAG`. |
 | 4 | **Private access:** an operator env allow-list of exact origins, `ROUTING_INTERNAL_ORIGINS`; Settings can never widen it. |
-| 5 | **First region on the owner's machine:** Berlin (small test region). |
+| 5 | **First region on the owner's machine:** Berlin (small test region); then Mexico + Costa Rica + Ecuador. |
+| 6 | **Servers memory-map the graph** (`osrm-routed --mmap=1`): only queried areas become resident, evictable page cache. |
+| 7 | **Snap bound:** every leg sends `radiuses` = 5 km, so out-of-coverage stops become flagged straight `no_route` legs. |
 
 ## Compose topology
 
 | Service | Image | Role |
 |---|---|---|
-| `osrm-fetch` | `curlimages/curl:8.23.0` (digest-pinned) | One-shot. Downloads `OSRM_PBF_URL` (HTTPS only, also for redirects) to `/osrm/region.osm.pbf` via a `.part` rename; writes a per-download `region.stamp` (UTC time + URL), then `region.url`; skips when the URL is unchanged and a stamp exists. Removing `region.url` forces a refresh of the same URL. |
-| `osrm-prepare` | `osrm-backend:v26.11.0-debian` (digest-pinned) | One-shot after `osrm-fetch` succeeded, bounded by `mem_limit` = `memswap_limit` = `OSRM_PREPARE_MEM_LIMIT` (default `4g`). Per mode **sequentially** (peak RAM = one extract): `osrm-extract -p /opt/{car,bicycle,foot}.lua`, `osrm-partition`, `osrm-customize` into `<mode>.tmp`, then swaps it in. Skips a mode whose `ready` marker equals `region.stamp`, so both a new URL and a refresh rebuild. |
-| `osrm-car` / `osrm-bike` / `osrm-foot` | same OSRM image | `osrm-routed --algorithm mld` on port 5000, `osrm` volume read-only, no host port, TCP healthcheck. Start only after `osrm-prepare` succeeded. |
+| `osrm-fetch` | `debian:trixie-slim` (digest-pinned) | One-shot. When work is due, installs `curl` + `osmium-tool` from Debian's signed archive, downloads each `OSRM_PBF_URLS` entry (HTTPS only, also for redirects), merges more than one with `osmium merge` into `/osrm/region.osm.pbf` via a `.part` rename; writes a per-download `region.stamp` (UTC time + list), then `region.url`; skips when the list is unchanged and a stamp exists. Removing `region.url` forces a refresh. |
+| `osrm-prepare` | `osrm-backend:v26.11.0-debian` (digest-pinned) | One-shot after `osrm-fetch` succeeded, bounded by `mem_limit` = `memswap_limit` = `OSRM_PREPARE_MEM_LIMIT` (default `4g`). Per mode **sequentially** (peak RAM = one extract): `osrm-extract -p /opt/{car,bicycle,foot}.lua`, `osrm-partition`, `osrm-customize` into `<mode>.tmp`, then swaps it in. Skips a mode whose `ready` marker equals `region.stamp`, so both a new list and a refresh rebuild. |
+| `osrm-car` / `osrm-bike` / `osrm-foot` | same OSRM image | `osrm-routed --algorithm mld --mmap=1` on port 5000, `osrm` volume read-only, no host port, TCP healthcheck. Start only after `osrm-prepare` succeeded. |
 
-- All OSRM containers run with `cap_drop: [ALL]` and `no-new-privileges`. `osrm-fetch` runs as
-  root only because a fresh named volume is root-owned; it needs no capability to write it.
+- OSRM containers run with `cap_drop: [ALL]` and `no-new-privileges`. `osrm-fetch` adds back
+  exactly `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETUID`, `SETGID` for apt/dpkg; osmium has no
+  official image and no third-party image is trusted. Package versions float within Debian 13.
 - The `osrm` volume is rebuildable (extract + graphs) and is not part of backups.
 - `app` does **not** depend on any OSRM service: a failed download or build leaves routing
   unavailable (the editor reports "no routing service") while the blog, admin and images run.
-- Changing `OSRM_PBF_URL` re-downloads and rebuilds on the next `docker compose up -d`; the
+- Changing `OSRM_PBF_URLS` re-downloads and rebuilds on the next `docker compose up -d`; the
   routed servers must then be recreated to load the new graph
   (`docker compose up -d --force-recreate osrm-car osrm-bike osrm-foot`). Refreshing the same
-  URL: remove `/osrm/region.url` (`docker compose run --rm --no-deps --entrypoint rm osrm-fetch
+  list: remove `/osrm/region.url` (`docker compose run --rm --no-deps --entrypoint rm osrm-fetch
   -f /osrm/region.url`), then the same sequence (`docs/install.md` §4g).
-- **Memory bound** (issue #71 reasoning): an oversized region must OOM the one-shot build
-  (exit 137, servers keep the previous graph), never the host's Postgres or app. Berlin
-  peaked at ~1.06 GB in one mode; the 4 GiB default is a ceiling, not a measured minimum.
-- **Upgrade/recovery:** `OSRM_PBF_URL` is interpolated for every Compose command; installs
+- **Several regions, one graph:** OSRM builds one graph per profile, never per region, so any
+  number of regions stays three servers. Regions need not touch: a leg between unconnected
+  regions is `NoRoute` → flagged straight leg. Merge residual: `osmium merge` keeps one copy of
+  identical objects (border overlap); extracts downloaded across a Geofabrik update boundary
+  could carry two versions of an object.
+- **Memory model:** `--mmap=1` keeps the graph file-backed. Measured on the Berlin car graph
+  (162 MB on disk) after one route: default 116 MB RSS (110 MB anonymous), mmap 30 MB
+  (29 MB file-backed page cache). The build, not serving, sizes the host.
+- **Memory bound** (issue #71 reasoning): an oversized list must OOM the one-shot build
+  (exit 137, servers keep the previous graph), never the host's Postgres or app. Measured
+  peaks (arm64): Berlin 95 MB → 1.06 GB; Costa Rica + Ecuador 158 MB → 3.5 GB (car; bike 3.2,
+  foot 3.1), 1.1 GB graph per mode; Mexico + Costa Rica + Ecuador 780 MB → killed at 12 GB
+  (car, with 10 and with 4 threads). Peak grows faster than file size; the 4 GiB default is a
+  ceiling, not a minimum. Extrapolated, not measured: a 32 GB host is not expected to build
+  every story country at once (≈ 3.5 GB of extracts); pick the list against a measured build.
+- **Upgrade/recovery:** `OSRM_PBF_URLS` is interpolated for every Compose command; installs
   must set it before any command, including the restore runbook (`ARCHITECTURE.md`).
 - **Pacing:** the #513 ≥ 1.1 s spacing honours public-service policy (FOSSGIS); legs to an
   operator-listed internal origin are not paced. Single flight and the 60 s budget still apply,
@@ -85,7 +100,13 @@ Invariants:
   full; credentials still refused), `stop-routing.test.ts` (listed compose origin routes through
   the real `safeFetch`; unlisted plain HTTP is unconfigured), `stop-route-api.test.ts` (save
   accepts only listed plain-HTTP origins; stale stored values do not block saves).
+- `stop-routing.test.ts` also pins the snap bound: an OSRM double that answers NoSegment only
+  when `radiuses` ≤ 5 km turns the Yucatán stops into flagged straight legs (fails without the
+  bound with `stop_route_empty`, the owner-reported error).
 - Smoke: Berlin extract, three graphs built, editor Calculate returns road legs per mode.
+- Smoke (multi-region, `--mmap=1`): Costa Rica + Ecuador merged with `osmium merge`; in `app`:
+  Costa Rica car → road, Ecuador foot → road, Costa Rica → Ecuador → straight `no_route`,
+  Yucatán → two straight `no_route` legs. Car server RSS 92 MB (86 MB file-backed).
 
 ## Rollback and containment
 

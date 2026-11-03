@@ -1,7 +1,7 @@
 # Self-hosted stack, WordPress-style: one app container + Postgres, plus the
 # street-routing OSRM servers (car, bike, foot) the editor's stop routing uses.
 # Copy uploader/.env.example to .env (set POSTGRES_PASSWORD, PUBLIC_BASE_URL, IMG_HOST,
-# IMAGE_TAG and OSRM_PBF_URL; see docs/install.md). Then:
+# IMAGE_TAG and OSRM_PBF_URLS; see docs/install.md). Then:
 #   docker compose pull && docker compose up -d     # run a released GHCR image
 # IMAGE_TAG must identify a release published under wanderlust-studio (0.18.1 or
 # later) or `local`; there is no default. See README.md before upgrading.
@@ -109,32 +109,54 @@ services:
       retries: 10
     restart: unless-stopped
 
-  # Street routing data (#513). One-shot: downloads OSRM_PBF_URL (an OpenStreetMap
-  # extract, e.g. Geofabrik) into the `osrm` volume, again only when the URL changes
-  # or after a refresh removed /osrm/region.url (docs/install.md §4g).
+  # Street routing data (#513). One-shot: downloads every OSRM_PBF_URLS extract
+  # (OpenStreetMap, e.g. Geofabrik; space- or comma-separated) and merges them into
+  # one region.osm.pbf in the `osrm` volume — again only when the list changes or
+  # after a refresh removed /osrm/region.url (docs/install.md §4g).
   osrm-fetch:
-    image: curlimages/curl:8.23.0@sha256:3fb7e13e5d179a845c97d78204f3f1064d1907037f26a3ebf91710571151fd93
-    # A fresh named volume is root-owned; root here needs no capabilities to write it.
-    user: "0:0"
+    image: debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4
+    # curl and osmium-tool come from Debian's signed archive, installed only when a
+    # download is due (osmium has no official image; third-party images are not
+    # trusted here). apt/dpkg need exactly these capabilities; the container sees
+    # nothing but the rebuildable `osrm` volume.
     cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID]
     security_opt: ["no-new-privileges:true"]
     environment:
-      OSRM_PBF_URL: ${OSRM_PBF_URL:?set OSRM_PBF_URL in .env to an HTTPS .osm.pbf extract (see docs/install.md)}
+      OSRM_PBF_URLS: ${OSRM_PBF_URLS:?set OSRM_PBF_URLS in .env to one or more HTTPS .osm.pbf extracts (see docs/install.md)}
     volumes:
       - osrm:/osrm
     entrypoint: ["sh", "-euc"]
     command:
       - |
-        if [ -f /osrm/region.osm.pbf ] && [ -f /osrm/region.stamp ] && [ "$$(cat /osrm/region.url 2>/dev/null)" = "$$OSRM_PBF_URL" ]; then
-          echo "osrm-fetch: map extract is current"; exit 0
+        urls=$$(printf '%s' "$$OSRM_PBF_URLS" | tr ',' ' ' | xargs -n1)
+        [ -n "$$urls" ] || { echo "osrm-fetch: OSRM_PBF_URLS lists no extract" >&2; exit 1; }
+        if [ -f /osrm/region.osm.pbf ] && [ -f /osrm/region.stamp ] && [ "$$(cat /osrm/region.url 2>/dev/null)" = "$$urls" ]; then
+          echo "osrm-fetch: map extracts are current"; exit 0
         fi
-        echo "osrm-fetch: downloading the map extract"
-        curl -fsSL --proto =https --proto-redir =https --retry 3 -o /osrm/region.osm.pbf.part "$$OSRM_PBF_URL"
+        echo "osrm-fetch: installing curl and osmium-tool"
+        apt-get update -qq
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ca-certificates curl osmium-tool >/dev/null
+        rm -rf /osrm/download.tmp; mkdir /osrm/download.tmp
+        n=0
+        for url in $$urls; do
+          n=$$((n + 1)); echo "osrm-fetch: downloading extract $$n"
+          curl -fsSL --proto =https --proto-redir =https --retry 3 -o "/osrm/download.tmp/$$n.osm.pbf" "$$url"
+        done
+        if [ "$$n" -eq 1 ]; then
+          mv /osrm/download.tmp/1.osm.pbf /osrm/region.osm.pbf.part
+        else
+          # One graph per mode covers every region; legs between regions that
+          # share no road come back NoRoute and become flagged straight legs.
+          echo "osrm-fetch: merging $$n extracts"
+          osmium merge --overwrite -f pbf -o /osrm/region.osm.pbf.part /osrm/download.tmp/*.osm.pbf
+        fi
+        rm -rf /osrm/download.tmp
         mv /osrm/region.osm.pbf.part /osrm/region.osm.pbf
         # The stamp names this exact download, so osrm-prepare also rebuilds after a
-        # refresh of the same URL. Written before region.url: a crash in between re-downloads.
-        printf '%s %s\n' "$$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$$OSRM_PBF_URL" > /osrm/region.stamp
-        printf '%s' "$$OSRM_PBF_URL" > /osrm/region.url
+        # refresh of the same list. Written before region.url: a crash in between re-downloads.
+        printf '%s %s\n' "$$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$$(printf '%s' "$$urls" | tr '\n' ' ')" > /osrm/region.stamp
+        printf '%s' "$$urls" > /osrm/region.url
     restart: "no"
 
   # One-shot: builds the MLD routing graph per travel mode, one mode at a time
@@ -144,9 +166,10 @@ services:
     depends_on:
       osrm-fetch:
         condition: service_completed_successfully
-    # Bounded (issue #71 reasoning): an oversized region must OOM this one-shot,
-    # never the host's Postgres or app. Berlin peaked at ~1.06 GB in one mode;
-    # raise OSRM_PREPARE_MEM_LIMIT for larger regions. memswap_limit MUST equal
+    # Bounded (issue #71 reasoning): an oversized list must OOM this one-shot,
+    # never the host's Postgres or app. Measured peaks: Costa Rica + Ecuador
+    # (158 MB) 3.5 GB; Mexico + both (780 MB) over 12 GB. Raise
+    # OSRM_PREPARE_MEM_LIMIT for larger lists. memswap_limit MUST equal
     # mem_limit, or Docker grants 2× swap and the build thrashes instead of failing.
     mem_limit: ${OSRM_PREPARE_MEM_LIMIT:-4g}
     memswap_limit: ${OSRM_PREPARE_MEM_LIMIT:-4g}
@@ -174,21 +197,23 @@ services:
         done
     restart: "no"
 
+  # --mmap=1: the graph stays on disk and the kernel pages in only what queries
+  # touch (evictable page cache), so unused regions cost no resident memory.
   osrm-car:
     <<: *osrm-server
-    command: ["osrm-routed", "--algorithm", "mld", "/osrm/car/region.osrm"]
+    command: ["osrm-routed", "--algorithm", "mld", "--mmap=1", "/osrm/car/region.osrm"]
     volumes:
       - osrm:/osrm:ro
 
   osrm-bike:
     <<: *osrm-server
-    command: ["osrm-routed", "--algorithm", "mld", "/osrm/bike/region.osrm"]
+    command: ["osrm-routed", "--algorithm", "mld", "--mmap=1", "/osrm/bike/region.osrm"]
     volumes:
       - osrm:/osrm:ro
 
   osrm-foot:
     <<: *osrm-server
-    command: ["osrm-routed", "--algorithm", "mld", "/osrm/foot/region.osrm"]
+    command: ["osrm-routed", "--algorithm", "mld", "--mmap=1", "/osrm/foot/region.osrm"]
     volumes:
       - osrm:/osrm:ro
 

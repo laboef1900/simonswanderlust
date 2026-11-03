@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createStopRouter, splitAntimeridian, StopRoutingError, ROUTING_SPACING_MS, ROUTING_BUDGET_MS } from '../src/stop-routing.js';
+import { createStopRouter, splitAntimeridian, StopRoutingError, ROUTING_SPACING_MS, ROUTING_BUDGET_MS, ROUTING_SNAP_RADIUS_METRES } from '../src/stop-routing.js';
 import { FetchError, type SafeFetchOptions } from '../src/safe-fetch.js';
 import { validatePublicStopRoute, validateRouteStops, type RouteStop } from '../public/stop-route.js';
 import { stopRouteFingerprintSync } from '../src/stop-route-fingerprint.js';
@@ -94,6 +94,33 @@ describe('createStopRouter (#513)', () => {
     expect(stored.legs).toEqual([{ profile: 'car', kind: 'road' }, { profile: 'car', kind: 'straight', fallback: 'no_route' }]);
     expect(stored.route.runs.map((run) => run.kind)).toEqual(['road', 'straight']);
     expect(agents.every((agent) => /SimonsWanderlust\/.+ \(editor stop routing\)/.test(agent))).toBe(true);
+  });
+
+  it('turns stops outside the extract into flagged straight legs instead of a fake road at its edge', async () => {
+    // Behaves like osrm-routed on a Berlin-only graph: without a radius every
+    // Yucatán stop snaps ~9,600 km to the same Berlin edge node (0 m "route");
+    // with `radiuses` beyond the nearest road it answers NoSegment.
+    const edge: [number, number] = [13.083971, 52.411755];
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const radiuses = new URL(String(input)).searchParams.get('radiuses')?.split(';').map(Number) ?? [];
+      return radiuses.length === 2 && radiuses.every((metres) => metres > 0 && metres <= ROUTING_SNAP_RADIUS_METRES)
+        ? new Response(JSON.stringify({ code: 'NoSegment', message: 'Could not find a matching segment' }), { status: 400 })
+        : new Response(ok([edge, edge]), { status: 200 });
+    });
+    const c = clock();
+    const router = createStopRouter({
+      endpoints: () => ({ car: 'http://osrm-car:5000', bike: '', foot: '' }), now: c.now, sleep: c.sleep, fetchImpl,
+      lookup: async () => [{ address: '172.18.0.4', family: 4 }], internalOrigins: new Set(['http://osrm-car:5000']),
+    });
+    const yucatan = validateRouteStops([
+      { name: 'Cancún', lat: 21.1527467, lng: -86.8425761 }, { name: 'Playa del Carmen', lat: 20.6462848, lng: -87.0807866 },
+      { name: 'Tulum', lat: 20.429647, lng: -87.6529306 },
+    ]);
+    const stored = await router.calculate(yucatan);
+    expect(stored.legs).toEqual([
+      { profile: 'car', kind: 'straight', fallback: 'no_route' }, { profile: 'car', kind: 'straight', fallback: 'no_route' },
+    ]);
+    expect(stored.route.runs).toEqual([{ kind: 'straight', coordinates: [[-86.8426, 21.1527], [-87.0808, 20.6463], [-87.6529, 20.4296]] }]);
   });
 
   it.each([
