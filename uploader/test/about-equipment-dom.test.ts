@@ -168,13 +168,20 @@ describe('About editor equipment line (#514)', () => {
     expect(h.beforeUnload().defaultPrevented).toBe(false);
   });
 
-  it('clears a locale with an empty line', async () => {
-    const h = await editor({ route: stubbed().route });
+  it('clears a locale with an empty line and returns keyboard focus to Save', async () => {
+    let dropFocus = () => {};
+    const h = await editor({ route: stubbed({ put: (body) => { dropFocus(); return { status: 200, body: { revision: body.revision + 1 } }; } }).route });
+    // A browser drops focus from the Save button it disables while the request runs.
+    dropFocus = () => h.dom.document.body!.focus();
+    await h.click('tabbtn-en');
     h.type('enGear', '   ');
+    h.el('enGearSave').focus();
+    expect(h.dom.document.activeElement).toBe(h.el('enGearSave'));
     await h.click('enGearSave');
     expect(h.puts()[0]!.identity.aboutGear).toEqual({ de: 'Leica Q2 · Notizbuch', en: '   ' });
     expect(h.el('enGear').value).toBe('');
     expect(h.el('enGearStatus').textContent).toBe(copy.aboutGearCleared);
+    expect(h.dom.document.activeElement).toBe(h.el('enGearSave'));
   });
 
   it('refuses over-limit and non-plain text locally, keeping and focusing the input', async () => {

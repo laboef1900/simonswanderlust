@@ -144,8 +144,18 @@ window.AboutEquipment = (function () {
       return '';
     }
 
+    // Disabling the control that started a request drops keyboard focus to <body>.
+    // An outcome that needs attention takes focus; otherwise the origin gets it back,
+    // unless the author has moved to another control meanwhile.
+    function settleFocus(origin, target) {
+      const active = document.activeElement;
+      if (target) target.focus();
+      else if (origin && (!active || active === document.body || active === origin)) origin.focus();
+    }
+
     async function save(locale) {
       if (busy || conflicted || state !== 'ready') return;
+      const origin = document.activeElement;
       const input = $(locale + 'Gear');
       const value = input.value;
       const problem = invalid(value);
@@ -191,17 +201,18 @@ window.AboutEquipment = (function () {
       } finally {
         busy = false;
         paint();
-        focus?.focus();
+        settleFocus(origin, focus);
       }
     }
 
     async function reload(locale) {
       if (busy) return;
+      const origin = document.activeElement;
       if (shown().some(dirty) && !await AdminConfirm.ask({
         title: copy.aboutGearReload, body: copy.aboutGearReloadConfirm, confirmLabel: copy.aboutGearReload,
       })) return;
       await load();
-      if (state === 'ready') $(locale + 'Gear').focus();
+      settleFocus(origin, state === 'ready' ? $(locale + 'Gear') : null);
     }
 
     paint();
