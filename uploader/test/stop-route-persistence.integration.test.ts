@@ -161,4 +161,27 @@ maybe('stop routes in PostgreSQL: Publish, GPX precedence, backup (#513)', () =>
       expect((await rows(tk)).map((row) => row.stop_route)).toEqual([route, route]);
     }
   });
+
+  // A route calculated for 4 stops stays stored when a later draft save removes a
+  // stop or clears them all. That is stale data, not corruption: every backup,
+  // and the pre-restore undo dump, must still capture it.
+  it('captures and restores a stale stored route whose stop count changed after Calculate', async () => {
+    const route = storedRouteFor(ROUTE_STOPS);
+    const removed = await story();
+    await posts.saveStopRoute(removed, route);
+    await setStops(removed, ROUTE_STOPS.slice(0, 3));
+    const cleared = await story();
+    await posts.saveStopRoute(cleared, route);
+    await setStops(cleared, []);
+    const before = [...await rows(removed), ...await rows(cleared)];
+
+    const dir = await mkdtemp(join(tmpdir(), 'stop-route-stale-backup-'));
+    const file = join(dir, await dumpDatabase(pool, dir));
+    await pool.query('DELETE FROM posts');
+    await restoreDatabase(pool, file);
+    const restored = [...await rows(removed), ...await rows(cleared)];
+    expect(restored.map((row) => row.stop_route)).toEqual(before.map((row) => row.stop_route));
+    expect(restored.map((row) => row.stop_route)).toEqual([route, route, route, route]);
+    expect((await posts.publish(removed, await publishTokens(posts, removed))).stopRoute).toBe('stale');
+  });
 });

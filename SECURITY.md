@@ -933,9 +933,10 @@ default, no API key exists, and no `app_secrets` slot is used.
   60 s budget per calculation. A refused/failed provider stores nothing; the previously stored
   and published routes stay unchanged. `straight` legs never touch the network.
 - **Inputs:** session required; 16 KiB body; ≤ 25 stops validated like Publish (name, ranges,
-  `via` boolean, `profile` enum); 20 calculations per user per 10 minutes. An unknown story is
-  refused before any request. Only admins change the endpoints (HTTPS, no credentials, query or
-  fragment); authors see availability booleans, never URLs.
+  `via` boolean, `profile` enum); 20 calculations per user per 10 minutes, spent only once the
+  unavailable-profile and in-flight refusals have passed. An unknown story is refused before any
+  request. Only admins change the endpoints (HTTPS, no credentials, query or fragment); authors
+  see availability booleans, never URLs.
 - **Provider output is untrusted:** parsed in a try block, `code`/`LineString`/position count
   and every coordinate checked, then simplified and re-validated against the public GPX track
   limits (`validateStoredStopRoute`). Per-leg NoRoute or errors become flagged straight
@@ -950,7 +951,8 @@ default, no API key exists, and no `app_secrets` slot is used.
 - **Licensing:** routed geometry derives from OpenStreetMap; the editor panel and every public
   map that draws a stop route carry OSM attribution.
 - **Backups:** dump v15 carries the private `posts.stop_route` and validates it (strict shape,
-  DE/EN equality, one leg per stop gap) and any published `stop_route` before any write.
+  DE/EN equality) and any published `stop_route` before any write. A stale stored route, including
+  one whose leg count no longer matches the saved stops, is legitimate data and always captured.
 - **Containment:** clear the three URLs in Settings. See the
   [design, misuse cases and rollback](docs/superpowers/specs/2026-11-03-issue-513-stop-routing-design.md).
 

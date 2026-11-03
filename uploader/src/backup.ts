@@ -111,10 +111,13 @@ function validatePublishedTracks(posts: readonly Record<string, unknown>[], lang
 }
 
 /**
- * #513 stop routes, checked before any write. Stored routes are strict, identical
- * on both rows and have one leg per stop gap; published projections are strict,
- * identical across a pair and never share a snapshot with a GPX `track`.
- * Freshness is NOT re-judged here: a stale stored route is legitimate data.
+ * #513 stop routes, checked before any write. Stored routes are strict and
+ * identical on both rows; published projections are strict, identical across a
+ * pair and never share a snapshot with a GPX `track`.
+ * Freshness is NOT re-judged here: a stale stored route is legitimate data. That
+ * includes a leg count that no longer matches the saved stops (Calculate stores
+ * the editor's current stops; a later draft save may add or remove one). Publish
+ * alone decides freshness (`freshStopRoute`), so capture and restore accept it.
  */
 export function validateStopRoutes(posts: readonly Record<string, unknown>[], version: number): void {
   const snapshotRoute = (snapshot: unknown): unknown => snapshot !== null && typeof snapshot === 'object' && Object.hasOwn(snapshot, 'stop_route')
@@ -129,10 +132,7 @@ export function validateStopRoutes(posts: readonly Record<string, unknown>[], ve
         continue;
       }
       const stored = post.stop_route ?? null;
-      if (stored !== null) {
-        const route = validateStoredStopRoute(stored);
-        if (!Array.isArray(post.stops) || route.legs.length !== post.stops.length - 1) throw new Error();
-      }
+      if (stored !== null) validateStoredStopRoute(stored);
       if (published !== undefined) {
         validatePublicStopRoute(published);
         if (Object.hasOwn(post.published_snapshot as object, 'track')) throw new Error();

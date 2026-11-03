@@ -115,16 +115,21 @@ editor's current rows; they need not be saved yet).
 1. Validate with `validateRouteStops` (strict: names, ranges, via, profile). `2 ≤ stops ≤ 25`
    (`STOP_ROUTE_LIMITS.stops`); else `400 {code}`.
 2. The pair must exist (`404`). Storage must be writable (`503`).
-3. Per-user fixed-window limiter (20 calculations / 10 min) → `429 stop_route_rate_limited`; one
-   calculation in flight app-wide → `429 stop_route_busy` (`Retry-After`).
-4. Every routed profile used by a leg must have a configured URL, else `409
-   stop_route_profile_unavailable {profiles}` **before any network request**.
+3. Refusals that start nothing come first and never spend a calculation (`StopRouter.refusal`):
+   every routed profile used by a leg must have a configured URL, else `409
+   stop_route_profile_unavailable {profiles}` **before any network request**; one calculation in
+   flight app-wide → `429 stop_route_busy` (`Retry-After: 5`).
+4. Per-user fixed-window limiter (20 calculations / 10 min) → `429 stop_route_rate_limited`.
+   `calculate` re-checks step 3 when it starts, so a race still refuses safely.
 5. Legs run **sequentially in stop order**, one OSRM request per routed leg:
    `GET {base}/route/v1/{segment}/{lng1},{lat1};{lng2},{lat2}?overview=full&geometries=geojson&alternatives=false&steps=false`
    through `safeFetch` (`maxRedirects: 0`, `timeoutMs: 10_000`, `maxBytes: 4 MiB`, identifying
    `User-Agent` like the geocoder). Outbound requests are spaced ≥ 1.1 s app-wide (FOSSGIS policy:
    ≤ 1 request/s; harmless for self-hosted). An overall 60 s budget bounds a calculation; legs not
-   started in time become `provider_error` fallbacks.
+   started in time become `provider_error` fallbacks. The request is held for up to about a minute,
+   within the supported proxy's 960 s read timeout. A proxy with a read timeout under ~70 s cuts
+   the browser off while the server still stores the result; the editor shows a failure and a
+   reload shows the stored route (`docs/install.md` troubleshooting).
 6. Per-leg outcome: valid `code: "Ok"` with a `LineString` of finite, in-range positions (≤ 100,000)
    → `road`. HTTP 400 or OSRM `NoRoute`/`NoSegment` → straight fallback `no_route`. Any other HTTP
    status, network/timeout/size error, `safeFetch` block or malformed body → straight fallback
@@ -241,8 +246,11 @@ today.
 
 ## Backup, restore and export
 
-- Dump **v15** adds `posts.stop_route` (validated strictly, both rows of a pair equal, legs count
-  consistent) and validates any `published_snapshot.stop_route`. Dumps ≤ v14 restore it as `NULL`.
+- Dump **v15** adds `posts.stop_route` (validated strictly, both rows of a pair equal) and validates
+  any `published_snapshot.stop_route`. A stored route's leg count is **not** compared with the saved
+  stops: Calculate stores the editor's current stops and a later draft save may add or remove one,
+  which is stale data, not corruption. Capture, the pre-restore undo dump and restore must accept it;
+  only Publish judges freshness. Dumps ≤ v14 restore it as `NULL`.
   `SUPPORTED_DUMP_VERSIONS` gains 15 (allow-list guard widened deliberately).
 - MDX export writes `stops` including `via`/`profile` and the published `stopRoute` (validated) next
   to `track`.
