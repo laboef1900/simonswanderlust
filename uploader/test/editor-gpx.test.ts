@@ -1733,4 +1733,26 @@ describe('route caption advisory', () => {
     expect(h.element('fmRoute').value).toBe('');
     expect(advisory(h).hidden).toBe(true);
   });
+
+  it('makes no claim after Publish when its route re-read fails, and keeps publishing gated', async () => {
+    const stored = { ...reloadPostFixture(), shared: { ...reloadPostFixture().shared, route: 'Athens → Rhodes' } };
+    let routeFails = false;
+    const h = fullEditor(preview, async (url, options) => {
+      if (url.endsWith('/route') && options.method === 'GET') return routeFails ? response({ error: 'synthetic' }, 500) : response(attachedRoute);
+      if (url === '/posts/pair-1' && options.method === 'PUT') return response({ ...stored, updatedAt: '2026-10-28T10:02:00.000Z' });
+      if (url === '/posts/pair-1') return response(stored);
+      if (url.endsWith('/publish')) return response({ published: true, updatedAt: '2026-10-28T10:03:00.000Z', publication: publication('published'), build: { ok: true, attemptId: 'r1', release: 'r1' } });
+      return undefined;
+    });
+    await h.editor.loadPost('pair-1');
+    expect(advisory(h).hidden).toBe(false);
+    routeFails = true;
+    h.element('publishBtn').click();
+    await settle();
+    expect(publicationWrites(h)).toHaveLength(1);
+    // The pre-publish answer is now stale and the new one unknown: neither is shown.
+    expect(advisory(h).hidden).toBe(true);
+    expect(h.element('gpxRouteFeedback').textContent).toBe(ui.en['gpx.routeRefreshFailed']);
+    expect(() => h.api.publishVersion()).toThrow();
+  });
 });
