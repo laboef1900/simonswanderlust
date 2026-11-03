@@ -2896,7 +2896,7 @@ describe('POST /posts/bulk', () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body).toMatchObject({ succeeded: 1, failed: 1 });
-    expect(body.results).toContainEqual({ key: good, ok: true,
+    expect(body.results).toContainEqual({ key: good, ok: true, stopRoute: 'none',
       updatedAt: (await b.posts.get(good))!.updatedAt.toISOString(),
       publication: { availability: 'available', status: 'published', requestedLocales: ['de', 'en'],
         committedLocales: ['de', 'en'], draftDiffers: false, live: { de: 'not-live', en: 'not-live' } } });

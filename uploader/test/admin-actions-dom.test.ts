@@ -17,6 +17,7 @@ import { createEncodeQueue } from '../src/encode-queue.js';
 import { createWorkLock } from '../src/work-lock.js';
 import { ui } from '../../site/src/i18n/ui.js';
 import { renderGpxCopy } from '../src/gpx-copy.js';
+import { renderStopRouteCopy } from '../src/stop-route-copy.js';
 import { publication, loadPublicationState } from './publication-client-fixture.js';
 
 // posts.html, settings.html and comments.html run their actions as plain
@@ -228,6 +229,7 @@ function loadPage(file: string, extraGlobals: Record<string, unknown>, scripts: 
   ctx.window = ctx;
   vm.createContext(ctx);
   vm.runInContext(renderGpxCopy(), ctx);
+  vm.runInContext(renderStopRouteCopy(), ctx);
   vm.runInContext(readFileSync('public/build-reporting.js', 'utf8'), ctx);
   vm.runInContext(readFileSync('public/publication-state.js', 'utf8'), ctx);
   vm.runInContext(readFileSync('public/publication-refresh.js', 'utf8'), ctx);

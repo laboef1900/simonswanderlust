@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Trip } from './trips';
 import { tripPins, tripGeometry, type TripGeometry } from './map-data';
 import type { PublicTrack } from './public-track';
+import type { PublicStopRoute } from './public-stop-route';
 
 type Exact<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2)
   ? (<T>() => T extends B ? 1 : 2) extends (<T>() => T extends A ? 1 : 2) ? true : false
@@ -69,5 +70,35 @@ describe('tripGeometry', () => {
   });
   it('pins content-inferred and map track types exactly, including optional additions', () => {
     expect([contentShape, mapShape]).toEqual([true, true]);
+  });
+});
+
+describe('tripGeometry stop routes (#513)', () => {
+  const stopRoute: PublicStopRoute = { version: 1, runs: [
+    { kind: 'road', coordinates: [[23.7275, 37.9838], [23.3439, 37.9961], [22.9322, 37.9407]] },
+    { kind: 'straight', coordinates: [[21.7346, 38.2466], [28.2278, 36.4341]] },
+  ] };
+  const stops = [
+    { name: 'Athens', lat: 37.9838, lng: 23.7275 },
+    { name: 'Megara (via)', lat: 37.9961, lng: 23.3439, via: true },
+    { name: 'Corinth', lat: 37.9407, lng: 22.9322, profile: 'bike' as const },
+    { name: 'Rhodes', lat: 36.4341, lng: 28.2278 },
+  ];
+
+  it.each([
+    ['track only', { track }, ['track']],
+    ['stop route only', { stopRoute }, ['stopRoute']],
+    ['both: the GPX track wins', { track, stopRoute }, ['track']],
+    ['neither', {}, []],
+  ] as const)('%s', (_name, data, lines) => {
+    const geometry = tripGeometry(trip('de/x', data));
+    expect(Object.keys(geometry).filter((key) => key === 'track' || key === 'stopRoute')).toEqual(lines);
+  });
+
+  it('drops via points from pins and names but leaves the stored line untouched, in stop order', () => {
+    const geometry = tripGeometry(trip('de/x', { stops, stopRoute }));
+    expect(geometry.stops.map((stop) => stop.properties.name)).toEqual(['Athens', 'Corinth', 'Rhodes']);
+    expect(JSON.stringify(geometry)).not.toContain('Megara');
+    expect(geometry.stopRoute).toEqual(stopRoute);
   });
 });
