@@ -4,6 +4,13 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Implemented, owner approval pending (High risk):** #513 stop routing. Stories without a
+  published GPX track can show a line along their ordered stops: per-leg car/bike/foot/straight,
+  via points (never public), straight dashed fallbacks for unroutable legs. Computed only in the
+  admin via `safeFetch` against owner-configured OSRM endpoints (default empty = disabled);
+  stored as `posts.stop_route` with a fingerprint; Publish ships only a fresh route and never
+  beside a GPX track. Dump v15. Spec:
+  `docs/superpowers/specs/2026-11-03-issue-513-stop-routing-design.md`.
 - **Implemented, qualification pending:** #309 journey authoring under the owner-approved
   #308 contract. Separate journey, locale and ordered-member tables; author draft editing,
   admin-only publication/unpublication/deletion; permanent per-locale URL history and explicit

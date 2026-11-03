@@ -918,6 +918,42 @@ remain usable during failures; setting the endpoint to empty contains the featur
 without changing stored content. See the
 [design and recovery plan](docs/superpowers/specs/2026-10-16-waypoint-location-lookup-design.md).
 
+## Editor stop routing (#513)
+
+Owner decisions (2026-11-03): authenticated `GET`/`POST /posts/:tk/stop-route` compute a
+route along a story's ordered stops **at authoring time only**, server-side, per leg, through
+the admin-configured OSRM-compatible endpoints (`routingCarUrl`, `routingBikeUrl`,
+`routingFootUrl`; one per profile because `osrm-routed` serves only the profile its graph was
+built with). **All three default to empty (disabled).** No public demo server is shipped as a
+default, no API key exists, and no `app_secrets` slot is used.
+
+- **Outbound requests** go only through `safeFetch`: the existing IP/DNS SSRF guards (no
+  loopback, RFC1918, link-local, CGNAT, …; no private-network opt-in was added), no redirects,
+  10 s per leg, a 4 MiB streamed cap, one request at a time app-wide, starts ≥ 1.1 s apart, and a
+  60 s budget per calculation. A refused/failed provider stores nothing; the previously stored
+  and published routes stay unchanged. `straight` legs never touch the network.
+- **Inputs:** session required; 16 KiB body; ≤ 25 stops validated like Publish (name, ranges,
+  `via` boolean, `profile` enum); 20 calculations per user per 10 minutes. An unknown story is
+  refused before any request. Only admins change the endpoints (HTTPS, no credentials, query or
+  fragment); authors see availability booleans, never URLs.
+- **Provider output is untrusted:** parsed in a try block, `code`/`LineString`/position count
+  and every coordinate checked, then simplified and re-validated against the public GPX track
+  limits (`validateStoredStopRoute`). Per-leg NoRoute or errors become flagged straight
+  fallbacks; legs never reach markup except through `textContent`.
+- **Publication:** the build and readers make no routing request. Publish copies only a route
+  whose fingerprint matches the locked saved stops into `published_snapshot.stop_route`, never
+  next to a GPX `track` (which always wins); a stale route is omitted, never published. Via
+  stops are dropped before any public render or serialized map data.
+- **Privacy:** calculating sends all stop and via coordinates, including unpublished drafts, to
+  the configured service; the editor and Settings disclose this. Coordinates and request URLs
+  are never logged (`safeFetch` errors embed the URL and are swallowed).
+- **Licensing:** routed geometry derives from OpenStreetMap; the editor panel and every public
+  map that draws a stop route carry OSM attribution.
+- **Backups:** dump v15 carries the private `posts.stop_route` and validates it (strict shape,
+  DE/EN equality, one leg per stop gap) and any published `stop_route` before any write.
+- **Containment:** clear the three URLs in Settings. See the
+  [design, misuse cases and rollback](docs/superpowers/specs/2026-11-03-issue-513-stop-routing-design.md).
+
 ## SSRF protection (WordPress import)
 
 The importer fetches image URLs taken from an uploaded export — attacker-influenced input. All such
