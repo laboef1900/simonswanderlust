@@ -6,18 +6,18 @@ const ordinate = (limit: number) => z.number().min(-limit).max(limit).refine(
   { message: 'Invalid public coordinate precision' },
 );
 const position = z.tuple([ordinate(180), ordinate(90)]);
-const run = z.array(position).min(2).max(2000).refine(
+/** One public line run: 2..2000 distinct consecutive positions, never wrapping more than 180°. Shared with stop routes (#513). */
+export const publicRunSchema = z.array(position).min(2).max(2000).refine(
   (positions) => positions.every((point, index) => index === 0
     || ((point[0] !== positions[index - 1]![0] || point[1] !== positions[index - 1]![1])
       && Math.abs(point[0] - positions[index - 1]![0]) <= 180)),
   { message: 'Invalid public run continuity' },
 );
-
 /** Strict public projection; never accepts or strips private GPX metadata. */
 export const publicTrackSchema = z.object({
   version: z.literal(1),
   type: z.literal('MultiLineString'),
-  coordinates: z.array(run).min(1).max(100),
+  coordinates: z.array(publicRunSchema).min(1).max(100),
 }).strict().superRefine((track, ctx) => {
   if (track.coordinates.reduce((count, positions) => count + positions.length, 0) > 2000) {
     ctx.addIssue({ code: 'custom', message: 'Public track vertex limit exceeded' });
