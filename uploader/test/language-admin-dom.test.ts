@@ -211,7 +211,7 @@ async function about(primary: Locale, prepareLocale?: Locale, route?: (url: stri
   context.BuildCopy = buildCopy;
   vm.createContext(context);
   Object.assign(context, galleryCodecBindings);
-  for (const file of ['build-reporting.js', 'language.js', 'tabs.js', 'pages-ui.js', 'write-recovery.js', 'gallery-fence.js', 'gallery-metadata-warnings.js']) vm.runInContext(browserScript(file), context);
+  for (const file of ['build-reporting.js', 'language.js', 'tabs.js', 'pages-ui.js', 'about-equipment.js', 'write-recovery.js', 'gallery-fence.js', 'gallery-metadata-warnings.js']) vm.runInContext(browserScript(file), context);
   // The page script is a module (it imports the gallery fence); run its body.
   const start = html.lastIndexOf('<script type="module">');
   vm.runInContext(html.slice(html.indexOf("'use strict'", start), html.lastIndexOf('</script>')), context);
