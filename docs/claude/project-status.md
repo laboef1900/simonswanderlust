@@ -4,6 +4,11 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Implemented, owner approval pending (High risk):** bundled OSRM street routing. The
+  compose stack downloads `OSRM_PBF_URL` and runs `osrm-car`/`osrm-bike`/`osrm-foot`
+  (`osrm-backend` v26.11.0); `ROUTING_INTERNAL_ORIGINS` is the operator-only, exact-origin
+  exemption from the `safeFetch` private-address guard for routing. Spec:
+  `docs/superpowers/specs/2026-11-03-osrm-compose-routing-design.md`.
 - **Implemented, owner approval pending (High risk):** #513 stop routing. Stories without a
   published GPX track can show a line along their ordered stops: per-leg car/bike/foot/straight,
   via points (never public), straight dashed fallbacks for unroutable legs. Computed only in the

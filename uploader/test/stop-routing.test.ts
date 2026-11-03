@@ -134,6 +134,31 @@ describe('createStopRouter (#513)', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it('routes through an operator-listed compose origin over plain HTTP via the real safeFetch', async () => {
+    const fetched: string[] = [];
+    const fetchImpl = vi.fn(async (input: URL | string) => { fetched.push(String(input)); return new Response(ok([[23, 37], [23.1, 37.1]])); }) as unknown as typeof fetch;
+    const c = clock();
+    const router = createStopRouter({
+      endpoints: () => ({ car: 'http://osrm-car:5000', bike: '', foot: '' }), now: c.now, sleep: c.sleep, fetchImpl,
+      lookup: async () => [{ address: '172.18.0.4', family: 4 }], internalOrigins: new Set(['http://osrm-car:5000']),
+    });
+    expect(router.profiles()).toEqual({ car: true, bike: false, foot: false });
+    const stored = await router.calculate(stops({}, {}));
+    expect(stored.legs).toEqual([{ profile: 'car', kind: 'road' }]);
+    expect(new URL(fetched[0]!).origin).toBe('http://osrm-car:5000');
+  });
+
+  it('treats a plain-HTTP URL whose origin is not listed as unconfigured, before any request', () => {
+    const request = vi.fn();
+    const router = createStopRouter({
+      endpoints: () => ({ car: 'http://osrm-car:5000', bike: 'http://osrm.example', foot: '' }), request,
+      internalOrigins: new Set(['http://osrm-car:5001']),
+    });
+    expect(router.profiles()).toEqual({ car: false, bike: false, foot: false });
+    expect(router.refusal(stops({}, {}))).toMatchObject({ code: 'stop_route_profile_unavailable', profiles: ['car'] });
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it('spaces outbound requests at least 1.1 s apart, across calculations', async () => {
     const c = clock();
     const starts: number[] = [];
@@ -145,6 +170,22 @@ describe('createStopRouter (#513)', () => {
     await router.calculate(stops({}, {}));
     expect(starts).toHaveLength(3);
     for (let i = 1; i < starts.length; i++) expect(starts[i]! - starts[i - 1]!).toBeGreaterThanOrEqual(ROUTING_SPACING_MS);
+  });
+
+  it('does not pace an operator-listed internal origin, but keeps pacing public endpoints in the same route', async () => {
+    const c = clock();
+    const starts: Array<[string, number]> = [];
+    const router = createStopRouter({
+      endpoints: () => ({ car: 'http://osrm-car:5000', bike: 'https://bike.example', foot: '' }), now: c.now, sleep: c.sleep,
+      internalOrigins: new Set(['http://osrm-car:5000']),
+      request: async (url) => { starts.push([new URL(url).host, c.now()]); c.advance(200); return respond(ok([[23, 37], [23.1, 37.1]])); },
+    });
+    await router.calculate(stops({}, {}, { profile: 'bike' }, {}, { profile: 'bike' }, {}));
+    const car = starts.filter(([host]) => host === 'osrm-car:5000').map(([, at]) => at);
+    const bike = starts.filter(([host]) => host === 'bike.example').map(([, at]) => at);
+    expect([car.length, bike.length]).toEqual([3, 2]);
+    expect(car[1]! - car[0]!).toBe(200); // back to back: no sleep before the second internal leg
+    expect(bike[1]! - bike[0]!).toBeGreaterThanOrEqual(ROUTING_SPACING_MS);
   });
 
   it('runs one calculation at a time app-wide', async () => {

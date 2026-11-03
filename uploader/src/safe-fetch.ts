@@ -70,6 +70,12 @@ export interface SafeFetchOptions {
   maxRedirects?: number;
   fetchImpl?: typeof fetch;
   lookup?: LookupFn;
+  /**
+   * Exact origins (`URL.origin`) the operator placed on a private network
+   * (ROUTING_INTERNAL_ORIGINS). Only the FIRST hop may use one, and it then skips
+   * the internal-address checks; every redirect hop is judged in full.
+   */
+  allowedInternalOrigins?: ReadonlySet<string>;
 }
 
 export interface SafeFetchResult {
@@ -143,6 +149,13 @@ function bareHost(url: URL): string {
  * `safeFetch` — see `assertResolvesPublic`.
  */
 export function assertFetchableUrl(raw: string): URL {
+  const url = parseFetchableUrl(raw);
+  assertPublicLiteral(url);
+  return url;
+}
+
+/** Scheme and credential rules every hop obeys, exempt origin or not. */
+function parseFetchableUrl(raw: string): URL {
   let url: URL;
   try {
     url = new URL(raw);
@@ -155,11 +168,14 @@ export function assertFetchableUrl(raw: string): URL {
   if (url.username || url.password) {
     throw new FetchError('URL must not contain credentials', 'invalid-url');
   }
+  return url;
+}
+
+function assertPublicLiteral(url: URL): void {
   const host = bareHost(url);
   if (isIP(host) && isBlockedAddress(host)) {
     throw new FetchError(`refusing to fetch internal address: ${url.hostname}`, 'blocked');
   }
-  return url;
 }
 
 /** Settle with `p`, or reject with the signal's reason the moment it aborts. */
@@ -254,11 +270,13 @@ export async function safeFetch(raw: string, opts: SafeFetchOptions = {}): Promi
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const signal = opts.signal ? AbortSignal.any([opts.signal, controller.signal]) : controller.signal;
   try {
-    let url = assertFetchableUrl(raw);
+    let url = parseFetchableUrl(raw);
+    let exempt = opts.allowedInternalOrigins?.has(url.origin) === true;
+    if (!exempt) assertPublicLiteral(url);
     let res: Response;
     for (let hop = 0; ; hop++) {
       signal.throwIfAborted();
-      await assertResolvesPublic(url, lookup, signal);
+      if (!exempt) await assertResolvesPublic(url, lookup, signal);
       signal.throwIfAborted();
       res = await doFetch(url, { signal, redirect: 'manual' });
       if (signal.aborted) { discard(res); signal.throwIfAborted(); }
@@ -269,6 +287,7 @@ export async function safeFetch(raw: string, opts: SafeFetchOptions = {}): Promi
         throw new FetchError(`too many redirects (more than ${maxRedirects}) for ${raw}`, 'http', { status: res.status });
       }
       url = redirectTarget(location, url, raw, hop + 1);
+      exempt = false;
     }
     if (!res.ok) {
       discard(res);

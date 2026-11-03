@@ -691,12 +691,24 @@ with a line along roads. Data and flow:
   absent = car). Draft saves canonicalize them (`uploader/public/stop-route.js`).
 - **Calculate** (editor button) → authenticated `POST /posts/:tk/stop-route` →
   `uploader/src/stop-routing.ts`: one OSRM `route/v1` request per routed leg via `safeFetch`
-  (paced 1.1 s app-wide, single flight, 60 s budget), straight fallbacks flagged per leg,
+  (public endpoints paced 1.1 s app-wide; operator-listed internal origins unpaced; single
+  flight, 60 s budget), straight fallbacks flagged per leg,
   antimeridian split, great-circle simplification widened until the public GPX limits hold.
   The result is stored as `posts.stop_route` (identical on both rows, `{fingerprint, computedAt,
   legs, route}`) without touching `updated_at`.
 - **Settings** → *Street routing*: `routingCarUrl` / `routingBikeUrl` / `routingFootUrl`
   (`settings.json`), one OSRM base URL per profile; empty (the default) disables a profile.
+  HTTPS, or plain HTTP only to an exact origin in the operator env `ROUTING_INTERNAL_ORIGINS`
+  (`uploader/src/routing-origins.ts`), which is also the only origin set `safeFetch` exempts
+  from its private-address checks (first hop only).
+- **Bundled OSRM** (`docker-compose.yml`): `osrm-fetch` (curl, one-shot) downloads
+  `OSRM_PBF_URL` into the `osrm` volume when the URL changes (or after a refresh removed
+  `region.url`) and writes a per-download `region.stamp`; `osrm-prepare` (one-shot, bounded by
+  `OSRM_PREPARE_MEM_LIMIT`, default `4g`, equal swap) builds the MLD graph per mode sequentially
+  (`car.lua`, `bicycle.lua`, `foot.lua`) only when its `ready` stamp differs;
+  `osrm-car` / `osrm-bike` / `osrm-foot` run `osrm-routed` on port 5000 with no host port.
+  `app` does not depend on them: a failed download or build leaves routing unavailable, the
+  blog and admin up. Spec: `docs/superpowers/specs/2026-11-03-osrm-compose-routing-design.md`.
 - **Publish** fingerprints the locked saved stops; only a fresh route is merged as
   `published_snapshot.stop_route`, and never when a GPX `track` is published (track wins). The
   editor shows fresh/stale per the same fingerprint and warns when Publish left a stale route out.
@@ -1170,7 +1182,9 @@ disposable `/data` host path and the credential-free database target printed by 
   automatic restart/activation throughout recovery, and wait for process exit and database
   sessions to drain. This includes writers using the storage through another database/cluster.
   Keep Postgres running. With the actual dump basename substituted, use the same configured
-  image/volumes without service ports:
+  image/volumes without service ports. The Compose file must interpolate first: since the
+  bundled OSRM, `.env` needs `OSRM_PBF_URL` (any valid HTTPS extract) or **every** command
+  below fails before it starts; restoring with an older backed-up `.env` means adding it first.
 
   ```sh
   docker compose stop app
@@ -1433,6 +1447,11 @@ boot/rescan can decode originals even when uploads are disabled.
    image name; see Release flow). Substitute the real verified tag/digest
    privately; do not use the ellipsis literally. Preserve the selected platform and Postgres
    major. Do not print expanded Compose configuration containing credentials into evidence.
+   **Releases carrying the bundled OSRM:** set `OSRM_PBF_URL` (and optionally
+   `OSRM_PREPARE_MEM_LIMIT`) in `.env` **before any** Compose command. Without it Compose
+   refuses to interpolate the file, so `stop`, `ps`, `run` and `up -d --no-deps app` all fail,
+   including the restore commands above. The `pull` in step 3 also fetches the OSRM and curl
+   images; the first full `up -d` downloads the extract and builds the graphs.
 2. **Host-proxy prerequisite for releases carrying #369:** deploy the matching proxy-trust
    runtime and Compose contract together. The approved topology is a TLS proxy on the host,
    the loopback-only published app port and the Compose bridge, with the literal
@@ -1663,6 +1682,7 @@ is the reference behind it.
 | `DATABASE_URL` | app | Postgres connection (content + auth) |
 | `ENCRYPTION_KEY` | app | Optional 64-hex master key for encrypted AI credentials; unset permits local workflows, malformed values refuse boot; escrow separately |
 | `TRUSTED_PROXY` | app / compose literal | Unset or `loopback`: loopback peers only. Compose sets `docker-gateway`: also trust the single discovered IPv4 default gateway, at hop zero only. Empty/unknown values or failed gateway discovery refuse boot. Not an `.env` setting; changing bridge/proxy topology requires a new trust spec. |
+| `ROUTING_INTERNAL_ORIGINS` | app / compose literal | Comma-separated exact `http(s)` origins (no path) that street routing may reach over plain HTTP on a private network; the only `safeFetch` private-address exemption, first hop only. Compose sets the three bundled OSRM origins. Unset = none; an invalid entry refuses boot. |
 | `PUBLIC_BASE_URL` | app | Public base for image URLs (e.g. `https://img.example.com`); required by Compose (`:?`, no owner default), optional for a bare `node` run (falls back to `http://localhost:3000`); not the allowed blog-comment origin. Its image authority is excluded from the temporary comment-origin fallback except in single-origin loopback development. |
 | `IMG_HOST` | app | Hostname routed to the image-variant static handler (the app defaults it to the host of `PUBLIC_BASE_URL`; Compose requires it explicitly); also excluded from the comment-origin fallback, with the same loopback exception. |
 | `SITE_APP_DIR` | app | Path to the Astro project the builder spawns (`/app/site`) |
@@ -1676,6 +1696,8 @@ is the reference behind it.
 | `PORT` | app | Listen port (default `3000`) |
 | `PROTOMAPS_BUILD` / `MAP_MAXZOOM` / `PMTILES_VERSION` | Dockerfile (build args) | Pin the map basemap fetched + baked into the image at build (see `docs/map-assets.md`) |
 | `IMAGE_TAG` | compose | Released GHCR image version to run |
+| `OSRM_PBF_URL` | compose (`osrm-fetch`) | Required HTTPS OpenStreetMap `.osm.pbf` extract the bundled OSRM servers route over; a change re-downloads and rebuilds the graphs. Missing → every Compose command fails to interpolate |
+| `OSRM_PREPARE_MEM_LIMIT` | compose (`osrm-prepare`) | Optional memory ceiling (= swap ceiling) for the one-shot graph build; default `4g`. An exceeded limit fails only the build (exit 137), never the host |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | db | Database bootstrap |
 
 Origin roles remain distinct: `PUBLIC_BASE_URL` supplies image URLs and the body/gallery

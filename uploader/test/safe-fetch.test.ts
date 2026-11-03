@@ -263,6 +263,46 @@ describe('safeFetch redirects', () => {
   });
 });
 
+/** ROUTING_INTERNAL_ORIGINS: an operator-listed origin may be private, for its own first hop only. */
+describe('safeFetch allowedInternalOrigins', () => {
+  const internal = new Set(['http://osrm-car:5000', 'http://172.18.0.4:5000']);
+  const composeLookup: LookupFn = async () => [{ address: '172.18.0.4', family: 4 }];
+
+  it('fetches a listed origin that resolves to, or is, a private address', async () => {
+    for (const url of ['http://osrm-car:5000/route/v1/driving/1,2;3,4', 'http://172.18.0.4:5000/route']) {
+      const { fetchImpl, calls } = scripted([body([1])]);
+      const { buffer } = await safeFetch(url, { fetchImpl, lookup: composeLookup, allowedInternalOrigins: internal });
+      expect([...buffer], url).toEqual([1]);
+      expect(calls, url).toEqual([url]);
+    }
+  });
+
+  it('still refuses an unlisted private origin: another port, scheme, host or the database', async () => {
+    for (const url of ['http://osrm-car:5001/x', 'https://osrm-car:5000/x', 'http://osrm-bike:5000/x', 'http://db:5432/', 'http://172.18.0.5:5000/x']) {
+      const { fetchImpl, calls } = scripted([body([1])]);
+      const err = await caught(() => safeFetch(url, { fetchImpl, lookup: composeLookup, allowedInternalOrigins: internal }));
+      expect(err.kind, url).toBe('blocked');
+      expect(calls, url).toEqual([]);
+    }
+  });
+
+  it('judges every redirect hop in full, even one back to the listed origin', async () => {
+    for (const target of ['http://osrm-car:5000/other', 'http://10.0.0.5/x']) {
+      const { fetchImpl, calls } = scripted([redirect(target), body([1])]);
+      const err = await caught(() => safeFetch('http://osrm-car:5000/a', { fetchImpl, lookup: composeLookup, allowedInternalOrigins: internal }));
+      expect(err.kind, target).toBe('blocked');
+      expect(calls, target).toEqual(['http://osrm-car:5000/a']);
+    }
+  });
+
+  it('keeps the scheme and credential rules for a listed origin', async () => {
+    const { fetchImpl, calls } = scripted([body([1])]);
+    const err = await caught(() => safeFetch('http://user:pw@osrm-car:5000/a', { fetchImpl, lookup: composeLookup, allowedInternalOrigins: internal }));
+    expect(err.kind).toBe('invalid-url');
+    expect(calls).toEqual([]);
+  });
+});
+
 /** The pre-connect DNS check: a hostname is judged by what it resolves to, not by its spelling. */
 describe('safeFetch DNS check', () => {
   it('refuses a hostname that resolves to an internal address, without fetching', async () => {

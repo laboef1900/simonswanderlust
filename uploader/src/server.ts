@@ -63,6 +63,7 @@ import { CommentError, isCommentStatus, isModerationOffset, withPublicLocaleMeta
 import { ui } from '../../site/src/i18n/ui.js';
 import { createGeocoder, GeocodingError } from './geocoding.js';
 import { createStopRouter, StopRoutingError, type StopRouter } from './stop-routing.js';
+import { routingEndpointUsable } from './routing-origins.js';
 import { STOP_ROUTE_LIMITS, StopRouteError, validateRouteStops } from '../public/stop-route.js';
 import { renderStopRouteCopy } from './stop-route-copy.js';
 import { registerGpxRoutes } from './gpx-routes.js';
@@ -115,6 +116,8 @@ export interface ServerConfig {
   passwordLimiter?: AccountLimiter;
   /** #513: injectable like `loginLimiter`; defaults to the OSRM router over `settings`. */
   stopRouter?: StopRouter;
+  /** ROUTING_INTERNAL_ORIGINS (operator env): the only plain-HTTP / private routing origins. Default none. */
+  routingInternalOrigins?: ReadonlySet<string>;
   /** Per-user Calculate limiter (default 20 per 10 minutes). */
   stopRouteLimiter?: RateLimiter;
   media: MediaStore;
@@ -220,6 +223,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
   if (cfg.onRoute) app.addHook('onRoute', cfg.onRoute);
   const { users, sessions } = cfg;
   const language = cfg.language ?? cfg.posts.language;
+  const routingInternalOrigins = cfg.routingInternalOrigins ?? new Set<string>();
   const journeys = cfg.journeys ?? memoryJourneyStore(cfg.posts, cfg.posts.language, cfg.media, cfg.baseUrl.replace(/\/$/, ''));
   let mutationsClosed = false;
   const activeMutations = new Set<Promise<void>>();
@@ -1036,11 +1040,18 @@ export function buildServer(cfg: ServerConfig): AppServer {
       if (Object.hasOwn(b, field)) partial[field] = b[field];
     }
     if (Object.hasOwn(b, 'geocodingSearchUrl')) partial.geocodingSearchUrl = b.geocodingSearchUrl;
-    for (const field of ['routingCarUrl', 'routingBikeUrl', 'routingFootUrl'] as const) {
+    const routingFields = [['routingCarUrl', 'Car'], ['routingBikeUrl', 'Bike'], ['routingFootUrl', 'Foot']] as const;
+    for (const [field] of routingFields) {
       if (Object.hasOwn(b, field)) partial[field] = b[field];
     }
     const next = checkCandidate({ ...cfg.settings.get(), ...partial }, reply);
     if (!next) return reply;
+    // Only fields this request changes: a stale stored value must not block unrelated saves.
+    for (const [field, label] of routingFields) {
+      if (Object.hasOwn(partial, field) && next[field] !== '' && !routingEndpointUsable(next[field], routingInternalOrigins)) {
+        return reply.code(400).send({ error: `${label} routing URL must use HTTPS unless its exact origin is listed in ROUTING_INTERNAL_ORIGINS.` });
+      }
+    }
     let views: ProviderView[];
     try {
       views = await providerViews(next.aiProviders);
@@ -1442,6 +1453,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
       return { car: s.routingCarUrl, bike: s.routingBikeUrl, foot: s.routingFootUrl };
     },
     canonicalOrigin: () => cfg.identityStore?.get().identity.canonicalOrigin ?? null,
+    internalOrigins: routingInternalOrigins,
   });
   const stopRouteLimiter = cfg.stopRouteLimiter ?? fixedWindowLimiter({ max: 20, windowMs: 600_000 });
   app.get<{ Params: { tk: string } }>('/posts/:tk/stop-route', { preHandler: requireAuth }, async (req, reply) => {

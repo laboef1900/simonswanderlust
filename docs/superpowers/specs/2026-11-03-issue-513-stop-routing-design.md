@@ -36,7 +36,7 @@ list visible without a track, OSM attribution, Settings fields, backup/restore a
 
 Out: journey maps (they draw published GPX runs only and stay unchanged), route optimisation or
 reordering, alternatives, turn-by-turn, distances/durations on the public page, private-network
-routing endpoints (see *Left for owner decision*), the Route caption (#512/#516).
+routing endpoints (decided separately; see *Left for owner decision*), the Route caption (#512/#516).
 
 ## Data model
 
@@ -279,8 +279,9 @@ network request, `ui.ts` completeness. Smoke: browser editor flow, disposable DB
 
 ## Left for owner decision
 
-- **Private-network routing endpoints** (self-hosted OSRM on the compose network or LAN) are refused
-  by `safeFetch`. Supporting them needs an explicit, separately reviewed opt-in; not implemented.
+- **Private-network routing endpoints** (self-hosted OSRM on the compose network or LAN): decided
+  2026-11-03 in `2026-11-03-osrm-compose-routing-design.md` — an operator-only exact-origin
+  allow-list (`ROUTING_INTERNAL_ORIGINS`) and bundled OSRM compose services.
 - **Defaults chosen in this spec:** 25-stop calculation cap; 1.1 s request spacing; 60 s budget;
   20 calculations per user per 10 minutes; Publish omits (not blocks) a stale route; the last
   stop's profile is dropped on save.
