@@ -1205,14 +1205,24 @@ and the `<dialog>`s appended to `<body>` share one set:
   the caret with the inserted text, not at the fence or trailing padding, so
   continued typing stays in the same paragraph. Consecutive typing remains one
   undo group.
-- Story details sits beside the manuscript on desktop. Its header carries one
+- Story details sits beside the manuscript on desktop, inside the same ruled frame: one
+  `--line` border and 12px radius hold both columns, and the inspector is the frame's
+  tinted column (`--canvas`, divided by `--line-strong`) so white fields read against it.
+  It pins flush under the command bar and scrolls on its own. Its header carries one
   icon-only panel toggle (`panel-right-close` / `panel-right-open`, named Collapse /
-  Expand story details); collapsing slides the panel right into a slim rail that
+  Expand story details); collapsing slides the panel right into a slim tinted rail that
   keeps only that toggle, and the writing column widens into the freed space. The
   collapsed content is inert and hidden from assistive technology; the slide honours
   reduced motion. At 74rem and below it is a modal drawer opened by an icon button
   after More actions; the same header toggle closes it, and it traps Tab, closes on
-  Escape or the scrim, and restores focus to its opener.
+  Escape or the scrim, and restores focus to its opener. The frame then holds the
+  manuscript alone.
+- Hero image and title image are collapsible inspector sections (closed by default) with
+  one box: a white panel with preview, alt text, status, then **Replace photo** (native
+  file input with a dashed drop edge, upload, library) and **Adjust framing**. A closed
+  section shows a small thumbnail of its photo beside Show. A loaded story opens Replace
+  photo only when that image is missing; author actions never fold it under focus.
+- Excerpts grow with their text; no inner scrollbar or resize grip.
 - GPX editing is a flat section in Story details, not another dashboard. Its scoped native
   dialog closes the phone inspector first, then restores that drawer and the exact opener
   on dismissal. A fixed header/footer frame one scrollable body; touch actions are at least

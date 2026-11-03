@@ -1629,6 +1629,26 @@ describe('editor.html inline script against its own markup', () => {
       expect(el('deHeroFocus').hidden).toBe(true);
     });
 
+  it('opens Replace photo on load only for a missing image and thumbnails a present one', async () => {
+      const { api, el } = await loadEditor();
+      const pair = fullPair();
+      pair.de.titleImage = { src: 'https://img/title-photo', width: 2400, height: 800, alt: 'Berge' };
+      api.populateForm(pair);
+      expect(el('deHeroReplace').open).toBe(false);
+      expect(el('deHeroThumb').hidden).toBe(false);
+      expect(el('deTitleImageReplace').open).toBe(false);
+      expect(el('deTitleImageThumb').hidden).toBe(false);
+      // Removing is an author action inside the open picker; it must not fold it.
+      el('deTitleImageReplace').open = true;
+      el('deTitleImageRemove').click();
+      expect(el('deTitleImageReplace').open).toBe(true);
+      expect(el('deTitleImageThumb').hidden).toBe(true);
+      api.populateForm(minimalPair());
+      expect(el('deHeroReplace').open).toBe(true);
+      expect(el('deHeroThumb').hidden).toBe(true);
+      expect(el('deTitleImageReplace').open).toBe(true);
+    });
+
   it('names the CodeMirror inputs EasyMDE swaps in for the labelled body textareas (SC 4.1.2)', async () => {
       const { editors } = await loadEditor();
       expect(editors.map((e) => e.input.attrs['aria-label'])).toEqual(['Body (Markdown, DE)', 'Body (Markdown, EN)']);

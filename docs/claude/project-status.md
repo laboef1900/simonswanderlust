@@ -631,3 +631,10 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
   200-code-point limit, retained disabled-locale text, 409 conflicts and the next-build
   publication timing are the existing #274 contract. No schema, route, snapshot or public
   rendering change; Settings → Site identity keeps editing the same value.
+- **Implemented (2026-11-02, branch `feature/editor-inspector-visibility`):** editor Story details
+  moved inside the manuscript's ruled frame as a tinted, flush-pinned column (tinted rail when
+  collapsed; drawer unchanged below 74rem, its header no longer lets content show above it).
+  Hero image and title image are collapsible sections with one shared box (preview, alt,
+  status, Replace photo, Adjust framing) and a summary thumbnail; title image gains the
+  `editor.titleImage.replace` copy key. Excerpt textareas auto-fit their text (`fitTextarea`,
+  shared with the title). No route, schema or payload change.

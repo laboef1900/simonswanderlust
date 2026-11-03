@@ -6,36 +6,46 @@
     const { locale, mount, copy, onChange, onUnauthed, getSlug } = options;
     const prefix = locale + 'TitleImage';
     // Only fixed markup and the application's own locale are interpolated.
+    // The structure mirrors the hero section in editor.html so both image
+    // sections read as one pattern: preview, alt text, status, then the
+    // Replace photo and Adjust framing disclosures.
     mount.innerHTML = `
-      <h3 class="editor-card-title" id="${prefix}Heading" data-copy="heading"></h3>
-      <p class="muted" data-copy="help"></p>
+      <summary class="editor-card-title" id="${prefix}Heading">
+        <span class="editor-image-section__title" data-copy="heading"></span>
+        <span class="editor-image-section__thumb" id="${prefix}Thumb" hidden><img id="${prefix}ThumbImg" alt="" /></span>
+      </summary>
       <div class="hero-picker hero-banner-zone">
+        <p class="muted" data-copy="help"></p>
         <div class="hero-compact-preview" id="${prefix}Preview" hidden>
           <img id="${prefix}Img" alt="" />
         </div>
-        <div class="hero-actions-row">
-          <button type="button" class="btn-secondary" id="${prefix}Library" data-copy="library"></button>
-          <button type="button" class="btn-secondary" id="${prefix}Remove" data-copy="remove" hidden></button>
-        </div>
-        <label for="${prefix}File" data-copy="file"></label>
-        <input type="file" id="${prefix}File" accept="image/*" />
-        <button type="button" class="btn-secondary" id="${prefix}Upload" data-copy="upload"></button>
-        <div id="${prefix}Fields" hidden>
+        <div class="hero-fields" id="${prefix}Fields" hidden>
           <label for="${prefix}Alt" data-copy="alt"></label>
           <input type="text" id="${prefix}Alt" maxlength="1000" />
-          <details class="editor-disclosure">
-            <summary data-copy="framing"></summary>
-            <p class="muted" data-copy="framingHelp"></p>
-            <label for="${prefix}X"><span data-copy="horizontal"></span> <output id="${prefix}XOut" for="${prefix}X">50%</output></label>
-            <input type="range" id="${prefix}X" min="0" max="100" step="1" value="50" />
-            <label for="${prefix}Y"><span data-copy="vertical"></span> <output id="${prefix}YOut" for="${prefix}Y">50%</output></label>
-            <input type="range" id="${prefix}Y" min="0" max="100" step="1" value="50" />
-            <button type="button" class="btn-secondary" id="${prefix}Reset" data-copy="reset"></button>
-          </details>
         </div>
         <p class="muted" id="${prefix}Status" role="status"></p>
+        <details class="editor-disclosure hero-replace" id="${prefix}Replace">
+          <summary data-copy="replace"></summary>
+          <label for="${prefix}File" data-copy="file"></label>
+          <input type="file" id="${prefix}File" accept="image/*" class="hero-file-input" />
+          <div class="hero-actions-row">
+            <button type="button" class="btn-secondary" id="${prefix}Upload" data-copy="upload"></button>
+            <button type="button" class="btn-secondary" id="${prefix}Library" data-copy="library"></button>
+            <button type="button" class="btn-secondary" id="${prefix}Remove" data-copy="remove" hidden></button>
+          </div>
+        </details>
+        <details class="editor-disclosure hero-focus" id="${prefix}Focus" hidden>
+          <summary data-copy="framing"></summary>
+          <p class="muted" data-copy="framingHelp"></p>
+          <label for="${prefix}X"><span data-copy="horizontal"></span> <output id="${prefix}XOut" for="${prefix}X">50%</output></label>
+          <input type="range" id="${prefix}X" min="0" max="100" step="1" value="50" />
+          <label for="${prefix}Y"><span data-copy="vertical"></span> <output id="${prefix}YOut" for="${prefix}Y">50%</output></label>
+          <input type="range" id="${prefix}Y" min="0" max="100" step="1" value="50" />
+          <div class="hero-actions-row">
+            <button type="button" class="btn-secondary" id="${prefix}Reset" data-copy="reset"></button>
+          </div>
+        </details>
       </div>`;
-    mount.setAttribute('aria-labelledby', prefix + 'Heading');
     mount.setAttribute('lang', locale);
     mount.querySelectorAll('[data-copy]').forEach((el) => { el.textContent = copy[el.dataset.copy]; });
     const el = (name) => document.getElementById(prefix + name);
@@ -48,6 +58,7 @@
       el('XOut').textContent = x + '%';
       el('YOut').textContent = y + '%';
       el('Img').style.objectPosition = x + '% ' + y + '%';
+      el('ThumbImg').style.objectPosition = x + '% ' + y + '%';
     }
 
     function set(value) {
@@ -56,15 +67,21 @@
       el('X').value = image?.focus?.x ?? 50;
       el('Y').value = image?.focus?.y ?? 50;
       el('Fields').hidden = !image;
+      el('Focus').hidden = !image;
       el('Remove').hidden = !image;
       el('Preview').hidden = !image;
+      el('Thumb').hidden = !image;
       const img = el('Img');
+      const thumb = el('ThumbImg');
       if (image) {
-        img.src = PostsFilter.thumbUrl({ heroSrc: image.src, heroWidth: image.width, heroFormat: image.format });
-        img.onerror = () => { el('Preview').hidden = true; };
-        img.onload = () => { el('Preview').hidden = false; };
+        const url = PostsFilter.thumbUrl({ heroSrc: image.src, heroWidth: image.width, heroFormat: image.format });
+        img.src = url;
+        thumb.src = url;
+        img.onerror = () => { el('Preview').hidden = true; el('Thumb').hidden = true; };
+        img.onload = () => { el('Preview').hidden = false; el('Thumb').hidden = false; };
       } else {
         img.removeAttribute('src');
+        thumb.removeAttribute('src');
       }
       el('File').value = '';
       el('Status').textContent = image ? '' : copy.fallback;
@@ -142,8 +159,14 @@
         ['Upload', 'Library', 'Remove', 'File'].forEach((name) => { el(name).disabled = false; });
       }
     });
-    set(undefined);
-    return { get, set };
+    // A loaded story opens the picker only when it has no title image. Author
+    // actions (upload, library, remove) never fold it under the focused control.
+    function load(value) {
+      set(value);
+      el('Replace').open = !image;
+    }
+    load(undefined);
+    return { get, set: load };
   }
 
   root.EditorTitleImage = { create };
