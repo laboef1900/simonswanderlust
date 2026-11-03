@@ -701,14 +701,20 @@ with a line along roads. Data and flow:
   HTTPS, or plain HTTP only to an exact origin in the operator env `ROUTING_INTERNAL_ORIGINS`
   (`uploader/src/routing-origins.ts`), which is also the only origin set `safeFetch` exempts
   from its private-address checks (first hop only).
-- **Bundled OSRM** (`docker-compose.yml`): `osrm-fetch` (curl, one-shot) downloads
-  `OSRM_PBF_URL` into the `osrm` volume when the URL changes (or after a refresh removed
-  `region.url`) and writes a per-download `region.stamp`; `osrm-prepare` (one-shot, bounded by
+- **Bundled OSRM** (`docker-compose.yml`): `osrm-fetch` (pinned `debian:trixie-slim`, one-shot;
+  installs `curl` + `osmium-tool` from Debian only when work is due) downloads every
+  `OSRM_PBF_URLS` extract, merges them with `osmium merge` into one `region.osm.pbf` in the
+  `osrm` volume when the list changes (or after a refresh removed `region.url`) and writes a
+  per-download `region.stamp`; `osrm-prepare` (one-shot, bounded by
   `OSRM_PREPARE_MEM_LIMIT`, default `4g`, equal swap) builds the MLD graph per mode sequentially
   (`car.lua`, `bicycle.lua`, `foot.lua`) only when its `ready` stamp differs;
-  `osrm-car` / `osrm-bike` / `osrm-foot` run `osrm-routed` on port 5000 with no host port.
-  `app` does not depend on them: a failed download or build leaves routing unavailable, the
-  blog and admin up. Spec: `docs/superpowers/specs/2026-11-03-osrm-compose-routing-design.md`.
+  `osrm-car` / `osrm-bike` / `osrm-foot` run `osrm-routed --mmap=1` on port 5000 with no host
+  port: the graph stays on disk and only queried areas become (evictable) page cache.
+  `app` does not depend on the OSRM services: a failed download or build leaves routing
+  unavailable, the blog and admin up. Every leg request sends `radiuses` = 5 km
+  (`ROUTING_SNAP_RADIUS_METRES`): a stop farther from any covered road gets OSRM `NoSegment` →
+  a flagged straight `no_route` leg, never a road snapped to the extract's edge.
+  Spec: `docs/superpowers/specs/2026-11-03-osrm-compose-routing-design.md`.
 - **Publish** fingerprints the locked saved stops; only a fresh route is merged as
   `published_snapshot.stop_route`, and never when a GPX `track` is published (track wins). The
   editor shows fresh/stale per the same fingerprint and warns when Publish left a stale route out.
@@ -1183,7 +1189,7 @@ disposable `/data` host path and the credential-free database target printed by 
   sessions to drain. This includes writers using the storage through another database/cluster.
   Keep Postgres running. With the actual dump basename substituted, use the same configured
   image/volumes without service ports. The Compose file must interpolate first: since the
-  bundled OSRM, `.env` needs `OSRM_PBF_URL` (any valid HTTPS extract) or **every** command
+  bundled OSRM, `.env` needs `OSRM_PBF_URLS` (any valid HTTPS extract) or **every** command
   below fails before it starts; restoring with an older backed-up `.env` means adding it first.
 
   ```sh
@@ -1447,10 +1453,10 @@ boot/rescan can decode originals even when uploads are disabled.
    image name; see Release flow). Substitute the real verified tag/digest
    privately; do not use the ellipsis literally. Preserve the selected platform and Postgres
    major. Do not print expanded Compose configuration containing credentials into evidence.
-   **Releases carrying the bundled OSRM:** set `OSRM_PBF_URL` (and optionally
+   **Releases carrying the bundled OSRM:** set `OSRM_PBF_URLS` (and optionally
    `OSRM_PREPARE_MEM_LIMIT`) in `.env` **before any** Compose command. Without it Compose
    refuses to interpolate the file, so `stop`, `ps`, `run` and `up -d --no-deps app` all fail,
-   including the restore commands above. The `pull` in step 3 also fetches the OSRM and curl
+   including the restore commands above. The `pull` in step 3 also fetches the OSRM and Debian
    images; the first full `up -d` downloads the extract and builds the graphs.
 2. **Host-proxy prerequisite for releases carrying #369:** deploy the matching proxy-trust
    runtime and Compose contract together. The approved topology is a TLS proxy on the host,
@@ -1696,7 +1702,7 @@ is the reference behind it.
 | `PORT` | app | Listen port (default `3000`) |
 | `PROTOMAPS_BUILD` / `MAP_MAXZOOM` / `PMTILES_VERSION` | Dockerfile (build args) | Pin the map basemap fetched + baked into the image at build (see `docs/map-assets.md`) |
 | `IMAGE_TAG` | compose | Released GHCR image version to run |
-| `OSRM_PBF_URL` | compose (`osrm-fetch`) | Required HTTPS OpenStreetMap `.osm.pbf` extract the bundled OSRM servers route over; a change re-downloads and rebuilds the graphs. Missing → every Compose command fails to interpolate |
+| `OSRM_PBF_URLS` | compose (`osrm-fetch`) | Required: one or more HTTPS OpenStreetMap `.osm.pbf` extracts (space- or comma-separated), merged into one graph per mode; a change re-downloads and rebuilds. Missing → every Compose command fails to interpolate |
 | `OSRM_PREPARE_MEM_LIMIT` | compose (`osrm-prepare`) | Optional memory ceiling (= swap ceiling) for the one-shot graph build; default `4g`. An exceeded limit fails only the build (exit 137), never the host |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | db | Database bootstrap |
 

@@ -19,6 +19,14 @@ export const ROUTING_LEG_TIMEOUT_MS = 10_000;
 /** Legs not started within this budget fall back to `provider_error`. */
 export const ROUTING_BUDGET_MS = 60_000;
 export const ROUTING_MAX_BYTES = 4 * 1024 * 1024;
+/**
+ * Farthest OSRM may move a stop onto its road graph. Without a bound OSRM
+ * snaps ANY coordinate to the nearest covered road, however far: stops outside
+ * the extract came back as a 0 m "road" at the extract's edge, or as a road leg
+ * ending in another country. Beyond this radius OSRM answers NoSegment, which
+ * becomes a flagged straight `no_route` leg.
+ */
+export const ROUTING_SNAP_RADIUS_METRES = 5000;
 const MAX_PROVIDER_POSITIONS = 100_000;
 const FIRST_TOLERANCE_METRES = 25;
 /** ~26,000 km: every run is down to its endpoints long before this. */
@@ -183,7 +191,7 @@ export function createStopRouter({
     }
     const coordinate = (stop: RouteStop) => `${stop.lng.toFixed(6)},${stop.lat.toFixed(6)}`;
     const target = `${base}/route/v1/${SEGMENT[profile]}/${coordinate(from)};${coordinate(to)}`
-      + '?overview=full&geometries=geojson&alternatives=false&steps=false';
+      + `?overview=full&geometries=geojson&alternatives=false&steps=false&radiuses=${ROUTING_SNAP_RADIUS_METRES};${ROUTING_SNAP_RADIUS_METRES}`;
     const origin = normalizeCanonicalOrigin(canonicalOrigin());
     try {
       const response = await request(target, {
