@@ -37,6 +37,12 @@ export class StopRoutingError extends Error {
 export interface StopRouter {
   /** Which routed profiles have a configured endpoint. */
   profiles(): Record<RoutedProfile, boolean>;
+  /**
+   * Why `calculate(stops)` would refuse right now (an unavailable profile, or a
+   * calculation already in flight), or null. Starts nothing, so a caller can
+   * answer these refusals before spending a rate-limit slot.
+   */
+  refusal(stops: readonly RouteStop[]): StopRoutingError | null;
   /** Route validated, normalized stops in order. Never stores; the caller persists the result. */
   calculate(stops: readonly RouteStop[]): Promise<StoredStopRoute>;
 }
@@ -193,14 +199,20 @@ export function createStopRouter({
     }
   }
 
+  function refusal(stops: readonly RouteStop[]): StopRoutingError | null {
+    const available = configured();
+    const missing = [...new Set(stops.slice(0, -1).map((_, index) => legProfile(stops, index)))]
+      .filter((profile): profile is RoutedProfile => profile !== 'straight' && !available[profile]);
+    if (missing.length) return new StopRoutingError('stop_route_profile_unavailable', 409, missing);
+    return busy ? new StopRoutingError('stop_route_busy', 429) : null;
+  }
+
   return {
     profiles: configured,
+    refusal,
     async calculate(stops) {
-      const available = configured();
-      const missing = [...new Set(stops.slice(0, -1).map((_, index) => legProfile(stops, index)))]
-        .filter((profile): profile is RoutedProfile => profile !== 'straight' && !available[profile]);
-      if (missing.length) throw new StopRoutingError('stop_route_profile_unavailable', 409, missing);
-      if (busy) throw new StopRoutingError('stop_route_busy', 429);
+      const refused = refusal(stops);
+      if (refused) throw refused;
       busy = true;
       try {
         const deadline = now() + ROUTING_BUDGET_MS;

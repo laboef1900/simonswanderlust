@@ -1473,6 +1473,14 @@ export function buildServer(cfg: ServerConfig): AppServer {
       if (e instanceof PostError && e.code === 'not_found') return reply.code(404).send({ code: 'not_found' });
       throw e;
     }
+    const refuse = (e: StopRoutingError) => {
+      if (e.status === 429) reply.header('Retry-After', '5');
+      return reply.code(e.status).send({ code: e.code, ...(e.profiles ? { profiles: e.profiles } : {}) });
+    };
+    // Refusals that start nothing (unavailable profile, calculation in flight)
+    // never spend one of the author's calculations.
+    const refused = stopRouter.refusal(stops);
+    if (refused) return refuse(refused);
     if (!stopRouteLimiter.check(req.authUser!.id)) {
       return reply.code(429).header('Retry-After', '600').send({ code: 'stop_route_rate_limited' });
     }
@@ -1480,8 +1488,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     try { route = await stopRouter.calculate(stops); }
     catch (e) {
       if (!(e instanceof StopRoutingError)) throw e;
-      if (e.status === 429) reply.header('Retry-After', '5');
-      return reply.code(e.status).send({ code: e.code, ...(e.profiles ? { profiles: e.profiles } : {}) });
+      return refuse(e);
     }
     try { await posts.saveStopRoute(tk, route); }
     catch (e) {

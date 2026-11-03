@@ -74,7 +74,7 @@ async function story(posts: PostStore): Promise<string> {
 /** A router double: records calls; returns a valid straight-only route for the given stops. */
 function fakeRouter(behaviour: (stops: readonly RouteStop[]) => Promise<StoredStopRoute> = async (stops) => storedRouteFor([...stops])) {
   const calculate = vi.fn(behaviour);
-  const router: StopRouter = { profiles: () => ({ car: true, bike: true, foot: false }), calculate };
+  const router: StopRouter = { profiles: () => ({ car: true, bike: true, foot: false }), refusal: () => null, calculate };
   return { router, calculate };
 }
 
@@ -173,6 +173,23 @@ describe('stop-route HTTP boundary (#513)', () => {
     expect(calculate).toHaveBeenCalledTimes(2);
     const other = await login(b, false, 'other');
     expect((await b.app.inject({ method: 'POST', url: `/posts/${tk}/stop-route`, cookies: other, payload: { stops: ROUTE_STOPS } })).statusCode).toBe(200);
+  });
+
+  it('answers refusals that start nothing without spending a calculation', async () => {
+    const { router, calculate } = fakeRouter();
+    const refusals = [new StopRoutingError('stop_route_profile_unavailable', 409, ['foot']), new StopRoutingError('stop_route_busy', 429)];
+    router.refusal = () => refusals.shift() ?? null;
+    const b = build({ stopRouter: router, stopRouteLimiter: fixedWindowLimiter({ max: 1, windowMs: 60_000 }) });
+    close = () => b.app.close();
+    const tk = await story(b.posts);
+    const cookies = await login(b);
+    const post = () => b.app.inject({ method: 'POST', url: `/posts/${tk}/stop-route`, cookies, payload: { stops: ROUTE_STOPS } });
+    expect((await post()).json()).toEqual({ code: 'stop_route_profile_unavailable', profiles: ['foot'] });
+    const busy = await post();
+    expect([busy.statusCode, busy.json(), busy.headers['retry-after']]).toEqual([429, { code: 'stop_route_busy' }, '5']);
+    expect((await post()).statusCode).toBe(200);
+    expect((await post()).json()).toEqual({ code: 'stop_route_rate_limited' });
+    expect(calculate).toHaveBeenCalledOnce();
   });
 
   it('uses the Settings URLs live: clearing them disables routed legs before any request', async () => {

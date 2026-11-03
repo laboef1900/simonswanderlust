@@ -235,3 +235,4 @@ not your content. See [Connect an optional AI provider](../README.md#connect-an-
 | Images show the blog or a 404 | The proxy rewrote `Host`, or `IMG_HOST` does not match the image domain |
 | Comments are refused (403) | The public domain is unset, or does not exactly match the page's origin |
 | Publish shows a timeout in the browser while the build continues | The proxy's read timeout is below the 900-second build deadline |
+| **Calculate route** reports a failure, but a reload shows the new route | The proxy's read timeout is below about 70 seconds; one calculation can take up to a minute. The shipped `proxy_read_timeout 960s` covers it |
