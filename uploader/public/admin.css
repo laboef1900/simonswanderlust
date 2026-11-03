@@ -1459,6 +1459,17 @@ body.login-page #submit { width: 100%; margin-top: 1.5rem; }
 .comment-reply { display: grid; justify-items: start; gap: 0.5rem; max-width: 40rem; margin-top: 0.75rem; }
 .comment-reply textarea { min-height: 4rem; }
 .about-tabs { margin-bottom: 1.25rem; }
+/* About Me equipment line (#514): site identity with its own save, set off from the
+   page body by the same hairline as the image row above it. */
+.about-gear { margin-top: 1.75rem; padding-top: 1.25rem; border-top: 1px solid var(--line); }
+.about-gear > .section-label { margin-top: 0; }
+.about-gear > label { margin-top: 0.875rem; }
+.about-gear__count { font-variant-numeric: tabular-nums; }
+.about-gear > .err { margin: 0.375rem 0 0; }
+.about-gear > .form-actions { margin-top: 0.875rem; }
+.about-gear > .muted:empty { display: none; }
+.about-gear input[aria-invalid='true'] { border-color: var(--red); }
+.about-gear__timing { max-width: 70ch; }
 .cms-masthead {
   grid-column: 1 / -1;
   display: flex;

@@ -100,7 +100,7 @@ async function loadPage(save: (payload: PagePayload) => Promise<Response>) {
   };
   context.window = context;
   vm.createContext(context);
-  for (const file of ['build-reporting.js', 'language.js', 'tabs.js', 'pages-ui.js', 'draft-guard.js', 'write-recovery.js', 'gallery-fence.js', 'gallery-metadata-warnings.js']) vm.runInContext(browserScript(file), context);
+  for (const file of ['build-reporting.js', 'language.js', 'tabs.js', 'pages-ui.js', 'about-equipment.js', 'draft-guard.js', 'write-recovery.js', 'gallery-fence.js', 'gallery-metadata-warnings.js']) vm.runInContext(browserScript(file), context);
   vm.runInContext(script, context);
   const api = vm.runInContext('({ fill })', context) as { fill(locale: string, data: { title: string; bodyMarkdown: string }): void };
   // Let initialization (language + stored page) settle before the test edits.
