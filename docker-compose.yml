@@ -110,7 +110,8 @@ services:
     restart: unless-stopped
 
   # Street routing data (#513). One-shot: downloads OSRM_PBF_URL (an OpenStreetMap
-  # extract, e.g. Geofabrik) into the `osrm` volume, again only when the URL changes.
+  # extract, e.g. Geofabrik) into the `osrm` volume, again only when the URL changes
+  # or after a refresh removed /osrm/region.url (docs/install.md §4g).
   osrm-fetch:
     image: curlimages/curl:8.23.0@sha256:3fb7e13e5d179a845c97d78204f3f1064d1907037f26a3ebf91710571151fd93
     # A fresh named volume is root-owned; root here needs no capabilities to write it.
@@ -124,22 +125,31 @@ services:
     entrypoint: ["sh", "-euc"]
     command:
       - |
-        if [ -f /osrm/region.osm.pbf ] && [ "$$(cat /osrm/region.url 2>/dev/null)" = "$$OSRM_PBF_URL" ]; then
+        if [ -f /osrm/region.osm.pbf ] && [ -f /osrm/region.stamp ] && [ "$$(cat /osrm/region.url 2>/dev/null)" = "$$OSRM_PBF_URL" ]; then
           echo "osrm-fetch: map extract is current"; exit 0
         fi
         echo "osrm-fetch: downloading the map extract"
         curl -fsSL --proto =https --proto-redir =https --retry 3 -o /osrm/region.osm.pbf.part "$$OSRM_PBF_URL"
         mv /osrm/region.osm.pbf.part /osrm/region.osm.pbf
+        # The stamp names this exact download, so osrm-prepare also rebuilds after a
+        # refresh of the same URL. Written before region.url: a crash in between re-downloads.
+        printf '%s %s\n' "$$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$$OSRM_PBF_URL" > /osrm/region.stamp
         printf '%s' "$$OSRM_PBF_URL" > /osrm/region.url
     restart: "no"
 
   # One-shot: builds the MLD routing graph per travel mode, one mode at a time
-  # (peak RAM is one osrm-extract), only when the extract changed since the last build.
+  # (peak RAM is one osrm-extract), only when the downloaded extract changed.
   osrm-prepare:
     image: ghcr.io/project-osrm/osrm-backend:v26.11.0-debian@sha256:e1929ae2818226284d7ef007329098a30851c11528ab3712bc9c8d68da78278b
     depends_on:
       osrm-fetch:
         condition: service_completed_successfully
+    # Bounded (issue #71 reasoning): an oversized region must OOM this one-shot,
+    # never the host's Postgres or app. Berlin peaked at ~1.06 GB in one mode;
+    # raise OSRM_PREPARE_MEM_LIMIT for larger regions. memswap_limit MUST equal
+    # mem_limit, or Docker grants 2× swap and the build thrashes instead of failing.
+    mem_limit: ${OSRM_PREPARE_MEM_LIMIT:-4g}
+    memswap_limit: ${OSRM_PREPARE_MEM_LIMIT:-4g}
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     volumes:
@@ -149,7 +159,7 @@ services:
       - |
         for pair in car:car bike:bicycle foot:foot; do
           mode=$${pair%%:*}; profile=$${pair#*:}; dir=/osrm/$$mode
-          if [ -f "$$dir/ready" ] && cmp -s /osrm/region.url "$$dir/ready"; then
+          if [ -f "$$dir/ready" ] && cmp -s /osrm/region.stamp "$$dir/ready"; then
             echo "osrm-prepare: $$mode graph is current"; continue
           fi
           echo "osrm-prepare: building the $$mode graph"
@@ -159,7 +169,7 @@ services:
           osrm-partition "$$dir.tmp/region.osrm"
           osrm-customize "$$dir.tmp/region.osrm"
           rm "$$dir.tmp/region.osm.pbf"
-          cp /osrm/region.url "$$dir.tmp/ready"
+          cp /osrm/region.stamp "$$dir.tmp/ready"
           rm -rf "$$dir"; mv "$$dir.tmp" "$$dir"
         done
     restart: "no"

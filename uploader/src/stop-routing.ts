@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { safeFetch, type LookupFn } from './safe-fetch.js';
-import { routingEndpointUsable } from './routing-origins.js';
+import { isInternalRoutingOrigin, routingEndpointUsable } from './routing-origins.js';
 import { normalizeCanonicalOrigin } from '../../site/src/lib/site-identity.js';
 import { simplifyRun } from '../public/gpx-public-track.js';
 import {
@@ -169,11 +169,18 @@ export function createStopRouter({
   };
 
   async function routeLeg(profile: RoutedProfile, from: RouteStop, to: RouteStop, deadline: number): Promise<LegOutcome> {
-    const wait = nextStart - now();
-    if (now() + Math.max(0, wait) >= deadline) return { kind: 'straight', fallback: 'provider_error' };
-    if (wait > 0) await sleep(wait);
-    nextStart = now() + ROUTING_SPACING_MS;
     const base = endpoints()[profile].replace(/\/+$/, '');
+    // The ≥ 1.1 s pacing honours public-service usage policies (FOSSGIS). An
+    // operator-listed internal server (the bundled compose OSRM) is the
+    // operator's own; single flight and the budget still bound it.
+    if (!isInternalRoutingOrigin(base, internalOrigins)) {
+      const wait = nextStart - now();
+      if (now() + Math.max(0, wait) >= deadline) return { kind: 'straight', fallback: 'provider_error' };
+      if (wait > 0) await sleep(wait);
+      nextStart = now() + ROUTING_SPACING_MS;
+    } else if (now() >= deadline) {
+      return { kind: 'straight', fallback: 'provider_error' };
+    }
     const coordinate = (stop: RouteStop) => `${stop.lng.toFixed(6)},${stop.lat.toFixed(6)}`;
     const target = `${base}/route/v1/${SEGMENT[profile]}/${coordinate(from)};${coordinate(to)}`
       + '?overview=full&geometries=geojson&alternatives=false&steps=false';

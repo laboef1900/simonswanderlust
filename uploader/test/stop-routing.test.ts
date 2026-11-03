@@ -172,6 +172,22 @@ describe('createStopRouter (#513)', () => {
     for (let i = 1; i < starts.length; i++) expect(starts[i]! - starts[i - 1]!).toBeGreaterThanOrEqual(ROUTING_SPACING_MS);
   });
 
+  it('does not pace an operator-listed internal origin, but keeps pacing public endpoints in the same route', async () => {
+    const c = clock();
+    const starts: Array<[string, number]> = [];
+    const router = createStopRouter({
+      endpoints: () => ({ car: 'http://osrm-car:5000', bike: 'https://bike.example', foot: '' }), now: c.now, sleep: c.sleep,
+      internalOrigins: new Set(['http://osrm-car:5000']),
+      request: async (url) => { starts.push([new URL(url).host, c.now()]); c.advance(200); return respond(ok([[23, 37], [23.1, 37.1]])); },
+    });
+    await router.calculate(stops({}, {}, { profile: 'bike' }, {}, { profile: 'bike' }, {}));
+    const car = starts.filter(([host]) => host === 'osrm-car:5000').map(([, at]) => at);
+    const bike = starts.filter(([host]) => host === 'bike.example').map(([, at]) => at);
+    expect([car.length, bike.length]).toEqual([3, 2]);
+    expect(car[1]! - car[0]!).toBe(200); // back to back: no sleep before the second internal leg
+    expect(bike[1]! - bike[0]!).toBeGreaterThanOrEqual(ROUTING_SPACING_MS);
+  });
+
   it('runs one calculation at a time app-wide', async () => {
     const { promise: held, resolve } = Promise.withResolvers<void>();
     const router = createStopRouter({

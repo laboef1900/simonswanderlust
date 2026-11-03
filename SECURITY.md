@@ -929,7 +929,8 @@ default, no API key exists, and no `app_secrets` slot is used.
 
 - **Outbound requests** go only through `safeFetch`: the existing IP/DNS SSRF guards (no
   loopback, RFC1918, link-local, CGNAT, …), no redirects, 10 s per leg, a 4 MiB streamed cap,
-  one request at a time app-wide, starts ≥ 1.1 s apart, and a 60 s budget per calculation. A
+  one request at a time app-wide, public endpoints started ≥ 1.1 s apart (operator-listed
+  internal origins are not paced), and a 60 s budget per calculation. A
   refused/failed provider stores nothing; the previously stored and published routes stay
   unchanged. `straight` legs never touch the network.
 - **Private-network opt-in (owner decision 2026-11-03):** the environment variable

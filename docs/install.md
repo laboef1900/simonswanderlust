@@ -37,7 +37,7 @@ about it cannot be answered.
 | Image disk | App image ~1.13 GB uncompressed, Postgres ~0.30 GB, on either architecture | [Local images](2026-10-29-clean-install-rehearsal.md#amd64-local-images) |
 | Photo disk | Each uploaded photo keeps its **original** plus 8 variant files. The synthetic, highly compressible PNGs used ~0.66 MB allocated per photo; real camera photos will use more. Measure your own corpus before sizing | [Corpus and disk](2026-10-29-clean-install-rehearsal.md#corpus-and-disk) |
 | Backups | In-app dumps and image archives are written to the **same disk** under `/data/backup`; image archives are never pruned automatically. Budget space for them and for an offsite copy | [Backups & DR](../ARCHITECTURE.md#backups--disaster-recovery) |
-| Street routing (OSRM) | Three graphs (car, bike, foot) built from `OSRM_PBF_URL` into the `osrm` volume. Preparation needs several times the extract size in RAM and disk, per mode; pick the smallest region covering your stories. Not measured here beyond a Berlin extract | [Bundled OSRM design](superpowers/specs/2026-11-03-osrm-compose-routing-design.md) |
+| Street routing (OSRM) | Three graphs (car, bike, foot) built from `OSRM_PBF_URL` into the `osrm` volume. Preparation needs several times the extract size in RAM and disk, per mode; pick the smallest region covering your stories. The build is capped by `OSRM_PREPARE_MEM_LIMIT` (default `4g`, swap equal), so an oversized region fails the build, not the host. Measured only for Berlin: ~1.06 GB peak in one mode, 1.3 GB volume | [Bundled OSRM design](superpowers/specs/2026-11-03-osrm-compose-routing-design.md) |
 
 ## 3. Licensing in one paragraph
 
@@ -217,6 +217,18 @@ in `ROUTING_INTERNAL_ORIGINS`.
 To change the region, edit `OSRM_PBF_URL`, run `docker compose up -d`, wait for
 `osrm-prepare` to exit, then `docker compose up -d --force-recreate osrm-car osrm-bike osrm-foot`.
 
+To refresh the same region with newer OpenStreetMap data (a `-latest` URL is downloaded only
+once), drop the download marker and run the same sequence:
+
+```bash
+docker compose run --rm --no-deps --entrypoint rm osrm-fetch -f /osrm/region.url
+docker compose up -d        # re-downloads; osrm-prepare rebuilds every mode
+docker compose up -d --force-recreate osrm-car osrm-bike osrm-foot   # after osrm-prepare exited 0
+```
+
+A larger region may need more memory for the build: set `OSRM_PREPARE_MEM_LIMIT` (for example
+`8g`) in `.env`. Until a rebuild succeeds, the servers keep the previous graph.
+
 ## 5. Verify the installation
 
 - `https://blog.example.com/` and `https://blog.example.com/en/` (or your secondary-language
@@ -232,6 +244,9 @@ To change the region, edit `OSRM_PBF_URL`, run `docker compose up -d`, wait for
 - **Upgrades:** follow the
   [app upgrade and supported recovery runbook](../ARCHITECTURE.md#app-upgrades-and-supported-recovery).
   Recovery is roll-forward by default; capture a backup generation before every upgrade.
+  **Upgrading to a release with the bundled OSRM:** add `OSRM_PBF_URL` to `.env` first. Until
+  it is set, every `docker compose` command (including `stop`, `run` and the restore runbook)
+  fails with `set OSRM_PBF_URL in .env`. Then set the Street routing URLs (4g).
   Postgres major upgrades have their own
   [procedure](../ARCHITECTURE.md#upgrading-a-postgres-major-eg-17--18).
 - **Backups:** **Settings → Site & backups** creates database dumps and image archives on
@@ -253,6 +268,7 @@ To change the region, edit `OSRM_PBF_URL`, run `docker compose up -d`, wait for
 | App exits with `TRUSTED_PROXY=docker-gateway requires one unambiguous default gateway.` (or `cannot read /proc/net/route`) | The Compose network or `network_mode` was changed; only the shipped bridge topology is supported |
 | `docker compose` stops with `set OSRM_PBF_URL in .env` | Set an HTTPS `.osm.pbf` extract URL (4g) |
 | Editor says "no routing service configured" | Settings URLs empty, or `osrm-prepare` failed (`docker compose logs osrm-prepare`, often out of memory or disk for the region) |
+| `osrm-prepare` exits with code 137 | The build hit `OSRM_PREPARE_MEM_LIMIT`; raise it in `.env` or choose a smaller region, then `docker compose up -d` |
 | App exits with `ROUTING_INTERNAL_ORIGINS entry N must be an http(s) origin …` | The compose value was edited; each entry must be `scheme://host:port` only |
 | Images show the blog or a 404 | The proxy rewrote `Host`, or `IMG_HOST` does not match the image domain |
 | Comments are refused (403) | The public domain is unset, or does not exactly match the page's origin |
