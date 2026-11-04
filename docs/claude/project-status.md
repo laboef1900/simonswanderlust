@@ -4,6 +4,19 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Implemented, release verification pending:** Direct Anthropic browser access (2026-11-04,
+  owner-approved high-risk transport change). Existing Custom providers at
+  `https://api.anthropic.com/v1` now send the browser opt-in and API-version headers for
+  model discovery, reviews, excerpts, captions and photo details. Other origins retain
+  their existing headers; no stored settings, keys or server routes change. Uploader tests
+  and typecheck pass; Chromium exercised Settings Test and all inference operations against
+  a CORS-gated fixture. Live Anthropic preflight succeeds, but authenticated production
+  inference and deployment are not claimed. Spec:
+  `docs/superpowers/specs/2026-11-04-anthropic-browser-access.md`.
+- **Done:** admin sidebar account trigger is avatar-only. The wrapping name/role/chevron badge
+  is replaced by a steel-blue avatar button; name and role head the upward account panel above
+  Log out. Markup in `uploader/public/auth.js` (text still set via `textContent`, #131), styles
+  in `uploader/public/admin.css`, shell description in `DESIGN.md`.
 - **Implemented, owner approval pending (High risk):** bundled OSRM street routing whose
   regions follow the stories. The app maps the country of every story with two or more stops
   to one Geofabrik extract; `osrm-fetch` downloads it and `osrm` (`osrm-backend` v26.11.0) builds

@@ -86,6 +86,7 @@ function client(fetcher: typeof fetch) {
   const window: { LLM?: {
     caption(base: string, model: string, prompt: string, image: string, timeout: number, maxTokens: number, signal?: AbortSignal, key?: string): Promise<{ altEn: string; altDe: string }>;
     listModels(base: string, key?: string): Promise<string[]>;
+    suggestExcerpt(base: string, model: string, prompt: string, draft: { locale: string; title: string; markdown: string }, key?: string, timeout?: number): Promise<string>;
   } } = {};
   new Function('window', 'fetch', src)(window, fetcher);
   return window.LLM!;
@@ -118,6 +119,70 @@ describe('browser caption credentials', () => {
     await expect(llm.caption('https://vision.example/v1', 'vision', 'describe', 'data:image/jpeg;base64,AA==', 5000, 8000, undefined, 'fixture-key'))
       .rejects.toThrow('Caption request failed');
     await expect(llm.listModels('https://vision.example/v1', 'fixture-key')).rejects.not.toThrow('fixture-secret');
+  });
+});
+
+describe('Anthropic browser access', () => {
+  it('passes the browser gate for discovery and both inference transports without retaining credentials', async () => {
+    const fetcher = vi.fn<typeof fetch>(async (url, options) => {
+      const endpoint = new URL(String(url));
+      const headers = new Headers(options?.headers);
+      if (endpoint.origin === 'https://api.anthropic.com') {
+        if (headers.get('anthropic-dangerous-direct-browser-access') !== 'true' ||
+            headers.get('anthropic-version') !== '2023-06-01') throw new TypeError('Failed to fetch');
+        if (headers.get('authorization') !== 'Bearer fixture-key') return new Response('', { status: 401 });
+      } else {
+        expect(headers.has('anthropic-dangerous-direct-browser-access')).toBe(false);
+        expect(headers.has('anthropic-version')).toBe(false);
+        expect(headers.has('authorization')).toBe(false);
+      }
+      return endpoint.pathname.endsWith('/models')
+        ? Response.json({ data: [{ id: 'claude-fixture' }] })
+        : Response.json({ choices: [{ message: { content: JSON.stringify(
+          JSON.parse(String(options?.body)).max_tokens
+            ? { altEn: 'A mountain', altDe: 'Ein Berg' }
+            : { excerpt: 'A walk in the mountains.' },
+        ) } }] });
+    });
+    const llm = client(fetcher);
+    expect(await llm.listModels('https://api.anthropic.com/v1/', 'fixture-key')).toEqual(['claude-fixture']);
+    expect(await llm.caption('https://api.anthropic.com/v1', 'claude-fixture', 'describe',
+      'data:image/jpeg;base64,AA==', 5000, 8000, undefined, 'fixture-key'))
+      .toEqual({ altEn: 'A mountain', altDe: 'Ein Berg' });
+    expect(await llm.suggestExcerpt('https://api.anthropic.com/v1', 'claude-fixture', '',
+      { locale: 'en', title: 'Mountains', markdown: 'We walked in the mountains.' }, 'fixture-key', 5000))
+      .toBe('A walk in the mountains.');
+    await llm.listModels('http://localhost:1234/v1');
+    await llm.caption('http://localhost:1234/v1', 'local', '', 'data:image/jpeg;base64,AA==', 5000, 8000);
+    await llm.suggestExcerpt('http://localhost:1234/v1', 'local', '',
+      { locale: 'en', title: 'Mountains', markdown: 'We walked in the mountains.' }, undefined, 5000);
+    for (const [, options] of fetcher.mock.calls) {
+      expect(options).toMatchObject({ credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer' });
+    }
+  });
+
+  it.each([
+    'https://api.anthropic.com.evil.example/v1',
+    'https://evil-api.anthropic.com/v1',
+    'https://api.anthropic.com:8443/v1',
+    'http://api.anthropic.com/v1',
+    'https://provider.example/api.anthropic.com/v1',
+  ])('does not opt other origins into Anthropic browser access: %s', async (base) => {
+    const fetcher = vi.fn<typeof fetch>(async () => Response.json({ data: [{ id: 'other-model' }] }));
+    expect(await client(fetcher).listModels(base, 'other-provider-key')).toEqual(['other-model']);
+    const headers = new Headers(fetcher.mock.calls[0]?.[1]?.headers);
+    expect(headers.get('authorization')).toBe('Bearer other-provider-key');
+    expect(headers.has('anthropic-dangerous-direct-browser-access')).toBe(false);
+    expect(headers.has('anthropic-version')).toBe(false);
+  });
+
+  it('does not retry or disclose an Anthropic authentication failure', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => Response.json({
+      error: { message: 'Rejected fixture-key' },
+    }, { status: 401 }));
+    await expect(client(fetcher).listModels('https://api.anthropic.com/v1', 'fixture-key'))
+      .rejects.toThrow('Could not list models. Check the provider, API key and browser CORS access.');
+    expect(fetcher).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -183,8 +183,10 @@ Typing after the last requested save stays on screen as **Unsaved changes**, eve
 when earlier requests succeed. A rejected save does not prevent a later corrected
 save. A genuine edit from another tab still produces the conflict dialog:
 **Reload** replaces your editing base and cancels already queued older requests.
-If that reload fails, saving remains blocked until the page loads successfully;
-keep or recover your local draft rather than assuming it reached the server.
+Save and Publish requests are refused while that reload is pending; they cannot
+capture the old form against the replacement version. If the reload fails, they
+remain blocked until the page loads successfully; keep or recover your local draft
+rather than assuming it reached the server.
 If a GPX preview is open while Reload reconciles a newly attached or replaced route,
 its trimming selections remain intact. The replacement warning becomes available
 for the current route; a changed route version requires fresh replacement confirmation.
@@ -402,8 +404,11 @@ Trim more, remove segments or replace the source; precision is never silently re
 A route attached before public-route support may need this correction on its first Publish.
 
 **Attach route** is explicit. For an existing post it does not save unsaved story text
-or other fields. For a new post, **Save draft and attach route** first saves the form;
-if attachment fails afterwards, keep the saved draft and retry the preview. A conflict
+or other fields. For a new post, **Save draft and attach route** first saves the form
+as it was when clicked. If an earlier save is still pending, this action waits and
+updates that same newly created pair before attaching; it never drops the requested
+form save or creates a second pair. Later typing remains unsaved. If attachment fails
+afterwards, keep the saved draft and retry the preview. A conflict
 requires reloading current state. An unknown network outcome blocks further changes
 until reload rather than risking a second replacement.
 

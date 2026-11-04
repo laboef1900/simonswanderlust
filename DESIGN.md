@@ -1146,9 +1146,13 @@ and the `<dialog>`s appended to `<body>` share one set:
 
 - A full-width 4rem masthead (brand on the left; descriptor and View site on the right)
   sits above a 13rem sidebar and a single rounded white workspace. The sidebar holds
-  all page navigation (no journal header above it) and, at its foot, the account menu: the
-  user badge (avatar, name, role, chevron) is a menu trigger whose panel opens upward with
-  **Log out**, closing like every admin menu (Escape, outside click). Admin-only pages appear
+  all page navigation (no journal header above it) and, at its foot, the account menu. Its
+  trigger is the avatar alone: a 36px steel-blue (`--studio-accent`) circle with the white
+  initial, inside a 44px hit area aligned to the footer edge; it darkens on hover and gains a
+  canvas-gapped accent ring while open. No name, role or chevron sits in the sidebar, so a long
+  username never wraps there. The panel opens upward with the full name (wrapping, never
+  truncated) and role above a hairline, then **Log out**, closing like every admin menu (Escape,
+  outside click); the trigger's accessible name stays “Account menu for …”. Admin-only pages appear
   in the sidebar for admins only. Roles and server authorization are unchanged. Publish and
   destructive actions retain their existing red treatment.
 - The shell is exactly the viewport and the workspace is its only scroll container:
