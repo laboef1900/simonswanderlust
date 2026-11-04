@@ -4,12 +4,14 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
-- **Implemented, owner approval pending (High risk):** bundled OSRM street routing. The
-  compose stack downloads and merges every `OSRM_PBF_URLS` extract and runs
-  `osrm-car`/`osrm-bike`/`osrm-foot` (`osrm-backend` v26.11.0, `--mmap=1`);
-  `ROUTING_INTERNAL_ORIGINS` is the operator-only, exact-origin exemption from the `safeFetch`
-  private-address guard for routing; legs bound OSRM snapping to 5 km (`radiuses`). Spec:
-  `docs/superpowers/specs/2026-11-03-osrm-compose-routing-design.md`.
+- **Implemented, owner approval pending (High risk):** bundled OSRM street routing whose
+  regions follow the stories. The app maps the country of every story with two or more stops
+  to one Geofabrik extract; `osrm-fetch` downloads it and `osrm` (`osrm-backend` v26.11.0) builds
+  and serves one memory-mapped graph per country and mode, one build at a time. No `.env` region
+  list. `ROUTING_INTERNAL_ORIGINS` (`http://osrm:5100-5999`) is the operator-only exemption from
+  the `safeFetch` private-address guard; legs bound OSRM snapping to 5 km. Specs:
+  `docs/superpowers/specs/2026-11-03-osrm-compose-routing-design.md`,
+  `docs/superpowers/specs/2026-11-04-osrm-automatic-regions-design.md`.
 - **Implemented, owner approval pending (High risk):** #513 stop routing. Stories without a
   published GPX track can show a line along their ordered stops: per-leg car/bike/foot/straight,
   via points (never public), straight dashed fallbacks for unroutable legs. Computed only in the

@@ -63,7 +63,8 @@ import { CommentError, isCommentStatus, isModerationOffset, withPublicLocaleMeta
 import { ui } from '../../site/src/i18n/ui.js';
 import { createGeocoder, GeocodingError } from './geocoding.js';
 import { createStopRouter, StopRoutingError, type StopRouter } from './stop-routing.js';
-import { routingEndpointUsable } from './routing-origins.js';
+import { routingEndpointUsable, type OriginAllowList } from './routing-origins.js';
+import type { BundledRouting } from './routing-regions.js';
 import { STOP_ROUTE_LIMITS, StopRouteError, validateRouteStops } from '../public/stop-route.js';
 import { renderStopRouteCopy } from './stop-route-copy.js';
 import { registerGpxRoutes } from './gpx-routes.js';
@@ -117,7 +118,9 @@ export interface ServerConfig {
   /** #513: injectable like `loginLimiter`; defaults to the OSRM router over `settings`. */
   stopRouter?: StopRouter;
   /** ROUTING_INTERNAL_ORIGINS (operator env): the only plain-HTTP / private routing origins. Default none. */
-  routingInternalOrigins?: ReadonlySet<string>;
+  routingInternalOrigins?: OriginAllowList;
+  /** Bundled per-country OSRM (compose `osrm` + `osrm-fetch`); absent = Settings URLs only. */
+  bundledRouting?: BundledRouting;
   /** Per-user Calculate limiter (default 20 per 10 minutes). */
   stopRouteLimiter?: RateLimiter;
   media: MediaStore;
@@ -1447,19 +1450,32 @@ export function buildServer(cfg: ServerConfig): AppServer {
   // #513 stop routing: authoring-time only, server-side, authenticated authors.
   // Draft coordinates leave the server only here, only to the admin-configured
   // endpoints, only through safeFetch (see stop-routing.ts). URLs never reach authors.
+  const bundledRouting = cfg.bundledRouting;
   const stopRouter = cfg.stopRouter ?? createStopRouter({
     endpoints: () => {
       const s = cfg.settings.get();
       return { car: s.routingCarUrl, bike: s.routingBikeUrl, foot: s.routingFootUrl };
     },
+    regionEndpoints: (countryCode) => bundledRouting?.endpoints(countryCode) ?? {},
     canonicalOrigin: () => cfg.identityStore?.get().identity.canonicalOrigin ?? null,
     internalOrigins: routingInternalOrigins,
   });
   const stopRouteLimiter = cfg.stopRouteLimiter ?? fixedWindowLimiter({ max: 20, windowMs: 600_000 });
+  // The story's country selects its bundled region; authors see its state, never a URL.
+  const routingContext = async (tk: string) => {
+    const pair = await posts.get(tk);
+    if (!pair) return null;
+    const countryCode = pair.shared.countryCode;
+    // Opening or calculating a story makes sure its country is on the wanted list.
+    void bundledRouting?.sync();
+    return { context: { countryCode }, bundled: bundledRouting ? { bundled: bundledRouting.view(countryCode) } : {} };
+  };
   app.get<{ Params: { tk: string } }>('/posts/:tk/stop-route', { preHandler: requireAuth }, async (req, reply) => {
     reply.header('Cache-Control', 'no-store');
     try {
-      return reply.send({ profiles: stopRouter.profiles(), route: await posts.getStopRoute(req.params.tk) });
+      const story = await routingContext(req.params.tk);
+      if (!story) return reply.code(404).send({ code: 'not_found' });
+      return reply.send({ profiles: stopRouter.profiles(story.context), route: await posts.getStopRoute(req.params.tk), ...story.bundled });
     } catch (e) {
       if (e instanceof PostError && e.code === 'not_found') return reply.code(404).send({ code: 'not_found' });
       throw e;
@@ -1480,24 +1496,27 @@ export function buildServer(cfg: ServerConfig): AppServer {
     if (stops.length > STOP_ROUTE_LIMITS.stops) return reply.code(400).send({ code: 'stop_route_too_many', max: STOP_ROUTE_LIMITS.stops });
     if (!isWritable()) return readOnly(reply);
     // Existence first: an unknown story must never trigger an outbound request.
-    try { await posts.getStopRoute(tk); }
+    let story;
+    try { story = await routingContext(tk); }
     catch (e) {
       if (e instanceof PostError && e.code === 'not_found') return reply.code(404).send({ code: 'not_found' });
       throw e;
     }
+    if (!story) return reply.code(404).send({ code: 'not_found' });
+    const { context, bundled } = story;
     const refuse = (e: StopRoutingError) => {
       if (e.status === 429) reply.header('Retry-After', '5');
-      return reply.code(e.status).send({ code: e.code, ...(e.profiles ? { profiles: e.profiles } : {}) });
+      return reply.code(e.status).send({ code: e.code, ...(e.profiles ? { profiles: e.profiles } : {}), ...bundled });
     };
     // Refusals that start nothing (unavailable profile, calculation in flight)
     // never spend one of the author's calculations.
-    const refused = stopRouter.refusal(stops);
+    const refused = stopRouter.refusal(stops, context);
     if (refused) return refuse(refused);
     if (!stopRouteLimiter.check(req.authUser!.id)) {
       return reply.code(429).header('Retry-After', '600').send({ code: 'stop_route_rate_limited' });
     }
     let route;
-    try { route = await stopRouter.calculate(stops); }
+    try { route = await stopRouter.calculate(stops, context); }
     catch (e) {
       if (!(e instanceof StopRoutingError)) throw e;
       return refuse(e);
@@ -1508,7 +1527,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
       if (e instanceof PostError && e.code === 'storage_read_only') return readOnly(reply);
       throw e;
     }
-    return reply.send({ profiles: stopRouter.profiles(), route });
+    return reply.send({ profiles: stopRouter.profiles(context), route, ...bundled });
   });
 
   // Unsaved source analysis only: inherit the same JSON body ceiling as /posts.
@@ -1826,6 +1845,8 @@ export function buildServer(cfg: ServerConfig): AppServer {
         }
       }
       const saved = await posts.upsertDraft(pair, baseUpdatedAt ?? existing?.updatedAt, { createOnly, receipt, baseLanguageUpdatedAt: mode.updatedAt });
+      // Stops or the country may have changed: refresh the bundled routing regions (never awaited).
+      void bundledRouting?.sync();
       return reply.send({ ...saved, publication: await publication.one(saved.translationKey),
         ownerUserId: receipt.ownerUserId, saveId: receipt.saveId });
     } catch (e) {

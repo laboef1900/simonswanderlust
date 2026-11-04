@@ -697,24 +697,37 @@ with a line along roads. Data and flow:
   The result is stored as `posts.stop_route` (identical on both rows, `{fingerprint, computedAt,
   legs, route}`) without touching `updated_at`.
 - **Settings** → *Street routing*: `routingCarUrl` / `routingBikeUrl` / `routingFootUrl`
-  (`settings.json`), one OSRM base URL per profile; empty (the default) disables a profile.
-  HTTPS, or plain HTTP only to an exact origin in the operator env `ROUTING_INTERNAL_ORIGINS`
-  (`uploader/src/routing-origins.ts`), which is also the only origin set `safeFetch` exempts
-  from its private-address checks (first hop only).
-- **Bundled OSRM** (`docker-compose.yml`): `osrm-fetch` (pinned `debian:trixie-slim`, one-shot;
-  installs `curl` + `osmium-tool` from Debian only when work is due) downloads every
-  `OSRM_PBF_URLS` extract, merges them with `osmium merge` into one `region.osm.pbf` in the
-  `osrm` volume when the list changes (or after a refresh removed `region.url`) and writes a
-  per-download `region.stamp`; `osrm-prepare` (one-shot, bounded by
-  `OSRM_PREPARE_MEM_LIMIT`, default `4g`, equal swap) builds the MLD graph per mode sequentially
-  (`car.lua`, `bicycle.lua`, `foot.lua`) only when its `ready` stamp differs;
-  `osrm-car` / `osrm-bike` / `osrm-foot` run `osrm-routed --mmap=1` on port 5000 with no host
-  port: the graph stays on disk and only queried areas become (evictable) page cache.
-  `app` does not depend on the OSRM services: a failed download or build leaves routing
-  unavailable, the blog and admin up. Every leg request sends `radiuses` = 5 km
+  (`settings.json`), optional **external** OSRM base URLs per profile, used only where no
+  bundled server serves the story's country; empty (the default) disables them. HTTPS, or plain
+  HTTP only to an origin in the operator env `ROUTING_INTERNAL_ORIGINS`
+  (`uploader/src/routing-origins.ts`: exact origins or one host with a port range), which is
+  also the only origin set `safeFetch` exempts from its private-address checks (first hop only).
+- **Bundled OSRM, regions follow the stories** (`uploader/src/routing-regions.ts`,
+  `docker-compose.yml`):
+  1. The app derives the countries of stories with two or more stops
+     (`PostStore.routingCountries`), maps each ISO code to exactly one Geofabrik extract via the
+     index `https://download.geofabrik.de/index-v1-nogeom.json` (through `safeFetch`, cached 24 h;
+     ambiguous codes are unsupported, never guessed) and writes `/osrm/control/wanted`. It syncs at
+     boot, every 5 minutes, after each story save and when a story's routing panel opens.
+  2. `osrm-fetch` (pinned `debian:trixie-slim`, long-running) validates each wanted line
+     (Geofabrik host, `-latest.osm.pbf`, safe characters), installs `curl` only when a download is
+     due and downloads as uid 1000 into `/osrm/extracts/<id>.osm.pbf` with a per-download stamp.
+  3. `osrm` (official `osrm-backend`, uid 1000, no capabilities, `OSRM_MEM_LIMIT` with equal swap)
+     builds each country's car/bike/foot graph separately, one build at a time, in `<mode>.tmp`
+     before swapping it in, and serves each with `osrm-routed --mmap=1` on
+     `5100 + 3 × slot + mode`. It writes `/osrm/control/status`
+     (`<id> <state> <car> <bike> <foot>`), which the app validates field by field.
+  4. The router sends each leg to the story country's ready bundled server, otherwise to the
+     Settings URL. The editor shows `preparing` / `failed` / `unsupported` from `GET` / `POST
+     /posts/:tk/stop-route` (`bundled`; never a URL or port) and re-checks every 30 s while
+     preparing. Countries no longer wanted stop serving; their files stay for a fast re-add.
+
+  `app` does not depend on the OSRM services: a failed download or build leaves routing for that
+  country unavailable, the blog and admin up. Every leg request sends `radiuses` = 5 km
   (`ROUTING_SNAP_RADIUS_METRES`): a stop farther from any covered road gets OSRM `NoSegment` →
-  a flagged straight `no_route` leg, never a road snapped to the extract's edge.
-  Spec: `docs/superpowers/specs/2026-11-03-osrm-compose-routing-design.md`.
+  a flagged straight `no_route` leg, never a road snapped to the extract's edge; a leg between
+  two countries is therefore straight. Spec:
+  `docs/superpowers/specs/2026-11-04-osrm-automatic-regions-design.md`.
 - **Publish** fingerprints the locked saved stops; only a fresh route is merged as
   `published_snapshot.stop_route`, and never when a GPX `track` is published (track wins). The
   editor shows fresh/stale per the same fingerprint and warns when Publish left a stale route out.
@@ -1188,9 +1201,9 @@ disposable `/data` host path and the credential-free database target printed by 
   automatic restart/activation throughout recovery, and wait for process exit and database
   sessions to drain. This includes writers using the storage through another database/cluster.
   Keep Postgres running. With the actual dump basename substituted, use the same configured
-  image/volumes without service ports. The Compose file must interpolate first: since the
-  bundled OSRM, `.env` needs `OSRM_PBF_URLS` (any valid HTTPS extract) or **every** command
-  below fails before it starts; restoring with an older backed-up `.env` means adding it first.
+  image/volumes without service ports. (v0.19.0 only: its Compose file required
+  `OSRM_PBF_URLS` in `.env` for **every** command; restoring with that release's files means
+  setting it first. Later releases need no routing variable.)
 
   ```sh
   docker compose stop app
@@ -1453,11 +1466,12 @@ boot/rescan can decode originals even when uploads are disabled.
    image name; see Release flow). Substitute the real verified tag/digest
    privately; do not use the ellipsis literally. Preserve the selected platform and Postgres
    major. Do not print expanded Compose configuration containing credentials into evidence.
-   **Releases carrying the bundled OSRM:** set `OSRM_PBF_URLS` (and optionally
-   `OSRM_PREPARE_MEM_LIMIT`) in `.env` **before any** Compose command. Without it Compose
-   refuses to interpolate the file, so `stop`, `ps`, `run` and `up -d --no-deps app` all fail,
-   including the restore commands above. The `pull` in step 3 also fetches the OSRM and Debian
-   images; the first full `up -d` downloads the extract and builds the graphs.
+   **v0.19.0 only:** set `OSRM_PBF_URLS` (and optionally `OSRM_PREPARE_MEM_LIMIT`) in `.env`
+   **before any** Compose command; without it `stop`, `ps`, `run` and `up -d --no-deps app` all
+   fail to interpolate. **Later releases** replace both with optional `OSRM_MEM_LIMIT`, and the
+   OSRM services `osrm-fetch` + `osrm`: run `up -d --remove-orphans` once to drop v0.19.0's
+   `osrm-prepare` / `osrm-car` / `osrm-bike` / `osrm-foot`. The `pull` in step 3 also fetches
+   the OSRM and Debian images; regions are then downloaded and built from the stories.
 2. **Host-proxy prerequisite for releases carrying #369:** deploy the matching proxy-trust
    runtime and Compose contract together. The approved topology is a TLS proxy on the host,
    the loopback-only published app port and the Compose bridge, with the literal
@@ -1702,8 +1716,8 @@ is the reference behind it.
 | `PORT` | app | Listen port (default `3000`) |
 | `PROTOMAPS_BUILD` / `MAP_MAXZOOM` / `PMTILES_VERSION` | Dockerfile (build args) | Pin the map basemap fetched + baked into the image at build (see `docs/map-assets.md`) |
 | `IMAGE_TAG` | compose | Released GHCR image version to run |
-| `OSRM_PBF_URLS` | compose (`osrm-fetch`) | Required: one or more HTTPS OpenStreetMap `.osm.pbf` extracts (space- or comma-separated), merged into one graph per mode; a change re-downloads and rebuilds. Missing → every Compose command fails to interpolate |
-| `OSRM_PREPARE_MEM_LIMIT` | compose (`osrm-prepare`) | Optional memory ceiling (= swap ceiling) for the one-shot graph build; default `4g`. An exceeded limit fails only the build (exit 137), never the host |
+| `OSRM_MEM_LIMIT` | compose (`osrm`) | Optional memory ceiling (= swap ceiling) for the `osrm` service; its peak is one country's graph build. Default `4g`. An exceeded limit fails only that country's build, never the host |
+| `ROUTING_BUNDLED_DIR` / `ROUTING_BUNDLED_HOST` | app / compose literals | `/osrm` and `osrm`: where the app writes the wanted regions and reads the servers' status, and the servers' host. Both or neither; the host's port range must be in `ROUTING_INTERNAL_ORIGINS`, or boot is refused |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | db | Database bootstrap |
 
 Origin roles remain distinct: `PUBLIC_BASE_URL` supplies image URLs and the body/gallery

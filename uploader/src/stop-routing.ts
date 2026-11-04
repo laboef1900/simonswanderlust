@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { safeFetch, type LookupFn } from './safe-fetch.js';
-import { isInternalRoutingOrigin, routingEndpointUsable } from './routing-origins.js';
+import { isInternalRoutingOrigin, routingEndpointUsable, type OriginAllowList } from './routing-origins.js';
 import { normalizeCanonicalOrigin } from '../../site/src/lib/site-identity.js';
 import { simplifyRun } from '../public/gpx-public-track.js';
 import {
@@ -43,21 +43,27 @@ export class StopRoutingError extends Error {
   }
 }
 
+/** The story a calculation belongs to; its country selects the bundled per-country servers. */
+export interface RouteContext { countryCode?: string }
+
 export interface StopRouter {
-  /** Which routed profiles have a configured endpoint. */
-  profiles(): Record<RoutedProfile, boolean>;
+  /** Which routed profiles have a usable endpoint for this story. */
+  profiles(context?: RouteContext): Record<RoutedProfile, boolean>;
   /**
    * Why `calculate(stops)` would refuse right now (an unavailable profile, or a
    * calculation already in flight), or null. Starts nothing, so a caller can
    * answer these refusals before spending a rate-limit slot.
    */
-  refusal(stops: readonly RouteStop[]): StopRoutingError | null;
+  refusal(stops: readonly RouteStop[], context?: RouteContext): StopRoutingError | null;
   /** Route validated, normalized stops in order. Never stores; the caller persists the result. */
-  calculate(stops: readonly RouteStop[]): Promise<StoredStopRoute>;
+  calculate(stops: readonly RouteStop[], context?: RouteContext): Promise<StoredStopRoute>;
 }
 
 export interface StopRouterOptions {
+  /** Settings URLs: the external services, used where no bundled server serves the story's country. */
   endpoints: () => Record<RoutedProfile, string>;
+  /** Bundled per-country servers that are ready now; they take precedence over `endpoints`. */
+  regionEndpoints?: (countryCode: string) => Partial<Record<RoutedProfile, string>>;
   canonicalOrigin?: () => string | null;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -66,7 +72,7 @@ export interface StopRouterOptions {
   fetchImpl?: typeof fetch;
   lookup?: LookupFn;
   /** ROUTING_INTERNAL_ORIGINS: the only origins reachable over plain HTTP or on a private network. */
-  internalOrigins?: ReadonlySet<string>;
+  internalOrigins?: OriginAllowList;
 }
 
 type Position = [number, number];
@@ -160,6 +166,7 @@ function project(lines: readonly LegLine[]): PublicStopRoute | 'empty' | 'too_co
 /** One instance per app: request spacing and single flight are shared by every user and tab. */
 export function createStopRouter({
   endpoints,
+  regionEndpoints = () => ({}),
   canonicalOrigin = () => null,
   now = Date.now,
   sleep = (ms) => delay(ms),
@@ -170,14 +177,18 @@ export function createStopRouter({
 }: StopRouterOptions): StopRouter {
   let nextStart = 0;
   let busy = false;
+  // Per leg: the story country's bundled server when ready, else the Settings URL.
   // A hand-edited or stale plain-HTTP URL whose origin is not listed counts as unconfigured.
-  const configured = () => {
-    const urls = endpoints();
-    return Object.fromEntries(ROUTED_PROFILES.map((profile) => [profile, routingEndpointUsable(urls[profile], internalOrigins)])) as Record<RoutedProfile, boolean>;
+  const endpointFor = (profile: RoutedProfile, context: RouteContext): string => {
+    const bundled = context.countryCode ? regionEndpoints(context.countryCode)[profile] : undefined;
+    if (bundled !== undefined && routingEndpointUsable(bundled, internalOrigins)) return bundled;
+    return endpoints()[profile];
   };
+  const configured = (context: RouteContext = {}) =>
+    Object.fromEntries(ROUTED_PROFILES.map((profile) => [profile, routingEndpointUsable(endpointFor(profile, context), internalOrigins)])) as Record<RoutedProfile, boolean>;
 
-  async function routeLeg(profile: RoutedProfile, from: RouteStop, to: RouteStop, deadline: number): Promise<LegOutcome> {
-    const base = endpoints()[profile].replace(/\/+$/, '');
+  async function routeLeg(profile: RoutedProfile, from: RouteStop, to: RouteStop, deadline: number, context: RouteContext): Promise<LegOutcome> {
+    const base = endpointFor(profile, context).replace(/\/+$/, '');
     // The ≥ 1.1 s pacing honours public-service usage policies (FOSSGIS). An
     // operator-listed internal server (the bundled compose OSRM) is the
     // operator's own; single flight and the budget still bound it.
@@ -220,8 +231,8 @@ export function createStopRouter({
     }
   }
 
-  function refusal(stops: readonly RouteStop[]): StopRoutingError | null {
-    const available = configured();
+  function refusal(stops: readonly RouteStop[], context: RouteContext = {}): StopRoutingError | null {
+    const available = configured(context);
     const missing = [...new Set(stops.slice(0, -1).map((_, index) => legProfile(stops, index)))]
       .filter((profile): profile is RoutedProfile => profile !== 'straight' && !available[profile]);
     if (missing.length) return new StopRoutingError('stop_route_profile_unavailable', 409, missing);
@@ -231,8 +242,8 @@ export function createStopRouter({
   return {
     profiles: configured,
     refusal,
-    async calculate(stops) {
-      const refused = refusal(stops);
+    async calculate(stops, context = {}) {
+      const refused = refusal(stops, context);
       if (refused) throw refused;
       busy = true;
       try {
@@ -242,7 +253,7 @@ export function createStopRouter({
         for (let index = 0; index < stops.length - 1; index++) {
           const from = stops[index]!, to = stops[index + 1]!;
           const profile = legProfile(stops, index);
-          const outcome = profile === 'straight' ? { kind: 'straight' as const } : await routeLeg(profile, from, to, deadline);
+          const outcome = profile === 'straight' ? { kind: 'straight' as const } : await routeLeg(profile, from, to, deadline, context);
           if (outcome.kind === 'road') {
             legs.push({ profile, kind: 'road' });
             lines.push({ kind: 'road', points: outcome.points });

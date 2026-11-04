@@ -40,9 +40,14 @@
     /** @type {{car: boolean, bike: boolean, foot: boolean} | null} null = not loaded yet */
     let profiles = null;
     let route = null;
+    /** @type {{state: 'ready'|'preparing'|'failed'|'unsupported', region: string|null} | null} bundled per-country routing, when installed */
+    let bundled = null;
+    let poll = null;
     let busy = false;
     let failure = '';
     let generation = 0;
+    const BUNDLED_COPY = { preparing: 'bundledPreparing', failed: 'bundledFailed', unsupported: 'bundledUnsupported' };
+    const POLL_MS = 30000;
 
     $('stopRouteHeading').textContent = copy.heading;
     $('stopRouteHelp').textContent = copy.help;
@@ -165,8 +170,10 @@
       const legs = legsFor(stops);
       const missing = profiles === null ? [] : [...new Set(legs)].filter((profile) => ROUTED.includes(profile) && !profiles[profile]);
       const allOff = profiles !== null && ROUTED.every((profile) => !profiles[profile]);
-      els.providers.hidden = !allOff;
-      els.providers.textContent = allOff ? copy.disabled : '';
+      const bundledKey = bundled && BUNDLED_COPY[bundled.state];
+      const providerNote = bundledKey ? fill(copy[bundledKey], { region: bundled.region || '' }) : allOff ? copy.disabled : '';
+      els.providers.hidden = !providerNote;
+      els.providers.textContent = providerNote;
       let fresh = false;
       if (route && stops.length >= 2) {
         try { fresh = (await (await contract()).stopRouteFingerprint(stops)) === route.fingerprint; }
@@ -192,7 +199,8 @@
     async function refresh() {
       const tk = host.getTk();
       failure = '';
-      if (!tk) { route = null; return update(); }
+      if (poll) { root.clearTimeout(poll); poll = null; }
+      if (!tk) { route = null; bundled = null; return update(); }
       try {
         const res = await request('/posts/' + encodeURIComponent(tk) + '/stop-route', { cache: 'no-store' });
         if (res.status === 401) { host.on401(); return; }
@@ -200,8 +208,11 @@
           const body = await res.json();
           profiles = body.profiles;
           route = body.route;
+          bundled = body.bundled || null;
         }
       } catch { /* keep the last known state; Calculate reports its own errors */ }
+      // The map data for this story's country is still being built: look again later.
+      if (bundled && bundled.state === 'preparing') poll = root.setTimeout(() => { refresh(); }, POLL_MS);
       return update();
     }
 
@@ -232,8 +243,10 @@
         if (res.ok) {
           profiles = body.profiles;
           route = body.route;
+          if (body.bundled) bundled = body.bundled;
         } else {
           failure = errorFor(res.status, body);
+          if (body.bundled) bundled = body.bundled;
           if (res.status === 409 && Array.isArray(body.profiles) && profiles) {
             for (const profile of body.profiles) if (ROUTED.includes(profile)) profiles[profile] = false;
           }

@@ -1,6 +1,10 @@
 # Bundled OSRM street routing and the private-network routing opt-in
 
-- **Status:** implemented; owner approves spec and code together at merge.
+- **Status:** implemented and released in v0.19.0. **Superseded in part** by
+  `2026-11-04-osrm-automatic-regions-design.md`: decisions 2 and 3 (an `OSRM_PBF_URLS` list,
+  merged into one graph per mode) and the compose topology below (`osrm-prepare`, `osrm-car` /
+  `osrm-bike` / `osrm-foot`, exact-origin allow-list) describe v0.19.0 only. The private-network
+  invariants, misuse cases and the 5 km snap bound still hold.
 - **Risk:** **High** (`CLAUDE.md`): changes `safeFetch` (the SSRF chokepoint), the routing
   settings validation, the compose topology, and resolves the private-network item the #513 spec
   left for the owner.
