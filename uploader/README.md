@@ -575,6 +575,16 @@ with the typed key if one is entered. Listing sends no photo and does not verify
 support. Custom providers must allow browser CORS. Local LM Studio providers never hold or
 receive a key.
 
+**Direct Anthropic:** add a **Custom** provider with base URL
+`https://api.anthropic.com/v1` and an Anthropic API key, then use **Test** and assign
+the desired Claude model to each use case. Keep an existing Anthropic Custom provider;
+there is no migration or need to re-enter its stored key for this fix. For this exact
+HTTPS origin, the client adds Anthropic's browser-access opt-in and API-version headers
+to model discovery and all AI requests. Completions use Anthropic's documented
+OpenAI-compatible endpoint. A successful model listing does not verify model access,
+vision capability or available billing credit; organization CORS restrictions or an
+invalid key can still cause failures.
+
 **Pending provider keys.** An Add/Edit form keeps its masked, unsaved key when you
 use **Set default**, **Save AI settings**, or delete another provider. These actions
 do not submit that key. **Save provider** and confirmed **Remove stored key** clear

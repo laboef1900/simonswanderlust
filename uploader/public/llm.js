@@ -231,6 +231,17 @@ window.LLM = (function () {
     return timeout;
   }
 
+  /** Fresh headers per request: never let a provider's key or browser opt-in leak to another. */
+  function providerHeaders(endpoint, apiKey) {
+    const headers = {};
+    if (apiKey) headers.Authorization = 'Bearer ' + apiKey;
+    if (new URL(endpoint).origin === 'https://api.anthropic.com') {
+      headers['anthropic-dangerous-direct-browser-access'] = 'true';
+      headers['anthropic-version'] = '2023-06-01';
+    }
+    return headers;
+  }
+
   /**
    * One JSON-mode chat completion shared by review and excerpt requests.
    * Optional signal cancels a superseded request. One deadline covers both
@@ -238,8 +249,8 @@ window.LLM = (function () {
    * categories only: fetch, body and provider text can echo credentials or drafts.
    */
   async function completeJson({ label, endpoint, timeout, apiKey, model, messages, signal, parse }) {
-    const headers = { 'content-type': 'application/json' };
-    if (apiKey) headers.Authorization = 'Bearer ' + apiKey;
+    const headers = providerHeaders(endpoint, apiKey);
+    headers['content-type'] = 'application/json';
     if (endpoint.hostname === 'openrouter.ai') {
       const identity = window.SiteIdentity;
       if (identity?.canonicalOrigin) headers['HTTP-Referer'] = identity.canonicalOrigin;
@@ -381,8 +392,7 @@ window.LLM = (function () {
 
   async function listModels(baseUrl, apiKey) {
     const endpoint = captionEndpoint(baseUrl, '/models');
-    const headers = {};
-    if (apiKey) headers.Authorization = 'Bearer ' + apiKey;
+    const headers = providerHeaders(endpoint, apiKey);
     try {
       const res = await fetch(endpoint, {
         headers, signal: AbortSignal.timeout(15000),
@@ -443,8 +453,8 @@ window.LLM = (function () {
    * provider text can echo the key, so it is never surfaced.
    */
   async function visionChat({ label, endpoint, model, text, dataUrl, timeoutMs, signal, apiKey, maxTokens }) {
-    const headers = { 'content-type': 'application/json' };
-    if (apiKey) headers.Authorization = 'Bearer ' + apiKey;
+    const headers = providerHeaders(endpoint, apiKey);
+    headers['content-type'] = 'application/json';
     const ctrl = new AbortController();
     let timedOut = false;
     const cancel = () => ctrl.abort();

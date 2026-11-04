@@ -1008,6 +1008,12 @@ are not surfaced verbatim, since they may echo credentials or unpublished conten
 Review and excerpt requests share an abortable deadline covering attempts and body reads;
 only an HTTP 400 explicitly naming unsupported `response_format` permits one retry without
 that parameter.
+Anthropic's official HTTPS origin (`https://api.anthropic.com`, exact parsed origin equality)
+also receives request-local `anthropic-dangerous-direct-browser-access: true` and
+`anthropic-version: 2023-06-01` headers for discovery and all inference operations. This opts
+the existing browser-held key into Anthropic's browser API access, not a new server fetch or
+storage path. HTTP, non-default ports and lookalike origins do not receive these headers.
+See `docs/superpowers/specs/2026-11-04-anthropic-browser-access.md`.
 
 Model output is untrusted: both review parsers validate required fields, types and statuses,
 reject extra properties, strip Unicode controls, and cap text/list lengths. This is not
