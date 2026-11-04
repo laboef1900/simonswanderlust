@@ -299,6 +299,24 @@ limitations, then check correspondence and delivery in the final rebuilt release
 
 ### Cutting a release
 
+**v0.19.1 — direct Anthropic provider and sidebar account trigger** (linux/amd64 and
+linux/arm64, `ghcr.io/laboef1900/wanderlust-studio:0.19.1`). Changes since v0.19.0
+(PRs #524–#526):
+
+- **Direct Anthropic** (#525): a Custom AI provider at `https://api.anthropic.com/v1` now lists
+  models and runs reviews, excerpts and captions from the browser. For that exact HTTPS origin
+  only, requests carry Anthropic's browser-access opt-in and API-version headers
+  ([spec](docs/superpowers/specs/2026-11-04-anthropic-browser-access.md)). Existing providers,
+  stored keys and assignments are kept.
+- **Admin sidebar** (#524): the account trigger is the avatar alone; name and role head the
+  account panel above Log out, so long usernames no longer wrap.
+- **Docs** (#526): authoring workflow documents the reload-pending Save/Publish refusal and
+  the Save-draft-and-attach-route scope.
+
+Upgrade notes for v0.19.0 → v0.19.1: swap `IMAGE_TAG` only. No Compose, `.env`, schema,
+settings, dump-format (writer stays v15) or image-archive change; no rebuild required.
+Rollback to v0.19.0 is supported (same schema and dump format).
+
 **v0.19.0 — street routing for stops** (linux/amd64 and linux/arm64,
 `ghcr.io/laboef1900/wanderlust-studio:0.19.0`). Changes since v0.18.1 (PRs #511, #515–#520):
 
