@@ -137,9 +137,12 @@ cp uploader/.env.example .env
 ```
 
 Edit your private `.env`: set `POSTGRES_PASSWORD` to the output of `openssl rand -hex 32`,
-`PUBLIC_BASE_URL=http://localhost:3000`, `IMG_HOST=localhost:3000` and `IMAGE_TAG` (a
+`PUBLIC_BASE_URL=http://localhost:3000`, `IMG_HOST=localhost:3000`, `IMAGE_TAG` (a
 version published under `ghcr.io/laboef1900/wanderlust-studio`, or `local` after
-[building the current source](#build-the-current-source)). All four are required; Compose
+[building the current source](#build-the-current-source)) and `OSRM_PBF_URLS` (one or more
+OpenStreetMap extracts the bundled street-routing servers merge and use, e.g.
+`https://download.geofabrik.de/central-america/costa-rica-latest.osm.pbf`; see
+[docs/install.md](docs/install.md#4g-street-routing-bundled-osrm)). All five are required; Compose
 stops with `set … in .env` when one is missing. `PUBLIC_BASE_URL`/`IMG_HOST` name the image
 host only; a server's blog domain is set later in **Settings → Site identity**.
 
@@ -295,6 +298,72 @@ limitations, then check correspondence and delivery in the final rebuilt release
 <summary>Maintainers: releases and upgrade notes</summary>
 
 ### Cutting a release
+
+**v0.19.0 — street routing for stops** (linux/amd64 and linux/arm64,
+`ghcr.io/laboef1900/wanderlust-studio:0.19.0`). Changes since v0.18.1 (PRs #511, #515–#520):
+
+- **Stop routing** (#513): stories without a published GPX track can show a line along their
+  ordered stops, per leg by car, bike, foot or straight, with via points that never appear
+  publicly. Unroutable legs fall back to flagged, dashed straight lines (#517).
+- **Bundled OSRM** (#519, #520): the Compose stack downloads and merges the OpenStreetMap
+  extracts listed in `OSRM_PBF_URLS` and runs `osrm-car` / `osrm-bike` / `osrm-foot`
+  (memory-mapped). The app reaches them only through the exact-origin allow-list
+  `ROUTING_INTERNAL_ORIGINS`. Every leg bounds snapping to 5 km, so stops outside the map data
+  become flagged straight legs instead of a false road at the extract's edge.
+- **Editor:** Story details framed with the manuscript, collapsible image sections (#515); the
+  Route caption is scoped to the GPX route section (#512, #516); About Me equipment is editable
+  (#514, #518). Release evidence for v0.18.1 recorded (#511).
+
+Upgrade notes for v0.18.1 → v0.19.0 (the [release recovery checklist](ARCHITECTURE.md#release-recovery-checklist)):
+
+- **Image, Compose and bootstrap.** Apply this release's `docker-compose.yml` with the image.
+  Set **`OSRM_PBF_URLS`** (one or more HTTPS `.osm.pbf` extracts) in `.env` **before any
+  Compose command**: without it every command, including `stop`, `run` and the restore
+  runbook, fails to interpolate. Optional `OSRM_PREPARE_MEM_LIMIT` (default `4g`) bounds the
+  graph build. New services: `osrm-fetch` (digest-pinned `debian:trixie-slim`; installs `curl`
+  and `osmium-tool` from Debian at run time, so it needs outbound HTTPS to the Debian mirror
+  and the extract host), `osrm-prepare`, and `osrm-car` / `osrm-bike` / `osrm-foot` (no host
+  ports). `app` gains the literal `ROUTING_INTERNAL_ORIGINS`. The proxy topology,
+  `TRUSTED_PROXY` and Postgres 18 are unchanged. The first full `up -d` downloads and builds
+  (the app does not wait); then set **Settings → Street routing** to
+  `http://osrm-car:5000`, `http://osrm-bike:5000`, `http://osrm-foot:5000`
+  ([install §4g](docs/install.md#4g-street-routing-bundled-osrm)).
+- **Capacity.** The graph build sizes the host. Measured peaks (arm64): Costa Rica + Ecuador
+  (158 MB) 3.5 GB with a 1.1 GB graph per mode; Mexico + Costa Rica + Ecuador (780 MB) exceeded
+  12 GB. Choose `OSRM_PBF_URLS` against a measured build. The `osrm` volume is rebuildable map
+  data, not recovery material.
+- **Schema migrations** (forward and additive at boot, no `DROP`, no data rewrite):
+  `posts.stop_route jsonb` (`ADD COLUMN IF NOT EXISTS`).
+- **Settings migration:** none. Three new keys `routingCarUrl` / `routingBikeUrl` /
+  `routingFootUrl` default to empty (routing disabled); no migration copy is written.
+- **Dumps:** the writer is **v15** (adds the private `posts.stop_route` and
+  `published_snapshot.stop_route`); this release reads v1–v15. v0.18.1 reads only v1–v14, so no
+  dump taken after the upgrade restores on it. v1–v9 still cannot supply private GPX routes.
+  No image-archive format or cutoff change.
+- **Recovery material:** before upgrading, capture one generation on v0.18.1 under a write
+  freeze, per the [canonical runbook](ARCHITECTURE.md#app-upgrades-and-supported-recovery):
+  the v14 dump with its route archive, the complete image chain, `settings.json`, Compose and
+  `.env`, and the separately escrowed `ENCRYPTION_KEY` association.
+- **Rebuild:** not required. Deploying does not rebuild; published stories carry no stop route
+  until an author calculates one and publishes. The next Publish or **Settings → Rebuild site
+  now** ships the new mini-map rendering.
+- **Recovery direction: roll-forward only; no supported downgrade.** v0.18.1 cannot read v15
+  dumps.
+- **Evidence (2026-11-03, bounded):** disposable local rehearsal on macOS Docker Desktop
+  (arm64 Linux VM, Compose 5.6.1), separate project, volumes and data directory:
+  1. Published `0.18.1` (`sha256:6a12b5fb85be…`) fresh install: setup, one bilingual draft with
+     two stops, and a v14 dump.
+  2. This release's Compose and `.env` (Costa Rica), then `up -d --no-deps app` with a candidate
+     image built from `8c67a0f` (the version-bump commit; the tagged image is a later build).
+     Result: healthy, `posts.stop_route` added, draft intact, routing URLs empty.
+  3. Full `up -d`: the OSRM fetch and build exited 0. Saving the routing URLs returned 200 and
+     `POST /posts/:tk/stop-route` returned a road leg.
+  4. A v15 dump (2 `stop_route` rows).
+  5. An offline `restore --yes` of the **v14** dump on the new image verified a pre-restore set,
+     restored 1 user and 2 posts, and after restart the draft was intact with no stop route.
+
+  Not covered: native Linux, amd64, a production-size corpus, images, GPX archives, comments
+  or a TLS proxy.
 
 **v0.18.1 — first release as `ghcr.io/laboef1900/wanderlust-studio`** (linux/amd64 and
 linux/arm64). The `v0.18.0` tag's release workflow failed before publishing (it overrode the

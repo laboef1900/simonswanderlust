@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createStopRouter, splitAntimeridian, StopRoutingError, ROUTING_SPACING_MS, ROUTING_BUDGET_MS } from '../src/stop-routing.js';
+import { createStopRouter, splitAntimeridian, StopRoutingError, ROUTING_SPACING_MS, ROUTING_BUDGET_MS, ROUTING_SNAP_RADIUS_METRES } from '../src/stop-routing.js';
 import { FetchError, type SafeFetchOptions } from '../src/safe-fetch.js';
 import { validatePublicStopRoute, validateRouteStops, type RouteStop } from '../public/stop-route.js';
 import { stopRouteFingerprintSync } from '../src/stop-route-fingerprint.js';
@@ -96,6 +96,33 @@ describe('createStopRouter (#513)', () => {
     expect(agents.every((agent) => /SimonsWanderlust\/.+ \(editor stop routing\)/.test(agent))).toBe(true);
   });
 
+  it('turns stops outside the extract into flagged straight legs instead of a fake road at its edge', async () => {
+    // Behaves like osrm-routed on a Berlin-only graph: without a radius every
+    // Yucatán stop snaps ~9,600 km to the same Berlin edge node (0 m "route");
+    // with `radiuses` beyond the nearest road it answers NoSegment.
+    const edge: [number, number] = [13.083971, 52.411755];
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const radiuses = new URL(String(input)).searchParams.get('radiuses')?.split(';').map(Number) ?? [];
+      return radiuses.length === 2 && radiuses.every((metres) => metres > 0 && metres <= ROUTING_SNAP_RADIUS_METRES)
+        ? new Response(JSON.stringify({ code: 'NoSegment', message: 'Could not find a matching segment' }), { status: 400 })
+        : new Response(ok([edge, edge]), { status: 200 });
+    });
+    const c = clock();
+    const router = createStopRouter({
+      endpoints: () => ({ car: 'http://osrm-car:5000', bike: '', foot: '' }), now: c.now, sleep: c.sleep, fetchImpl,
+      lookup: async () => [{ address: '172.18.0.4', family: 4 }], internalOrigins: new Set(['http://osrm-car:5000']),
+    });
+    const yucatan = validateRouteStops([
+      { name: 'Cancún', lat: 21.1527467, lng: -86.8425761 }, { name: 'Playa del Carmen', lat: 20.6462848, lng: -87.0807866 },
+      { name: 'Tulum', lat: 20.429647, lng: -87.6529306 },
+    ]);
+    const stored = await router.calculate(yucatan);
+    expect(stored.legs).toEqual([
+      { profile: 'car', kind: 'straight', fallback: 'no_route' }, { profile: 'car', kind: 'straight', fallback: 'no_route' },
+    ]);
+    expect(stored.route.runs).toEqual([{ kind: 'straight', coordinates: [[-86.8426, 21.1527], [-87.0808, 20.6463], [-87.6529, 20.4296]] }]);
+  });
+
   it.each([
     ['HTTP 500', () => { throw new FetchError('download failed (HTTP 500)', 'http', { status: 500 }); }],
     ['timeout', () => { throw new FetchError('timeout', 'timeout'); }],
@@ -134,6 +161,31 @@ describe('createStopRouter (#513)', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it('routes through an operator-listed compose origin over plain HTTP via the real safeFetch', async () => {
+    const fetched: string[] = [];
+    const fetchImpl = vi.fn(async (input: URL | string) => { fetched.push(String(input)); return new Response(ok([[23, 37], [23.1, 37.1]])); }) as unknown as typeof fetch;
+    const c = clock();
+    const router = createStopRouter({
+      endpoints: () => ({ car: 'http://osrm-car:5000', bike: '', foot: '' }), now: c.now, sleep: c.sleep, fetchImpl,
+      lookup: async () => [{ address: '172.18.0.4', family: 4 }], internalOrigins: new Set(['http://osrm-car:5000']),
+    });
+    expect(router.profiles()).toEqual({ car: true, bike: false, foot: false });
+    const stored = await router.calculate(stops({}, {}));
+    expect(stored.legs).toEqual([{ profile: 'car', kind: 'road' }]);
+    expect(new URL(fetched[0]!).origin).toBe('http://osrm-car:5000');
+  });
+
+  it('treats a plain-HTTP URL whose origin is not listed as unconfigured, before any request', () => {
+    const request = vi.fn();
+    const router = createStopRouter({
+      endpoints: () => ({ car: 'http://osrm-car:5000', bike: 'http://osrm.example', foot: '' }), request,
+      internalOrigins: new Set(['http://osrm-car:5001']),
+    });
+    expect(router.profiles()).toEqual({ car: false, bike: false, foot: false });
+    expect(router.refusal(stops({}, {}))).toMatchObject({ code: 'stop_route_profile_unavailable', profiles: ['car'] });
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it('spaces outbound requests at least 1.1 s apart, across calculations', async () => {
     const c = clock();
     const starts: number[] = [];
@@ -145,6 +197,22 @@ describe('createStopRouter (#513)', () => {
     await router.calculate(stops({}, {}));
     expect(starts).toHaveLength(3);
     for (let i = 1; i < starts.length; i++) expect(starts[i]! - starts[i - 1]!).toBeGreaterThanOrEqual(ROUTING_SPACING_MS);
+  });
+
+  it('does not pace an operator-listed internal origin, but keeps pacing public endpoints in the same route', async () => {
+    const c = clock();
+    const starts: Array<[string, number]> = [];
+    const router = createStopRouter({
+      endpoints: () => ({ car: 'http://osrm-car:5000', bike: 'https://bike.example', foot: '' }), now: c.now, sleep: c.sleep,
+      internalOrigins: new Set(['http://osrm-car:5000']),
+      request: async (url) => { starts.push([new URL(url).host, c.now()]); c.advance(200); return respond(ok([[23, 37], [23.1, 37.1]])); },
+    });
+    await router.calculate(stops({}, {}, { profile: 'bike' }, {}, { profile: 'bike' }, {}));
+    const car = starts.filter(([host]) => host === 'osrm-car:5000').map(([, at]) => at);
+    const bike = starts.filter(([host]) => host === 'bike.example').map(([, at]) => at);
+    expect([car.length, bike.length]).toEqual([3, 2]);
+    expect(car[1]! - car[0]!).toBe(200); // back to back: no sleep before the second internal leg
+    expect(bike[1]! - bike[0]!).toBeGreaterThanOrEqual(ROUTING_SPACING_MS);
   });
 
   it('runs one calculation at a time app-wide', async () => {

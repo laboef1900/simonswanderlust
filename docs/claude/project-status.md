@@ -13,6 +13,16 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
   a CORS-gated fixture. Live Anthropic preflight succeeds, but authenticated production
   inference and deployment are not claimed. Spec:
   `docs/superpowers/specs/2026-11-04-anthropic-browser-access.md`.
+- **Done:** admin sidebar account trigger is avatar-only. The wrapping name/role/chevron badge
+  is replaced by a steel-blue avatar button; name and role head the upward account panel above
+  Log out. Markup in `uploader/public/auth.js` (text still set via `textContent`, #131), styles
+  in `uploader/public/admin.css`, shell description in `DESIGN.md`.
+- **Implemented, owner approval pending (High risk):** bundled OSRM street routing. The
+  compose stack downloads and merges every `OSRM_PBF_URLS` extract and runs
+  `osrm-car`/`osrm-bike`/`osrm-foot` (`osrm-backend` v26.11.0, `--mmap=1`);
+  `ROUTING_INTERNAL_ORIGINS` is the operator-only, exact-origin exemption from the `safeFetch`
+  private-address guard for routing; legs bound OSRM snapping to 5 km (`radiuses`). Spec:
+  `docs/superpowers/specs/2026-11-03-osrm-compose-routing-design.md`.
 - **Implemented, owner approval pending (High risk):** #513 stop routing. Stories without a
   published GPX track can show a line along their ordered stops: per-leg car/bike/foot/straight,
   via points (never public), straight dashed fallbacks for unroutable legs. Computed only in the
@@ -647,3 +657,10 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
   status, Replace photo, Adjust framing) and a summary thumbnail; title image gains the
   `editor.titleImage.replace` copy key. Excerpt textareas auto-fit their text (`fitTextarea`,
   shared with the title). No route, schema or payload change.
+- **Implemented, PR pending (#512, owner decision 2026-11-03: options 1+2):** the editor's
+  Route caption (`fmRoute`) moved from Expedition details into the GPX route section, with help
+  text naming its only public placement ("Published route", beside a published GPX track) and a
+  live, non-blocking advisory when a non-blank caption has no published track (none attached,
+  attached but unpublished, or detached). `GET/PUT/DELETE /posts/:tk/route` add a read-only
+  `published` flag; the editor re-reads it after Publish/Unpublish. Payload, storage, snapshot,
+  MDX export and public rendering are unchanged (option 3 out of scope).

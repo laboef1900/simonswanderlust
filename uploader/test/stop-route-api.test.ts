@@ -223,6 +223,25 @@ describe('stop-route HTTP boundary (#513)', () => {
     if (status === 400) expect(res.body).not.toContain(url);
   });
 
+  it.each([
+    ['http://osrm-car:5000', 200], ['http://osrm-car:5000/', 200], ['http://osrm-car:5001', 400],
+    ['http://osrm-bike:5000', 400], ['http://db:5432', 400],
+  ])('accepts plain-HTTP routing URL %s only for a ROUTING_INTERNAL_ORIGINS origin', async (url, status) => {
+    const b = build({ routingInternalOrigins: new Set(['http://osrm-car:5000']) });
+    close = () => b.app.close();
+    const res = await b.app.inject({ method: 'POST', url: '/settings', cookies: await login(b, true, 'admin'), payload: { routingCarUrl: url } });
+    expect(res.statusCode).toBe(status);
+    if (status === 400) expect(res.body).not.toContain(url);
+    else expect(b.settings.get().routingCarUrl).toBe(url);
+  });
+
+  it('does not let a stale stored plain-HTTP routing URL block an unrelated settings save', async () => {
+    const b = build({ settings: settingsStore({ ...defaultSettings(), ...ENDPOINTS, routingFootUrl: 'http://osrm-foot:5000' }) });
+    close = () => b.app.close();
+    const res = await b.app.inject({ method: 'POST', url: '/settings', cookies: await login(b, true, 'admin'), payload: { routingCarUrl: '' } });
+    expect(res.statusCode).toBe(200);
+  });
+
   it('defaults every routing URL to empty: no routing service is shipped', () => {
     const defaults = defaultSettings();
     expect([defaults.routingCarUrl, defaults.routingBikeUrl, defaults.routingFootUrl]).toEqual(['', '', '']);

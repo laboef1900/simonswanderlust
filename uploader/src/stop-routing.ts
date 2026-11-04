@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { safeFetch, type LookupFn } from './safe-fetch.js';
+import { isInternalRoutingOrigin, routingEndpointUsable } from './routing-origins.js';
 import { normalizeCanonicalOrigin } from '../../site/src/lib/site-identity.js';
 import { simplifyRun } from '../public/gpx-public-track.js';
 import {
@@ -18,6 +19,14 @@ export const ROUTING_LEG_TIMEOUT_MS = 10_000;
 /** Legs not started within this budget fall back to `provider_error`. */
 export const ROUTING_BUDGET_MS = 60_000;
 export const ROUTING_MAX_BYTES = 4 * 1024 * 1024;
+/**
+ * Farthest OSRM may move a stop onto its road graph. Without a bound OSRM
+ * snaps ANY coordinate to the nearest covered road, however far: stops outside
+ * the extract came back as a 0 m "road" at the extract's edge, or as a road leg
+ * ending in another country. Beyond this radius OSRM answers NoSegment, which
+ * becomes a flagged straight `no_route` leg.
+ */
+export const ROUTING_SNAP_RADIUS_METRES = 5000;
 const MAX_PROVIDER_POSITIONS = 100_000;
 const FIRST_TOLERANCE_METRES = 25;
 /** ~26,000 km: every run is down to its endpoints long before this. */
@@ -56,6 +65,8 @@ export interface StopRouterOptions {
   /** Transport under safeFetch; tests inject it together with `lookup`. */
   fetchImpl?: typeof fetch;
   lookup?: LookupFn;
+  /** ROUTING_INTERNAL_ORIGINS: the only origins reachable over plain HTTP or on a private network. */
+  internalOrigins?: ReadonlySet<string>;
 }
 
 type Position = [number, number];
@@ -155,23 +166,32 @@ export function createStopRouter({
   request = safeFetch,
   fetchImpl = fetch,
   lookup,
+  internalOrigins = new Set<string>(),
 }: StopRouterOptions): StopRouter {
   let nextStart = 0;
   let busy = false;
+  // A hand-edited or stale plain-HTTP URL whose origin is not listed counts as unconfigured.
   const configured = () => {
     const urls = endpoints();
-    return Object.fromEntries(ROUTED_PROFILES.map((profile) => [profile, urls[profile] !== ''])) as Record<RoutedProfile, boolean>;
+    return Object.fromEntries(ROUTED_PROFILES.map((profile) => [profile, routingEndpointUsable(urls[profile], internalOrigins)])) as Record<RoutedProfile, boolean>;
   };
 
   async function routeLeg(profile: RoutedProfile, from: RouteStop, to: RouteStop, deadline: number): Promise<LegOutcome> {
-    const wait = nextStart - now();
-    if (now() + Math.max(0, wait) >= deadline) return { kind: 'straight', fallback: 'provider_error' };
-    if (wait > 0) await sleep(wait);
-    nextStart = now() + ROUTING_SPACING_MS;
     const base = endpoints()[profile].replace(/\/+$/, '');
+    // The ≥ 1.1 s pacing honours public-service usage policies (FOSSGIS). An
+    // operator-listed internal server (the bundled compose OSRM) is the
+    // operator's own; single flight and the budget still bound it.
+    if (!isInternalRoutingOrigin(base, internalOrigins)) {
+      const wait = nextStart - now();
+      if (now() + Math.max(0, wait) >= deadline) return { kind: 'straight', fallback: 'provider_error' };
+      if (wait > 0) await sleep(wait);
+      nextStart = now() + ROUTING_SPACING_MS;
+    } else if (now() >= deadline) {
+      return { kind: 'straight', fallback: 'provider_error' };
+    }
     const coordinate = (stop: RouteStop) => `${stop.lng.toFixed(6)},${stop.lat.toFixed(6)}`;
     const target = `${base}/route/v1/${SEGMENT[profile]}/${coordinate(from)};${coordinate(to)}`
-      + '?overview=full&geometries=geojson&alternatives=false&steps=false';
+      + `?overview=full&geometries=geojson&alternatives=false&steps=false&radiuses=${ROUTING_SNAP_RADIUS_METRES};${ROUTING_SNAP_RADIUS_METRES}`;
     const origin = normalizeCanonicalOrigin(canonicalOrigin());
     try {
       const response = await request(target, {
@@ -179,6 +199,7 @@ export function createStopRouter({
         maxBytes: ROUTING_MAX_BYTES,
         maxRedirects: 0,
         ...(lookup ? { lookup } : {}),
+        allowedInternalOrigins: internalOrigins,
         // @ai-note OSRM reports NoRoute/NoSegment as HTTP 400 with a JSON `code`.
         // Only 400 is relabelled, so the body still streams through safeFetch's
         // byte cap and the parsed `code` (never the status) decides the outcome.

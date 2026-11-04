@@ -1582,44 +1582,35 @@ body.login-page #submit { width: 100%; margin-top: 1.5rem; }
   padding: 1rem 0 0;
   border-top: 1px solid var(--line);
 }
-/* The account menu is the admin's menu shape (editor More actions): an
-   outlined trigger with a drawn chevron and a floating panel — here opening
-   upward, since the trigger sits at the foot of the sidebar, and spanning the
-   footer so it never leaves the sidebar. */
+/* The account menu is the admin's floating-panel menu, triggered by the
+   avatar alone so a long username never wraps in the sidebar. The panel opens
+   upward (the trigger sits at the foot of the sidebar), spans the footer so it
+   never leaves the sidebar, and names the account above Log out. */
 .cms-account-menu { position: relative; }
-/* Child-qualified so the global `summary:focus-visible` radius cannot win. */
+.cms-sidebar-footer > * + .cms-account-menu { margin-top: 0.75rem; }
+/* Child-qualified so the global `summary:focus-visible` radius cannot win.
+   The 44px hit area overhangs the 36px avatar, so the avatar itself lines up
+   with the footer's left edge and the workspace's bottom edge. */
 .cms-account-menu > .cms-account-menu__trigger {
-  display: flex;
-  align-items: center;
-  gap: 0.65rem;
-  min-height: 2.75rem;
-  padding: 0.375rem 0.75rem 0.375rem 0.375rem;
-  border: 1px solid var(--line-control);
-  border-radius: var(--control-radius);
+  display: grid;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  margin: 0 0 -0.25rem -0.25rem;
+  border-radius: 50%;
   list-style: none;
-  transition: background-color 150ms ease, border-color 150ms ease;
+  cursor: pointer;
 }
 .cms-account-menu__trigger::-webkit-details-marker { display: none; }
-/* Points up while closed (the way the panel opens), down while open. */
-.cms-account-menu__trigger::after {
-  content: '';
-  flex-shrink: 0;
-  width: 0.375rem;
-  height: 0.375rem;
-  margin-left: auto;
-  margin-top: 0.2rem;
-  border-right: 1.5px solid currentColor;
-  border-bottom: 1.5px solid currentColor;
-  transform: rotate(225deg);
+.cms-account-menu__trigger .cms-avatar {
+  transition: background-color 150ms ease, box-shadow 150ms ease;
 }
-.cms-account-menu[open] .cms-account-menu__trigger::after {
-  margin-top: -0.2rem;
-  transform: rotate(45deg);
-}
-.cms-account-menu__trigger:hover,
-.cms-account-menu[open] .cms-account-menu__trigger {
-  border-color: var(--studio-accent);
-  background: var(--studio-accent-soft);
+.cms-account-menu__trigger:hover .cms-avatar,
+.cms-account-menu__trigger:active .cms-avatar { background: #2e5274; }
+/* Open: a ring held off the avatar by a canvas gap. */
+.cms-account-menu[open] .cms-avatar {
+  background: #2e5274;
+  box-shadow: 0 0 0 2px var(--canvas), 0 0 0 3.5px var(--studio-accent);
 }
 .cms-account-menu__panel {
   position: absolute;
@@ -1635,20 +1626,29 @@ body.login-page #submit { width: 100%; margin-top: 1.5rem; }
   background: var(--surface);
   box-shadow: 0 12px 28px -8px rgb(20 42 66 / 22%);
 }
-.cms-user-info { display: flex; flex-direction: column; min-width: 0; }
+.cms-user-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-width: 0;
+  margin-bottom: 0.25rem;
+  padding: 0.5rem 0.625rem 0.625rem;
+  border-bottom: 1px solid var(--line);
+}
 .cms-avatar {
   display: grid;
   place-items: center;
   flex-shrink: 0;
-  width: 2rem;
-  height: 2rem;
+  width: 2.25rem;
+  height: 2.25rem;
   border-radius: 50%;
-  background: #e9edf0;
-  color: #344253;
-  font-size: 0.8rem;
-  font-weight: 550;
+  background: var(--studio-accent);
+  color: #fff;
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1;
 }
-.cms-user-name { font-size: 0.85rem; font-weight: 550; overflow-wrap: anywhere; }
+.cms-user-name { color: var(--ink); font-size: 0.85rem; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
 .cms-user-role { color: var(--muted); font-size: 0.75rem; }
 .cms-logout-btn {
   display: flex;
