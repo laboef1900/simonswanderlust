@@ -4,6 +4,10 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Done:** admin sidebar account trigger is avatar-only. The wrapping name/role/chevron badge
+  is replaced by a steel-blue avatar button; name and role head the upward account panel above
+  Log out. Markup in `uploader/public/auth.js` (text still set via `textContent`, #131), styles
+  in `uploader/public/admin.css`, shell description in `DESIGN.md`.
 - **Implemented, owner approval pending (High risk):** bundled OSRM street routing. The
   compose stack downloads and merges every `OSRM_PBF_URLS` extract and runs
   `osrm-car`/`osrm-bike`/`osrm-foot` (`osrm-backend` v26.11.0, `--mmap=1`);
