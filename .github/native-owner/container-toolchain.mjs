@@ -15,7 +15,9 @@ assert(/^[a-z]+$/.test(suite ?? ''), 'Cannot identify Debian suite');
 assert.equal(suite, 'trixie', 'The reviewed snapshot is qualified for Debian trixie only');
 const sources = '/proof/inputs/proof.sources.list';
 writeFileSync(sources, `deb https://snapshot.debian.org/archive/debian/${process.env.DEBIAN_SNAPSHOT}/ ${suite} main\n`, { flag: 'wx' });
-const options = ['-o', `Dir::Etc::sourcelist=${sources}`, '-o', 'Dir::Etc::sourceparts=-', '-o', 'Acquire::Retries=0'];
+// snapshot.debian.org throttles shared CI egress with transient 503s; apt retries with
+// backoff. Integrity is unchanged: the pinned snapshot's signed index still verifies every file.
+const options = ['-o', `Dir::Etc::sourcelist=${sources}`, '-o', 'Dir::Etc::sourceparts=-', '-o', 'Acquire::Retries=5'];
 execFileSync('apt-get', [...options, 'update'], { stdio: 'inherit' });
 // DHI's installed +dhi revisions cannot satisfy Debian development packages'
 // exact-version dependencies. Align this disposable build stage's six-package
