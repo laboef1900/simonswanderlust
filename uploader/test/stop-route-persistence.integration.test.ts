@@ -54,6 +54,23 @@ maybe('stop routes in PostgreSQL: Publish, GPX precedence, backup (#513)', () =>
     await posts.upsertDraft({ ...current, shared: { ...current.shared, stops } }, current.updatedAt);
   };
 
+  it('lists the countries bundled routing must cover: stories with two or more stops, never the placeholder', async () => {
+    const make = async (countryCode: string, stops: RouteStop[] | undefined) => {
+      const id = randomUUID();
+      const locale = (locale: 'de' | 'en'): PostLocale => ({ locale, slug: `${locale}-${id}`, title: 'Country story', country: 'X', excerpt: 'Excerpt', heroImage: { src: 'https://images.test/hero', width: 100, height: 100, alt: 'Hero' }, bodyMarkdown: 'Text', images: {} });
+      await posts.upsertDraft({ translationKey: '', status: 'draft', shared: { date: '2026-01-01', countryCode, region: 'europe', coordinates: { lat: 38, lng: 23 }, ...(stops ? { stops } : {}) }, de: locale('de'), en: locale('en') });
+    };
+    const before = await posts.routingCountries();
+    await make('cr', ROUTE_STOPS);
+    await make('MX', ROUTE_STOPS.slice(0, 2));
+    await make('DK', ROUTE_STOPS.slice(0, 1));
+    await make('NL', undefined);
+    await make('XX', ROUTE_STOPS);
+    const after = await posts.routingCountries();
+    expect(after.filter((code) => !before.includes(code))).toEqual(['CR', 'MX']);
+    expect(after).not.toContain('XX');
+  });
+
   it('stores on both rows without touching updated_at, publishes only while fresh, and tracks draftDiffers', async () => {
     const tk = await story();
     const before = await rows(tk);

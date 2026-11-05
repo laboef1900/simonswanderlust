@@ -23,7 +23,8 @@ import { pgUploadReceiptStore } from './upload-receipts.js';
 import { createUploadService } from './upload-service.js';
 import { createMediaSync, createReconciler } from './media-sync.js';
 import { parseEncryptionKey, pgSecretsStore } from './secrets.js';
-import { parseRoutingInternalOrigins } from './routing-origins.js';
+import { parseRoutingInternalOrigins, type RoutingInternalOrigins } from './routing-origins.js';
+import { BUNDLED_PORT_MAX, BUNDLED_PORT_MIN, createBundledRouting } from './routing-regions.js';
 import { LEGACY_AI_KEY_SLOT, slotFor } from './ai-providers.js';
 import { pgCommentStore } from './comments.js';
 import { pgCommentAdminStore } from './comments-admin.js';
@@ -59,14 +60,14 @@ const encryptionKey = parseEncryptionKey(process.env.ENCRYPTION_KEY);
 if (encryptionKey === undefined) console.info('ENCRYPTION_KEY not configured in .env; encrypted remote AI credentials are unavailable.');
 
 // Operator-only private routing origins (the bundled compose OSRM). Invalid → refuse to start.
-let routingInternalOrigins: ReadonlySet<string>;
+let routingInternalOrigins: RoutingInternalOrigins;
 try {
   routingInternalOrigins = parseRoutingInternalOrigins(process.env.ROUTING_INTERNAL_ORIGINS);
 } catch (error) {
   console.error(error instanceof Error ? error.message : 'ROUTING_INTERNAL_ORIGINS configuration is invalid.');
   process.exit(1);
 }
-console.info(`routing internal origins: ${routingInternalOrigins.size ? [...routingInternalOrigins].join(', ') : 'none'}`);
+console.info(`routing internal origins: ${routingInternalOrigins.entries.length ? routingInternalOrigins.entries.join(', ') : 'none'}`);
 
 // Every app/restore entry point acquires the stable filesystem lock before PG.
 const storageDir = process.env.STORAGE_DIR ?? '/data/images';
@@ -214,6 +215,24 @@ const housekeeping = () => {
 const housekeepingTimer = setInterval(housekeeping, 3_600_000);
 housekeepingTimer.unref();
 
+// Bundled street routing (compose `osrm` + `osrm-fetch`): regions follow the stories.
+// Both values are compose literals; the allow-list must cover the servers' port range.
+const bundledDir = process.env.ROUTING_BUNDLED_DIR;
+const bundledHost = process.env.ROUTING_BUNDLED_HOST;
+let bundledRouting: ReturnType<typeof createBundledRouting> | undefined;
+if (bundledDir || bundledHost) {
+  if (!bundledDir || !bundledHost || !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(bundledHost)
+    || !routingInternalOrigins.has(`http://${bundledHost}:${BUNDLED_PORT_MIN}`) || !routingInternalOrigins.has(`http://${bundledHost}:${BUNDLED_PORT_MAX}`)) {
+    console.error('ROUTING_BUNDLED_DIR and ROUTING_BUNDLED_HOST must both be set, and ROUTING_INTERNAL_ORIGINS must list the bundled host\'s port range.');
+    process.exit(1);
+  }
+  bundledRouting = createBundledRouting({ dir: bundledDir, host: bundledHost, countries: () => posts.routingCountries() });
+  void bundledRouting.sync();
+  const routingRegionTimer = setInterval(() => { if (owner.isWritable()) void bundledRouting?.sync(); }, 300_000);
+  routingRegionTimer.unref();
+  console.info(`bundled routing: regions follow the stories (${bundledDir}, host ${bundledHost})`);
+}
+
 const app = buildServer({
   trustProxy: proxyPolicy.trust,
   storageDir,
@@ -250,6 +269,7 @@ const app = buildServer({
   isWritable: owner.isWritable,
   storageSignal: owner.signal,
   routingInternalOrigins,
+  ...(bundledRouting ? { bundledRouting } : {}),
 });
 
 let quiescing: Promise<void> | undefined;

@@ -37,7 +37,7 @@ about it cannot be answered.
 | Image disk | App image ~1.13 GB uncompressed, Postgres ~0.30 GB, on either architecture | [Local images](2026-10-29-clean-install-rehearsal.md#amd64-local-images) |
 | Photo disk | Each uploaded photo keeps its **original** plus 8 variant files. The synthetic, highly compressible PNGs used ~0.66 MB allocated per photo; real camera photos will use more. Measure your own corpus before sizing | [Corpus and disk](2026-10-29-clean-install-rehearsal.md#corpus-and-disk) |
 | Backups | In-app dumps and image archives are written to the **same disk** under `/data/backup`; image archives are never pruned automatically. Budget space for them and for an offsite copy | [Backups & DR](../ARCHITECTURE.md#backups--disaster-recovery) |
-| Street routing (OSRM) | Three graphs (car, bike, foot) built from the merged `OSRM_PBF_URLS` extracts into the `osrm` volume, one mode at a time. **The build sizes the host**, capped by `OSRM_PREPARE_MEM_LIMIT` (default `4g`, swap equal) so an oversized list fails the build, not the host. Measured (arm64, 2026-11-03): Berlin 95 MB → 1.06 GB peak; Costa Rica + Ecuador 158 MB → **3.5 GB** peak, 1.1 GB graph per mode, 6 min for all three; Mexico + Costa Rica + Ecuador 780 MB → killed at **12 GB** (car). Peak grows faster than the file size; measure your list before relying on it. Serving uses `--mmap=1`: after routing, the car server held 92 MB (86 MB evictable page cache) of its 1.1 GB graph | [Bundled OSRM design](superpowers/specs/2026-11-03-osrm-compose-routing-design.md) |
+| Street routing (OSRM) | One graph per **country** and mode (car, bike, foot), for every country with a story that has two or more stops, in the `osrm` volume. **One build runs at a time**, so peak RAM is the largest single country, capped by `OSRM_MEM_LIMIT` (default `4g`, swap equal): a country that does not fit fails only its own build. Measured (arm64, 2026-11-04): Costa Rica (37 MB) 0.9 GB peak, 80 s from saving the story to serving all three modes; Ecuador (120 MB) ready in 192 s. Earlier merged runs: Costa Rica + Ecuador 158 MB → 3.5 GB; Mexico + both 780 MB → over 12 GB. Serving is memory-mapped: idle servers held 6 MB | [Automatic regions design](superpowers/specs/2026-11-04-osrm-automatic-regions-design.md) |
 
 ## 3. Licensing in one paragraph
 
@@ -70,7 +70,8 @@ POSTGRES_PASSWORD=<output of: openssl rand -hex 32>
 PUBLIC_BASE_URL=https://img.example.com
 IMG_HOST=img.example.com
 IMAGE_TAG=<version>
-OSRM_PBF_URLS=https://download.geofabrik.de/central-america/costa-rica-latest.osm.pbf https://download.geofabrik.de/south-america/ecuador-latest.osm.pbf
+# Optional: memory ceiling for street-routing builds (one country at a time; see 4g):
+# OSRM_MEM_LIMIT=20g
 # Optional, only for remote AI providers (see 4f):
 # ENCRYPTION_KEY=<output of: openssl rand -hex 32>
 ```
@@ -81,8 +82,7 @@ OSRM_PBF_URLS=https://download.geofabrik.de/central-america/costa-rica-latest.os
   `set PUBLIC_BASE_URL in .env` / `set IMG_HOST in .env` when either is missing or empty. They
   name the **image** domain only. The blog domain is set later in Settings (4e).
 - `IMAGE_TAG` is required as well; there is no default.
-- `OSRM_PBF_URLS` is required: one or more HTTPS OpenStreetMap extracts, space- or
-  comma-separated, that the bundled street-routing servers merge and route over (see 4g).
+- Street routing needs no region setting: it follows your stories (see 4g).
 
 Prepare the data directory. The app runs as uid/gid 1000; without this step the rehearsal
 observed `EACCES`, exit code 1 and a restart loop
@@ -119,7 +119,7 @@ legal page; see the licensing note in section 3.
 
 ```bash
 docker compose config --quiet && docker compose up -d
-docker compose ps                      # app and db "healthy"; osrm-fetch/osrm-prepare "exited (0)"; osrm-* "healthy"
+docker compose ps                      # app, db, osrm-fetch and osrm "healthy"
 curl -fsS http://127.0.0.1:3000/health
 ```
 
@@ -204,37 +204,35 @@ not your content. See [Connect an optional AI provider](../README.md#connect-an-
 
 ### 4g. Street routing (bundled OSRM)
 
-`docker compose up -d` also downloads every `OSRM_PBF_URLS` extract and merges them into one
-file (`osrm-fetch`), builds one routing graph per travel mode over all regions
-(`osrm-prepare`, one mode at a time) and starts `osrm-car`, `osrm-bike` and `osrm-foot`. The
-first build takes minutes for a city, much longer for a country; follow it with
-`docker compose logs -f osrm-prepare`. The app does not wait for it.
+Street routing configures itself. Whenever a story has two or more stops, the app looks up
+its country in the [Geofabrik](https://download.geofabrik.de/) index and asks for that
+country's map:
 
-Choose regions: list the [Geofabrik](https://download.geofabrik.de/) extract of every country
-(or sub-region) your stories have stops in. Regions do not need to touch: a leg between two
-regions without a road connection becomes a flagged straight line, and a stop more than 5 km
-from any covered road does too. The servers memory-map the graph (`--mmap=1`), so a region
-costs resident memory only while it is being routed in; the build is what needs RAM.
+1. `osrm-fetch` downloads the country's extract (once).
+2. `osrm` builds its car, bike and foot graphs, one build at a time, and serves them.
+3. The editor shows "map data … is being prepared" until the country is ready, then routes.
 
-Then, in **Settings → Site & backups → Street routing**, set the three base URLs to
-`http://osrm-car:5000`, `http://osrm-bike:5000` and `http://osrm-foot:5000`. These are the only
-plain-HTTP, private-network addresses the app accepts, because `docker-compose.yml` lists them
-in `ROUTING_INTERNAL_ORIGINS`.
+A city-sized country takes about a minute, a large one up to an hour or more. The blog and
+admin never wait for it. Follow it with `docker compose logs -f osrm-fetch osrm`. When no story
+with stops is left in a country, its servers stop; its files stay on disk so re-adding the
+country is fast.
 
-To change the regions, edit `OSRM_PBF_URLS`, run `docker compose up -d`, wait for
-`osrm-prepare` to exit, then `docker compose up -d --force-recreate osrm-car osrm-bike osrm-foot`.
+Nothing has to be entered in **Settings → Street routing** for this. The URLs there are
+optional external OSRM services, used only for countries the bundled data does not cover.
 
-To refresh the same regions with newer OpenStreetMap data (a `-latest` URL is downloaded only
-once), drop the download marker and run the same sequence:
+- **Legs between countries** become flagged straight lines (each country is its own graph).
+- **Countries Geofabrik does not offer as one file** (for example some island territories)
+  show "no street-routing map data exists" and use straight lines or the external service.
+- **Memory:** a country whose build exceeds `OSRM_MEM_LIMIT` shows "could not be prepared"; raise
+  `OSRM_MEM_LIMIT` in `.env` and run `docker compose up -d osrm`.
+- **Refresh a country with newer OpenStreetMap data** (each extract is downloaded once):
 
-```bash
-docker compose run --rm --no-deps --entrypoint rm osrm-fetch -f /osrm/region.url
-docker compose up -d        # re-downloads; osrm-prepare rebuilds every mode
-docker compose up -d --force-recreate osrm-car osrm-bike osrm-foot   # after osrm-prepare exited 0
-```
+  ```bash
+  docker compose exec osrm rm /osrm/extracts/<id>.stamp   # <id> as in the editor, e.g. costa-rica
+  ```
 
-More or larger regions need more memory for the build: set `OSRM_PREPARE_MEM_LIMIT` (for
-example `16g`) in `.env`. Until a rebuild succeeds, the servers keep the previous graph.
+  `osrm-fetch` re-downloads it within a minute and `osrm` rebuilds it; the old graph keeps
+  serving until the new one is ready.
 
 ## 5. Verify the installation
 
@@ -251,9 +249,11 @@ example `16g`) in `.env`. Until a rebuild succeeds, the servers keep the previou
 - **Upgrades:** follow the
   [app upgrade and supported recovery runbook](../ARCHITECTURE.md#app-upgrades-and-supported-recovery).
   Recovery is roll-forward by default; capture a backup generation before every upgrade.
-  **Upgrading to a release with the bundled OSRM:** add `OSRM_PBF_URLS` to `.env` first. Until
-  it is set, every `docker compose` command (including `stop`, `run` and the restore runbook)
-  fails with `set OSRM_PBF_URLS in .env`. Then set the Street routing URLs (4g).
+  **Upgrading from v0.19.0:** `OSRM_PBF_URLS` and `OSRM_PREPARE_MEM_LIMIT` are no longer used
+  (remove them; use `OSRM_MEM_LIMIT`). Run `docker compose up -d --remove-orphans` to remove the
+  old `osrm-prepare`, `osrm-car`, `osrm-bike` and `osrm-foot` containers, and clear the
+  `http://osrm-*:5000` URLs in Settings → Street routing. The first start deletes the old
+  merged graph from the `osrm` volume; countries are rebuilt from the stories.
   Postgres major upgrades have their own
   [procedure](../ARCHITECTURE.md#upgrading-a-postgres-major-eg-17--18).
 - **Backups:** **Settings → Site & backups** creates database dumps and image archives on
@@ -273,10 +273,9 @@ example `16g`) in `.env`. Until a rebuild succeeds, the servers keep the previou
 | App restarts repeatedly, log shows `EACCES` / permission denied | `uploader/data` is not owned by uid/gid 1000; run the `chown` in 4a |
 | App exits with `ENCRYPTION_KEY must contain exactly 64 hexadecimal characters.` | Remove the line or set a valid key (4f) |
 | App exits with `TRUSTED_PROXY=docker-gateway requires one unambiguous default gateway.` (or `cannot read /proc/net/route`) | The Compose network or `network_mode` was changed; only the shipped bridge topology is supported |
-| `docker compose` stops with `set OSRM_PBF_URLS in .env` | List at least one HTTPS `.osm.pbf` extract URL (4g) |
-| Editor says "no routing service configured" | Settings URLs empty, or `osrm-prepare` failed (`docker compose logs osrm-prepare`, often out of memory or disk for the region) |
-| `osrm-prepare` exits with code 137 | The build hit `OSRM_PREPARE_MEM_LIMIT`; raise it in `.env` or choose a smaller region, then `docker compose up -d` |
-| App exits with `ROUTING_INTERNAL_ORIGINS entry N must be an http(s) origin …` | The compose value was edited; each entry must be `scheme://host:port` only |
+| Editor says "no routing service configured" | No bundled data for the story's country and no external service in Settings; check `docker compose logs osrm-fetch osrm` |
+| Editor says map data "could not be prepared" | The download failed (retried hourly) or the build hit `OSRM_MEM_LIMIT`; see `docker compose logs osrm`, raise the limit, then `docker compose up -d osrm` |
+| App exits with `ROUTING_INTERNAL_ORIGINS entry N must be an http(s) origin …` or `ROUTING_BUNDLED_DIR and ROUTING_BUNDLED_HOST must both be set …` | The compose values were edited; restore `ROUTING_INTERNAL_ORIGINS: http://osrm:5100-5999`, `ROUTING_BUNDLED_DIR: /osrm` and `ROUTING_BUNDLED_HOST: osrm` |
 | Images show the blog or a 404 | The proxy rewrote `Host`, or `IMG_HOST` does not match the image domain |
 | Comments are refused (403) | The public domain is unset, or does not exactly match the page's origin |
 | Publish shows a timeout in the browser while the build continues | The proxy's read timeout is below the 900-second build deadline |

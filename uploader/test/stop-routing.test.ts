@@ -186,6 +186,26 @@ describe('createStopRouter (#513)', () => {
     expect(request).not.toHaveBeenCalled();
   });
 
+  it("routes each leg to the story country's bundled server when ready, else to the Settings URL", async () => {
+    const calls: string[] = [];
+    const c = clock();
+    const router = createStopRouter({
+      endpoints: () => ({ car: 'https://car.example', bike: 'https://bike.example', foot: '' }),
+      // Costa Rica: car and foot built, bike still building. Unlisted origins never win.
+      regionEndpoints: (code) => (code === 'CR' ? { car: 'http://osrm:5100', foot: 'http://osrm:5102' } : code === 'MX' ? { car: 'http://evil:5100' } : {}),
+      internalOrigins: new Set(['http://osrm:5100', 'http://osrm:5101', 'http://osrm:5102']),
+      now: c.now, sleep: c.sleep,
+      request: async (url) => { calls.push(new URL(url).origin); return respond(ok([[23, 37], [23.1, 37.1]])); },
+    });
+    expect(router.profiles({ countryCode: 'CR' })).toEqual({ car: true, bike: true, foot: true });
+    expect(router.profiles({ countryCode: 'GR' })).toEqual({ car: true, bike: true, foot: false });
+    await router.calculate(stops({}, { profile: 'bike' }, { profile: 'foot' }, {}), { countryCode: 'CR' });
+    await router.calculate(stops({}, {}), { countryCode: 'MX' });
+    await router.calculate(stops({}, {}));
+    expect(calls).toEqual(['http://osrm:5100', 'https://bike.example', 'http://osrm:5102', 'https://car.example', 'https://car.example']);
+    expect(router.refusal(stops({ profile: 'foot' }, {}), { countryCode: 'GR' })).toMatchObject({ code: 'stop_route_profile_unavailable', profiles: ['foot'] });
+  });
+
   it('spaces outbound requests at least 1.1 s apart, across calculations', async () => {
     const c = clock();
     const starts: number[] = [];

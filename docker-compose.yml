@@ -1,31 +1,14 @@
-# Self-hosted stack, WordPress-style: one app container + Postgres, plus the
-# street-routing OSRM servers (car, bike, foot) the editor's stop routing uses.
-# Copy uploader/.env.example to .env (set POSTGRES_PASSWORD, PUBLIC_BASE_URL, IMG_HOST,
-# IMAGE_TAG and OSRM_PBF_URLS; see docs/install.md). Then:
+# Self-hosted stack, WordPress-style: one app container + Postgres, plus bundled
+# street routing (osrm-fetch + osrm) whose map regions follow the stories.
+# Copy uploader/.env.example to .env (set POSTGRES_PASSWORD, PUBLIC_BASE_URL, IMG_HOST
+# and IMAGE_TAG; see docs/install.md). Then:
 #   docker compose pull && docker compose up -d     # run a released GHCR image
 # IMAGE_TAG must identify a release published under wanderlust-studio (0.18.1 or
 # later) or `local`; there is no default. See README.md before upgrading.
 # Compose only RUNS the published image; to rebuild it, `docker build` from the
 # repo root (bases default to DHI — see Dockerfile).
 
-# @ai-context docs/superpowers/specs/2026-11-03-osrm-compose-routing-design.md
-x-osrm-server: &osrm-server
-  image: ghcr.io/project-osrm/osrm-backend:v26.11.0-debian@sha256:e1929ae2818226284d7ef007329098a30851c11528ab3712bc9c8d68da78278b
-  # No host port: only `app` reaches it, as an exact ROUTING_INTERNAL_ORIGINS origin.
-  depends_on:
-    osrm-prepare:
-      condition: service_completed_successfully
-  cap_drop: [ALL]
-  security_opt: ["no-new-privileges:true"]
-  healthcheck:
-    # The image has no curl/wget; bash's /dev/tcp proves osrm-routed accepts connections.
-    test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/5000"]
-    interval: 10s
-    timeout: 5s
-    retries: 6
-    start_period: 60s
-  restart: unless-stopped
-
+# @ai-context docs/superpowers/specs/2026-11-04-osrm-automatic-regions-design.md
 services:
   app:
     image: ghcr.io/laboef1900/wanderlust-studio:${IMAGE_TAG:?set IMAGE_TAG to a published wanderlust-studio release or local after building}
@@ -40,9 +23,13 @@ services:
       # adding a CDN/proxy hop requires a new trust spec, not a broader allow-list.
       TRUSTED_PROXY: docker-gateway
       # Operator-only exemption from the private-address SSRF guard, for street
-      # routing only: exactly these origins may be plain HTTP on this network.
-      # Settings → Street routing can choose among them but never add one.
-      ROUTING_INTERNAL_ORIGINS: http://osrm-car:5000,http://osrm-bike:5000,http://osrm-foot:5000
+      # routing only: the bundled per-country OSRM servers on host `osrm`, ports
+      # 5100-5999. Settings → Street routing can never widen it.
+      ROUTING_INTERNAL_ORIGINS: http://osrm:5100-5999
+      # Bundled routing: the app writes the wanted regions to the shared volume and
+      # reads the servers' status back from it.
+      ROUTING_BUNDLED_DIR: /osrm
+      ROUTING_BUNDLED_HOST: osrm
       # Image domain only (the blog domain is Settings → Site identity). No default:
       # a forgotten value must stop Compose, not publish another site's image host.
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL in .env}
@@ -73,6 +60,8 @@ services:
     memswap_limit: 4608m
     volumes:
       - ./uploader/data:/data
+      # Bundled routing control files (wanted regions, server status) and map data.
+      - osrm:/osrm
       # The map basemap + fonts are baked into the image (served at /map/).
       # To override with your own tileset, bind-mount it over /map-assets:ro.
     depends_on:
@@ -109,115 +98,185 @@ services:
       retries: 10
     restart: unless-stopped
 
-  # Street routing data (#513). One-shot: downloads every OSRM_PBF_URLS extract
-  # (OpenStreetMap, e.g. Geofabrik; space- or comma-separated) and merges them into
-  # one region.osm.pbf in the `osrm` volume — again only when the list changes or
-  # after a refresh removed /osrm/region.url (docs/install.md §4g).
+  # Street routing data. Long-running: reads the regions the app wants from
+  # /osrm/control/wanted (one Geofabrik extract per story country) and downloads
+  # each missing extract. Delete /osrm/extracts/<id>.stamp to refresh one.
   osrm-fetch:
     image: debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4
-    # curl and osmium-tool come from Debian's signed archive, installed only when a
-    # download is due (osmium has no official image; third-party images are not
-    # trusted here). apt/dpkg need exactly these capabilities; the container sees
-    # nothing but the rebuildable `osrm` volume.
+    # curl comes from Debian's signed archive, installed only when a download is
+    # due. Root only for apt and for preparing the volume; downloads run as uid 1000
+    # (setpriv). The container sees nothing but the rebuildable `osrm` volume.
+    init: true
     cap_drop: [ALL]
     cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID]
     security_opt: ["no-new-privileges:true"]
-    environment:
-      OSRM_PBF_URLS: ${OSRM_PBF_URLS:?set OSRM_PBF_URLS in .env to one or more HTTPS .osm.pbf extracts (see docs/install.md)}
     volumes:
       - osrm:/osrm
-    entrypoint: ["sh", "-euc"]
+    entrypoint: ["sh", "-uc"]
     command:
       - |
-        urls=$$(printf '%s' "$$OSRM_PBF_URLS" | tr ',' ' ' | xargs -n1)
-        [ -n "$$urls" ] || { echo "osrm-fetch: OSRM_PBF_URLS lists no extract" >&2; exit 1; }
-        if [ -f /osrm/region.osm.pbf ] && [ -f /osrm/region.stamp ] && [ "$$(cat /osrm/region.url 2>/dev/null)" = "$$urls" ]; then
-          echo "osrm-fetch: map extracts are current"; exit 0
-        fi
-        echo "osrm-fetch: installing curl and osmium-tool"
-        apt-get update -qq
-        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ca-certificates curl osmium-tool >/dev/null
-        rm -rf /osrm/download.tmp; mkdir /osrm/download.tmp
-        n=0
-        for url in $$urls; do
-          n=$$((n + 1)); echo "osrm-fetch: downloading extract $$n"
-          curl -fsSL --proto =https --proto-redir =https --retry 3 -o "/osrm/download.tmp/$$n.osm.pbf" "$$url"
+        log() { echo "osrm-fetch: $$*"; }
+        as_app() { setpriv --reuid=1000 --regid=1000 --clear-groups -- "$$@"; }
+        # One uid owns the volume: the app writes control/wanted, osrm writes data/ and control/status.
+        chown 1000:1000 /osrm
+        for d in control extracts data; do install -d -o 1000 -g 1000 -m 0755 "/osrm/$$d"; done
+        # The v0.19 single merged graph is replaced by per-country data (rebuildable map data).
+        rm -rf /osrm/region.osm.pbf /osrm/region.url /osrm/region.stamp /osrm/download.tmp \
+          /osrm/car /osrm/bike /osrm/foot /osrm/car.tmp /osrm/bike.tmp /osrm/foot.tmp
+        touch /tmp/ready
+        tools=no
+        while :; do
+          if [ -f /osrm/control/wanted ]; then
+            while read -r id url rest; do
+              case "$$id" in ''|*[!a-z0-9-]*) continue ;; esac
+              case "$$url" in https://download.geofabrik.de/*-latest.osm.pbf) ;; *) log "ignoring $$id: not a Geofabrik extract"; continue ;; esac
+              case "$$url" in *[!a-z0-9:/._-]*) log "ignoring $$id: unexpected characters in its URL"; continue ;; esac
+              [ -f "/osrm/extracts/$$id.stamp" ] && continue
+              failed="/osrm/extracts/$$id.failed"
+              if [ -f "$$failed" ] && [ -n "$$(find "$$failed" -mmin -60)" ]; then continue; fi
+              if [ "$$tools" = no ]; then
+                log "installing curl"
+                if apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ca-certificates curl >/dev/null; then
+                  tools=yes
+                else
+                  log "apt failed; retrying in a minute"; break
+                fi
+              fi
+              log "downloading $$id"
+              part="/osrm/extracts/$$id.osm.pbf.part"
+              if as_app curl -fsSL --proto =https --proto-redir =https --retry 3 -o "$$part" "$$url"; then
+                # The stamp names this exact download; osrm rebuilds when it differs from a graph's.
+                as_app sh -c 'mv "$$1.osm.pbf.part" "$$1.osm.pbf" && rm -f "$$1.failed" && printf "%s %s\n" "$$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$$2" > "$$1.stamp"' sh "/osrm/extracts/$$id" "$$url"
+                log "downloaded $$id"
+              else
+                rm -f "$$part"; as_app touch "$$failed"
+                log "downloading $$id failed; retrying in an hour"
+              fi
+            done < /osrm/control/wanted
+          fi
+          sleep 60
         done
-        if [ "$$n" -eq 1 ]; then
-          mv /osrm/download.tmp/1.osm.pbf /osrm/region.osm.pbf.part
-        else
-          # One graph per mode covers every region; legs between regions that
-          # share no road come back NoRoute and become flagged straight legs.
-          echo "osrm-fetch: merging $$n extracts"
-          osmium merge --overwrite -f pbf -o /osrm/region.osm.pbf.part /osrm/download.tmp/*.osm.pbf
-        fi
-        rm -rf /osrm/download.tmp
-        mv /osrm/region.osm.pbf.part /osrm/region.osm.pbf
-        # The stamp names this exact download, so osrm-prepare also rebuilds after a
-        # refresh of the same list. Written before region.url: a crash in between re-downloads.
-        printf '%s %s\n' "$$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$$(printf '%s' "$$urls" | tr '\n' ' ')" > /osrm/region.stamp
-        printf '%s' "$$urls" > /osrm/region.url
-    restart: "no"
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    restart: unless-stopped
 
-  # One-shot: builds the MLD routing graph per travel mode, one mode at a time
-  # (peak RAM is one osrm-extract), only when the downloaded extract changed.
-  osrm-prepare:
+  # Street routing servers. Long-running, official OSRM image, no capabilities:
+  # builds each wanted country separately (car, bike, foot; one build at a time,
+  # so peak RAM is the largest single country) and serves each graph memory-mapped
+  # on its own port (5100 + 3 × slot + mode). Reports /osrm/control/status.
+  osrm:
     image: ghcr.io/project-osrm/osrm-backend:v26.11.0-debian@sha256:e1929ae2818226284d7ef007329098a30851c11528ab3712bc9c8d68da78278b
+    # No host port: only `app` reaches it, inside ROUTING_INTERNAL_ORIGINS.
+    user: "1000:1000"
+    init: true
     depends_on:
       osrm-fetch:
-        condition: service_completed_successfully
-    # Bounded (issue #71 reasoning): an oversized list must OOM this one-shot,
-    # never the host's Postgres or app. Measured peaks: Costa Rica + Ecuador
-    # (158 MB) 3.5 GB; Mexico + both (780 MB) over 12 GB. Raise
-    # OSRM_PREPARE_MEM_LIMIT for larger lists. memswap_limit MUST equal
-    # mem_limit, or Docker grants 2× swap and the build thrashes instead of failing.
-    mem_limit: ${OSRM_PREPARE_MEM_LIMIT:-4g}
-    memswap_limit: ${OSRM_PREPARE_MEM_LIMIT:-4g}
+        condition: service_healthy
+    # Bounded (issue #71 reasoning): an oversized country must OOM its own build,
+    # never the host's Postgres or app. Measured: Costa Rica + Ecuador (158 MB)
+    # peaked at 3.5 GB; Mexico + both (780 MB) over 12 GB. memswap_limit MUST
+    # equal mem_limit, or Docker grants 2× swap and the build thrashes instead.
+    mem_limit: ${OSRM_MEM_LIMIT:-4g}
+    memswap_limit: ${OSRM_MEM_LIMIT:-4g}
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     volumes:
       - osrm:/osrm
-    entrypoint: ["bash", "-euo", "pipefail", "-c"]
+    entrypoint: ["bash", "-uo", "pipefail", "-c"]
     command:
       - |
-        for pair in car:car bike:bicycle foot:foot; do
-          mode=$${pair%%:*}; profile=$${pair#*:}; dir=/osrm/$$mode
-          if [ -f "$$dir/ready" ] && cmp -s /osrm/region.stamp "$$dir/ready"; then
-            echo "osrm-prepare: $$mode graph is current"; continue
+        log() { echo "osrm: $$*"; }
+        MODES=(car bike foot)
+        declare -A PROFILE=([car]=car [bike]=bicycle [foot]=foot)
+        declare -A pid=()
+        wanted=()
+        trap 'for p in "$${pid[@]}"; do kill "$$p" 2>/dev/null; done; exit 0' TERM INT
+        alive() { [ -n "$${pid[$$1]:-}" ] && [ -d "/proc/$${pid[$$1]}" ] && ! grep -q '^State:[[:space:]]*Z' "/proc/$${pid[$$1]}/status" 2>/dev/null; }
+        stop() { if [ -n "$${pid[$$1]:-}" ]; then kill "$${pid[$$1]}" 2>/dev/null; wait "$${pid[$$1]}" 2>/dev/null; unset "pid[$$1]"; fi; }
+        # A stable slot per extract: ports 5100 + 3 × slot + {0 car, 1 bike, 2 foot}, at most 5999.
+        slot() {
+          local f="/osrm/data/$$1/slot" n=0
+          if [ -f "$$f" ]; then cat "$$f"; return 0; fi
+          while grep -qsx "$$n" /osrm/data/*/slot; do n=$$((n + 1)); done
+          [ "$$n" -le 299 ] || return 1
+          mkdir -p "/osrm/data/$$1" && echo "$$n" > "$$f" && echo "$$n"
+        }
+        build() {
+          local id=$$1 mode=$$2 dir="/osrm/data/$$1/$$2" tmp="/osrm/data/$$1/$$2.tmp"
+          rm -rf "$$tmp"; mkdir -p "$$tmp"
+          ln "/osrm/extracts/$$id.osm.pbf" "$$tmp/region.osm.pbf" || return 1
+          if osrm-extract -p "/opt/$${PROFILE[$$mode]}.lua" "$$tmp/region.osm.pbf" \
+            && osrm-partition "$$tmp/region.osrm" && osrm-customize "$$tmp/region.osrm"; then
+            rm -f "$$tmp/region.osm.pbf"; cp "/osrm/extracts/$$id.stamp" "$$tmp/ready"
+            stop "$$id/$$mode"; rm -rf "$$dir"; mv "$$tmp" "$$dir"
+          else
+            rm -rf "$$tmp"; return 1
           fi
-          echo "osrm-prepare: building the $$mode graph"
-          rm -rf "$$dir.tmp"; mkdir -p "$$dir.tmp"
-          ln /osrm/region.osm.pbf "$$dir.tmp/region.osm.pbf"
-          osrm-extract -p "/opt/$$profile.lua" "$$dir.tmp/region.osm.pbf"
-          osrm-partition "$$dir.tmp/region.osrm"
-          osrm-customize "$$dir.tmp/region.osrm"
-          rm "$$dir.tmp/region.osm.pbf"
-          cp /osrm/region.stamp "$$dir.tmp/ready"
-          rm -rf "$$dir"; mv "$$dir.tmp" "$$dir"
+        }
+        # `<id> <state> <car> <bike> <foot>` per wanted extract; the app validates every field.
+        write_status() {
+          local out="" id i mode s ports ready pending failed state stamp
+          for id in "$${wanted[@]}"; do
+            s=$$(cat "/osrm/data/$$id/slot" 2>/dev/null); ports=""; ready=0; pending=0; failed=0
+            stamp="/osrm/extracts/$$id.stamp"
+            for i in 0 1 2; do
+              mode=$${MODES[$$i]}
+              if [ -f "/osrm/data/$$id/$$mode/ready" ] && alive "$$id/$$mode"; then ports+=" $$((5100 + 3 * s + i))"; ready=$$((ready + 1)); else ports+=" -"; fi
+              if [ -f "$$stamp" ] && ! cmp -s "$$stamp" "/osrm/data/$$id/$$mode/ready"; then
+                if cmp -s "$$stamp" "/tmp/failed-$$id-$$mode"; then failed=1; else pending=1; fi
+              fi
+            done
+            if [ ! -f "$$stamp" ] && [ "$$ready" -eq 0 ]; then
+              if [ -f "/osrm/extracts/$$id.failed" ]; then state=failed; else state=downloading; fi
+            elif [ "$$pending" -eq 1 ]; then state=building
+            elif [ "$$failed" -eq 1 ]; then state=failed
+            elif [ "$$ready" -eq 3 ]; then state=ready
+            else state=building; fi
+            out+="$$id $$state$$ports"$$'\n'
+          done
+          printf '%s' "$$out" > /osrm/control/status.tmp && mv /osrm/control/status.tmp /osrm/control/status
+        }
+        while :; do
+          wanted=()
+          if [ -f /osrm/control/wanted ]; then
+            while read -r id _; do [[ $$id =~ ^[a-z0-9-]+$$ ]] && wanted+=("$$id"); done < /osrm/control/wanted
+          fi
+          declare -A want=(); for id in "$${wanted[@]}"; do want[$$id]=1; done
+          for key in "$${!pid[@]}"; do [ -n "$${want[$${key%/*}]:-}" ] || { log "stopping $$key (no longer wanted)"; stop "$$key"; }; done
+          unset want
+          write_status
+          for id in "$${wanted[@]}"; do
+            s=$$(slot "$$id") || { log "no free port slot for $$id"; continue; }
+            stamp="/osrm/extracts/$$id.stamp"
+            for i in 0 1 2; do
+              mode=$${MODES[$$i]}; dir="/osrm/data/$$id/$$mode"
+              if [ -f "$$stamp" ] && ! cmp -s "$$stamp" "$$dir/ready" && ! cmp -s "$$stamp" "/tmp/failed-$$id-$$mode"; then
+                log "building $$id $$mode"
+                write_status
+                if build "$$id" "$$mode"; then log "built $$id $$mode"; else cp "$$stamp" "/tmp/failed-$$id-$$mode"; log "building $$id $$mode failed (often OSRM_MEM_LIMIT); retried after a refresh or restart"; fi
+              fi
+              if [ -f "$$dir/ready" ] && ! alive "$$id/$$mode"; then
+                osrm-routed --algorithm mld --mmap=1 --verbosity WARNING --port "$$((5100 + 3 * s + i))" "$$dir/region.osrm" &
+                pid[$$id/$$mode]=$$!
+                log "serving $$id $$mode on port $$((5100 + 3 * s + i))"
+              fi
+            done
+          done
+          write_status
+          sleep 15 & wait $$!
         done
-    restart: "no"
-
-  # --mmap=1: the graph stays on disk and the kernel pages in only what queries
-  # touch (evictable page cache), so unused regions cost no resident memory.
-  osrm-car:
-    <<: *osrm-server
-    command: ["osrm-routed", "--algorithm", "mld", "--mmap=1", "/osrm/car/region.osrm"]
-    volumes:
-      - osrm:/osrm:ro
-
-  osrm-bike:
-    <<: *osrm-server
-    command: ["osrm-routed", "--algorithm", "mld", "--mmap=1", "/osrm/bike/region.osrm"]
-    volumes:
-      - osrm:/osrm:ro
-
-  osrm-foot:
-    <<: *osrm-server
-    command: ["osrm-routed", "--algorithm", "mld", "--mmap=1", "/osrm/foot/region.osrm"]
-    volumes:
-      - osrm:/osrm:ro
+    healthcheck:
+      test: ["CMD", "test", "-f", "/osrm/control/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    restart: unless-stopped
 
 volumes:
   pgdata:
-  # Downloaded OpenStreetMap extract + prepared routing graphs; rebuildable, not backed up.
+  # Routing control files, downloaded extracts and per-country graphs; rebuildable, not backed up.
   osrm:

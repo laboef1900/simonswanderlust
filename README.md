@@ -137,14 +137,13 @@ cp uploader/.env.example .env
 ```
 
 Edit your private `.env`: set `POSTGRES_PASSWORD` to the output of `openssl rand -hex 32`,
-`PUBLIC_BASE_URL=http://localhost:3000`, `IMG_HOST=localhost:3000`, `IMAGE_TAG` (a
+`PUBLIC_BASE_URL=http://localhost:3000`, `IMG_HOST=localhost:3000` and `IMAGE_TAG` (a
 version published under `ghcr.io/laboef1900/wanderlust-studio`, or `local` after
-[building the current source](#build-the-current-source)) and `OSRM_PBF_URLS` (one or more
-OpenStreetMap extracts the bundled street-routing servers merge and use, e.g.
-`https://download.geofabrik.de/central-america/costa-rica-latest.osm.pbf`; see
-[docs/install.md](docs/install.md#4g-street-routing-bundled-osrm)). All five are required; Compose
+[building the current source](#build-the-current-source)). All four are required; Compose
 stops with `set … in .env` when one is missing. `PUBLIC_BASE_URL`/`IMG_HOST` name the image
-host only; a server's blog domain is set later in **Settings → Site identity**.
+host only; a server's blog domain is set later in **Settings → Site identity**. Street
+routing needs no setting: it downloads the map of each country your stories have stops in
+([docs/install.md](docs/install.md#4g-street-routing-bundled-osrm)).
 
 On Linux, the app runs as uid 1000, so prepare the data directory before starting:
 

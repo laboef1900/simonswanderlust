@@ -202,6 +202,11 @@ export interface PostStore {
   /** Preflight only; upsertDraft repeats the check under its transaction. */
   pageSlugOwner(locale: Locale, slug: string): Promise<string | null>;
   list(): Promise<PostSummary[]>;
+  /**
+   * Distinct `countryCode`s of stories (any status) with two or more stops —
+   * the countries bundled street routing must cover. Never the import placeholder.
+   */
+  routingCountries(): Promise<string[]>;
   /** Internal consistent mode/row facts; digests must never reach author responses. */
   publicationFacts(): Promise<PublicationFact[]>;
   /** Story-only impact corpus, with mode/coverage and both versions from one consistent read. */
@@ -737,6 +742,13 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
       })));
     },
     async pageSlugOwner(locale, slug) { return memorySlugOwner(language, locale, slug, 'page')?.name ?? null; },
+    async routingCountries() {
+      const codes = new Set<string>();
+      for (const p of byKey.values()) {
+        if ((p.shared.stops?.length ?? 0) >= 2 && p.shared.countryCode && p.shared.countryCode !== PLACEHOLDER_COUNTRY_CODE) codes.add(p.shared.countryCode.toUpperCase());
+      }
+      return [...codes].sort();
+    },
     async list() {
       return language.runExclusive(async (mode) => {
       const secondary = mode.locales.find((locale) => locale !== mode.primary);
@@ -1235,6 +1247,17 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
     async pageSlugOwner(locale, slug) {
       if (!slug) return null;
       return (await pool.query<{ key: string }>('SELECT key FROM pages WHERE locale=$1 AND slug=$2 LIMIT 1', [locale, slug])).rows[0]?.key ?? null;
+    },
+    async routingCountries() {
+      // `stops` and `country_code` are shared fields: identical on both locale rows.
+      const { rows } = await pool.query<{ code: string }>(
+        `SELECT DISTINCT upper(country_code) AS code FROM posts
+          WHERE stops IS NOT NULL AND jsonb_typeof(stops) = 'array' AND jsonb_array_length(stops) >= 2
+            AND country_code IS NOT NULL AND upper(country_code) <> $1
+          ORDER BY code`,
+        [PLACEHOLDER_COUNTRY_CODE],
+      );
+      return rows.map((row) => row.code);
     },
     async list() {
       return consistentRead(async (client, language) => {
