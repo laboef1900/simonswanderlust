@@ -4270,7 +4270,7 @@ describe('stop routing in the editor (#513)', () => {
     { name: 'Patras', lat: 38.2466, lng: 21.7346 },
   ];
   const ALL_ON = { car: true, bike: true, foot: true };
-  async function routed(options: { stops?: RouteStop[]; profiles?: Record<string, boolean>; route?: StoredStopRoute | null; post?: Fetch; publish?: () => Response } = {}) {
+  async function routed(options: { stops?: RouteStop[]; profiles?: Record<string, boolean>; route?: StoredStopRoute | null; post?: Fetch; publish?: () => Response; bundled?: { state: string; region: string | null } } = {}) {
     const pair = fullPair();
     pair.shared.stops = options.stops ?? ROUTE;
     const h = await loadEditor({
@@ -4281,7 +4281,8 @@ describe('stop routing in the editor (#513)', () => {
         return response(url === '/posts/tk1' ? pair : url.endsWith('/revisions') ? [] : { images: [] });
       },
       stopRouteFetch: async (url, init) => init?.method === 'POST' && options.post ? options.post(url, init)
-        : response({ profiles: options.profiles ?? ALL_ON, route: options.route === undefined ? storedRouteFor(ROUTE) : options.route }),
+        : response({ profiles: options.profiles ?? ALL_ON, route: options.route === undefined ? storedRouteFor(ROUTE) : options.route,
+          ...(options.bundled ? { bundled: options.bundled } : {}) }),
     });
     await settleFor(h, () => h.el('stopRouteStatus').textContent !== '');
     return h;
@@ -4362,6 +4363,23 @@ describe('stop routing in the editor (#513)', () => {
     h.el('stopRouteCalculate').click();
     await expectStatus(h, message);
     expect(h.el('stopRouteLegs').querySelectorAll('li')).toHaveLength(3);
+  });
+
+  it.each([
+    ['preparing', 'mexico', /map data for this story's country \(mexico\) is being prepared/],
+    ['failed', 'mexico', /map data for mexico could not be prepared/],
+    ['unsupported', null, /No street-routing map data exists for this story's country/],
+  ] as const)('tells the author why bundled routing is not ready (%s) instead of blaming Settings', async (state, region, message) => {
+    const h = await routed({ profiles: { car: false, bike: false, foot: false }, bundled: { state, region } });
+    await settleFor(h, () => !h.el('stopRouteProviders').hidden);
+    expect(h.el('stopRouteProviders').textContent).toMatch(message);
+    expect(h.el('stopRouteProviders').textContent).not.toMatch(/Street routing is off/);
+  });
+
+  it('shows no bundled note once the region is ready', async () => {
+    const h = await routed({ bundled: { state: 'ready', region: 'greece' } });
+    await settleFor(h, () => h.el('stopRouteCalculate').disabled === false);
+    expect(h.el('stopRouteProviders').hidden).toBe(true);
   });
 
   it('explains a disabled provider and only allows all-straight calculations', async () => {

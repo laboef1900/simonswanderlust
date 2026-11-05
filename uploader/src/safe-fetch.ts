@@ -75,7 +75,7 @@ export interface SafeFetchOptions {
    * (ROUTING_INTERNAL_ORIGINS). Only the FIRST hop may use one, and it then skips
    * the internal-address checks; every redirect hop is judged in full.
    */
-  allowedInternalOrigins?: ReadonlySet<string>;
+  allowedInternalOrigins?: { has(origin: string): boolean };
 }
 
 export interface SafeFetchResult {

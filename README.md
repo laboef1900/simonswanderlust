@@ -137,14 +137,13 @@ cp uploader/.env.example .env
 ```
 
 Edit your private `.env`: set `POSTGRES_PASSWORD` to the output of `openssl rand -hex 32`,
-`PUBLIC_BASE_URL=http://localhost:3000`, `IMG_HOST=localhost:3000`, `IMAGE_TAG` (a
+`PUBLIC_BASE_URL=http://localhost:3000`, `IMG_HOST=localhost:3000` and `IMAGE_TAG` (a
 version published under `ghcr.io/laboef1900/wanderlust-studio`, or `local` after
-[building the current source](#build-the-current-source)) and `OSRM_PBF_URLS` (one or more
-OpenStreetMap extracts the bundled street-routing servers merge and use, e.g.
-`https://download.geofabrik.de/central-america/costa-rica-latest.osm.pbf`; see
-[docs/install.md](docs/install.md#4g-street-routing-bundled-osrm)). All five are required; Compose
+[building the current source](#build-the-current-source)). All four are required; Compose
 stops with `set … in .env` when one is missing. `PUBLIC_BASE_URL`/`IMG_HOST` name the image
-host only; a server's blog domain is set later in **Settings → Site identity**.
+host only; a server's blog domain is set later in **Settings → Site identity**. Street
+routing needs no setting: it downloads the map of each country your stories have stops in
+([docs/install.md](docs/install.md#4g-street-routing-bundled-osrm)).
 
 On Linux, the app runs as uid 1000, so prepare the data directory before starting:
 
@@ -298,6 +297,41 @@ limitations, then check correspondence and delivery in the final rebuilt release
 <summary>Maintainers: releases and upgrade notes</summary>
 
 ### Cutting a release
+
+**v0.20.0 — street-routing regions follow the stories** (linux/amd64 and linux/arm64,
+`ghcr.io/laboef1900/wanderlust-studio:0.20.0`). Changes since v0.19.1 (PR #523):
+
+- **Automatic routing regions** (#523): no `.env` region list. When a story has two or more
+  stops, the app resolves its country to one Geofabrik extract (ambiguous codes are
+  unsupported, never guessed), and the bundled OSRM downloads, builds and serves car, bike and
+  foot for that country, one build at a time. Countries no longer used stop serving. A leg
+  between two countries is a flagged straight line. The editor shows preparing, failed or
+  unsupported in both languages
+  ([spec](docs/superpowers/specs/2026-11-04-osrm-automatic-regions-design.md)).
+- **Allow-list:** `ROUTING_INTERNAL_ORIGINS` accepts one host with a port range
+  (`http://osrm:5100-5999`); exact origins are unchanged and malformed ranges refuse boot.
+  Settings → Street routing URLs are now optional external services, used only where no bundled
+  country is ready.
+
+Upgrade notes for v0.19.1 → v0.20.0 (the [release recovery checklist](ARCHITECTURE.md#release-recovery-checklist)):
+
+- **Image, Compose and `.env`.** Apply this release's `docker-compose.yml` with the image.
+  `osrm-prepare` and `osrm-car` / `osrm-bike` / `osrm-foot` are replaced by the long-running
+  `osrm-fetch` and `osrm`. Remove `OSRM_PBF_URLS` and `OSRM_PREPARE_MEM_LIMIT` from `.env`;
+  optionally set `OSRM_MEM_LIMIT` (default `4g`, the peak of the largest single country). Run
+  `docker compose up -d --remove-orphans` to drop the old OSRM containers.
+- **Settings:** clear the `http://osrm-*:5000` Street routing URLs; those hosts are no longer
+  allow-listed. No settings migration is written.
+- **Network:** `app` fetches the Geofabrik index (`download.geofabrik.de`, via `safeFetch`,
+  cached 24 h); `osrm-fetch` needs outbound HTTPS to Geofabrik and the Debian mirror.
+- **Map data:** the first start deletes v0.19.x's merged graph from the `osrm` volume;
+  countries are rebuilt from the stories ([install §4g](docs/install.md#4g-street-routing-bundled-osrm)).
+  The volume stays rebuildable map data, not recovery material.
+- **Schema, dumps and rebuild:** no schema, dump-format (writer stays v15) or image-archive
+  change; no site rebuild required.
+- **Rollback to v0.19.1:** supported (same schema and dump format) together with v0.19.x's
+  Compose file and an `OSRM_PBF_URLS` list in `.env`; its `osrm-prepare` rebuilds the merged
+  graph, then re-enter the `http://osrm-*:5000` Settings URLs.
 
 **v0.19.1 — direct Anthropic provider and sidebar account trigger** (linux/amd64 and
 linux/arm64, `ghcr.io/laboef1900/wanderlust-studio:0.19.1`). Changes since v0.19.0

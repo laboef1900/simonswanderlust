@@ -21,6 +21,24 @@ function pair(overrides: Partial<PostPair> = {}): PostPair {
   };
 }
 
+describe('routingCountries', () => {
+  it('lists each country with a story of two or more stops once, uppercased, never the placeholder', async () => {
+    const store = memoryPostStore();
+    const stops = [{ name: 'A', lat: 1, lng: 1 }, { name: 'B', lat: 2, lng: 2 }];
+    const save = (key: string, countryCode: string, storyStops?: typeof stops) => store.upsertDraft(pair({
+      shared: { date: '2024-10-03', countryCode, region: 'europe', coordinates: { lat: 1, lng: 1 }, ...(storyStops ? { stops: storyStops } : {}) },
+      de: { ...pair().de, slug: `de-${key}` }, en: { ...pair().en, slug: `en-${key}` },
+    }));
+    await save('a', 'mx', stops);
+    await save('b', 'CR', stops);
+    await save('c', 'CR', stops);
+    await save('d', 'DK', stops.slice(0, 1));
+    await save('e', 'NL');
+    await save('f', 'XX', stops);
+    expect(await store.routingCountries()).toEqual(['CR', 'MX']);
+  });
+});
+
 describe('story slug byte bound (#353)', () => {
   it.each(['de', 'en'] as const)('%s accepts 250/251 bytes unchanged and refuses 252/multi-kilobyte input at every save boundary', async (locale) => {
     expect(MAX_SLUG_BYTES).toBe(251);

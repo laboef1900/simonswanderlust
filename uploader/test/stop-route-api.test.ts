@@ -242,6 +242,38 @@ describe('stop-route HTTP boundary (#513)', () => {
     expect(res.statusCode).toBe(200);
   });
 
+  it("answers with the story country's bundled region state and its per-story profiles, and asks for that region", async () => {
+    const sync = vi.fn(async () => {});
+    const b = build({
+      settings: settingsStore({ ...defaultSettings(), routingCarUrl: '', routingBikeUrl: '', routingFootUrl: '' }),
+      routingInternalOrigins: new Set(['http://osrm:5100', 'http://osrm:5101']),
+      bundledRouting: {
+        sync,
+        endpoints: (code) => (code === 'GR' ? { car: 'http://osrm:5100', bike: 'http://osrm:5101' } : {}),
+        view: (code) => (code === 'GR' ? { state: 'preparing', region: 'greece' } : { state: 'unsupported', region: null }),
+      },
+    });
+    close = () => b.app.close();
+    const tk = await story(b.posts); // countryCode GR
+    const res = await b.app.inject({ method: 'GET', url: `/posts/${tk}/stop-route`, cookies: await login(b) });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ profiles: { car: true, bike: true, foot: false }, route: null, bundled: { state: 'preparing', region: 'greece' } });
+    expect(res.body).not.toContain('osrm:51');
+    expect(sync).toHaveBeenCalled();
+    const refused = await b.app.inject({ method: 'POST', url: `/posts/${tk}/stop-route`, cookies: await login(b, false, 'second'),
+      payload: { stops: ROUTE_STOPS.map((stop, index) => (index === 0 ? { ...stop, profile: 'foot' } : stop)) } });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json()).toEqual({ code: 'stop_route_profile_unavailable', profiles: ['foot'], bundled: { state: 'preparing', region: 'greece' } });
+  });
+
+  it('adds no bundled field when the install has no bundled routing', async () => {
+    const b = build();
+    close = () => b.app.close();
+    const tk = await story(b.posts);
+    const res = await b.app.inject({ method: 'GET', url: `/posts/${tk}/stop-route`, cookies: await login(b) });
+    expect(Object.keys(res.json()).sort()).toEqual(['profiles', 'route']);
+  });
+
   it('defaults every routing URL to empty: no routing service is shipped', () => {
     const defaults = defaultSettings();
     expect([defaults.routingCarUrl, defaults.routingBikeUrl, defaults.routingFootUrl]).toEqual(['', '', '']);

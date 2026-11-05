@@ -933,21 +933,33 @@ default, no API key exists, and no `app_secrets` slot is used.
   internal origins are not paced), and a 60 s budget per calculation. A
   refused/failed provider stores nothing; the previously stored and published routes stay
   unchanged. `straight` legs never touch the network.
-- **Private-network opt-in (owner decision 2026-11-03):** the environment variable
-  `ROUTING_INTERNAL_ORIGINS` (comma-separated exact origins; the shipped compose file sets
-  `http://osrm-car:5000,http://osrm-bike:5000,http://osrm-foot:5000`) is the only exemption. A
-  routing request whose URL origin is listed skips the private-address checks for that first hop
-  only and may use plain HTTP; every redirect hop is judged in full and routing sets no redirects.
-  Settings can select a listed origin but never add one; any other plain-HTTP routing URL is
-  refused on save (400) and treated as unconfigured at run time. An invalid list refuses boot.
-  Geocoding and WXR import never receive the list. Residual: an admin can point a profile at a
-  listed origin that is not an OSRM server; only operator-listed services are reachable.
-- **Bundled OSRM data path:** `osrm-fetch` (digest-pinned `debian:trixie-slim`) installs
-  `curl` and `osmium-tool` from Debian's signed archive only when a download is due, with
-  `cap_drop: ALL` plus exactly `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETUID`, `SETGID` for
-  apt/dpkg and `no-new-privileges`. It downloads operator-listed `OSRM_PBF_URLS` over HTTPS only
-  (redirects too) and mounts nothing but the rebuildable `osrm` volume. Residual: package
-  versions float within Debian 13 stable; no third-party osmium image is trusted.
+- **Private-network opt-in (owner decisions 2026-11-03/04):** the environment variable
+  `ROUTING_INTERNAL_ORIGINS` is the only exemption: comma-separated exact origins, or one host
+  with an inclusive port range; the shipped compose file sets `http://osrm:5100-5999` (the
+  bundled per-country servers). A routing request whose URL origin is listed skips the
+  private-address checks for that first hop only and may use plain HTTP; every redirect hop is
+  judged in full and routing sets no redirects. Settings can select a listed origin but never
+  add one; any other plain-HTTP routing URL is refused on save (400) and treated as unconfigured
+  at run time. An invalid list, or a bundled host whose range is not fully listed, refuses boot.
+  Geocoding, WXR import and the Geofabrik index fetch never receive the list. Residual: anything
+  listening on host `osrm` inside the range is reachable; only the `osrm` service runs there.
+- **Automatic regions (owner decision 2026-11-04):** which extracts are downloaded is derived
+  from authored content, not configured: the countries of stories with two or more stops, each
+  resolved through the Geofabrik index (fetched with `safeFetch`: 4 MiB cap, 20 s, no redirects;
+  only `https://download.geofabrik.de/…-latest.osm.pbf` URLs and `[a-z0-9-]` ids are accepted, an
+  ambiguous ISO code is skipped). An author therefore chooses *which country* is downloaded, from
+  that fixed host only; the cost is disk and build time, bounded by Geofabrik's country list and
+  `OSRM_MEM_LIMIT`. The app writes only `/osrm/control/wanted` and reads `/osrm/control/status`,
+  validating every status field (id, state, ports inside 5100-5999) and never sending a URL or
+  port to authors.
+- **Bundled OSRM containers:** `osrm-fetch` (digest-pinned `debian:trixie-slim`) re-validates
+  every wanted line in shell (host, suffix, character set), installs `curl` from Debian's signed
+  archive only when a download is due and downloads as uid 1000 (`setpriv`), over HTTPS only
+  (redirects too), with `cap_drop: ALL` plus exactly `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETUID`,
+  `SETGID` for apt and volume ownership, and `no-new-privileges`. `osrm` (official
+  `osrm-backend`) runs as uid 1000 with no capabilities, no host port and `OSRM_MEM_LIMIT` with
+  equal swap. Both mount only the rebuildable `osrm` volume. Residual: package versions float
+  within Debian 13 stable.
 - **Inputs:** session required; 16 KiB body; ≤ 25 stops validated like Publish (name, ranges,
   `via` boolean, `profile` enum); 20 calculations per user per 10 minutes, spent only once the
   unavailable-profile and in-flight refusals have passed. An unknown story is refused before any
@@ -972,10 +984,12 @@ default, no API key exists, and no `app_secrets` slot is used.
 - **Backups:** dump v15 carries the private `posts.stop_route` and validates it (strict shape,
   DE/EN equality) and any published `stop_route` before any write. A stale stored route, including
   one whose leg count no longer matches the saved stops, is legitimate data and always captured.
-- **Containment:** clear the three URLs in Settings; remove `ROUTING_INTERNAL_ORIGINS` from the
-  compose file to withdraw the private-network exemption. See the
-  [design, misuse cases and rollback](docs/superpowers/specs/2026-11-03-issue-513-stop-routing-design.md)
-  and the [bundled OSRM design](docs/superpowers/specs/2026-11-03-osrm-compose-routing-design.md).
+- **Containment:** stop the `osrm-fetch` and `osrm` services, or remove
+  `ROUTING_INTERNAL_ORIGINS` / `ROUTING_BUNDLED_*` from the compose file to withdraw the
+  exemption and the automatic regions; clear the three Settings URLs for external services. See
+  the [design, misuse cases and rollback](docs/superpowers/specs/2026-11-03-issue-513-stop-routing-design.md),
+  the [bundled OSRM design](docs/superpowers/specs/2026-11-03-osrm-compose-routing-design.md) and
+  the [automatic regions design](docs/superpowers/specs/2026-11-04-osrm-automatic-regions-design.md).
 
 ## SSRF protection (WordPress import)
 
