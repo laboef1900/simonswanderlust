@@ -4,6 +4,13 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Done:** release build tolerates Debian snapshot throttling (2026-11-05, owner-approved
+  build-pipeline change). The v0.20.0 release run failed four times in `native-build` because
+  `snapshot.debian.org` answered GitHub runners with `503 No healthy backends`, and
+  `container-toolchain.mjs` ran apt with `Acquire::Retries=0`. It now uses `Acquire::Retries=5`
+  (apt's own backoff); the snapshot, package pins and signed-index verification are unchanged.
+  Local check: apt 3.0.3 (trixie) fails on one 503 with `0` and recovers with `5`. New recipe
+  hash in `docs/superpowers/specs/2026-10-27-issue-304-weak-connection-write-contract.md`.
 - **Implemented, release verification pending:** Direct Anthropic browser access (2026-11-04,
   owner-approved high-risk transport change). Existing Custom providers at
   `https://api.anthropic.com/v1` now send the browser opt-in and API-version headers for
