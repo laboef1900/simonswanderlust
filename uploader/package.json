@@ -23,7 +23,7 @@
     "@fastify/busboy": "^3.2.4",
     "@fastify/cookie": "^11.0.2",
     "@fastify/multipart": "^10.0.0",
-    "@fastify/static": "^10.1.7",
+    "@fastify/static": "^10.1.10",
     "@fontsource-variable/inter": "^5.2.8",
     "@fontsource/ibm-plex-mono": "^5.2.7",
     "easymde": "^2.21.0",
