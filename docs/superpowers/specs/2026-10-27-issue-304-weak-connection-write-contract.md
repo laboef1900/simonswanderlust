@@ -1049,8 +1049,12 @@ copies of the qualified temporary #304 packet, with SHA-256 identities:
 The copied `container-toolchain.mjs` initially had hash
 `ecff9a333a190a33c2e06c2b72d8e7f7d40360eafde20d5a1b4876c976b9a77b`.
 An actual DHI build then exposed missing `gzip` while extracting the pinned Node headers.
-The build-stage-only dependency is now pinned to `gzip=1.13-1+deb13u1`; the current driver
-hash is `ac0297367ee91dab539c485b39847f2637a62e93bd02732edaef10d567eb79f9`.
+The build-stage-only dependency is now pinned to `gzip=1.13-1+deb13u1`; that driver hash
+was `ac0297367ee91dab539c485b39847f2637a62e93bd02732edaef10d567eb79f9`.
+Release run 41986792172 (v0.20.0, 2026-11-05) then failed four times on transient
+`snapshot.debian.org` 503s, so apt now retries (`Acquire::Retries=5`, was `0`) with the same
+snapshot, pins and signed-index verification; the current driver hash is
+`2ccd1474e99d97bf4a3009519d65dcbee5dd74b74e5f7fdc96f4f6534eda8225`.
 
 Their historical qualification comments and `/proof` scratch path remain intentionally
 unchanged. The production Dockerfile retains the qualified DHI index digests and Debian
