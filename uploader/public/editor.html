@@ -9,7 +9,6 @@
     <link rel="stylesheet" href="/admin/editor-stop-route.css" />
     <link rel="stylesheet" href="/admin/gpx-map.css" />
     <link rel="stylesheet" href="/admin/vendor/easymde.min.css" />
-    <link rel="stylesheet" href="/admin/vendor/font-awesome/css/font-awesome.min.css" />
   </head>
   <body class="editor-page">
     <header class="cms-page-meta">
@@ -30,13 +29,6 @@
           </div>
         </div>
 
-        <div class="editor-commandbar__status">
-          <p id="draftSaveState" class="editor-save-state" role="status"></p>
-          <p id="localeChip" class="locale-chip" role="status"></p>
-          <p id="actionStatus" class="muted" role="status"></p>
-          <p id="actionError" class="err" role="alert" hidden></p>
-        </div>
-
         <div class="editor-commandbar__actions">
           <button id="saveDraft" type="button">Save draft</button>
           <button id="publishBtn" type="button" class="btn-primary-publish" hidden>Publish</button>
@@ -44,6 +36,8 @@
           <!-- Preview is a daily writing action, so it sits in the bar, not the menu.
                Its accessible name keeps the full "not the live site" warning. -->
           <button id="previewBtn" type="button" class="btn-secondary">Preview</button>
+          <!-- Desktop shows readiness in the status row; below 74rem it lives
+               here instead, so the menu only appears when it holds something. -->
           <details class="editor-actions-menu" id="editorActionsMenu">
             <summary class="btn-secondary editor-actions-menu__trigger">More actions</summary>
             <div class="editor-actions-menu__panel">
@@ -67,6 +61,15 @@
             hidden
           ><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/><path d="m10 15-3-3 3-3"/></svg></button>
         </div>
+
+        <!-- After the actions in the DOM so Tab reaches Save before the status
+             line; the grid still draws it as the bar's second row. -->
+        <div class="editor-commandbar__status">
+          <p id="draftSaveState" class="editor-save-state" role="status"></p>
+          <p id="localeChip" class="locale-chip"></p>
+          <p id="actionStatus" class="muted" role="status"></p>
+          <p id="actionError" class="err" role="alert" hidden></p>
+        </div>
       </div>
 
       <div class="editor-workspace" id="editorWorkspace">
@@ -87,22 +90,54 @@
             </div>
 
             <div class="editor-card editor-writing-surface__body">
-              <div class="editor-card-header">
-                <h2 class="editor-card-title">Story (Deutsch)</h2>
-                <button type="button" id="deGalleryView" class="btn-secondary"></button>
+              <h2 class="editor-card-title">Story (Deutsch)</h2>
+              <!-- The bar pins under the command bar, so formatting and photos
+                   stay at hand anywhere in a long story; inserts go in at the
+                   cursor. A roving toolbar: one Tab stop, arrow keys inside. -->
+              <div class="manuscript-tools" data-locale="de">
+                <div class="manuscript-bar" id="deManuscriptBar" role="toolbar" aria-label="Story tools (Deutsch)">
+                  <div class="manuscript-bar__group">
+                    <button type="button" class="manuscript-bar__btn" data-format="bold" aria-label="Bold"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h9a4 4 0 0 1 0 8H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h7a4 4 0 0 1 0 8"/></svg></button>
+                    <button type="button" class="manuscript-bar__btn" data-format="italic" aria-label="Italic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 4h-9"/><path d="M14 20H5"/><path d="M15 4 9 20"/></svg></button>
+                    <button type="button" class="manuscript-bar__btn" data-format="heading" aria-label="Heading"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12"/><path d="M6 20V4"/><path d="M18 20V4"/></svg></button>
+                  </div>
+                  <div class="manuscript-bar__group">
+                    <button type="button" class="manuscript-bar__btn" data-format="quote" aria-label="Quote"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 6H3"/><path d="M21 12H8"/><path d="M21 18H8"/><path d="M3 12v6"/></svg></button>
+                    <button type="button" class="manuscript-bar__btn" data-format="bullets" aria-label="Bulleted list"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/></svg></button>
+                    <button type="button" class="manuscript-bar__btn" data-format="numbers" aria-label="Numbered list"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 6h11"/><path d="M10 12h11"/><path d="M10 18h11"/><path d="M4 6h1v4"/><path d="M4 10h2"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/></svg></button>
+                    <button type="button" class="manuscript-bar__btn" data-format="link" aria-label="Link"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>
+                  </div>
+                  <div class="manuscript-bar__group">
+                    <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="dePhotoToggle" aria-expanded="false" aria-controls="dePhotoPanel"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.09-3.09a2 2 0 0 0-2.82 0L6 21"/></svg>Photo</button>
+                    <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="deGallery"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>Gallery</button>
+                  </div>
+                  <div class="manuscript-bar__group manuscript-bar__group--view">
+                    <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="deGalleryView"></button>
+                    <button type="button" class="manuscript-bar__btn" data-format="preview" aria-pressed="false" aria-label="Rendered view"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0"/><circle cx="12" cy="12" r="3"/></svg></button>
+                  </div>
+                </div>
+                <p id="deBodyImgStatus" class="muted manuscript-tools__status" role="status"></p>
+                <div class="manuscript-photo" id="dePhotoPanel" role="group" aria-label="Insert a photo (Deutsch)" hidden>
+                  <div class="manuscript-photo__fields">
+                    <div>
+                      <label for="deBodyImgFile">Photo file</label>
+                      <input id="deBodyImgFile" type="file" accept="image/*" class="hero-file-input" />
+                    </div>
+                    <div>
+                      <label for="deBodyImgAlt">Alt text (Deutsch)</label>
+                      <input id="deBodyImgAlt" type="text" placeholder="Describe the photo in German" />
+                    </div>
+                  </div>
+                  <div class="manuscript-photo__actions">
+                    <button type="button" id="deBodyImgUpload">Upload and insert</button>
+                    <button type="button" id="deBodyImgSuggest" class="btn-secondary">Suggest alt text</button>
+                    <button type="button" id="deBodyImgLibrary" class="btn-secondary">Choose from library</button>
+                    <p class="muted">Goes in at the cursor.</p>
+                  </div>
+                </div>
               </div>
               <label for="deBody" hidden>Body (Markdown)</label>
               <textarea id="deBody" aria-label="Body (Markdown, DE)"></textarea>
-              <div class="body-img-row">
-                <input id="deBodyImgFile" type="file" accept="image/*" aria-label="Body image file (DE)" />
-                <input id="deBodyImgAlt" type="text" placeholder="Alt text for body image (DE)" aria-label="Alt text for body image (DE)" />
-                <div class="body-img-row__actions">
-                  <button type="button" id="deBodyImgUpload" class="btn-secondary">Insert image</button>
-                  <button type="button" id="deBodyImgSuggest" class="btn-secondary">Suggest alt text</button>
-                  <button type="button" id="deGallery" class="btn-secondary">Insert / edit gallery</button>
-                </div>
-                <p id="deBodyImgStatus" class="muted" role="status"></p>
-              </div>
             </div>
           </section>
 
@@ -113,22 +148,51 @@
             </div>
 
             <div class="editor-card editor-writing-surface__body">
-              <div class="editor-card-header">
-                <h2 class="editor-card-title">Story (English)</h2>
-                <button type="button" id="enGalleryView" class="btn-secondary"></button>
+              <h2 class="editor-card-title">Story (English)</h2>
+              <div class="manuscript-tools" data-locale="en">
+                <div class="manuscript-bar" id="enManuscriptBar" role="toolbar" aria-label="Story tools (English)">
+                  <div class="manuscript-bar__group">
+                    <button type="button" class="manuscript-bar__btn" data-format="bold" aria-label="Bold"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h9a4 4 0 0 1 0 8H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h7a4 4 0 0 1 0 8"/></svg></button>
+                    <button type="button" class="manuscript-bar__btn" data-format="italic" aria-label="Italic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 4h-9"/><path d="M14 20H5"/><path d="M15 4 9 20"/></svg></button>
+                    <button type="button" class="manuscript-bar__btn" data-format="heading" aria-label="Heading"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12"/><path d="M6 20V4"/><path d="M18 20V4"/></svg></button>
+                  </div>
+                  <div class="manuscript-bar__group">
+                    <button type="button" class="manuscript-bar__btn" data-format="quote" aria-label="Quote"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 6H3"/><path d="M21 12H8"/><path d="M21 18H8"/><path d="M3 12v6"/></svg></button>
+                    <button type="button" class="manuscript-bar__btn" data-format="bullets" aria-label="Bulleted list"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/></svg></button>
+                    <button type="button" class="manuscript-bar__btn" data-format="numbers" aria-label="Numbered list"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 6h11"/><path d="M10 12h11"/><path d="M10 18h11"/><path d="M4 6h1v4"/><path d="M4 10h2"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/></svg></button>
+                    <button type="button" class="manuscript-bar__btn" data-format="link" aria-label="Link"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>
+                  </div>
+                  <div class="manuscript-bar__group">
+                    <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="enPhotoToggle" aria-expanded="false" aria-controls="enPhotoPanel"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.09-3.09a2 2 0 0 0-2.82 0L6 21"/></svg>Photo</button>
+                    <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="enGallery"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>Gallery</button>
+                  </div>
+                  <div class="manuscript-bar__group manuscript-bar__group--view">
+                    <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="enGalleryView"></button>
+                    <button type="button" class="manuscript-bar__btn" data-format="preview" aria-pressed="false" aria-label="Rendered view"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0"/><circle cx="12" cy="12" r="3"/></svg></button>
+                  </div>
+                </div>
+                <p id="enBodyImgStatus" class="muted manuscript-tools__status" role="status"></p>
+                <div class="manuscript-photo" id="enPhotoPanel" role="group" aria-label="Insert a photo (English)" hidden>
+                  <div class="manuscript-photo__fields">
+                    <div>
+                      <label for="enBodyImgFile">Photo file</label>
+                      <input id="enBodyImgFile" type="file" accept="image/*" class="hero-file-input" />
+                    </div>
+                    <div>
+                      <label for="enBodyImgAlt">Alt text (English)</label>
+                      <input id="enBodyImgAlt" type="text" placeholder="Describe the photo in English" />
+                    </div>
+                  </div>
+                  <div class="manuscript-photo__actions">
+                    <button type="button" id="enBodyImgUpload">Upload and insert</button>
+                    <button type="button" id="enBodyImgSuggest" class="btn-secondary">Suggest alt text</button>
+                    <button type="button" id="enBodyImgLibrary" class="btn-secondary">Choose from library</button>
+                    <p class="muted">Goes in at the cursor.</p>
+                  </div>
+                </div>
               </div>
               <label for="enBody" hidden>Body (Markdown)</label>
               <textarea id="enBody" aria-label="Body (Markdown, EN)"></textarea>
-              <div class="body-img-row">
-                <input id="enBodyImgFile" type="file" accept="image/*" aria-label="Body image file (EN)" />
-                <input id="enBodyImgAlt" type="text" placeholder="Alt text for body image (EN)" aria-label="Alt text for body image (EN)" />
-                <div class="body-img-row__actions">
-                  <button type="button" id="enBodyImgUpload" class="btn-secondary">Insert image</button>
-                  <button type="button" id="enBodyImgSuggest" class="btn-secondary">Suggest alt text</button>
-                  <button type="button" id="enGallery" class="btn-secondary">Insert / edit gallery</button>
-                </div>
-                <p id="enBodyImgStatus" class="muted" role="status"></p>
-              </div>
             </div>
           </section>
 
@@ -322,8 +386,12 @@
             <details class="editor-inspector-group editor-image-section title-image-editor" id="enTitleImage"></details>
           </section>
 
+          <!-- Closed by default: its summary line carries date, code, region and
+               stops (or what is missing), so the panel stays a short index. -->
           <details class="editor-inspector-group" id="expeditionDetails">
-            <summary class="editor-card-title">Expedition details</summary>
+            <summary class="editor-card-title">
+              <span class="editor-section-title">Expedition details<span class="editor-section-summary" id="expeditionSummary"></span></span>
+            </summary>
             <label for="fmDate">Trip date</label>
             <input id="fmDate" type="date" />
 
@@ -392,38 +460,46 @@
               </div>
             </div>
           </details>
+          <!-- Route and GPX fold like the sections around them; each summary
+               keeps its live status so the state reads without opening it. -->
           <section class="editor-inspector-group stop-route" id="stopRoutePanel" aria-labelledby="stopRouteHeading">
-            <h3 class="editor-card-title" id="stopRouteHeading"></h3>
-            <p id="stopRouteHelp" class="muted"></p>
-            <p id="stopRouteProviders" class="notice-warn" hidden></p>
-            <div class="stop-route__actions">
-              <button id="stopRouteCalculate" type="button" class="btn-secondary" aria-describedby="stopRouteStatus" disabled></button>
-            </div>
-            <p id="stopRouteStatus" class="muted" role="status"></p>
-            <ol id="stopRouteLegs" class="stop-route__legs" hidden></ol>
-            <p id="stopRoutePublishNotice" class="notice-warn" hidden></p>
-            <p id="stopRoutePrecedence" class="muted"></p>
-            <p class="muted"><a id="stopRouteAttribution" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer"></a></p>
+            <details id="stopRouteDetails">
+              <summary class="editor-card-title">
+                <span class="editor-section-title"><span id="stopRouteHeading"></span><span id="stopRouteStatus" class="editor-section-summary" role="status"></span></span>
+              </summary>
+              <p id="stopRouteHelp" class="muted"></p>
+              <p id="stopRouteProviders" class="notice-warn" hidden></p>
+              <div class="stop-route__actions">
+                <button id="stopRouteCalculate" type="button" class="btn-secondary" aria-describedby="stopRouteStatus" disabled></button>
+              </div>
+              <ol id="stopRouteLegs" class="stop-route__legs" hidden></ol>
+              <p id="stopRoutePublishNotice" class="notice-warn" hidden></p>
+              <p id="stopRoutePrecedence" class="muted"></p>
+              <p class="muted"><a id="stopRouteAttribution" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer"></a></p>
+            </details>
           </section>
           <section class="editor-inspector-group gpx-route" aria-labelledby="gpxRouteHeading">
-            <h3 class="editor-card-title" id="gpxRouteHeading"></h3>
-            <p id="gpxRouteStatus" class="muted" role="status"></p>
-            <p id="gpxPublicationNotice" class="muted"></p>
-            <p id="gpxRouteFeedback" class="muted" role="status" tabindex="-1" hidden></p>
-            <div class="gpx-route__actions">
-              <button id="gpxImportOpen" type="button" class="btn-secondary"></button>
-              <button id="gpxReimport" type="button" class="btn-secondary" hidden></button>
-              <button id="gpxDownload" type="button" class="btn-secondary" hidden></button>
-              <button id="gpxDetach" type="button" class="btn-secondary" hidden></button>
-            </div>
-            <div class="gpx-route__caption">
-              <label for="fmRoute" id="gpxCaptionLabel"></label>
-              <input id="fmRoute" type="text" aria-describedby="gpxCaptionHelp gpxCaptionWarning" />
-              <p class="muted editor-field-help" id="gpxCaptionHelp"></p>
-              <div role="status">
-                <p class="notice-warn" id="gpxCaptionWarning" hidden></p>
+            <details id="gpxRouteDetails">
+              <summary class="editor-card-title">
+                <span class="editor-section-title"><span id="gpxRouteHeading"></span><span id="gpxRouteStatus" class="editor-section-summary" role="status"></span></span>
+              </summary>
+              <p id="gpxPublicationNotice" class="muted"></p>
+              <p id="gpxRouteFeedback" class="muted" role="status" tabindex="-1" hidden></p>
+              <div class="gpx-route__actions">
+                <button id="gpxImportOpen" type="button" class="btn-secondary"></button>
+                <button id="gpxReimport" type="button" class="btn-secondary" hidden></button>
+                <button id="gpxDownload" type="button" class="btn-secondary" hidden></button>
+                <button id="gpxDetach" type="button" class="btn-secondary" hidden></button>
               </div>
-            </div>
+              <div class="gpx-route__caption">
+                <label for="fmRoute" id="gpxCaptionLabel"></label>
+                <input id="fmRoute" type="text" aria-describedby="gpxCaptionHelp gpxCaptionWarning" />
+                <p class="muted editor-field-help" id="gpxCaptionHelp"></p>
+                <div role="status">
+                  <p class="notice-warn" id="gpxCaptionWarning" hidden></p>
+                </div>
+              </div>
+            </details>
           </section>
 
           <details class="editor-inspector-group" id="taxonomyDetails">
@@ -652,20 +728,19 @@
       // @ai-warning EasyMDE's built-in autosave stays disabled on purpose: it is
       // body-only and per-textarea. DraftGuard below stashes the FULL form
       // (all frontmatter fields, both locales) instead.
-      const deMDE = new EasyMDE({
-        element: $('deBody'),
+      // The toolbar is the editor's own .manuscript-bar (wired below), so it
+      // can pin under the command bar and carry Photo/Gallery. EasyMDE's own
+      // view shortcuts go too: the bar's rendered-view toggle tracks its state,
+      // and side-by-side/fullscreen have no place in the workspace.
+      const MDE_OPTIONS = {
         spellChecker: false,
         autoDownloadFontAwesome: false,
         autosave: { enabled: false },
-        toolbar: ['bold', 'italic', 'heading', '|', 'quote', 'unordered-list', 'ordered-list', '|', 'link', 'image', '|', 'preview'],
-      });
-      const enMDE = new EasyMDE({
-        element: $('enBody'),
-        spellChecker: false,
-        autoDownloadFontAwesome: false,
-        autosave: { enabled: false },
-        toolbar: ['bold', 'italic', 'heading', '|', 'quote', 'unordered-list', 'ordered-list', '|', 'link', 'image', '|', 'preview'],
-      });
+        toolbar: false,
+        shortcuts: { togglePreview: null, toggleSideBySide: null, toggleFullScreen: null },
+      };
+      const deMDE = new EasyMDE({ ...MDE_OPTIONS, element: $('deBody') });
+      const enMDE = new EasyMDE({ ...MDE_OPTIONS, element: $('enBody') });
       // EasyMDE hides the labelled <textarea> and types into CodeMirror's own
       // input, which starts nameless — a screen reader would hear "edit text".
       deMDE.codemirror.getInputField().setAttribute('aria-label', 'Body (Markdown, DE)');
@@ -760,13 +835,17 @@
       const publicationQualifier = document.createElement('p');
       publicationQualifier.id = 'publicationQualifier';
       publicationQualifier.className = 'muted';
+      // A read, not an action: a small icon beside the state it re-checks, so
+      // it never weighs as much as Save or Preview.
       const publicationRetry = document.createElement('button');
       publicationRetry.type = 'button';
-      publicationRetry.className = 'btn-secondary';
-      publicationRetry.textContent = PublicationState.text('refresh');
+      publicationRetry.className = 'editor-status-refresh';
+      publicationRetry.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>';
+      publicationRetry.setAttribute('aria-label', PublicationState.text('refreshLabel'));
+      publicationRetry.title = PublicationState.text('refreshLabel');
       publicationRetry.hidden = !initialTk;
       publicationRetry.setAttribute('aria-describedby', 'publicationState');
-      $('draftSaveState').after(publicationLine, publicationQualifier, publicationRetry);
+      $('draftSaveState').after(publicationLine, publicationRetry, publicationQualifier);
       publicationRefresh = PublicationRefresh.create({
         resource: () => currentTk || initialTk,
         async read(signal, publish) {
@@ -787,6 +866,11 @@
       publicationRetry.addEventListener('click', () => publicationRefresh.refresh());
       $('previewBtn').setAttribute('aria-label', PublicationState.text('preview'));
       $('previewBtn').title = PublicationState.text('preview') + '. ' + PublicationState.text('previewMedia') + '.';
+      // Cmd/Ctrl+S already saves (keydown handler below); say so where Save is.
+      const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '');
+      const shortcutLabel = (key) => (isMac ? '⌘' : 'Ctrl+') + key;
+      $('saveDraft').title = 'Save draft (' + shortcutLabel('S') + ')';
+      $('saveDraft').setAttribute('aria-keyshortcuts', 'Meta+S Control+S');
       // Delegated listeners cover every static field plus dynamic key-fact rows;
       // the EasyMDE bodies live in CodeMirror and need their own change hooks.
       const mainEl = document.querySelector('main');
@@ -838,16 +922,26 @@
           if (event.key === 'Enter' && !event.isComposing) event.preventDefault();
         });
       });
+      let fitObserver = null;
       if (typeof ResizeObserver !== 'undefined') {
         const widths = new WeakMap();
-        const observer = new ResizeObserver((entries) => {
+        fitObserver = new ResizeObserver((entries) => {
           entries.forEach(({ target, contentRect }) => {
             if (widths.get(target) === contentRect.width) return;
             widths.set(target, contentRect.width);
             fitTextarea(target);
           });
         });
-        fittedFields.forEach((field) => observer.observe(field));
+        fittedFields.forEach((field) => fitObserver.observe(field));
+      }
+      // Dynamic rows (key-fact values) grow the same way and are released
+      // when their row goes, so a reload does not keep detached fields observed.
+      function autoFit(field) {
+        field.addEventListener('input', () => fitTextarea(field));
+        fitObserver?.observe(field);
+      }
+      function releaseFit(root) {
+        root.querySelectorAll('textarea').forEach((field) => fitObserver?.unobserve(field));
       }
       window.addEventListener('resize', fitTextareas);
       document.fonts?.ready.then(fitTextareas);
@@ -880,6 +974,89 @@
       document.addEventListener('click', (event) => {
         if (actionsMenu.open && !actionsMenu.contains(event.target)) actionsMenu.open = false;
       });
+
+      // ---- manuscript bar: formatting, photo, gallery ----
+      // EasyMDE's static commands act on the instance's current selection,
+      // which CodeMirror keeps while focus sits on the bar. One Tab stop per
+      // bar (roving tabindex); arrow keys, Home and End move inside it.
+      const FORMAT = {
+        bold: 'toggleBold', italic: 'toggleItalic', heading: 'toggleHeadingSmaller',
+        quote: 'toggleBlockquote', bullets: 'toggleUnorderedList', numbers: 'toggleOrderedList',
+        link: 'drawLink', preview: 'togglePreview',
+      };
+      const FORMAT_KEYS = { bold: 'B', italic: 'I', link: 'K' };
+      const mdeFor = (locale) => (locale === 'en' ? enMDE : deMDE);
+      function wireManuscriptBar(locale) {
+        const bar = $(locale + 'ManuscriptBar');
+        const all = () => Array.from(bar.querySelectorAll('button'));
+        const usable = () => all().filter((button) => !button.hidden && !button.disabled);
+        const rove = (target) => all().forEach((button) => { button.tabIndex = button === target ? 0 : -1; });
+        rove(usable()[0]);
+        bar.addEventListener('focusin', (event) => {
+          const button = event.target.closest('button');
+          if (button) rove(button);
+        });
+        bar.addEventListener('keydown', (event) => {
+          const list = usable();
+          const index = list.indexOf(document.activeElement);
+          const step = { ArrowRight: index + 1, ArrowLeft: index - 1, Home: 0, End: list.length - 1 }[event.key];
+          if (index < 0 || step === undefined) return;
+          event.preventDefault();
+          const target = list[(step + list.length) % list.length];
+          rove(target);
+          target.focus();
+        });
+        const preview = bar.querySelector('[data-format="preview"]');
+        // The rendered view is read-only: every control that edits the text waits.
+        // State is tracked here, not read back: EasyMDE marks its preview active
+        // only after a timeout, and this button is its only switch.
+        let previewOn = false;
+        function syncPreview() {
+          const on = previewOn;
+          preview.setAttribute('aria-pressed', String(on));
+          all().forEach((button) => { if (button !== preview) button.disabled = on; });
+          if (on) closePhotoPanel(locale);
+          rove(preview);
+        }
+        bar.querySelectorAll('[data-format]').forEach((button) => {
+          const name = button.dataset.format;
+          const label = button.getAttribute('aria-label');
+          const key = FORMAT_KEYS[name];
+          button.title = key ? label + ' (' + shortcutLabel(key) + ')' : label;
+          if (key) button.setAttribute('aria-keyshortcuts', 'Meta+' + key + ' Control+' + key);
+          button.addEventListener('click', () => {
+            EasyMDE[FORMAT[name]](mdeFor(locale));
+            if (name === 'preview') { previewOn = !previewOn; syncPreview(); }
+          });
+        });
+        const toggle = $(locale + 'PhotoToggle');
+        toggle.addEventListener('click', () => {
+          if ($(locale + 'PhotoPanel').hidden) openPhotoPanel(locale);
+          else closePhotoPanel(locale, toggle);
+        });
+        $(locale + 'PhotoPanel').addEventListener('keydown', (event) => {
+          if (event.key !== 'Escape') return;
+          event.preventDefault();
+          closePhotoPanel(locale, toggle);
+        });
+      }
+      function openPhotoPanel(locale) {
+        $(locale + 'PhotoPanel').hidden = false;
+        $(locale + 'PhotoToggle').setAttribute('aria-expanded', 'true');
+        // The tray lies in the pinned bar's area; a scrolling focus would drag
+        // the story away from the caret it is about to insert at.
+        $(locale + 'BodyImgFile').focus({ preventScroll: true });
+      }
+      /** Close the photo panel; `focus` is where the caret goes next (default: nowhere). */
+      function closePhotoPanel(locale, focus) {
+        const panel = $(locale + 'PhotoPanel');
+        if (panel.hidden) return;
+        panel.hidden = true;
+        $(locale + 'PhotoToggle').setAttribute('aria-expanded', 'false');
+        focus?.focus({ preventScroll: true });
+      }
+      wireManuscriptBar('de');
+      wireManuscriptBar('en');
 
       // ---- tabs ----
       let activeTab = 'de';
@@ -1030,6 +1207,8 @@
       });
 
       // ---- key facts (optional rows, per locale) ----
+      // A drawn × in the same stroke as the rest of the editor's icons.
+      const REMOVE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
       function addKeyFactRow(locale, label = '', value = '') {
         const row = document.createElement('div');
         row.className = 'keyfact-row';
@@ -1041,26 +1220,40 @@
         lInput.className = 'keyfact-label';
         lInput.value = label;
 
-        const vInput = document.createElement('input');
-        vInput.type = 'text';
+        // Values like "2′320′898 (Yucatán); 1′857′985 (Quintana Roo)" outgrow
+        // the inspector: the field wraps and grows instead of clipping, but
+        // stays one logical line (Enter and pasted breaks become spaces).
+        const vInput = document.createElement('textarea');
+        vInput.rows = 1;
         vInput.placeholder = 'Value';
         vInput.setAttribute('aria-label', 'Key fact value (' + locale.toUpperCase() + ')');
-        vInput.className = 'keyfact-value';
+        vInput.className = 'keyfact-value editor-autofit';
         vInput.value = value;
+        vInput.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter' && !event.isComposing) event.preventDefault();
+        });
+        vInput.addEventListener('input', () => {
+          const single = vInput.value.replace(/[\r\n]+/g, ' ');
+          if (single !== vInput.value) vInput.value = single;
+        });
+        autoFit(vInput);
 
         const remove = document.createElement('button');
         remove.type = 'button';
-        remove.className = 'btn-remove';
-        remove.textContent = '×';
+        remove.className = 'btn-remove editor-icon-remove';
+        remove.innerHTML = REMOVE_ICON;
         remove.setAttribute('aria-label', 'Remove key fact');
         // A click fires neither input nor change, so the delegated listeners
         // on <main> never see a removal (#138).
-        remove.addEventListener('click', () => { row.remove(); guard.markDirty(); });
+        remove.addEventListener('click', () => { releaseFit(row); row.remove(); guard.markDirty(); });
 
+        // Tab order follows reading order (label, value, remove); CSS draws
+        // the remove button at the label row's end.
         row.appendChild(lInput);
         row.appendChild(vInput);
         row.appendChild(remove);
         $(locale + 'KeyFactsList').appendChild(row);
+        fitTextarea(vInput);
       }
 
       $('deAddKeyFact').addEventListener('click', () => addKeyFactRow('de'));
@@ -1124,8 +1317,8 @@
 
         const remove = document.createElement('button');
         remove.type = 'button';
-        remove.className = 'btn-remove';
-        remove.textContent = '×';
+        remove.className = 'btn-remove editor-icon-remove';
+        remove.innerHTML = REMOVE_ICON;
         remove.setAttribute('aria-label', 'Remove stop');
         remove.addEventListener('click', () => {
           stopLookups.get(row)();
@@ -1603,7 +1796,57 @@
       $('deHeroLibrary').addEventListener('click', () => pickHero('de'));
       $('enHeroLibrary').addEventListener('click', () => pickHero('en'));
 
-      // ---- body image upload + insert ----
+      // ---- body photo: upload or library pick, inserted at the cursor ----
+      // Insert markdown at the cursor in the matching EasyMDE instance — but
+      // never into a fence (#333): on a gallery's closing line the image turns
+      // the ``` into text and the gallery swallows the rest of the story;
+      // between its fences it is a photo line the renderer ignores. Then it
+      // goes after the block instead, on its own line. (Both edits fire a
+      // CodeMirror change → marks the guard dirty.) Resolves true once written.
+      async function insertBodyImage(locale, image, alt) {
+        const statusEl = $(locale + 'BodyImgStatus');
+        const cm = mdeFor(locale).codemirror;
+        const md = ImageMarkdown.image(alt, image.src);
+        const revision = galleryRevision[locale];
+        const snapshot = cm.getValue();
+        const selection = cm.listSelections();
+        let spot;
+        try { spot = await GalleryFence.insertBlockAt(snapshot, cm.indexFromPos(cm.getCursor()), md); }
+        catch (error) {
+          galleryFailure(locale, error, () => { void insertBodyImage(locale, image, alt); });
+          statusEl.appendChild(document.createTextNode(' ' + md));
+          return false;
+        }
+        if (galleryRevision[locale] !== revision || cm.getValue() !== snapshot || JSON.stringify(cm.listSelections()) !== JSON.stringify(selection)) {
+          statusEl.textContent = EditorGalleryCopy.en.stale + ' ' + md;
+          return false;
+        }
+        if (spot.blocked === 'unterminated') {
+          statusEl.textContent = EditorGalleryCopy.en.unterminated + ' ' + md;
+          return false;
+        }
+        const imagesMap = locale === 'de' ? deImages : enImages;
+        imagesMap[image.src] = {
+          width: image.width, height: image.height,
+          ...(image.format === 'jpeg' ? { format: image.format } : {}),
+        };
+        if (spot.relocated) {
+          const from = cm.posFromIndex(spot.start);
+          cm.replaceRange(spot.text, from, from);
+          cm.setCursor(cm.posFromIndex(spot.cursor));
+        } else {
+          cm.replaceSelection(md);
+        }
+        statusEl.textContent = (spot.relocated ? 'Inserted after the ``` block: ' : 'Inserted: ') + image.src
+          + (image.status === 'processing' ? ' — still processing (Publish waits for it)' : '');
+        return true;
+      }
+      // The panel has done its job: back to writing, right after the photo.
+      function finishPhotoInsert(locale) {
+        closePhotoPanel(locale);
+        mdeFor(locale).codemirror.focus();
+      }
+
       async function uploadBodyImg(locale) {
         const slugFieldId = locale === 'de' ? 'slugFieldDe' : 'slugFieldEn';
         const slug = $(slugFieldId).value.trim();
@@ -1627,60 +1870,36 @@
             onUnauthed: () => guard.redirectToLogin(),
           });
           if (!body || !writeRecovery.canAdopt(ownerId)) return;
-
-          // Insert markdown at the cursor in the matching EasyMDE instance —
-          // but never into a fence (#333): on a gallery's closing line the
-          // image turns the ``` into text and the gallery swallows the rest of
-          // the story; between its fences it is a photo line the renderer
-          // ignores. Then it goes after the block instead, on its own line.
-          // (Both edits fire a CodeMirror change → marks the guard dirty.)
-          const cm = (locale === 'de' ? deMDE : enMDE).codemirror;
-          const md = ImageMarkdown.image(alt, body.src);
-          async function insertUploaded() {
-            const revision = galleryRevision[locale];
-            const snapshot = cm.getValue();
-            const selection = cm.listSelections();
-            let spot;
-            try { spot = await GalleryFence.insertBlockAt(snapshot, cm.indexFromPos(cm.getCursor()), md); }
-            catch (error) {
-              galleryFailure(locale, error, () => { void insertUploaded(); });
-              statusEl.appendChild(document.createTextNode(' ' + md));
-              return;
-            }
-            if (galleryRevision[locale] !== revision || cm.getValue() !== snapshot || JSON.stringify(cm.listSelections()) !== JSON.stringify(selection)) {
-              statusEl.textContent = EditorGalleryCopy.en.stale + ' ' + md;
-              return;
-            }
-            if (spot.blocked === 'unterminated') {
-              statusEl.textContent = EditorGalleryCopy.en.unterminated + ' ' + md;
-            } else {
-              const imagesMap = locale === 'de' ? deImages : enImages;
-              imagesMap[body.src] = {
-                width: body.width, height: body.height,
-                ...(body.format === 'jpeg' ? { format: body.format } : {}),
-              };
-              if (spot.relocated) {
-                const from = cm.posFromIndex(spot.start);
-                cm.replaceRange(spot.text, from, from);
-                cm.setCursor(cm.posFromIndex(spot.cursor));
-              } else {
-                cm.replaceSelection(md);
-              }
-              statusEl.textContent = (spot.relocated ? 'Inserted after the ``` block: ' : 'Inserted: ') + body.src
-                + (body.status === 'processing' ? ' — still processing (Publish waits for it)' : '');
-            }
-          }
-          await insertUploaded();
+          const inserted = await insertBodyImage(locale, body, alt);
           // Clear only what this upload consumed; a newer pick or alt stays.
           if (fileInput.files[0] === file) fileInput.value = '';
           if (altInput.value === alt) altInput.value = '';
+          if (inserted) finishPhotoInsert(locale);
         } catch (e) {
           statusEl.textContent = 'Upload failed: ' + e;
         }
       }
 
-      $('deBodyImgUpload').addEventListener('click', () => uploadBodyImg('de'));
-      $('enBodyImgUpload').addEventListener('click', () => uploadBodyImg('en'));
+      // Most photos already live in Media; picking one avoids a second copy.
+      // A typed alt wins, otherwise the library's own alt for this language.
+      function pickBodyImage(locale) {
+        MediaPicker.open({
+          onUnauthed: () => guard.redirectToLogin(),
+          onPick: async (item) => {
+            const altInput = $(locale + 'BodyImgAlt');
+            const typed = altInput.value.trim();
+            const alt = typed || (item.alt && item.alt[locale]) || '';
+            if (!(await insertBodyImage(locale, item, alt))) return;
+            if (typed && altInput.value.trim() === typed) altInput.value = '';
+            finishPhotoInsert(locale);
+          },
+        });
+      }
+
+      for (const locale of ['de', 'en']) {
+        $(locale + 'BodyImgUpload').addEventListener('click', () => uploadBodyImg(locale));
+        $(locale + 'BodyImgLibrary').addEventListener('click', () => pickBodyImage(locale));
+      }
 
       // ---- AI alt-text suggestions (browser-direct provider; see alt-suggest.js) ----
       // on401 routes a session-expiry through DraftGuard (stash draft + ?next=) instead
@@ -1875,6 +2094,33 @@
         chip.appendChild(chipPart('Trip', 'trip', g.trip));
         chip.classList.toggle('is-incomplete', gapCount(g) > 0);
       }
+      // The closed Expedition details still says what it holds, or what it
+      // lacks; the readiness chip's Trip link is the way in to a gap.
+      function renderExpeditionSummary(gaps) {
+        const summary = $('expeditionSummary');
+        if (gaps.length) {
+          summary.textContent = 'Missing ' + gaps.join(', ');
+          summary.classList.add('is-incomplete');
+          return;
+        }
+        summary.classList.remove('is-incomplete');
+        const date = $('fmDate').value;
+        const parsed = date ? new Date(date + 'T00:00:00Z') : null;
+        const region = $('fmRegion').value;
+        const regionName = region
+          ? Array.from($('fmRegion').querySelectorAll('option')).find((option) => option.value === region)?.textContent.trim()
+          : '';
+        const stops = $('stopsList').querySelectorAll('.stop-row').length;
+        summary.textContent = [
+          parsed && !Number.isNaN(parsed.getTime())
+            ? parsed.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }) : '',
+          $('fmCountryCode').value.trim().toUpperCase(),
+          regionName,
+          stops ? stops + (stops === 1 ? ' stop' : ' stops') : '',
+        ].filter(Boolean).join(' · ');
+      }
+      // Adding or removing a stop is a click, not an input event.
+      $('stopsContainer').addEventListener('click', () => renderExpeditionSummary(tripGaps()));
       function updateLocaleChip() {
         const chip = $('localeChip');
         const mobileChip = $('mobileLocaleChip');
@@ -1882,8 +2128,7 @@
         const g = allPublishGaps();
         renderLocaleChip(chip, g);
         renderLocaleChip(mobileChip, g);
-        const details = $('expeditionDetails');
-        if (details && g.trip.length) details.open = true;
+        renderExpeditionSummary(g.trip);
         // Publishing is admin-only on the server; an author is never offered a
         // control that can only answer 403 (#302 "authors see no Publish").
         const pub = $('publishBtn');
@@ -2272,6 +2517,7 @@
 
       // ---- load existing post ----
       function populateKeyFacts(locale, facts) {
+        releaseFit($(locale + 'KeyFactsList'));
         $(locale + 'KeyFactsList').innerHTML = '';
         if (!facts || typeof facts !== 'object') return;
         Object.entries(facts).forEach(([l, v]) => addKeyFactRow(locale, l, v));

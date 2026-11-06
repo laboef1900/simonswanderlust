@@ -178,6 +178,7 @@ async function loadEditor(options: EditorOptions = {}) {
     cursor: { line: number; ch: number } | null = null;
     selection: { from: { line: number; ch: number }; to: { line: number; ch: number } } | null = null;
     focusCalls = 0;
+    settings?: { autosave?: { enabled?: boolean } };
     codemirror = {
       getCursor: () => this.cursor ?? { line: 0, ch: 0 },
       undo: () => {
@@ -194,6 +195,11 @@ async function loadEditor(options: EditorOptions = {}) {
       setValue: (value: string) => { this.value(value); },
       getInputField: () => this.input,
       setCursor: (position: { line: number; ch: number }) => { this.cursor = position; },
+      listSelections: () => [{ anchor: this.codemirror.getCursor(), head: this.codemirror.getCursor() }],
+      replaceSelection: (value: string) => {
+        const at = this.codemirror.getCursor();
+        this.codemirror.replaceRange(value, at, at);
+      },
       setSelection: (from: { line: number; ch: number }, to: { line: number; ch: number }) => { this.selection = { from, to }; },
       scrollIntoView() {},
       focus: () => { this.focusCalls += 1; this.input.focus(); },
@@ -326,8 +332,9 @@ async function loadEditor(options: EditorOptions = {}) {
     matchMedia: (query: string) => query === '(max-width: 900px)'
       ? { matches: false, addEventListener() {} } : media,
     EasyMDE: class extends EasyMDE {
-      constructor(settings: { element: Element }) {
+      constructor(settings: { element: Element; autosave?: { enabled?: boolean } }) {
         super();
+        this.settings = settings;
         settings.element.parentElement!.appendChild(this.input);
         editors.push(this);
         options.onEditor?.(this, editors.length - 1);
@@ -406,7 +413,7 @@ async function loadEditor(options: EditorOptions = {}) {
     guard.redirectToLogin = () => { redirects += 1; redirect(); };
     return guard;
   };
-  for (const file of ['journeys-ui.js', 'waypoint-lookup.js', 'editor-stop-route.js', 'posts-filter.js', 'editor-title-image.js', 'gallery-fence.js', 'gallery-metadata-warnings.js', 'media-api.js', 'gallery-library.js', 'editor-galleries.js', 'editor-linter.js', 'llm.js', 'editor-excerpt.js', 'country-centers.js', 'country-coordinates.js', 'tabs.js', 'editor-review.js', 'editor-inspector.js']) {
+  for (const file of ['journeys-ui.js', 'waypoint-lookup.js', 'editor-stop-route.js', 'posts-filter.js', 'editor-title-image.js', 'gallery-fence.js', 'gallery-metadata-warnings.js', 'media-api.js', 'gallery-library.js', 'editor-galleries.js', 'editor-linter.js', 'llm.js', 'editor-excerpt.js', 'country-centers.js', 'country-coordinates.js', 'tabs.js', 'editor-review.js', 'editor-inspector.js', 'image-markdown.js']) {
     vm.runInContext(browserScript(file), ctx, {
       filename: resolve('public/' + file),
       importModuleDynamically: vm.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER,
@@ -1654,6 +1661,13 @@ describe('editor.html inline script against its own markup', () => {
       expect(editors.map((e) => e.input.attrs['aria-label'])).toEqual(['Body (Markdown, DE)', 'Body (Markdown, EN)']);
     });
 
+  it('keeps EasyMDE autosave off on both bodies (DraftGuard owns persistence)', async () => {
+      // @ai-warning re-enabling it would write a body-only copy that fights the
+      // full-form DraftGuard stash (duplicate writes, partial restores).
+      const { editors } = await loadEditor();
+      expect(editors.map((e) => e.settings?.autosave?.enabled)).toEqual([false, false]);
+    });
+
   it('buildPayload round-trips what populateForm wrote', async () => {
       const { api } = await loadEditor();
       api.populateForm(fullPair());
@@ -2742,7 +2756,9 @@ describe('inline gallery editing', () => {
     expect(fields.map((field) => field.value)).toEqual(['Original', 'Original', 'English', 'English']);
     expect(fields.map((field) => field.readOnly)).toEqual([false, false, false, false]);
     expect(h.document.querySelectorAll('.editor-gallery__local').map((note) => note.hidden)).toEqual([false, false, false, false]);
-    expect(h.document.querySelectorAll('.editor-gallery__source').map((note) => note.hidden)).toEqual([true, true, true, true]);
+    // An editable field keeps a visible label.
+    expect(h.document.querySelectorAll('.editor-gallery__alt-label').map((label) => label.classList.contains('visually-hidden')))
+      .toEqual([false, false, false, false]);
     fields[0]!.value = 'A \"quote\" | and\nnewline';
     fields[0]!.dispatchEvent(new EditorEvent('input', { bubbles: true }));
     await settleAll();
@@ -3099,11 +3115,16 @@ describe('inline gallery editing', () => {
     // The empty DE Media caption overrides the post's copied "Caption".
     expect(h.document.querySelectorAll('.editor-gallery__caption').map((caption) => caption.hidden ? null : caption.textContent))
       .toEqual([null, null, 'Morning light', 'Morning light']);
+    // One way to Media per gallery, in its head — not a link under every photo.
     const links = h.document.querySelectorAll('.editor-gallery__media-link');
-    expect(links.map((link) => [link.getAttribute('href'), link.target, link.rel, link.parentElement!.hidden]))
-      .toEqual(Array(4).fill(['/admin/media.html', '_blank', 'noopener', false]));
-    expect(h.document.querySelectorAll('.editor-gallery__source')[0]!.textContent)
-      .toContain(ui.en['editor.gallery.fromMedia'] + ' Market at dawn');
+    expect(links.map((link) => [link.getAttribute('href'), link.target, link.rel, link.parentElement!.className]))
+      .toEqual(Array(h.document.querySelectorAll('.editor-gallery').length).fill(['/admin/media.html', '_blank', 'noopener', 'editor-gallery__head']));
+    // Shown text needs no visible label; the photo's Media title stays reachable.
+    const label = h.document.querySelectorAll('.editor-gallery__alt-label')[0]!;
+    expect(label.classList.contains('visually-hidden')).toBe(true);
+    expect(label.textContent).toContain('Market at dawn');
+    expect(h.document.querySelectorAll('.editor-gallery__image')[0]!.title)
+      .toBe(ui.en['editor.gallery.fromMedia'] + ' Market at dawn');
     expect(h.document.querySelectorAll('.editor-gallery__suggest').map((button) => button.hidden)).toEqual([true, true, true, true]);
     expect(h.document.querySelectorAll('.editor-gallery__local').map((note) => note.hidden)).toEqual([true, true, true, true]);
     expect(h.document.querySelector('.editor-gallery__lookup')!.textContent).toBe('');
@@ -3175,7 +3196,12 @@ describe('inline gallery editing', () => {
     h.el('reviewStory').click();
     await settleAll();
     // The post still carries a copied alt, but Media's empty one is what renders.
-    expect(h.el('reviewInstant').textContent).toContain('Add alt text to this gallery image.');
+    // Both photo lines sit in one gallery, so Review says it once and points to Media.
+    const missing = required(h.el('reviewInstant'), '[data-review-criterion="altText"]').querySelectorAll('li');
+    expect(missing.map((item) => item.textContent)).toEqual([
+      '2 photos in this gallery have no alt text. Gallery photos from Media are described in Media.Go to line 5Open Media (opens a new tab)',
+    ]);
+    expect(required(missing[0]!, '.review-media-link').getAttribute('href')).toBe('/admin/media.html');
     h.el('closeReview').click();
     row.alt.de = 'Beschreibung aus der Mediathek';
     pair.de.images = { 'https://img/photo': { width: 900, height: 600, alt: '' } };
@@ -3183,7 +3209,7 @@ describe('inline gallery editing', () => {
     await settleAll();
     h.el('reviewStory').click();
     await settleAll();
-    expect(h.el('reviewInstant').textContent).not.toContain('Add alt text to this gallery image.');
+    expect(h.el('reviewInstant').textContent).toContain('No missing alt text found in the checked images.');
   });
 
   it('leaves nested examples and unfinished fences editable, and cancels previews when showing raw Markdown', async () => {
@@ -3521,6 +3547,63 @@ describe('manuscript-first editor refinements', () => {
     h.el('enTitle').fire('input');
     expect(h.api.buildPayload().de.slug).toBe(restored.de.slug);
     expect(h.api.buildPayload().en.slug).toBe(restored.en.slug);
+  });
+
+  it('keeps Expedition details folded and says in its summary what it holds or lacks', async () => {
+    const h = await loadEditor();
+    h.api.populateForm(fullPair());
+    expect(h.el('expeditionDetails').open).toBe(false);
+    expect(h.el('expeditionSummary').textContent).toBe('3 Oct 2024 · RO · Europe · 1 stop');
+    h.el('fmDate').value = '';
+    h.el('fmDate').fire('input');
+    // A gap is named, not forced open: the readiness chip's Trip link is the way in.
+    expect(h.el('expeditionDetails').open).toBe(false);
+    expect(h.el('expeditionSummary').textContent).toBe('Missing date');
+    h.el('fmDate').value = '2024-10-03';
+    h.el('fmDate').fire('input');
+    h.el('addStop').click();
+    expect(h.el('expeditionSummary').textContent).toBe('3 Oct 2024 · RO · Europe · 2 stops');
+  });
+
+  it('keeps a key-fact value on one logical line however it was typed or pasted', async () => {
+    const h = await loadEditor();
+    h.api.populateForm(fullPair());
+    h.el('deAddKeyFact').click();
+    const row = h.el('deKeyFactsList').querySelectorAll('.keyfact-row').at(-1)!;
+    required(row, '.keyfact-label').value = 'Einwohner';
+    const value = required(row, '.keyfact-value');
+    const enter = new EditorEvent('keydown', { key: 'Enter', cancelable: true, bubbles: true });
+    value.dispatchEvent(enter);
+    expect(enter.defaultPrevented).toBe(true);
+    value.value = "2'320'898 (Yucatán);\n1'857'985 (Quintana Roo)";
+    value.fire('input');
+    expect(h.api.buildPayload().de.keyFacts?.Einwohner).toBe("2'320'898 (Yucatán); 1'857'985 (Quintana Roo)");
+  });
+
+  it('inserts a library photo at the cursor from the pinned bar and returns to writing', async () => {
+    const pickImage = { src: 'https://img/cenote', width: 1600, height: 1067, alt: { de: 'Cenote im Morgenlicht', en: 'Cenote at dawn' } };
+    const h = await loadEditor({ pickImage });
+    h.api.populateForm(fullPair());
+    const editor = h.editors[0]!;
+    editor.value('Erster Absatz.\n\nZweiter Absatz.');
+    editor.codemirror.setCursor({ line: 1, ch: 0 });
+    h.el('dePhotoToggle').click();
+    expect(h.el('dePhotoPanel').hidden).toBe(false);
+    expect(h.el('dePhotoToggle').getAttribute('aria-expanded')).toBe('true');
+    expect(h.document.activeElement).toBe(h.el('deBodyImgFile'));
+    h.el('dePhotoPanel').fire('keydown', { key: 'Escape' });
+    expect(h.el('dePhotoPanel').hidden).toBe(true);
+    expect(h.document.activeElement).toBe(h.el('dePhotoToggle'));
+
+    h.el('dePhotoToggle').click();
+    h.el('deBodyImgLibrary').click();
+    for (let i = 0; i < 12; i++) await settle();
+    // The library's German alt travels with the photo when none was typed.
+    expect(editor.value()).toBe('Erster Absatz.\n![Cenote im Morgenlicht](https://img/cenote)\nZweiter Absatz.');
+    expect(h.api.buildPayload().de.images['https://img/cenote']).toEqual({ width: 1600, height: 1067 });
+    expect(h.el('dePhotoPanel').hidden).toBe(true);
+    expect(h.el('dePhotoToggle').getAttribute('aria-expanded')).toBe('false');
+    expect(h.document.activeElement).toBe(editor.input);
   });
 });
 

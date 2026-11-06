@@ -223,9 +223,18 @@ window.EditorGalleries = (function () {
         const range = controller.marker.find();
         if (range) onEdit(cm.indexFromPos(range.from));
       });
+      // One way to Media per gallery, not per photo: every photo's link went to
+      // the same library page. A new tab, so it cannot discard this draft.
+      const mediaLink = el('a', 'editor-gallery__media-link', copy.editInMedia);
+      mediaLink.href = '/admin/media.html';
+      mediaLink.target = '_blank';
+      mediaLink.rel = 'noopener';
+      mediaLink.appendChild(el('span', 'visually-hidden', ' ' + copy.newTab));
+      head.appendChild(mediaLink);
       head.appendChild(edit);
       root.appendChild(head);
-      root.appendChild(el('p', 'muted editor-gallery__help', copy.help));
+      // The explanation is the same for every gallery; say it once per story.
+      if (number === 1) root.appendChild(el('p', 'muted editor-gallery__help', copy.help));
       // One live region per gallery, not per photo: a 30-photo gallery must not
       // announce "loading" thirty times.
       const lookupStatus = el('p', 'muted editor-gallery__status editor-gallery__lookup');
@@ -294,19 +303,9 @@ window.EditorGalleries = (function () {
         caption.setAttribute('lang', locale);
         caption.hidden = !showCaptions || postCaption === '';
         card.appendChild(caption);
-        // Library-backed photos: where the text comes from, and where to change it.
-        // A new tab, so following the link cannot discard this unsaved draft.
-        const source = el('p', 'muted editor-gallery__source');
-        const sourceText = el('span');
-        const mediaLink = el('a', 'editor-gallery__media-link', copy.editInMedia);
-        mediaLink.href = '/admin/media.html';
-        mediaLink.target = '_blank';
-        mediaLink.rel = 'noopener';
-        source.appendChild(sourceText);
-        source.appendChild(document.createTextNode(' '));
-        source.appendChild(mediaLink);
-        source.hidden = true;
-        card.appendChild(source);
+        // Library-backed photos show only the description: the photo's Media
+        // title rides on the image's tooltip and in the label for assistive
+        // technology, and the gallery head links to Media once.
         const localNote = el('p', 'muted editor-gallery__local', copy.notInMedia);
         localNote.hidden = true;
         card.appendChild(localNote);
@@ -353,16 +352,19 @@ window.EditorGalleries = (function () {
             altText.hidden = state === 'missing';
             suggest.hidden = state !== 'missing';
             localNote.hidden = state !== 'missing';
-            source.hidden = state !== 'library';
+            // An editable field keeps a visible label; shown text needs none.
+            labelText.classList.toggle('visually-hidden', state !== 'missing');
+            image.title = '';
             if (state === 'library') {
               const current = GalleryLibrary.describe(entry.row, locale);
-              labelText.textContent = copy.photo + ' ' + (index + 1) + ' · ' + copy.altFromMedia;
+              const name = current.title || fileName(current.key);
+              labelText.textContent = copy.photo + ' ' + (index + 1) + ' · ' + copy.altFromMedia + ' · ' + name;
+              image.title = copy.fromMedia + ' ' + name;
               input.value = current.alt;
               image.alt = current.alt;
               showAlt(current.alt);
               caption.textContent = localCaption ?? current.caption;
               caption.hidden = !showCaptions || caption.textContent === '';
-              sourceText.textContent = copy.fromMedia + ' ' + (current.title || fileName(current.key));
             } else {
               labelText.textContent = copy.photo + ' ' + (index + 1) + ' · ' + copy.alt;
               showAlt(input.value);

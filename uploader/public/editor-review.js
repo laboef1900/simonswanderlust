@@ -21,6 +21,36 @@ window.EditorReview = (function () {
     return node;
   }
 
+  // A 30-photo gallery without descriptions is one finding, not thirty: the
+  // fix happens in Media for all of them. The jump goes to the first photo.
+  function groupGalleryAlt(findings) {
+    const grouped = [];
+    const galleries = new Map();
+    for (const finding of findings) {
+      if (finding.code !== 'missing-alt' || finding.target !== 'gallery' || !Number.isInteger(finding.gallery)) {
+        grouped.push(finding);
+        continue;
+      }
+      const group = galleries.get(finding.gallery);
+      if (group) { group.count += 1; continue; }
+      const first = { ...finding, count: 1 };
+      galleries.set(finding.gallery, first);
+      grouped.push(first);
+    }
+    return grouped.map((finding) => finding.count > 1
+      ? { ...finding, message: finding.count + ' photos in this gallery have no alt text. Gallery photos from Media are described in Media.' }
+      : finding);
+  }
+
+  function mediaLink() {
+    const link = element('a', 'review-media-link', 'Open Media');
+    link.href = '/admin/media.html';
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.appendChild(element('span', 'visually-hidden', ' (opens a new tab)'));
+    return link;
+  }
+
   function card(criterion, title, status) {
     const node = element('article', 'review-card');
     node.dataset.reviewCriterion = criterion;
@@ -155,11 +185,12 @@ window.EditorReview = (function () {
           }
           if (check.findings.length) {
             const list = element('ul', 'review-findings');
-            for (const finding of check.findings) {
+            for (const finding of groupGalleryAlt(check.findings)) {
               const item = element('li');
               item.appendChild(element('p', '', finding.message));
               const jump = jumpButton(request, finding);
               if (jump) item.appendChild(jump);
+              if (finding.count > 1) item.appendChild(mediaLink());
               list.appendChild(item);
             }
             node.appendChild(list);
