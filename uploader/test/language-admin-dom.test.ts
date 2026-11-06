@@ -30,8 +30,10 @@ function settings(initial = state('de', ['de'])) {
   const lifecycle: string[] = [];
   let answer = response(state(initial.primary, [initial.primary, initial.primary === 'de' ? 'en' : 'de']));
   let confirmed = true;
+  const events = new EventTarget();
   const context: Record<string, unknown> = {
-    document: dom.document, location: { href: '/admin/settings.html' },
+    document: Object.assign(dom.document, { documentElement: { lang: 'en' } }), location: { href: '/admin/settings.html' },
+    addEventListener: events.addEventListener.bind(events),
     fetch: async (url: string, init: RequestInit = {}) => {
       requests.push({ url, init });
       if (init.method === 'PUT') lifecycle.push('request');
@@ -44,7 +46,7 @@ function settings(initial = state('de', ['de'])) {
   context.EditorCopy = editorCopy;
   context.BuildCopy = buildCopy;
   vm.createContext(context);
-  for (const file of ['build-reporting.js', 'language.js', 'settings-language.js']) vm.runInContext(readFileSync('public/' + file, 'utf8'), context);
+  for (const file of ['build-reporting.js', 'language.js', 'settings-drafts.js', 'settings-language.js']) vm.runInContext(readFileSync('public/' + file, 'utf8'), context);
   // The VM boundary loses the type of this production entry point.
   const controller = context.SettingsLanguage as { init(publication: { beginAction(): void; endAction(): void }): Promise<void> };
   return { el, requests, questions, context, lifecycle,
@@ -56,6 +58,15 @@ function settings(initial = state('de', ['de'])) {
 }
 
 describe('Language Settings', () => {
+  it('does not offer a save or issue a rebuild for an unchanged published language mode', async () => {
+    const h = settings(state('de', ['de', 'en'], stamp));
+    await h.init();
+    expect(h.el('saveLanguage').disabled).toBe(true);
+    await h.submit();
+    expect(h.requests.filter(({ init }) => init.method === 'PUT')).toEqual([]);
+    expect(h.questions).toEqual([]);
+  });
+
   it.each(['de', 'en'] as const)('prepares and adds the secondary without offering URL-moving changes after %s publication', async (primary) => {
     const secondary = primary === 'de' ? 'en' : 'de';
     const h = settings(state(primary, [primary], stamp));
