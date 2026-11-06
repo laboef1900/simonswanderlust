@@ -35,7 +35,7 @@
           <button id="reviewStory" type="button" class="btn-secondary" aria-haspopup="dialog" aria-controls="storyReviewDialog">Review story</button>
           <!-- Preview is a daily writing action, so it sits in the bar, not the menu.
                Its accessible name keeps the full "not the live site" warning. -->
-          <button id="previewBtn" type="button" class="btn-secondary">Preview</button>
+          <button id="previewBtn" type="button" class="btn-secondary" aria-describedby="previewHelp"></button>
           <!-- Desktop shows readiness in the status row; below 74rem it lives
                here instead, so the menu only appears when it holds something. -->
           <details class="editor-actions-menu" id="editorActionsMenu">
@@ -44,6 +44,7 @@
               <div class="editor-actions-menu__readiness">
                 <p class="section-label">Publish readiness</p>
                 <p id="mobileLocaleChip" class="locale-chip"></p>
+                <p id="previewHelp" class="muted"></p>
               </div>
               <button id="unpublishBtn" type="button" class="btn-secondary" hidden>Unpublish</button>
             </div>
@@ -77,7 +78,8 @@
           <!-- Advisory checks stay with the manuscript and never gate Publish. -->
           <div id="galleryMetadataWarnings" class="notice-warn" hidden></div>
           <details id="altAudit" class="notice-info alt-audit" hidden>
-            <summary><span id="altAuditSummary" role="status"></span></summary>
+            <summary aria-labelledby="altAuditSummary altAuditAdvisory"><span id="altAuditSummary" role="status"></span><span id="altAuditAdvisory" class="alt-audit__advisory"></span></summary>
+            <p id="altAuditCounts" class="muted"></p>
             <p id="altAuditHelp"></p>
             <div id="altAuditList"></div>
             <p id="altAuditFeedback" role="status" hidden></p>
@@ -96,6 +98,8 @@
                    cursor. A roving toolbar: one Tab stop, arrow keys inside. -->
               <div class="manuscript-tools" data-locale="de">
                 <div class="manuscript-bar" id="deManuscriptBar" role="toolbar" aria-label="Story tools (Deutsch)">
+                  <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="deFormatToggle" aria-expanded="false" aria-controls="deFormatPanel" hidden></button>
+                  <div class="manuscript-format" id="deFormatPanel">
                   <div class="manuscript-bar__group">
                     <button type="button" class="manuscript-bar__btn" data-format="bold" aria-label="Bold"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h9a4 4 0 0 1 0 8H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h7a4 4 0 0 1 0 8"/></svg></button>
                     <button type="button" class="manuscript-bar__btn" data-format="italic" aria-label="Italic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 4h-9"/><path d="M14 20H5"/><path d="M15 4 9 20"/></svg></button>
@@ -107,13 +111,14 @@
                     <button type="button" class="manuscript-bar__btn" data-format="numbers" aria-label="Numbered list"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 6h11"/><path d="M10 12h11"/><path d="M10 18h11"/><path d="M4 6h1v4"/><path d="M4 10h2"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/></svg></button>
                     <button type="button" class="manuscript-bar__btn" data-format="link" aria-label="Link"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>
                   </div>
+                    <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="deGalleryView"></button>
+                  </div>
                   <div class="manuscript-bar__group">
                     <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="dePhotoToggle" aria-expanded="false" aria-controls="dePhotoPanel"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.09-3.09a2 2 0 0 0-2.82 0L6 21"/></svg>Photo</button>
                     <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="deGallery"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>Gallery</button>
                   </div>
                   <div class="manuscript-bar__group manuscript-bar__group--view">
-                    <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="deGalleryView"></button>
-                    <button type="button" class="manuscript-bar__btn" data-format="preview" aria-pressed="false" aria-label="Rendered view"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0"/><circle cx="12" cy="12" r="3"/></svg></button>
+                    <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" data-format="preview" aria-pressed="false"></button>
                   </div>
                 </div>
                 <p id="deBodyImgStatus" class="muted manuscript-tools__status" role="status"></p>
@@ -151,6 +156,8 @@
               <h2 class="editor-card-title">Story (English)</h2>
               <div class="manuscript-tools" data-locale="en">
                 <div class="manuscript-bar" id="enManuscriptBar" role="toolbar" aria-label="Story tools (English)">
+                  <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="enFormatToggle" aria-expanded="false" aria-controls="enFormatPanel" hidden></button>
+                  <div class="manuscript-format" id="enFormatPanel">
                   <div class="manuscript-bar__group">
                     <button type="button" class="manuscript-bar__btn" data-format="bold" aria-label="Bold"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h9a4 4 0 0 1 0 8H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h7a4 4 0 0 1 0 8"/></svg></button>
                     <button type="button" class="manuscript-bar__btn" data-format="italic" aria-label="Italic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 4h-9"/><path d="M14 20H5"/><path d="M15 4 9 20"/></svg></button>
@@ -162,13 +169,14 @@
                     <button type="button" class="manuscript-bar__btn" data-format="numbers" aria-label="Numbered list"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 6h11"/><path d="M10 12h11"/><path d="M10 18h11"/><path d="M4 6h1v4"/><path d="M4 10h2"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/></svg></button>
                     <button type="button" class="manuscript-bar__btn" data-format="link" aria-label="Link"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>
                   </div>
+                    <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="enGalleryView"></button>
+                  </div>
                   <div class="manuscript-bar__group">
                     <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="enPhotoToggle" aria-expanded="false" aria-controls="enPhotoPanel"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.09-3.09a2 2 0 0 0-2.82 0L6 21"/></svg>Photo</button>
                     <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="enGallery"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>Gallery</button>
                   </div>
                   <div class="manuscript-bar__group manuscript-bar__group--view">
-                    <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="enGalleryView"></button>
-                    <button type="button" class="manuscript-bar__btn" data-format="preview" aria-pressed="false" aria-label="Rendered view"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0"/><circle cx="12" cy="12" r="3"/></svg></button>
+                    <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" data-format="preview" aria-pressed="false"></button>
                   </div>
                 </div>
                 <p id="enBodyImgStatus" class="muted manuscript-tools__status" role="status"></p>
@@ -229,30 +237,7 @@
           <p id="journeyClaim" class="editor-inspector-group" hidden></p>
 
           <section class="editor-inspector-locale" data-inspector-locale="de" aria-labelledby="deStoryDetailsHeading">
-            <div class="editor-inspector-group" id="deStoryDetails">
               <h3 class="editor-card-title" id="deStoryDetailsHeading">German story details</h3>
-              <label for="deCountry">Country (Deutsch)</label>
-              <input id="deCountry" type="text" placeholder="z. B. Griechenland" aria-describedby="deCountryHelp" />
-              <p class="muted editor-field-help" id="deCountryHelp"></p>
-
-              <label for="slugFieldDe">DE permalink</label>
-              <div class="slug-preview">
-                <span class="slug-base" id="slugBaseDe"></span>
-                <input id="slugFieldDe" type="text" placeholder="derived-from-de-title" />
-              </div>
-
-              <label for="deExcerpt">Excerpt / summary (DE)</label>
-              <textarea id="deExcerpt" class="editor-autofit" rows="3" placeholder="Eine kurze Zusammenfassung des Reiseberichts…"></textarea>
-              <p class="muted editor-field-help" id="deExcerptHelp"></p>
-              <div id="deExcerptAssist"></div>
-
-              <div id="deKeyFactsContainer" class="keyfacts-editor">
-                <p class="section-label">Key facts (DE)</p>
-                <div id="deKeyFactsList"></div>
-                <button type="button" id="deAddKeyFact" class="btn-secondary">Add key fact</button>
-              </div>
-            </div>
-
             <details class="editor-inspector-group editor-image-section" id="deHeroDetails">
               <summary class="editor-card-title" id="deHeroLabel">
                 <span class="editor-image-section__title">Hero image (DE)</span>
@@ -304,34 +289,34 @@
                 <input id="deHeroFormat" type="hidden" />
               </div>
             </details>
+            <div class="editor-inspector-group" id="deStoryDetails">
+              <label for="deExcerpt">Excerpt / summary (DE)</label>
+              <textarea id="deExcerpt" class="editor-autofit" rows="3" placeholder="Eine kurze Zusammenfassung des Reiseberichts…"></textarea>
+              <p class="muted editor-field-help" id="deExcerptHelp"></p>
+              <div id="deExcerptAssist"></div>
+              <label for="deCountry">Country (Deutsch)</label>
+              <input id="deCountry" type="text" placeholder="z. B. Griechenland" aria-describedby="deCountryHelp" />
+              <p class="muted editor-field-help" id="deCountryHelp"></p>
+
+              <label for="slugFieldDe">DE permalink</label>
+              <div class="slug-preview">
+                <span class="slug-base" id="slugBaseDe"></span>
+                <input id="slugFieldDe" type="text" placeholder="derived-from-de-title" />
+              </div>
+
+
+              <details id="deKeyFactsContainer" class="keyfacts-editor">
+                <summary class="editor-card-title" id="deKeyFactsSummary"></summary>
+                <div id="deKeyFactsList"></div>
+                <button type="button" id="deAddKeyFact" class="btn-secondary">Add key fact</button>
+              </details>
+            </div>
+
             <details class="editor-inspector-group editor-image-section title-image-editor" id="deTitleImage"></details>
           </section>
 
           <section class="editor-inspector-locale" data-inspector-locale="en" aria-labelledby="enStoryDetailsHeading" hidden>
-            <div class="editor-inspector-group" id="enStoryDetails">
               <h3 class="editor-card-title" id="enStoryDetailsHeading">English story details</h3>
-              <label for="enCountry">Country (English)</label>
-              <input id="enCountry" type="text" placeholder="e.g. Greece" aria-describedby="enCountryHelp" />
-              <p class="muted editor-field-help" id="enCountryHelp"></p>
-
-              <label for="slugFieldEn">EN permalink</label>
-              <div class="slug-preview">
-                <span class="slug-base" id="slugBaseEn"></span>
-                <input id="slugFieldEn" type="text" placeholder="derived-from-en-title" />
-              </div>
-
-              <label for="enExcerpt">Excerpt / summary (EN)</label>
-              <textarea id="enExcerpt" class="editor-autofit" rows="3" placeholder="A short summary of the trip report…"></textarea>
-              <p class="muted editor-field-help" id="enExcerptHelp"></p>
-              <div id="enExcerptAssist"></div>
-
-              <div id="enKeyFactsContainer" class="keyfacts-editor">
-                <p class="section-label">Key facts (EN)</p>
-                <div id="enKeyFactsList"></div>
-                <button type="button" id="enAddKeyFact" class="btn-secondary">Add key fact</button>
-              </div>
-            </div>
-
             <details class="editor-inspector-group editor-image-section" id="enHeroDetails">
               <summary class="editor-card-title" id="enHeroLabel">
                 <span class="editor-image-section__title">Hero image (EN)</span>
@@ -383,6 +368,29 @@
                 <input id="enHeroFormat" type="hidden" />
               </div>
             </details>
+            <div class="editor-inspector-group" id="enStoryDetails">
+              <label for="enExcerpt">Excerpt / summary (EN)</label>
+              <textarea id="enExcerpt" class="editor-autofit" rows="3" placeholder="A short summary of the trip report…"></textarea>
+              <p class="muted editor-field-help" id="enExcerptHelp"></p>
+              <div id="enExcerptAssist"></div>
+              <label for="enCountry">Country (English)</label>
+              <input id="enCountry" type="text" placeholder="e.g. Greece" aria-describedby="enCountryHelp" />
+              <p class="muted editor-field-help" id="enCountryHelp"></p>
+
+              <label for="slugFieldEn">EN permalink</label>
+              <div class="slug-preview">
+                <span class="slug-base" id="slugBaseEn"></span>
+                <input id="slugFieldEn" type="text" placeholder="derived-from-en-title" />
+              </div>
+
+
+              <details id="enKeyFactsContainer" class="keyfacts-editor">
+                <summary class="editor-card-title" id="enKeyFactsSummary"></summary>
+                <div id="enKeyFactsList"></div>
+                <button type="button" id="enAddKeyFact" class="btn-secondary">Add key fact</button>
+              </details>
+            </div>
+
             <details class="editor-inspector-group editor-image-section title-image-editor" id="enTitleImage"></details>
           </section>
 
@@ -864,8 +872,10 @@
         unauthorized: () => guard.redirectToLogin(),
       });
       publicationRetry.addEventListener('click', () => publicationRefresh.refresh());
-      $('previewBtn').setAttribute('aria-label', PublicationState.text('preview'));
-      $('previewBtn').title = PublicationState.text('preview') + '. ' + PublicationState.text('previewMedia') + '.';
+      $('previewBtn').textContent = editorCopy.previewAction;
+      $('previewBtn').setAttribute('aria-label', editorCopy.previewAction + ' — ' + PublicationState.text('preview'));
+      $('previewBtn').title = editorCopy.previewHelp + ' ' + PublicationState.text('previewMedia') + '.';
+      $('previewHelp').textContent = editorCopy.previewHelp;
       // Cmd/Ctrl+S already saves (keydown handler below); say so where Save is.
       const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '');
       const shortcutLabel = (key) => (isMac ? '⌘' : 'Ctrl+') + key;
@@ -961,6 +971,19 @@
       // The panel floats over the story, so it closes like a menu: after an
       // action, on Escape (focus back to its trigger), or on a click outside it.
       const actionsMenu = $('editorActionsMenu');
+      const compactEditor = window.matchMedia('(max-width: 52rem)');
+      function placeReviewAction() {
+        const review = $('reviewStory');
+        const focused = document.activeElement === review;
+        if (compactEditor.matches) actionsMenu.querySelector('.editor-actions-menu__panel').prepend(review);
+        else $('publishBtn').after(review);
+        if (focused) {
+          if (compactEditor.matches) actionsMenu.open = true;
+          review.focus({ preventScroll: true });
+        }
+      }
+      compactEditor.addEventListener('change', placeReviewAction);
+      placeReviewAction();
       actionsMenu.addEventListener('click', (event) => {
         const action = event.target.closest('button');
         if (action) actionsMenu.open = false;
@@ -988,10 +1011,50 @@
       const mdeFor = (locale) => (locale === 'en' ? enMDE : deMDE);
       function wireManuscriptBar(locale) {
         const bar = $(locale + 'ManuscriptBar');
+        const formatToggle = $(locale + 'FormatToggle');
+        const formatPanel = $(locale + 'FormatPanel');
+        formatToggle.textContent = editorCopy.formatTools;
         const all = () => Array.from(bar.querySelectorAll('button'));
-        const usable = () => all().filter((button) => !button.hidden && !button.disabled);
+        const usable = () => all().filter((button) => !button.hidden && !button.disabled
+          && (!formatPanel.hidden || !formatPanel.contains(button)));
         const rove = (target) => all().forEach((button) => { button.tabIndex = button === target ? 0 : -1; });
-        rove(usable()[0]);
+        function closeFormat(restoreFocus = false) {
+          if (!compactEditor.matches) return;
+          formatPanel.hidden = true;
+          formatToggle.setAttribute('aria-expanded', 'false');
+          if (formatPanel.querySelector('[tabindex="0"]') || restoreFocus) rove(formatToggle);
+          if (restoreFocus) formatToggle.focus({ preventScroll: true });
+        }
+        function adaptFormat() {
+          const focused = document.activeElement;
+          formatToggle.hidden = !compactEditor.matches;
+          formatPanel.hidden = compactEditor.matches;
+          formatToggle.setAttribute('aria-expanded', 'false');
+          const target = usable().includes(focused) ? focused : usable()[0];
+          rove(target);
+          if (bar.contains(focused)) target?.focus({ preventScroll: true });
+        }
+        compactEditor.addEventListener('change', adaptFormat);
+        adaptFormat();
+        formatToggle.addEventListener('click', () => {
+          if (!formatPanel.hidden) { closeFormat(true); return; }
+          closePhotoPanel(locale);
+          formatPanel.hidden = false;
+          formatToggle.setAttribute('aria-expanded', 'true');
+          formatPanel.querySelector('button').focus({ preventScroll: true });
+        });
+        bar.addEventListener('keydown', (event) => {
+          if (event.key === 'Escape' && compactEditor.matches && !formatPanel.hidden) {
+            event.preventDefault();
+            closeFormat(true);
+          }
+        });
+        bar.addEventListener('focusout', (event) => {
+          if (!bar.contains(event.relatedTarget)) closeFormat();
+        });
+        document.addEventListener('click', (event) => {
+          if (!bar.contains(event.target)) closeFormat();
+        });
         bar.addEventListener('focusin', (event) => {
           const button = event.target.closest('button');
           if (button) rove(button);
@@ -1007,6 +1070,8 @@
           target.focus();
         });
         const preview = bar.querySelector('[data-format="preview"]');
+        preview.textContent = editorCopy.renderMode;
+        preview.setAttribute('aria-label', editorCopy.renderMode);
         // The rendered view is read-only: every control that edits the text waits.
         // State is tracked here, not read back: EasyMDE marks its preview active
         // only after a timeout, and this button is its only switch.
@@ -1014,23 +1079,29 @@
         function syncPreview() {
           const on = previewOn;
           preview.setAttribute('aria-pressed', String(on));
+          preview.textContent = on ? editorCopy.writeMode : editorCopy.renderMode;
+          preview.setAttribute('aria-label', preview.textContent);
+          preview.title = editorCopy.renderHelp;
           all().forEach((button) => { if (button !== preview) button.disabled = on; });
-          if (on) closePhotoPanel(locale);
+          if (on) { closeFormat(); closePhotoPanel(locale); }
           rove(preview);
         }
         bar.querySelectorAll('[data-format]').forEach((button) => {
           const name = button.dataset.format;
           const label = button.getAttribute('aria-label');
           const key = FORMAT_KEYS[name];
-          button.title = key ? label + ' (' + shortcutLabel(key) + ')' : label;
+          button.title = name === 'preview' ? editorCopy.renderHelp
+            : key ? label + ' (' + shortcutLabel(key) + ')' : label;
           if (key) button.setAttribute('aria-keyshortcuts', 'Meta+' + key + ' Control+' + key);
           button.addEventListener('click', () => {
             EasyMDE[FORMAT[name]](mdeFor(locale));
             if (name === 'preview') { previewOn = !previewOn; syncPreview(); }
+            else closeFormat();
           });
         });
         const toggle = $(locale + 'PhotoToggle');
         toggle.addEventListener('click', () => {
+          closeFormat();
           if ($(locale + 'PhotoPanel').hidden) openPhotoPanel(locale);
           else closePhotoPanel(locale, toggle);
         });
@@ -1209,6 +1280,16 @@
       // ---- key facts (optional rows, per locale) ----
       // A drawn × in the same stroke as the rest of the editor's icons.
       const REMOVE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
+      function updateKeyFactsSummary(locale) {
+        const count = $(locale + 'KeyFactsList').querySelectorAll('.keyfact-row').length;
+        $(locale + 'KeyFactsSummary').textContent = editorCopy.keyFactsSummary.replace('{count}', String(count));
+      }
+      for (const locale of ['de', 'en']) {
+        updateKeyFactsSummary(locale);
+        $(locale + 'KeyFactsContainer').addEventListener('toggle', () => {
+          $(locale + 'KeyFactsList').querySelectorAll('textarea').forEach(fitTextarea);
+        });
+      }
       function addKeyFactRow(locale, label = '', value = '') {
         const row = document.createElement('div');
         row.className = 'keyfact-row';
@@ -1245,7 +1326,12 @@
         remove.setAttribute('aria-label', 'Remove key fact');
         // A click fires neither input nor change, so the delegated listeners
         // on <main> never see a removal (#138).
-        remove.addEventListener('click', () => { releaseFit(row); row.remove(); guard.markDirty(); });
+        remove.addEventListener('click', () => {
+          releaseFit(row);
+          row.remove();
+          updateKeyFactsSummary(locale);
+          guard.markDirty();
+        });
 
         // Tab order follows reading order (label, value, remove); CSS draws
         // the remove button at the label row's end.
@@ -1253,6 +1339,7 @@
         row.appendChild(vInput);
         row.appendChild(remove);
         $(locale + 'KeyFactsList').appendChild(row);
+        updateKeyFactsSummary(locale);
         fitTextarea(vInput);
       }
 
@@ -2230,6 +2317,10 @@
         box.hidden = false;
         summary.textContent = (images.length === 1 ? editorCopy.auditOne : editorCopy.auditOther)
           .replace('{count}', String(images.length));
+        const empty = images.filter((image) => image.reason === 'empty').length;
+        $('altAuditAdvisory').textContent = editorCopy.auditAdvisory;
+        $('altAuditCounts').textContent = editorCopy.auditCounts
+          .replace('{empty}', String(empty)).replace('{review}', String(images.length - empty));
         $('altAuditHelp').textContent = published ? editorCopy.auditPublished : editorCopy.auditHelp;
         // Optional before publishing (information); a live story missing alt text is a warning.
         box.classList.toggle('notice-warn', !!published);
@@ -2531,8 +2622,10 @@
       function populateKeyFacts(locale, facts) {
         releaseFit($(locale + 'KeyFactsList'));
         $(locale + 'KeyFactsList').innerHTML = '';
-        if (!facts || typeof facts !== 'object') return;
-        Object.entries(facts).forEach(([l, v]) => addKeyFactRow(locale, l, v));
+        if (facts && typeof facts === 'object') {
+          Object.entries(facts).forEach(([l, v]) => addKeyFactRow(locale, l, v));
+        }
+        updateKeyFactsSummary(locale);
       }
 
       function populateStops(stops) {

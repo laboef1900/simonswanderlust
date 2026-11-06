@@ -126,10 +126,10 @@ async function loadEditor(options: EditorOptions = {}) {
   const dom = editorDocument(markup);
   let dirty = 0;
   let redirects = 0;
-  let mediaChanged: (() => void) | undefined;
+  const mediaChanged: (() => void)[] = [];
   const media = {
     matches: options.mobile === true,
-    addEventListener(_type: string, listener: () => void) { mediaChanged = listener; },
+    addEventListener(_type: string, listener: () => void) { mediaChanged.push(listener); },
   };
   const navigator = { onLine: true };
   const requests: { url: string; options: RequestInit }[] = [];
@@ -435,7 +435,7 @@ async function loadEditor(options: EditorOptions = {}) {
       navigator.onLine = value;
       dom.document.body!.fire(value ? 'online' : 'offline');
     },
-    setMobile(mobile: boolean) { media.matches = mobile; mediaChanged?.(); },
+    setMobile(mobile: boolean) { media.matches = mobile; mediaChanged.forEach((listener) => listener()); },
     dirtyCalls: () => dirty, redirects: () => redirects,
   };
 }
@@ -3374,6 +3374,7 @@ describe('manuscript-first editor refinements', () => {
       expect(h.el('altAudit').open).toBe(false);
       expect(h.el('altAuditSummary').getAttribute('role')).toBe('status');
       expect(h.document.activeElement).toBe(h.el('deTitle'));
+      expect(h.el('altAuditCounts').textContent.match(/\d+/g)).toEqual(['1', '2']);
       const list = h.el('altAuditList');
       expect(list.querySelectorAll('h3').map((heading) => heading.textContent)).toEqual([
         'DE · ' + copy['editor.chrome.auditFilename'], 'EN · ' + copy['editor.chrome.auditEmpty'], 'DE · ' + copy['editor.chrome.auditTitle'],
@@ -3573,6 +3574,77 @@ describe('manuscript-first editor refinements', () => {
     h.el('fmDate').fire('input');
     h.el('addStop').click();
     expect(h.el('expeditionSummary').textContent).toBe('3 Oct 2024 · RO · Europe · 2 stops');
+  });
+
+  it('keeps folded key facts in both locale payloads and updates counts after edits and replacement', async () => {
+    const h = await loadEditor();
+    h.api.populateForm(fullPair());
+    const before = h.api.buildPayload();
+    for (const locale of ['de', 'en'] as const) {
+      const section = h.el(locale + 'KeyFactsContainer');
+      expect(section.open).toBe(false);
+      expect(h.el(locale + 'KeyFactsSummary').textContent).toMatch(/\b1\b/);
+      expect(h.api.buildPayload()[locale].keyFacts).toEqual(before[locale].keyFacts);
+      section.open = true;
+      h.el(locale + 'AddKeyFact').click();
+      const row = h.el(locale + 'KeyFactsList').querySelectorAll('.keyfact-row').at(-1)!;
+      required(row, '.keyfact-label').value = 'Distance';
+      required(row, '.keyfact-value').value = '120 km';
+      required(row, '.keyfact-value').fire('input');
+      section.open = false;
+      expect(h.el(locale + 'KeyFactsSummary').textContent).toMatch(/\b2\b/);
+      expect(h.api.buildPayload()[locale].keyFacts?.Distance).toBe('120 km');
+      section.open = true;
+      required(row, 'button').click();
+      expect(h.el(locale + 'KeyFactsSummary').textContent).toMatch(/\b1\b/);
+      expect(h.api.buildPayload()[locale].keyFacts?.Distance).toBeUndefined();
+    }
+    h.api.populateForm(minimalPair());
+    for (const locale of ['de', 'en'] as const) {
+      expect(h.el(locale + 'KeyFactsSummary').textContent).toMatch(/\b0\b/);
+      expect(h.api.buildPayload()[locale].keyFacts).toBeUndefined();
+    }
+  });
+
+  it('keeps mobile formatting reachable without arrowing into hidden controls', async () => {
+    const h = await loadEditor({ mobile: true });
+    h.api.populateForm(fullPair());
+    const before = h.api.buildPayload();
+    const toggle = h.el('deFormatToggle');
+    toggle.focus();
+    toggle.fire('keydown', { key: 'ArrowRight' });
+    expect(h.document.activeElement).toBe(h.el('dePhotoToggle'));
+    toggle.click();
+    expect(h.el('deFormatPanel').hidden).toBe(false);
+    expect(h.document.activeElement).toBe(required(h.el('deFormatPanel'), 'button'));
+    h.document.activeElement!.fire('keydown', { key: 'Escape' });
+    expect(h.el('deFormatPanel').hidden).toBe(true);
+    expect(h.document.activeElement).toBe(toggle);
+    h.setMobile(false);
+    expect(toggle.hidden).toBe(true);
+    expect(h.el('deFormatPanel').hidden).toBe(false);
+    expect(h.document.activeElement).toBe(required(h.el('deFormatPanel'), 'button'));
+    h.setMobile(true);
+    expect(h.document.activeElement).toBe(toggle);
+    expect(h.api.buildPayload()).toEqual(before);
+  });
+
+  it('preserves the focused review action when it moves into More on mobile', async () => {
+    const h = await loadEditor();
+    const review = h.el('reviewStory');
+    review.focus();
+    h.setMobile(true);
+    expect(h.el('editorActionsMenu').contains(review)).toBe(true);
+    expect(h.el('editorActionsMenu').open).toBe(true);
+    expect(h.document.activeElement).toBe(review);
+    review.click();
+    expect(h.el('editorActionsMenu').open).toBe(false);
+    expect(h.el('storyReviewDialog').open).toBe(true);
+    h.el('closeReview').click();
+    h.flushDialogEvents();
+    expect(h.document.activeElement).toBe(h.el('editorActionsMenu').querySelector('summary'));
+    h.setMobile(false);
+    expect(h.el('editorActionsMenu').contains(review)).toBe(false);
   });
 
   it('keeps a key-fact value on one logical line however it was typed or pasted', async () => {

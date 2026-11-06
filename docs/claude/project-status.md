@@ -4,6 +4,23 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Implemented locally:** second article-editor critique refinement (2026-11-06, 29/40
+  snapshot; desktop inspector first). Hero thumbnail and excerpt lead the inspector; key
+  facts fold behind a live count and published permalinks read as quiet references without
+  changing their locks. Phones retain Photo/Gallery/Rendered while less-used tools live in a
+  Format tray; Review story moves into More and returns focus there on dismissal. The action
+  now reads **Save & preview**, preserving save-before-preview, while **Rendered / Write**
+  switches the unsaved body view. Alt-text review stays accessible and advisory, with separate
+  missing-description and improvement counts. No content, routes, persistence or publishing
+  contracts changed. Regression coverage exercises folded facts, responsive keyboard access,
+  review focus restoration and audit classification. Browser verification uses working-tree
+  asset overrides against the local stack, not a deployment. Verified desktop/intermediate
+  and 390/320px touch layouts, both locale tabs, rendered mode and keyboard dismissal;
+  no article content was saved. Uploader typecheck and 4,225 tests pass (647 skipped;
+  `TEST_DATABASE_URL` was unset); final editor DOM run passes all 223 tests.
+  Site: 872 tests pass; database-backed Astro check reports zero errors/warnings/hints.
+  The detector's six dynamic-image warnings and CSS-unresolved hierarchy warning are
+  not rendered defects. No physical-device qualification or CI result is claimed.
 - **Implemented, PR #542 open:** post editor critique
   actions (2026-11-06; impeccable critique of the editor, 27/40, all five priority issues
   and the minor list). The manuscript has its own pinned toolbar (EasyMDE's is off): stroke

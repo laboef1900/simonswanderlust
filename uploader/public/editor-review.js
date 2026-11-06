@@ -95,6 +95,14 @@ window.EditorReview = (function () {
       byId('reviewLocale').textContent = '';
     }
 
+    function focusTrigger() {
+      const menu = trigger.closest('details');
+      // On phones Review lives in More, which closes when its action runs.
+      // Return to the visible menu opener rather than a hidden button.
+      const target = menu && !menu.open ? menu.querySelector('summary') : trigger;
+      target.focus();
+    }
+
     function close(restoreFocus) {
       release();
       clearResults();
@@ -104,7 +112,7 @@ window.EditorReview = (function () {
         queuedCloseEvents++;
         dialog.close();
       }
-      if (restoreFocus) trigger.focus();
+      if (restoreFocus) focusTrigger();
     }
 
     function invalidate() {
@@ -342,7 +350,7 @@ window.EditorReview = (function () {
     dialog.addEventListener('cancel', (event) => { event.preventDefault(); close(true); });
     dialog.addEventListener('close', () => {
       if (queuedCloseEvents) { queuedCloseEvents--; return; }
-      if (!dialog.open) { release(); clearResults(); trigger.focus(); }
+      if (!dialog.open) { release(); clearResults(); focusTrigger(); }
     });
     dialog.addEventListener('keydown', (event) => {
       if (event.key === 'Escape') { event.preventDefault(); close(true); return; }

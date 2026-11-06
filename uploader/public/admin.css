@@ -2447,6 +2447,7 @@ body.editor-page .editor-actions-menu__readiness {
   padding: 0.375rem 0.5rem 0.625rem;
   border-bottom: 1px solid var(--line);
 }
+body.editor-page #previewHelp { max-width: 16rem; margin-top: 0.5rem; white-space: normal; }
 
 body.editor-page .editor-actions-menu__readiness .section-label {
   margin-bottom: 0.25rem;
@@ -2466,13 +2467,29 @@ body.editor-page .editor-actions-menu__readiness .locale-chip {
 
 body.editor-page .alt-audit {
   margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
   overflow-wrap: anywhere;
 }
 
 body.editor-page .alt-audit summary {
+  min-height: var(--control-h);
   padding-block: 0.25rem;
+  color: var(--muted);
+  font-size: 0.8125rem;
   font-weight: 600;
 }
+
+body.editor-page .alt-audit__advisory {
+  flex-basis: 100%;
+  padding-left: 0.875rem;
+  font-size: 0.75rem;
+  font-weight: 400;
+}
+body.editor-page .alt-audit.notice-warn summary { color: #855f25; }
+body.editor-page .alt-audit[open] { padding-bottom: 0.75rem; border-bottom: 1px solid var(--line); }
+body.editor-page #altAuditCounts { margin-block: 0.5rem; font-size: 0.8125rem; }
 
 /* Help prose keeps a reading measure even in the wide manuscript column. */
 body.editor-page .alt-audit #altAuditHelp { max-width: 70ch; }
@@ -2770,6 +2787,13 @@ body.editor-page .manuscript-bar {
   background: var(--surface);
 }
 
+body.editor-page .manuscript-format {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+}
+
 body.editor-page .manuscript-bar__group {
   display: flex;
   align-items: center;
@@ -2884,17 +2908,6 @@ body.editor-page .manuscript-tools__status button { margin-left: 0.5rem; }
 @media (max-width: 40rem) {
   body.editor-page .manuscript-photo__fields { grid-template-columns: minmax(0, 1fr); }
   body.editor-page .manuscript-photo__actions .muted { margin-left: 0; flex-basis: 100%; }
-  /* One pinned row, scrolled sideways, not three wrapped ones: on a phone
-     every pinned line is writing space lost. Arrow keys still walk it. */
-  body.editor-page .manuscript-bar {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    overscroll-behavior-x: contain;
-    scrollbar-width: none;
-  }
-  body.editor-page .manuscript-bar__group,
-  body.editor-page .manuscript-bar__btn { flex: none; }
-  body.editor-page .manuscript-bar__group--view { margin-left: 0; }
 }
 
 /* The inspector is a sticky column inside the editor frame that collapses to
@@ -2982,6 +2995,13 @@ body.editor-page .editor-inspector-group {
 
 body.editor-page .editor-inspector-group:last-child { border-bottom: 0; }
 
+body.editor-page .editor-inspector-locale > .editor-card-title { margin: 1rem 0.25rem 0; }
+body.editor-page .keyfacts-editor {
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--line-strong);
+}
+
 /* Collapsed image sections keep a small thumbnail of their photo in the
    summary, so the state reads without opening them. */
 body.editor-page .editor-image-section > summary {
@@ -2994,8 +3014,8 @@ body.editor-page .editor-image-section__title { flex: 1; min-width: 0; }
 body.editor-page .editor-image-section__thumb {
   flex: none;
   overflow: hidden;
-  width: 3rem;
-  height: 2rem;
+  width: 4.5rem;
+  height: 3rem;
   border: 1px solid var(--line-strong);
   border-radius: 0.25rem;
   background: var(--surface);
@@ -3070,6 +3090,21 @@ body.editor-page .editor-inspector .slug-base {
   line-height: 1.4;
   white-space: normal;
   overflow-wrap: anywhere;
+}
+
+/* Published URLs remain disabled, but read as a reference rather than a
+   form asking for an edit. Editable, never-public slugs keep their boundary. */
+body.editor-page .slug-preview:has(input:disabled) {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+body.editor-page .slug-preview:has(input:disabled) .slug-base,
+body.editor-page .slug-preview input:disabled {
+  padding-inline: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
 }
 
 body.editor-page .editor-inspector .muted { overflow-wrap: anywhere; }
@@ -3315,13 +3350,12 @@ body.editor-page .locale-chip-link:where(:not(:disabled)):hover { background: no
   }
 
   body.editor-page .editor-commandbar__actions > button {
-    padding-inline: 0.5rem;
+    padding-inline: 0.375rem;
     font-size: 0.75rem;
   }
 
-  /* The actions row is full with Save, Publish, Review, Preview and More, so the
-     story-details opener rides at the right end of the locale row instead of
-     wrapping onto a line of its own. */
+  /* The story-details opener stays beside the locale switch, leaving the
+     action row for Save, Publish, Save & preview and More. */
   body.editor-page #inspectorToggle {
     position: absolute;
     top: 0.4rem;
@@ -3329,7 +3363,7 @@ body.editor-page .locale-chip-link:where(:not(:disabled)):hover { background: no
   }
 
   body.editor-page .editor-actions-menu__trigger {
-    width: 3.5rem;
+    width: 3rem;
     padding-inline: 0.25rem;
     overflow: hidden;
     color: transparent;
@@ -3360,7 +3394,7 @@ body.editor-page .locale-chip-link:where(:not(:disabled)):hover { background: no
   body.editor-page .editor-workspace {
     display: block;
     width: 100%;
-    margin: 0.75rem 0;
+    margin: 0.25rem 0;
     border-inline: 0;
     border-radius: 0;
   }
@@ -3371,12 +3405,35 @@ body.editor-page .locale-chip-link:where(:not(:disabled)):hover { background: no
 
   body.editor-page .editor-writing-surface {
     width: 100%;
-    padding: 1rem max(0.9rem, env(safe-area-inset-right)) 1.5rem max(0.9rem, env(safe-area-inset-left));
+    padding: 0.5rem max(0.9rem, env(safe-area-inset-right)) 1.5rem max(0.9rem, env(safe-area-inset-left));
   }
 
   body.editor-page .editor-title-input {
-    min-height: 3.25rem;
-    font-size: clamp(1.65rem, 8vw, 2.15rem);
+    min-height: 2.75rem;
+    font-size: clamp(1.5rem, 6.5vw, 1.875rem);
+  }
+
+  body.editor-page .editor-writing-surface .editor-card + .editor-card { margin-top: 1rem; }
+
+  /* One persistent row exposes photography and the read/write switch.
+     Less frequent formatting opens above the manuscript without moving it. */
+  body.editor-page .manuscript-bar { flex-wrap: nowrap; gap: 0.125rem; }
+  body.editor-page .manuscript-bar__group { gap: 0; }
+  body.editor-page .manuscript-bar__group--view { margin-left: auto; }
+  body.editor-page .manuscript-bar__group + .manuscript-bar__group { padding-left: 0; border-left: 0; }
+  body.editor-page .manuscript-bar__btn--text { padding-inline: 0.375rem; font-size: 0.75rem; }
+  body.editor-page .manuscript-bar__group--view .manuscript-bar__btn--text { padding-inline: 0.375rem; }
+  body.editor-page .manuscript-bar > .manuscript-bar__group > button > svg { display: none; }
+  body.editor-page .manuscript-format {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    z-index: 1;
+    padding: 0.5rem;
+    border-radius: 0 0 0.5rem 0.5rem;
+    background: var(--canvas);
+    box-shadow: var(--menu-shadow);
   }
 
   body.editor-page .hero-actions-row > * {
