@@ -4,6 +4,7 @@ import {
   focusPosition,
   imageOrigin,
   largestVariant,
+  smallestVariant,
   DEV_IMAGE_ORIGIN,
   retargetImageOrigins,
   srcset,
@@ -55,6 +56,13 @@ describe('focusPosition', () => {
     expect(focusPosition({ ...hero, focus: hostile })).toBeUndefined();
     const half = { x: 10, y: undefined } as unknown as { x: number; y: number };
     expect(focusPosition({ ...hero, focus: half })).toBe('object-position:10% 50%');
+  });
+});
+
+describe('smallestVariant', () => {
+  it('picks 640px when the frame is wider, and never upscales a narrower one', () => {
+    expect(smallestVariant({ src: 'https://img.example/x/hero', width: 1920, height: 1280, alt: '' })).toBe('https://img.example/x/hero-640.webp');
+    expect(smallestVariant({ src: 'https://img.example/x/hero', width: 500, height: 400, alt: '', format: 'jpeg' })).toBe('https://img.example/x/hero-500.jpeg');
   });
 });
 

@@ -160,3 +160,310 @@
 @media (prefers-reduced-motion: reduce) {
   .jgal__track { scroll-behavior: auto; }
 }
+
+/* ── travel map (MapPage.astro + StoryMiniMap.astro + JourneyMap.astro) ──
+ * MapLibre's stylesheet resets `.maplibregl-map` to `12px/20px Helvetica Neue`,
+ * ships 29×29px zoom buttons, leaves 0px vertical padding on `.maplibregl-ctrl-attrib`,
+ * and relies on UA link styling that Tailwind's preflight removes inside popups.
+ * Higher-specificity `.maplibregl-map …` selectors win regardless of whether
+ * `maplibre-gl.css` loads before or after `global.css`.
+ */
+.maplibregl-map {
+  font-family: var(--font-sans);
+  color: var(--color-ink);
+}
+
+.maplibregl-map .maplibregl-ctrl-group {
+  border: 1px solid rgb(20 42 66 / 0.22);
+  border-radius: 0.5rem;
+  background: var(--color-canvas);
+  box-shadow: 0 4px 12px rgb(20 42 66 / 0.12);
+  overflow: hidden;
+}
+
+.maplibregl-map .maplibregl-ctrl-group button {
+  width: 2.75rem;
+  height: 2.75rem;
+  color: var(--color-navy);
+}
+
+.maplibregl-map .maplibregl-ctrl-group button + button {
+  border-top: 1px solid rgb(20 42 66 / 0.15);
+}
+
+.maplibregl-map .maplibregl-ctrl-group button:focus-visible {
+  outline: 2px solid var(--color-brand-red);
+  outline-offset: -2px;
+}
+
+.maplibregl-map .maplibregl-ctrl.maplibregl-ctrl-attrib {
+  padding: 0.375rem 0.75rem;
+  border-radius: 0.375rem;
+  background-color: rgb(251 251 253 / 0.92);
+  color: var(--color-navy);
+  font-family: var(--font-sans);
+  font-size: 0.6875rem;
+  line-height: 1.4;
+}
+
+.maplibregl-map .maplibregl-ctrl-attrib.maplibregl-compact {
+  min-height: 2rem;
+  margin: 0.5rem;
+  padding: 0.375rem 2.25rem 0.375rem 0.75rem;
+}
+
+.maplibregl-map .maplibregl-ctrl-attrib a {
+  color: var(--color-navy);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.maplibregl-map .maplibregl-ctrl-attrib a:hover {
+  color: var(--color-brand-red);
+}
+
+.maplibregl-map .maplibregl-popup {
+  max-width: min(17.5rem, calc(100% - 2rem)) !important;
+  z-index: 20;
+}
+
+/* The photo runs edge to edge, so the content box has no padding of its own;
+ * `.travel-map-popup__body` carries it. A fixed width (not the photo's 640px)
+ * and a fixed 16:10 frame mean the popup never resizes when the image lands. */
+.maplibregl-map .maplibregl-popup-content {
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid rgb(20 42 66 / 0.18);
+  border-radius: 0.75rem;
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  box-shadow: 0 12px 28px -6px rgb(20 42 66 / 0.24);
+  font-family: var(--font-sans);
+}
+
+.maplibregl-map .maplibregl-popup-close-button {
+  top: 0.5rem;
+  right: 0.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border-radius: 999px;
+  background: rgb(251 251 253 / 0.92);
+  box-shadow: 0 2px 6px rgb(20 42 66 / 0.2);
+  color: var(--color-navy);
+  font-size: 1.125rem;
+  line-height: 1;
+}
+
+.maplibregl-map .maplibregl-popup-close-button:hover {
+  background: var(--color-canvas);
+  color: var(--color-brand-red);
+}
+
+.travel-map-popup {
+  width: min(16rem, calc(100vw - 4rem));
+}
+
+.travel-map-popup__photo {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+  background: rgb(20 42 66 / 0.08);
+}
+
+.travel-map-popup__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.75rem 1rem 0.875rem;
+}
+
+.travel-map-popup__meta {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: var(--tracking-log);
+  text-transform: uppercase;
+  color: var(--color-brand-red);
+}
+
+.travel-map-popup__title {
+  display: block;
+  font-size: 1rem;
+  font-weight: 800;
+  line-height: 1.3;
+  text-wrap: balance;
+  color: var(--color-navy);
+}
+
+.travel-map-popup__cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin-top: 0.25rem;
+  min-height: 1.75rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--color-brand-red);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.travel-map-popup__cta:hover {
+  color: var(--color-navy);
+}
+
+.travel-map-popup__arrow {
+  width: 0.875rem;
+  height: 0.875rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: translate 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .travel-map-popup__cta:hover .travel-map-popup__arrow { translate: 3px 0; }
+}
+
+/* Trips at one spot that zooming cannot separate: a plain list. */
+.travel-map-popup--list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  margin: 0;
+  padding: 0.75rem 3rem 0.75rem 1rem;
+  list-style: none;
+}
+
+.travel-map-pin {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.travel-map-pin[hidden] {
+  display: none;
+}
+
+.travel-map-pin__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.625rem;
+  height: 1.625rem;
+  padding-inline: 0.3125rem;
+  border: 2px solid var(--color-canvas);
+  border-radius: 999px;
+  background: var(--color-brand-red);
+  color: #fff;
+  box-shadow: 0 2px 6px rgb(20 42 66 / 0.28);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1), background-color 180ms ease;
+}
+
+.travel-map-pin:hover,
+.travel-map-pin:focus-visible,
+.travel-map-pin[data-active='true'],
+.travel-map-pin[data-hover='true'] {
+  z-index: 10;
+}
+
+.travel-map-pin:hover .travel-map-pin__badge,
+.travel-map-pin:focus-visible .travel-map-pin__badge,
+.travel-map-pin[data-active='true'] .travel-map-pin__badge,
+.travel-map-pin[data-hover='true'] .travel-map-pin__badge {
+  background: var(--color-navy);
+  transform: scale(1.16);
+}
+
+/* Several trips whose badges would touch: one navy count badge with a second
+ * ring, read as a stack. Tapping it zooms until they separate. */
+.travel-map-pin--cluster {
+  width: 2rem;
+  height: 2rem;
+}
+
+.travel-map-pin--cluster .travel-map-pin__badge {
+  min-width: 1.875rem;
+  height: 1.875rem;
+  background: var(--color-navy);
+  box-shadow: 0 0 0 3px rgb(20 42 66 / 0.22), 0 2px 6px rgb(20 42 66 / 0.28);
+  font-size: 0.75rem;
+}
+
+.travel-map-pin--cluster:hover .travel-map-pin__badge,
+.travel-map-pin--cluster:focus-visible .travel-map-pin__badge {
+  background: var(--color-brand-red);
+}
+
+/* Degree labels for the graticule, set like the homepage chart's. Positioned
+ * by travel-map.ts on every move; aria-hidden, and never in the way of a tap. */
+.travel-map-graticule {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.travel-map-graticule__label {
+  position: absolute;
+  padding: 0.0625rem 0.3125rem;
+  border-radius: 0.1875rem;
+  background: rgb(251 251 253 / 0.85);
+  color: rgb(20 42 66 / 0.78);
+  font-family: var(--font-mono);
+  font-size: 0.65625rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.travel-map-graticule__label[hidden] {
+  display: none;
+}
+
+.travel-map-graticule__label--meridian {
+  top: 0.5rem;
+  left: 0;
+}
+
+.travel-map-graticule__label--parallel {
+  top: 0;
+  left: 0.5rem;
+}
+
+/* Set by MapPage's script only, so a visitor without JS never sees a label
+ * for a map that will not come. Cleared by `data-ready` on MapLibre's `load`. */
+#map[data-loading]:not([data-ready])::after {
+  content: attr(data-loading-label);
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: rgb(20 42 66 / 0.72);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  letter-spacing: var(--tracking-log);
+}
