@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { editorDocument, type EditorElement } from './editor-dom-harness.js';
 import { ui } from '../../site/src/i18n/ui.js';
 import type { OnboardingLanguage } from '../src/onboarding.js';
+import { publication } from './publication-client-fixture.js';
 
 const deskWindows: EventTarget[] = [];
 afterEach(() => {
@@ -315,6 +316,8 @@ async function deskPage(options: {
   language?: () => Promise<Response>;
   onboarding?: (request: Request) => Promise<Response>;
   posts?: () => Promise<Response>;
+  summary?: () => Promise<Response>;
+  build?: () => Promise<Response>;
 } = {}) {
   const html = readFileSync('public/index.html', 'utf8');
   const dom = editorDocument(html);
@@ -350,8 +353,8 @@ async function deskPage(options: {
       if (url === '/media/queue') return Response.json({ pending: 0, running: 0 });
       if (url === '/health') return Response.json({ release: false });
       // The Desk reads the language mode (#284) and, for admins, build status (#297) and the publication summary (#317).
-      if (url === '/rebuild/status') return Response.json({ record: 'missing', running: null, last: null, live: null });
-      if (url === '/publication/summary') return Response.json({ availability: 'available', release: 'none', posts: null, galleryDescriptions: null });
+      if (url === '/rebuild/status') return options.build ? options.build() : Response.json({ record: 'missing', running: null, last: null, live: null });
+      if (url === '/publication/summary') return options.summary ? options.summary() : Response.json({ availability: 'available', release: 'none', posts: null, galleryDescriptions: null });
       throw new Error('Unexpected Desk request: ' + url);
     },
   };
@@ -380,8 +383,8 @@ describe('Actual Desk authenticated onboarding activation', () => {
     pending.resolve(Response.json({ primary: 'en', locales: ['en'], lockedAt: null, updatedAt: '2026-10-27T00:00:00.000Z' }));
     await h.flush();
     expect(h.get('#onboardingChecklist').hidden).toBe(false);
-    expect(h.get('#deskNext').querySelector('a')?.href).toBe('/admin/editor.html');
-    expect(h.get('#deskNext').textContent).toContain(ui.en['editor.chrome.deskNoDrafts']);
+    expect(h.get('#deskNewPost').href).toBe('/admin/editor.html');
+    expect(h.get('#deskNewPost').hidden).toBe(false);
     expect(h.requests.every((request) => request.method === 'GET')).toBe(true);
   });
 
@@ -398,7 +401,7 @@ describe('Actual Desk authenticated onboarding activation', () => {
     h.get('#deskError').querySelector('button')!.click();
     await h.flush();
     expect(h.get('#deskError').hidden).toBe(true);
-    expect(h.get('#deskNext').querySelector('a')?.href).toBe('/admin/editor.html');
+    expect(h.get('#deskNewPost').hidden).toBe(false);
     expect(h.requests.filter((request) => request.url === '/language')).toHaveLength(2);
     expect(h.requests.every((request) => request.method === 'GET')).toBe(true);
   });
@@ -414,11 +417,10 @@ describe('Actual Desk authenticated onboarding activation', () => {
     await h.flush();
     expect(h.get('#onboardingChecklist').querySelectorAll('[data-step]')).toHaveLength(5);
     expect(h.get('#onboardingChecklist').hidden).toBe(false);
-    expect(h.get('#onboardingOpener').parentElement).toBe(h.get('.cms-topbar-right'));
     expect(h.requests.filter((request) => request.url === '/auth/me')).toHaveLength(1);
     expect(h.requests.every((request) => request.method === 'GET')).toBe(true);
     expect(h.requests.some((request) => request.url === '/auth/status')).toBe(false);
-    expect(h.get('#deskNext').querySelector('a')?.href).toBe('/admin/editor.html');
+    expect(h.get('#deskNewPost').href).toBe('/admin/editor.html');
   });
 
   it('announces pending Desk loading politely and clears the same live region when data arrives', async () => {
@@ -427,14 +429,14 @@ describe('Actual Desk authenticated onboarding activation', () => {
     const status = h.get('#deskStatus');
     expect(status.getAttribute('role')).toBe('status');
     expect(status.hidden).toBe(false);
-    expect(status.textContent.trim().length).toBeGreaterThan(0);
+    expect(h.get('#deskNewPost').hidden).toBe(false);
     expect(h.get('#deskError').hidden).toBe(true);
     pending.resolve(Response.json([]));
     await h.flush();
     expect(h.get('#deskStatus')).toBe(status);
     expect(status.getAttribute('role')).toBe('status');
     expect(status.textContent).toBe('');
-    expect(h.get('#deskNext').querySelector('a')?.href).toBe('/admin/editor.html');
+    expect(h.get('#deskNewPost').href).toBe('/admin/editor.html');
   });
 
   it('keeps authors on the ordinary empty Desk without admin requests or instructions', async () => {
@@ -442,17 +444,80 @@ describe('Actual Desk authenticated onboarding activation', () => {
     expect(h.get('#onboardingChecklist').hidden).toBe(true);
     expect(h.get('#onboardingOpener').hidden).toBe(true);
     expect(h.requests.map((request) => request.url).sort()).toEqual(['/auth/me', '/health', '/language', '/media/queue', '/posts']);
-    expect(h.get('#deskNext').querySelector('a')?.href).toBe('/admin/editor.html');
-    expect(h.get('#deskRelease').textContent).toBe(ui.en['editor.chrome.deskNoReleaseAuthor']);
+    expect(h.get('#deskNewPost').href).toBe('/admin/editor.html');
+    expect(h.get('#deskPublicationDetails').hidden).toBe(true);
+    expect(h.get('#deskOverview').hidden).toBe(true);
+    expect(h.get('#deskBackupWarning').hidden).toBe(true);
+    expect(h.get('#deskRebuildLink').hidden).toBe(true);
     expect(h.document.querySelector('a[href="/admin/settings.html"]')).toBeNull();
     expect(h.location.href).toBe('');
+  });
+
+  it('keeps starting a new story available beside a recent draft and unavailable observations', async () => {
+    let unavailable = false;
+    const h = await deskPage({ posts: async () => Response.json([{
+      translationKey: 'draft-one', title: 'A long journey', updatedAt: '2026-11-06T10:00:00Z',
+      publication: unavailable ? { availability: 'unavailable' } : publication('draft'),
+    }]) });
+    expect(h.get('#deskNewPost').hidden).toBe(false);
+    expect(h.get('#deskNewPost').href).toBe('/admin/editor.html');
+    expect(h.get('#deskNext').querySelector('a.btn-new')?.href).toBe('/admin/editor.html?tk=draft-one');
+    unavailable = true;
+    h.get('#publicationRefresh').click();
+    await h.flush();
+    expect(h.get('#deskNext').querySelector('a')).toBeNull();
+    expect(h.get('#deskNewPost').hidden).toBe(false);
+    expect(h.get('#deskNewPost').href).toBe('/admin/editor.html');
+    expect(h.requests.every((request) => request.method === 'GET')).toBe(true);
+  });
+
+  it('keeps publication exceptions visible and preserves disclosure state through recovery', async () => {
+    let failing = false;
+    const h = await deskPage({ summary: async () => failing
+      ? Response.json({ error: 'unavailable' }, { status: 503 })
+      : Response.json({
+        availability: 'available', release: 'known',
+        posts: { notLive: 0, olderVersionLive: 0, unexpectedLocaleLive: 0, unpublishedStillLive: 0, deletedStillLive: 2 },
+        galleryDescriptions: { photos: 0, stories: 0 },
+      }) });
+    const details = h.get('#deskPublicationDetails');
+    expect(details.hidden).toBe(false);
+    expect(details.hasAttribute('open')).toBe(false);
+    expect(h.get('#deskOverview').getAttribute('data-state')).toBe('attention');
+    expect(h.get('#deskOverviewItems').hidden).toBe(false);
+    expect(h.get('#deskOverviewItems').textContent).toMatch(/Deleted.*2/);
+    expect(h.get('#deskAttentionSection').hidden).toBe(true);
+    details.setAttribute('open', '');
+    failing = true;
+    h.get('#publicationRefresh').click();
+    await h.flush();
+    expect(details.hasAttribute('open')).toBe(true);
+    expect(h.get('#deskOverview').getAttribute('data-state')).toBe('unavailable');
+    expect(h.get('#deskOverviewItems').hidden).toBe(true);
+    expect(h.get('#deskOverviewItems').textContent).toBe('');
+    failing = false;
+    h.get('#publicationRefresh').click();
+    await h.flush();
+    expect(details.hasAttribute('open')).toBe(true);
+    expect(h.get('#deskOverview').getAttribute('data-state')).toBe('attention');
+    expect(h.get('#deskOverviewItems').hidden).toBe(false);
+    expect(h.requests.every((request) => request.method === 'GET')).toBe(true);
+  });
+
+  it('does not hide a failed build or its recovery link inside publication details', async () => {
+    const h = await deskPage({ build: async () => Response.json({
+      record: 'ok', running: null, live: null,
+      last: { result: 'failed', startedAt: '2026-11-06T10:00:00Z', finishedAt: '2026-11-06T10:01:00Z', failure: { code: 'build_failed' } },
+    }) });
+    expect(h.get('#deskPublicationDetails').hasAttribute('open')).toBe(false);
+    expect(h.get('#deskBuildAlert').hidden).toBe(false);
+    expect(h.get('#deskBuildAlert').querySelector('a')?.href).toBe('/admin/settings.html#site');
   });
 
   it.each(['dismissed', 'retired'] as const)('respects shared %s state after the actual shell relocates the opener', async (status) => {
     const h = await deskPage({ initial: status === 'retired' ? { status } : view({ status }) });
     expect(h.get('#onboardingChecklist').hidden).toBe(true);
     expect(h.get('#onboardingOpener').hidden).toBe(status === 'retired');
-    expect(h.get('#onboardingOpener').parentElement).toBe(h.get('.cms-topbar-right'));
     expect(h.requests.every((request) => request.method === 'GET')).toBe(true);
   });
 

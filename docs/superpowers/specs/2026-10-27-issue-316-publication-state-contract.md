@@ -300,6 +300,18 @@ membership remains unknown rather than assuming the disabled/omitted locale is a
 - Desk heading: "Newer drafts of published stories" / "Neuere Entwürfe veröffentlichter Geschichten"
   over rows 4–7 with `draftDiffers`; admins also get "Publication needs attention" /
   "Veröffentlichungsstand prüfen" for rows 2–6. U is a separate unavailable notice, never a zero count.
+- **Desk presentation refinement (owner-requested 2026-11-06):** group these observations
+  under a neutral Publication heading with the existing read-only Refresh. Empty newer-draft
+  lists use compact copy; the attention subsection is visible only for attention rows or U.
+  An admin overview exposes nonzero summary categories without adding their overlapping counts.
+  A complete known observation with valid counts is required for no-known-differences wording;
+  missing/malformed/unknown/no-release data never becomes zero-count reassurance. Native
+  Publication details retains the full summary beside the rebuild action, scope and independent
+  history. Running, failed, interrupted and unavailable build evidence remains visible outside
+  the disclosure. Refresh retains its open state and the existing focused-story behavior.
+  Persistent header New post is outside the repainted lists and does not lose focus when a
+  draft appears. This is a display refinement, not a change to any source fact, refresh bound,
+  role boundary, confirmation or publication operation.
 - Posts-list filter `unpublished` keeps its value; label "Newer draft saved" / "Neuerer Entwurf
   gespeichert"; matches available `draftDiffers` only, with unavailable entries separately indicated.
 - Preview: "Draft preview — not the live site" / "Entwurfsvorschau — nicht die Live-Website"; plus

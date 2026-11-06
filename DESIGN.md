@@ -1030,6 +1030,27 @@ New post accents. The public blog's expedition identity is unchanged. Self-hoste
 Inter/IBM Plex Mono remain; the shell and login identify the workspace as **Wanderlust
 Studio**, with **Simon's travel journal** as the descriptor.
 
+**Writing-first Desk (2026-11-06).** Keep New post in the header after authenticated language
+context resolves, even with a recent draft or unavailable publication observations. Continue
+editing leads the populated writing section; the header's New post becomes an outlined command.
+The empty section says Start writing. Backup-off advice sits above writing with its Settings
+link; it remains admin-only and does not infer a backup state from a failed read.
+
+Publication has its own heading and read-only Refresh. Empty newer-draft lists remain compact;
+the attention subsection appears only for actual attention rows or unavailable observations.
+An admin overview lists nonzero story/media categories without adding overlapping counts.
+Only a complete, known, nonnegative-count observation can report no known differences; missing,
+malformed, unknown and no-release observations retain explicit uncertainty. Native Publication
+details discloses exact build/release history, all counts, rebuild scope, the confirmed action
+and its outcome without resetting open state on refresh. Running, failed, interrupted or
+unavailable build evidence remains outside the disclosure. Photo processing and live-site access
+stay independent below it. No refresh or disclosure triggers a write.
+
+Desk commands and standalone live-site links have 44px minimum targets. A missing/broken draft
+thumbnail does not reserve a blank panel; phone thumbnails are bounded so writing remains
+reachable. The Editorial desk palette, shell, role boundaries, publication observations and
+rebuild semantics are unchanged.
+
 **First-run checklist (#279).** Preserve the incumbent Desk and its independent draft,
 photo-queue and live-site sections. Only an eligible admin sees the compact checklist above
 them; the shared protected-page context resolves first, and authors retain ordinary
