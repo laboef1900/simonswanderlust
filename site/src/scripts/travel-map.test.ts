@@ -39,7 +39,34 @@ vi.mock('maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url', () => ({ default: 
 vi.mock('pmtiles', () => ({ Protocol: class { tile = vi.fn(); } }));
 vi.mock('protomaps-themes-base', () => ({ layers: () => [], namedTheme: () => ({}) }));
 vi.mock('maplibre-gl', () => ({
-  setWorkerUrl: vi.fn(), addProtocol: vi.fn(), NavigationControl: class {}, Popup: class {},
+  setWorkerUrl: vi.fn(), addProtocol: vi.fn(), NavigationControl: class {},
+  Marker: class {
+    element: HTMLElement;
+    coordinates?: [number, number];
+    constructor({ element }: { element: HTMLElement }) { this.element = element; }
+    setLngLat(coordinates: [number, number]) { this.coordinates = coordinates; return this; }
+    addTo(map: { canvas: HTMLCanvasElement }) { map.canvas.parentElement?.append(this.element); return this; }
+  },
+  Popup: class {
+    lngLat?: [number, number];
+    content?: HTMLElement;
+    wrapper?: HTMLElement;
+    setLngLat(lngLat: [number, number]) { this.lngLat = lngLat; return this; }
+    setDOMContent(content: HTMLElement) { this.content = content; return this; }
+    addTo(map: { canvas: HTMLCanvasElement }) {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'maplibregl-popup';
+      const close = document.createElement('button');
+      close.className = 'maplibregl-popup-close-button';
+      close.setAttribute('aria-label', 'Close popup');
+      if (this.content) wrapper.append(this.content);
+      wrapper.append(close);
+      map.canvas.parentElement?.append(wrapper);
+      this.wrapper = wrapper;
+      return this;
+    }
+    remove() { this.wrapper?.remove(); }
+  },
   LngLatBounds: class {
     points: [number, number][] = [];
     extend(point: [number, number]) { this.points.push(point); }
@@ -320,11 +347,69 @@ describe('story track map', () => {
     expect(stopMap.bounds).toEqual([[1, 2], [3, 4]]);
   });
 
-  it('keeps the full map pin-only', () => {
-    initFullMap(container(), { type: 'FeatureCollection', features: [plain.pin] }, { readStory: 'Read' });
+  it('keeps the full map pin-only and mounts accessible DOM pins, region filters, and error recovery', () => {
+    document.body.innerHTML = `
+      <button type="button" data-map-region="all" aria-pressed="true">All</button>
+      <button type="button" data-map-region="europe" aria-pressed="false">Europe</button>
+      <button type="button" data-map-region="south-america" aria-pressed="false">South America</button>
+      <button type="button" data-map-reset>Reset</button>
+      <div id="map"></div>
+      <section data-region-group="europe">
+        <li data-map-entry data-pin-index="0" data-region="europe"><button type="button" data-map-focus="0">01</button></li>
+      </section>
+      <section data-region-group="south-america">
+        <li data-map-entry data-pin-index="1" data-region="south-america"><button type="button" data-map-focus="1">02</button></li>
+      </section>
+    `;
+    const el = document.getElementById('map')!;
+    const southPin = {
+      type: 'Feature' as const,
+      geometry: { type: 'Point' as const, coordinates: [-78.5, -0.2] as [number, number] },
+      properties: { title: 'Ecuador <script>', href: '/ecuador/', country: 'Ecuador', region: 'south-america' as const },
+    };
+    initFullMap(
+      el,
+      { type: 'FeatureCollection', features: [plain.pin, southPin] },
+      { readStory: 'Read story', pinLabel: 'Trip {number}: {title} ({country})', closePopup: 'Hinweis schließen' },
+    );
     const map = state.maps[0]!;
     map.events.get('load')!();
     expect([...map.sources.keys()]).toEqual(['pins']);
     expect(map.layers.map((layer) => layer.type)).toEqual(['circle']);
+
+    const pins = el.querySelectorAll<HTMLButtonElement>('.travel-map-pin');
+    expect(pins).toHaveLength(2);
+    expect(pins[0]!.getAttribute('aria-label')).toBe('Trip 1: Story (Country)');
+    expect(pins[1]!.getAttribute('aria-label')).toBe('Trip 2: Ecuador <script> (Ecuador)');
+
+    // Clicking a ledger focus button centers the map, opens an XSS-safe popup, and syncs active state.
+    document.querySelector<HTMLButtonElement>('[data-map-focus="1"]')!.click();
+    expect(map.center).toEqual([-78.5, -0.2]);
+    expect(pins[1]!.dataset.active).toBe('true');
+    expect(document.querySelectorAll<HTMLElement>('[data-map-entry]')[1]!.dataset.active).toBe('true');
+    const popup = el.querySelector('.travel-map-popup')!;
+    expect(popup.querySelector('.travel-map-popup__title')?.textContent).toBe('Ecuador <script>');
+    expect(popup.querySelector('script')).toBeNull();
+    expect(popup.querySelector<HTMLAnchorElement>('.travel-map-popup__cta')?.getAttribute('href')).toBe('/ecuador/');
+    expect(el.querySelector('.maplibregl-popup-close-button')?.getAttribute('aria-label')).toBe('Hinweis schließen');
+
+    // Filtering by region hides non-matching pins and ledger groups and reframes bounds.
+    document.querySelector<HTMLButtonElement>('[data-map-region="europe"]')!.click();
+    expect(pins[0]!.hidden).toBe(false);
+    expect(pins[1]!.hidden).toBe(true);
+    expect(document.querySelector<HTMLElement>('[data-region-group="south-america"]')!.hidden).toBe(true);
+    expect(map.bounds).toMatchObject({ points: [[1, 2]] });
+
+    // Reset button restores all regions and pins.
+    document.querySelector<HTMLButtonElement>('[data-map-reset]')!.click();
+    expect(pins[1]!.hidden).toBe(false);
+    expect(document.querySelector<HTMLElement>('[data-region-group="south-america"]')!.hidden).toBe(false);
+    expect(map.bounds).toMatchObject({ points: [[1, 2], [-78.5, -0.2]] });
+
+    // Basemap failure switches to fallback style and restores pins without duplicating DOM markers.
+    map.events.get('error')!();
+    map.events.get('style.load')!();
+    expect(map.sources.has('pins')).toBe(true);
+    expect(el.querySelectorAll('.travel-map-pin')).toHaveLength(2);
   });
 });

@@ -843,6 +843,11 @@ const de = {
   'map.readStory': 'Reisebericht lesen',
   'map.pinCount': 'Pin-Standorte',
   'map.pinCountOne': 'Pin-Standort',
+  'map.pinLabel': 'Reise {number}: {title} ({country})',
+  'map.locateOnMap': 'Auf der Karte zeigen: {title}',
+  'map.resetView': 'Gesamtansicht',
+  'map.filterRegionLabel': 'Kartenbereich nach Region wählen',
+  'map.closePopup': 'Hinweis schließen',
   'stories.emptyTitle': 'Keine Beiträge gefunden',
   // Generic ("hier", not "in dieser Region"): StoryGrid also renders this on the
   // home page and the regions index, where a region-specific wording would lie.
@@ -1876,6 +1881,11 @@ const en: Record<UIKey, string> = {
   'map.readStory': 'Read the story',
   'map.pinCount': 'pin locations',
   'map.pinCountOne': 'pin location',
+  'map.pinLabel': 'Trip {number}: {title} ({country})',
+  'map.locateOnMap': 'Locate on map: {title}',
+  'map.resetView': 'Reset view',
+  'map.filterRegionLabel': 'Filter map by region',
+  'map.closePopup': 'Close popup',
   'stories.emptyTitle': 'No stories found',
   'stories.emptyBody': 'There are no travel stories here yet.',
   'story.toc': 'Contents',
