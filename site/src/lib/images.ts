@@ -35,6 +35,16 @@ export interface RemoteHeroImage {
  * `width`/`height`.
  */
 export function focusPosition(image: RemoteHeroImage): string | undefined {
+  const position = focusPercent(image);
+  return position === undefined ? undefined : `object-position:${position}`;
+}
+
+/**
+ * The clamped, rounded focal point as a CSS `object-position` value
+ * ("22% 18%"), or `undefined` for none/centre. `focusPosition` wraps it for a
+ * style attribute; the travel map assigns it to `style.objectPosition`.
+ */
+export function focusPercent(image: RemoteHeroImage): string | undefined {
   const f = image.focus;
   if (!f) return undefined;
   const pct = (n: unknown): number => {
@@ -43,7 +53,7 @@ export function focusPosition(image: RemoteHeroImage): string | undefined {
   };
   const x = pct(f.x);
   const y = pct(f.y);
-  return x === 50 && y === 50 ? undefined : `object-position:${x}% ${y}%`;
+  return x === 50 && y === 50 ? undefined : `${x}% ${y}%`;
 }
 
 export type ImageFormat = 'avif' | 'webp' | 'jpeg';
@@ -169,6 +179,14 @@ export function srcset(image: RemoteHeroImage, format: ImageFormat): string {
 export function largestVariant(image: RemoteHeroImage, format: ImageFormat = image.format ?? 'webp'): string {
   const widths = variantWidths(image.width);
   return `${image.src}-${widths[widths.length - 1]}.${format}`;
+}
+
+/**
+ * The smallest variant that exists for a photo: 640px for any frame wider than
+ * that, otherwise the intrinsic width. For thumbnails (the travel map popup).
+ */
+export function smallestVariant(image: RemoteHeroImage): string {
+  return `${image.src}-${variantWidths(image.width)[0]}.${image.format ?? 'webp'}`;
 }
 
 /** Plain <img src> fallback — prefers 1280, using only a generated format. */

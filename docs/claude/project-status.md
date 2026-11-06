@@ -4,15 +4,20 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
-- **Implemented, PR #540 open:** travel map page refinement (2026-11-06), driven by an
-  impeccable critique (21/40). Trips are now keyboard-focusable numbered DOM pins with
-  localized labels, and the popup uses the brand typography, a brand-red CTA and a localized
-  close label. Region filter buttons and a Reset view control replace the pulsing pin-count
-  pill. The destinations list is now a region-grouped ledger (date, country, coordinates) that
-  syncs with the map. The full map gained the basemap `error` fallback the mini and journey
-  maps already had, plus `cooperativeGestures` on touch. It also has a warm Protomaps palette
-  and 44px zoom controls. Slugs, routes, schema and content are unchanged. Files:
-  `site/src/components/pages/MapPage.astro`, `site/src/scripts/travel-map.ts`,
+- **Implemented, PR #540 open:** travel map page refinement (2026-11-06), driven by two
+  impeccable critiques (21/40, then 26/40). Trips are keyboard-focusable DOM pins showing
+  their travel-log entry number (oldest = N°01, as `entryNumberOf`), explained by a legend.
+  Pins whose badges would touch fold into a count badge that zooms them apart, or lists them
+  when they share one spot. The basemap now shows place names in the page language
+  (`layers(…, { lang })`; protomaps emits no labels without it) and a graticule with IBM Plex
+  Mono degree labels shared with the homepage chart (`graticuleTicks`/`degreeLabel`).
+  Popups show the story's smallest hero variant. Escape closes them and returns focus to the
+  opener. Locating from the region-grouped ledger zooms to ≥5. Region filters ("All" resets)
+  scroll in one row on mobile. The full map has the basemap `error` fallback, a scripted-only
+  loading label, `cooperativeGestures`, no world copies or rotation. Slugs, routes, schema and
+  content are unchanged. Files: `site/src/components/pages/MapPage.astro`,
+  `site/src/scripts/travel-map.ts`, `site/src/scripts/map-overlays.ts`,
+  `site/src/lib/map-data.ts`, `site/src/lib/map-chart.ts`, `site/src/lib/images.ts`,
   `site/src/styles/global.css`, `site/src/i18n/ui.ts`.
 - **Done:** release build tolerates Debian snapshot throttling (2026-11-05, owner-approved
   build-pipeline change). The v0.20.0 release run failed four times in `native-build` because

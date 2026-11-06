@@ -29,16 +29,16 @@ function seed(locale: Locale, count: number) {
 }
 
 const cases = [
-  ['de', 0, '0 REISEN', '0 Pin-Standorte'],
-  ['de', 1, '1 REISE', '1 Pin-Standort'],
-  ['de', 2, '2 REISEN', '2 Pin-Standorte'],
-  ['en', 0, '0 TRIPS', '0 pin locations'],
-  ['en', 1, '1 TRIP', '1 pin location'],
-  ['en', 2, '2 TRIPS', '2 pin locations'],
+  ['de', 0, '0 REISEN'],
+  ['de', 1, '1 REISE'],
+  ['de', 2, '2 REISEN'],
+  ['en', 0, '0 TRIPS'],
+  ['en', 1, '1 TRIP'],
+  ['en', 2, '2 TRIPS'],
 ] as const;
 
 describe('rendered public count labels', () => {
-  it.each(cases)('renders region and map counts in %s for %d', async (locale, count, trips, pins) => {
+  it.each(cases)('renders region and map counts in %s for %d', async (locale, count, trips) => {
     seed(locale, count);
     const renderer = await AstroContainer.create();
     const window = new Window();
@@ -49,9 +49,9 @@ describe('rendered public count labels', () => {
 
       const map = window.document.createElement('div');
       map.innerHTML = await renderer.renderToString(MapPage, { props: { locale } });
-      // #280: an empty map shows its empty state instead of a fabricated "0 pins" badge.
+      // #280: an empty map shows its empty state instead of a fabricated "0 trips" line.
       if (count === 0) expect(map.querySelector('main h2')?.textContent?.trim()).toBe(ui[locale]['map.emptyTitle']);
-      else expect([...map.querySelectorAll('main span')].some((span) => span.textContent?.trim() === pins)).toBe(true);
+      else expect(map.querySelector('main section p')?.textContent?.trim().startsWith(`${trips} · `)).toBe(true);
     } finally {
       await window.happyDOM.close();
     }

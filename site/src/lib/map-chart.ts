@@ -160,16 +160,16 @@ export function mapChart(input: ChartInput[]): MapChart | null {
     // Clipped and projected here, where the window is known, so the emitted
     // path is the visible coast and nothing else.
     land: landPath(LAND_RINGS, { west, east, south, north }, { x, y }),
-    meridians: ticks(west, east).map((lng) => ({
+    meridians: graticuleTicks(west, east).map((lng) => ({
       at: x(lng),
       labelAt: x(lng),
-      label: degrees(lng, 'E', 'W'),
+      label: degreeLabel(lng, 'E', 'W'),
       primary: lng === 0,
     })),
-    parallels: ticks(south, north).map((lat) => ({
+    parallels: graticuleTicks(south, north).map((lat) => ({
       at: y(lat),
       labelAt: clampBaseline(y(lat) - LABEL_LIFT),
-      label: degrees(lat, 'N', 'S'),
+      label: degreeLabel(lat, 'N', 'S'),
       primary: lat === 0,
     })),
     pins: input.map((p) => ({ x: x(p.lng), y: y(p.lat), title: p.title })),
@@ -199,15 +199,20 @@ function grow(lo: number, hi: number, want: number, min: number, max: number): [
   return [a, b];
 }
 
-/** Graticule values inside [lo, hi] at the coarsest step that stays readable. */
-function ticks(lo: number, hi: number): number[] {
+/**
+ * Graticule values inside [lo, hi] at the coarsest step that stays readable.
+ * Shared with the travel map page's graticule, so both charts use one step
+ * ladder and one label format.
+ */
+export function graticuleTicks(lo: number, hi: number): number[] {
   const step = STEPS.find((s) => Math.floor(hi / s) - Math.ceil(lo / s) + 1 <= MAX_LINES) ?? 90;
   const out: number[] = [];
   for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) out.push(v);
   return out;
 }
 
-function degrees(value: number, positive: string, negative: string): string {
+/** "30°E", "15°S", "0°" — the chart's degree label. */
+export function degreeLabel(value: number, positive: string, negative: string): string {
   const v = round(value);
   if (v === 0) return '0°';
   return `${Math.abs(v)}°${v > 0 ? positive : negative}`;
