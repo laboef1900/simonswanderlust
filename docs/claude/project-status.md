@@ -4,6 +4,29 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Implemented locally:** Settings critique refinement (2026-11-06, all six requested passes).
+  All seven tabs retain the Editorial desk identity. Unsaved-work tracking names independent
+  save scopes, protects page exit, confirms discard, preserves failed saves and never stores
+  field values/keys/files in browser storage. Identity text and image selections remain
+  independent. Save bars stack below the measured dirty notice; phone testing caught and
+  removed a bottom-bar overlap. Navigation rows summarize effective DE/EN labels and expand
+  for editing without losing focus on reorder. Identity has public/profile/admin groups;
+  Site separates publishing, backup/import settings and routing. Backup history is explicitly
+  unknown when no success is recorded, independently of existing files; empty archives and
+  recovery limitations are visible. AI settings group assignments and advanced controls by
+  author task. Seconds retain exact millisecond API values. Unchanged language mode cannot
+  trigger a redundant rebuild. Save scope, timing and comment saved state are explicit.
+  Uploader: 4,236 tests pass, 647 skip without integration DB; final focused Settings run
+  passes 380 tests and TypeScript passes. Site: 872 tests pass with two workers, 7 skip;
+  an earlier concurrent run timed out in the unrelated gallery partition corpus.
+  Database-backed Astro check reports zero errors/warnings/hints; its temporary proxy closed.
+  Browser smoke used working-tree asset overrides, checked all seven tabs at desktop and
+  390px, native beforeunload cancellation, retained cross-tab edits, navigation reorder/focus,
+  and intercepted failed saves. No saved settings, backups, publication or paid AI requests
+  were triggered. The detector reports the two hidden dynamic comparison images and cannot
+  resolve the absolute CSS URL; these are not rendered broken-image boxes.
+  Not deployed or pushed; no CI or physical-device qualification is claimed.
+
 - **Implemented locally:** article-editor consent and remediation refinement (2026-11-06,
   28/40 critique follow-up, all five recommended actions). Opening Story review runs local
   checks only; provider kind/endpoint/model, sent fields and possible charges appear above

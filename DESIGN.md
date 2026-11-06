@@ -1151,8 +1151,10 @@ and the `<dialog>`s appended to `<body>` share one set:
   time with title, slug and intro beside the hero photo. Alt text and framing appear only
   once a hero is chosen. The heading reads **New journey** until the first save.
 - **Navigation settings** uses the existing vertical tab and flat field-row pattern.
-  Header/footer/legal sections show bounded item counts; each row exposes type,
-  target and enabled-locale label/URL fields, with move up/down and confirmed removal.
+  Header/footer/legal sections show bounded item counts. Collapsed rows summarize the
+  destination and effective labels in each enabled locale, including default labels.
+  **Edit link** opens type, target and label/URL fields; move up/down and confirmed removal
+  remain visible. Reordering retains the expanded editor and keyboard focus.
   Unpublished/missing targets are explicit notices, not hidden authoring failures.
   Social links are read-only here with a Site identity link. Saving rebuilds once;
   a failed rebuild acknowledges the committed draft and offers explicit retry.
@@ -1380,21 +1382,43 @@ and the `<dialog>`s appended to `<body>` share one set:
   **Providers** list — name with a small `default` badge, kind and key state as text,
   the base URL in mono, and right-aligned text actions Edit · Set default · Test ·
   Delete (Delete red, disabled actions dimmed with a stated reason) under an **Add
-  provider** primary; add/edit is an inline tinted form, never a card — then a lightly
-  bordered **Use case assignments** panel (use case | provider | model dropdown with a
-  small reload icon, then a muted `→ Provider / model` line with the URL), each feature's
-  prompt and timeout below it, and one **Save AI settings**. Model dropdowns fill from the
+  provider** primary; add/edit is an inline tinted form, never a card. Two flat task sections,
+  **Story review & excerpts** and **Photo descriptions**, each own their provider/model pair,
+  resolved destination and privacy note. Prompts, timeouts and photo limits sit behind each
+  task's **Advanced settings** disclosure. **Test story review** sits with that task and names
+  its sample-data/possible-charge scope. One pinned **Save AI settings** saves both assignments
+  without contacting a provider. A shared model-list failure notice avoids duplicated diagnosis.
+  Model dropdowns fill from the
   provider's own list; a saved model it does not list stays as "(saved, not listed)", and
   **Other model ID…** reveals a text field. Images ends with **Compare quality**: a photo
-  picker, a WebP/AVIF segmented choice and **Preview**, then the original and the result in
+  picker, a WebP/AVIF segmented choice and **Generate preview**, then the original and the result in
   two equal panes (stacked below 48rem) captioned with format, pixels, file size and saving,
   with a synchronized **1:1 pixels** view. Tabs still save independently.
+- Settings tracks unsaved intent per save scope, including identity text and its two asset
+  selections separately. A pinned notice names pending sections; save controls stack below it
+  using its measured height, never cover one another. Native leave/reload protection remains
+  until that scope is saved or explicitly discarded. **Discard all changes** confirms a reload;
+  it does not undo saved settings. No field values, API keys or files are copied into browser
+  storage. Failed saves retain pending inputs. Form fields lock during their save.
+  Identity, Navigation, AI and backup/import saves state their scope and publication timing
+  next to the action. Languages disables its save/rebuild action for the unchanged mode.
+  Timeouts and import pacing use seconds, preserving millisecond precision and API units.
+  Comments names the saved on/off state separately from the current checkbox.
 - While the saved database backup schedule is **Off**, Site & backups shows a
   `.notice-warn` under the schedule and the admin's Desk repeats it in the Site list with
   a link to `settings.html#site`; the Desk reads it from `GET /settings` and stays silent if
   that read fails. Recovery details sit in a **What a full recovery needs** disclosure.
-- Site identity uses the same paired fields for enabled-locale taglines, profile details and
-  admin descriptors, with shared site/author names above. Social links are an ordered list
+  Site & backups has jump links for Publishing, Backups & recovery, WordPress import tuning
+  and Street routing. Publishing and routing have independent actions/status. Import tuning
+  folds below backup scheduling; the action explicitly saves backup and import settings only.
+  **Last recorded backup operation** is not inferred from a file listing: missing success
+  history says it is unknown even when local files exist. Every empty archive list names
+  what is absent. Local files are not proof of offsite copies or recoverability. A failed
+  status read has an explicit reload action and does not prevent other Settings from loading.
+- Site identity groups **Public identity**, **Author profile** and **Admin appearance**, using
+  paired enabled-locale fields. Its pinned save action distinguishes saving from publishing;
+  detailed timing and domain-format guidance fold while the blank-domain indexing consequence
+  remains visible. Social links are an ordered list
   with labelled Move up, Move down and Remove actions; a seventh link cannot be added.
   Saving checks the loaded revision: conflicts retain the author's inputs until an explicit,
   confirmed reload. Save never rebuilds. The timing note distinguishes the next public

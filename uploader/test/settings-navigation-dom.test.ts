@@ -22,7 +22,9 @@ async function page(options: { primary?: 'de' | 'en'; locales?: ('de' | 'en')[];
     language: { primary: options.primary ?? 'de', locales: options.locales ?? ['de', 'en'] }, socialLinks: [{ label: '<img onerror=x>', url: 'https://social.example/' }] };
   const requests: Request[] = []; const confirms: unknown[] = []; const lifecycle: string[] = [];
   const events = new EventTarget();
-  const context: Record<string, unknown> = { document, EditorCopy: { en: copy }, BuildCopy: buildCopy, location: { href: '' },
+  const context: Record<string, unknown> = { document, EditorCopy: { en: copy,
+    de: Object.fromEntries(Object.entries(ui.de).filter(([key]) => key.startsWith('editor.chrome.')).map(([key, value]) => [key.slice('editor.chrome.'.length), value])) },
+    BuildCopy: buildCopy, location: { href: '' },
     AbortController, setTimeout: () => 1, clearTimeout() {},
     addEventListener: events.addEventListener.bind(events), removeEventListener: events.removeEventListener.bind(events),
     AdminConfirm: { ask: async (question: unknown) => { confirms.push(question); return options.confirm ?? true; } },
@@ -39,6 +41,7 @@ async function page(options: { primary?: 'de' | 'en'; locales?: ('de' | 'en')[];
   context.window = context; vm.createContext(context);
   vm.runInContext(readFileSync('public/build-reporting.js', 'utf8'), context);
   vm.runInContext(readFileSync('public/publication-refresh.js', 'utf8'), context);
+  vm.runInContext(readFileSync('public/settings-drafts.js', 'utf8'), context);
   vm.runInContext(source, context);
   const el = (id: string) => { const node = document.getElementById(id); if (!node) throw new Error('Missing real element ' + id); return node; };
   el('panel-navigation').hidden = false;
@@ -67,6 +70,25 @@ async function page(options: { primary?: 'de' | 'en'; locales?: ('de' | 'en')[];
   return { el, edit, submit, requests, confirms, document, initial, lifecycle };
 }
 describe('owner-usable navigation settings', () => {
+  it('summarizes effective locale labels and keeps an edited row expanded after reordering', async () => {
+    const h = await page();
+    const details = h.el('nav-header-0-details');
+    expect(details.open).toBe(false);
+    expect(details.querySelector('summary')?.textContent).toContain('DE: Reiseberichte');
+    expect(details.querySelector('summary')?.textContent).toContain('EN: Stories');
+    details.open = true;
+    details.fire('toggle');
+    h.edit('nav-header-0-label-de', '<img src=x> Mein Text');
+    expect(details.querySelector('summary')?.textContent).toContain('<img src=x> Mein Text');
+    expect(details.querySelector('img')).toBeNull();
+    h.el('nav-header-0-down').click();
+    await settle();
+    expect(h.el('nav-header-1-details').open).toBe(true);
+    expect(h.el('nav-header-1-label-de').value).toBe('<img src=x> Mein Text');
+    await h.submit();
+    expect(h.el('settingsDraftBar').hidden).toBe(true);
+  });
+
   it.each(['de', 'en'] as const)('shows only enabled %s fields and preserves ordered edits through save', async (primary) => {
     const h = await page({ primary, locales: [primary] });
     const secondary = primary === 'de' ? 'en' : 'de';

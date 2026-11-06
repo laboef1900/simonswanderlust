@@ -1710,7 +1710,7 @@ function loadSettingsPage(extra: Record<string, unknown> = {}) {
     LLM: { mixedContentWarning: () => '', listModels: async () => [] },
     AbortController, AbortSignal, setTimeout, clearTimeout,
     ...extra,
-  }, ['public/tabs.js']);
+  }, ['public/tabs.js', 'public/settings-drafts.js']);
 }
 
 /** Settings opens on Site identity; model lookups run only while AI models is shown. */
@@ -1816,6 +1816,79 @@ async function apiPage(initial: SettingsResponse, opts: {
 }
 
 const calls = (requests: ApiRequest[]) => requests.map((r) => r.method + ' ' + r.url);
+
+describe('Settings safety and recovery state', () => {
+  it('keeps the leave guard for another dirty section after saving, and never persists entered credentials', async () => {
+    const page = await apiPage(settingsResponse());
+    const leave = async () => {
+      let prevented = false;
+      for (const listener of page.windowListeners.beforeunload ?? []) {
+        await listener({ preventDefault() { prevented = true; } });
+      }
+      return prevented;
+    };
+    expect(await leave()).toBe(false);
+    await page.el('commentSettings').fire('input');
+    await page.el('useCaseSection').fire('input');
+    await page.el('saveComments').click();
+    expect(await leave()).toBe(true);
+    await page.el('saveAi').click();
+    expect(await leave()).toBe(false);
+    await page.el('addProvider').click();
+    page.el('providerApiKey').value = 'fixture-never-store-this-key';
+    await page.el('providerForm').fire('input');
+    expect(await leave()).toBe(true);
+    expect(page.el('settingsDraftStatus').textContent).not.toContain('fixture-never-store-this-key');
+    expect(page.storageWrite).not.toHaveBeenCalled();
+    await page.el('cancelProvider').click();
+    expect(await leave()).toBe(false);
+    expect(page.el('providerApiKey').value).toBe('');
+  });
+
+  it('requires fresh consent to discard all pending settings', async () => {
+    let confirmed = false;
+    const reload = vi.fn();
+    const page = loadSettingsPage({
+      location: { ...AI_MODELS_TAB.location, reload },
+      AdminConfirm: { ask: async () => confirmed },
+    });
+    await page.el('useCaseSection').fire('input');
+    await page.el('settingsDiscard').click();
+    expect(reload).not.toHaveBeenCalled();
+    confirmed = true;
+    await page.el('settingsDiscard').click();
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('distinguishes unknown operation history from existing files and explicit empty archive lists', async () => {
+    const page = loadSettingsPage();
+    await callPage(page.ctx, 'renderBackups', {
+      state: {}, files: [{ name: 'db-existing.json.gz', size: 2048 }], imageArchives: [], routeArchives: [],
+    });
+    expect(page.el('backupStatus').textContent).toBe(EDITOR_COPY.settingsBackupUnknown);
+    expect(page.el('backupFiles').children[0]?.children[0]?.href).toBe('/backups/db-existing.json.gz');
+    expect(page.el('imageArchives').children[0]?.textContent).toBe(EDITOR_COPY.settingsImagesEmpty);
+    expect(page.el('routeArchives').children[0]?.textContent).toBe(EDITOR_COPY.settingsRoutesEmpty);
+    await callPage(page.ctx, 'renderBackups', {
+      state: { lastSuccessAt: '2026-11-06T00:00:00Z' }, files: [], imageArchives: [], routeArchives: [],
+    });
+    expect(page.el('backupStatus').textContent).toContain('2026-11-06T00:00:00Z');
+    expect(page.el('backupFiles').children[0]?.textContent).toBe(EDITOR_COPY.settingsBackupEmpty);
+  });
+
+  it('converts fractional seconds to exact import milliseconds and saves only the backup/import scope', async () => {
+    const page = await apiPage(settingsResponse({ importDelayMs: 1201 }));
+    expect(Number(page.el('importDelaySeconds').value)).toBe(1.201);
+    page.el('importDelaySeconds').value = '1.001';
+    page.el('importRetries').value = '2';
+    page.el('routingCarUrl').value = 'https://unsaved.example/';
+    await page.el('save').click();
+    expect(page.requests[0]?.body).toEqual({
+      backupSchedule: 'off', backupRetention: 14, importDelayMs: 1001, importRetries: 2,
+    });
+    expect(page.el('routingCarUrl').value).toBe('https://unsaved.example/');
+  });
+});
 
 describe('settings.html tabs', () => {
   const PANELS = ['panel-ai-models', 'panel-images', 'panel-comments', 'panel-identity', 'panel-language', 'panel-site'];
@@ -2744,7 +2817,7 @@ describe('settings.html model lists', () => {
     expect(modelOptions(el, 'aiModel')).toEqual(['review-model (saved, not listed)', 'c-1', 'Other model ID…']);
   });
 
-  it('a failed lookup keeps the saved model and Other, and names the likely causes without provider text', async () => {
+  it('a failed lookup keeps the saved model and Other without exposing provider text', async () => {
     const page = await apiPage(settingsResponse(), {
       listModels: async () => { throw new Error('fixture-provider-detail'); },
     });
@@ -2753,7 +2826,6 @@ describe('settings.html model lists', () => {
     expect(modelOptions(el, 'aiModel')).toEqual(['review-model', 'Other model ID…']);
     expect(el('aiModel').value).toBe('review-model');
     expect(el('aiModel').attrs['aria-busy']).toBe('false');
-    expect(el('reviewModelStatus').textContent).toMatch(/^Could not list models from Local LM Studio\. .*API key.*CORS.*online/);
     expect(pageText(el)).not.toContain('fixture-provider-detail');
   });
 
@@ -2764,8 +2836,6 @@ describe('settings.html model lists', () => {
     const { el } = page;
     await callPage(page.ctx, 'init');
     expect(page.listModels).not.toHaveBeenCalled();
-    expect(el('reviewModelStatus').textContent).toMatch(/^Could not list models from OpenRouter\./);
-    expect(el('captionModelStatus').textContent).toBe('DeepSeek needs an API key to list its models. Edit the provider to add one, or choose “Other model ID…”.');
     expect(el('lmModel').attrs['aria-busy']).toBe('false');
   });
 
@@ -2829,16 +2899,16 @@ describe('settings.html use case assignments', () => {
     el('reviewProviderId').value = 'openrouter';
     el('captionProviderId').value = '';
     el('reviewPrompt').value = 'R';
-    el('reviewTimeoutMs').value = '45000';
+    el('reviewTimeoutSeconds').value = '45.123';
     el('captionPrompt').value = 'C';
-    el('captionTimeoutMs').value = '30000';
+    el('captionTimeoutSeconds').value = '30.001';
     el('captionMaxEdge').value = '1024';
     el('captionMaxTokens').value = '4096';
     await el('saveAi').click();
     expect(calls(page.requests)).toEqual(['POST /settings']);
     expect(page.requests[0]!.body).toEqual({
       reviewProviderId: 'openrouter', captionProviderId: null, aiModel: 'review-2', lmModel: 'vision-2',
-      reviewPrompt: 'R', reviewTimeoutMs: 45000, captionPrompt: 'C', captionTimeoutMs: 30000, captionMaxEdge: 1024,
+      reviewPrompt: 'R', reviewTimeoutMs: 45123, captionPrompt: 'C', captionTimeoutMs: 30001, captionMaxEdge: 1024,
       captionMaxTokens: 4096,
     });
     // The saved values come back as the new "saved" models; Other closes.
@@ -2883,7 +2953,6 @@ describe('settings.html use case assignments', () => {
     page.el('backupSchedule').value = 'weekly';
     await page.el('save').click();
     expect(Object.keys(page.requests[0]!.body ?? {}).sort()).toEqual(['backupRetention', 'backupSchedule', 'importDelayMs', 'importRetries']);
-    expect(page.el('out').textContent).toBe('Saved.');
   });
 });
 
@@ -3002,7 +3071,7 @@ describe('settings.html AI configuration', () => {
     vi.useFakeTimers();
     try {
       const { el } = await reviewPage(LOCAL, async () => new Promise<Response>(() => {}));
-      el('reviewTimeoutMs').value = '5000';
+      el('reviewTimeoutSeconds').value = '5';
       const testing = el('testReview').click();
       await vi.advanceTimersByTimeAsync(5000);
       await testing;

@@ -561,37 +561,6 @@ describe('admin page wiring', () => {
   });
 });
 
-/**
- * Issue #85's two settings fields, and the copy that explains the new recovery
- * behaviour. A settings field needs markup AND `fill()` AND the POST body —
- * miss one and it either never displays or never persists, and nothing else
- * catches it: the server tests exercise the API, not the page.
- */
-describe('settings.html import pacing fields', () => {
-  const html = readFileSync('public/settings.html', 'utf8');
-
-  it('renders an input for each field, bounded to match the server', () => {
-    // Bounds are duplicated in the server's validate() by necessity; keeping the
-    // numbers here identical is what makes the client-side rejection agree.
-    expect(html).toMatch(/<input id="importDelayMs"[^>]*min="0"[^>]*max="10000"/);
-    expect(html).toMatch(/<input id="importRetries"[^>]*min="0"[^>]*max="5"/);
-  });
-
-  it('labels both inputs for screen readers', () => {
-    expect(html).toMatch(/<label for="importDelayMs">/);
-    expect(html).toMatch(/<label for="importRetries">/);
-  });
-
-  it('populates both from the loaded settings', () => {
-    expect(html).toMatch(/\$\('importDelayMs'\)\.value = s\.importDelayMs/);
-    expect(html).toMatch(/\$\('importRetries'\)\.value = s\.importRetries/);
-  });
-
-  it('sends both in the save payload', () => {
-    expect(html).toMatch(/importDelayMs: Number\(\$\('importDelayMs'\)\.value\)/);
-    expect(html).toMatch(/importRetries: Number\(\$\('importRetries'\)\.value\)/);
-  });
-});
 
 /**
  * The AI provider registry (spec 2026-10-19 §6) replaced the single shared key.

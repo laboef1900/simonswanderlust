@@ -8,6 +8,10 @@ window.SettingsNavigation = (function () {
     const targets = { home: copy.navigationHome, stories: copy.navigationStories, map: copy.navigationMap, regions: copy.navigationRegions,
       about: copy.navigationAbout, contact: copy.navigationContact, privacy: copy.navigationPrivacy, legal: copy.navigationLegalPage };
     let config, updatedAt, locales = [], pages = [], dirty = false, busy = false, conflicted = false;
+    const draft = SettingsDrafts.watch('navigation', $('navigationForm'), copy.navigationTab);
+    const expanded = new WeakSet();
+    const targetKeys = { home: 'navigationHome', stories: 'navigationStories', map: 'navigationMap', regions: 'navigationRegions',
+      about: 'navigationAbout', contact: 'navigationContact', privacy: 'navigationPrivacy', legal: 'navigationLegalPage' };
     for (const [id, text] of Object.entries({ navigationHeading: copy.navigationTab, navigationIntro: copy.navigationIntro,
       navigationHelp: copy.navigationLabelHelp, navigationSave: copy.navigationSave, navigationReload: copy.navigationReload,
       navigationRebuild: copy.identityRebuild, navigationSocialHelp: copy.navigationSocial, navigationSocialLink: copy.navigationSocialLink })) $(id).textContent = text;
@@ -15,7 +19,7 @@ window.SettingsNavigation = (function () {
     function lock(value) {
       busy = value;
       $('navigationFields').disabled = value || !config;
-      $('navigationSave').disabled = conflicted;
+      $('navigationSave').disabled = value || !config || conflicted;
       $('navigationReload').disabled = value;
       $('navigationRebuild').disabled = value;
     }
@@ -42,38 +46,57 @@ window.SettingsNavigation = (function () {
       for (const [slot, max] of Object.entries(slots)) {
         const section = element('section', undefined, 'navigation-slot');
         const heading = element('h3', names[slot] + ' (' + config[slot].length + '/' + max + ')', 'section-label');
-        const list = element('ol', undefined, 'identity-social-links');
+        const list = element('ol', undefined, 'navigation-links');
         section.append(heading);
         if (!config[slot].length) section.append(element('p', copy.navigationEmpty, 'muted'));
         config[slot].forEach((item, index) => {
           const id = 'nav-' + slot + '-' + index;
           const row = element('li');
+          const details = element('details', undefined, 'navigation-link');
+          details.id = id + '-details';
+          details.open = expanded.has(item) || Boolean(focusId && focusId.startsWith(id + '-'));
+          details.addEventListener('toggle', () => { if (details.open) expanded.add(item); else expanded.delete(item); });
+          const summary = element('summary');
+          const title = element('span', undefined, 'navigation-link-title');
+          const labels = element('span', undefined, 'navigation-link-labels');
+          const editHint = element('span', copy.settingsNavigationEdit, 'navigation-link-edit');
+          summary.append(title, labels, editHint);
+          details.append(summary);
+          const editor = element('div', undefined, 'navigation-fields');
+          const refreshSummary = () => {
+            title.textContent = targets[item.target] || item.href?.[locales[0]] || copy.settingsNavigationNew;
+            labels.textContent = locales.map((locale) => {
+              const fallback = EditorCopy[locale][targetKeys[item.target]] || copy.navigationMissing;
+              return locale.toUpperCase() + ': ' + (item.label?.[locale] || fallback);
+            }).join(' · ');
+          };
+          refreshSummary();
           const pair = element('div', undefined, 'settings-field-pair');
           const kind = control(pair, id + '-kind', copy.navigationKind, item.kind, types);
           kind.addEventListener('change', () => {
             config[slot][index] = kind.value === 'builtin' || kind.value === 'page'
               ? { kind: kind.value, target: kind.value === 'page' ? 'about' : 'home', label: item.label || {} }
               : { kind: kind.value, href: item.href || {}, label: item.label || {} };
-            dirty = true; paint(id + '-kind');
+            dirty = true; draft.mark(); paint(id + '-kind');
           });
           if (item.kind === 'builtin' || item.kind === 'page') {
             const allowed = item.kind === 'builtin' ? ['home', 'stories', 'map', 'regions'] : ['about', 'contact', 'privacy', 'legal'];
             const target = control(pair, id + '-target', copy.navigationTarget, item.target, Object.fromEntries(allowed.map((key) => [key, targets[key]])));
-            target.addEventListener('change', () => { item.target = target.value; dirty = true; paint(id + '-target'); });
+            target.addEventListener('change', () => { item.target = target.value; dirty = true; draft.mark(); paint(id + '-target'); });
           }
-          row.append(pair);
+          editor.append(pair);
           for (const locale of locales) {
             const localeLabel = locale === 'de' ? copy.identityGerman : copy.identityEnglish;
             const fields = element('div', undefined, 'settings-field-pair');
             const label = control(fields, id + '-label-' + locale, copy.navigationLabel + ' · ' + localeLabel, item.label?.[locale]);
             label.addEventListener('input', () => {
-              item.label ||= {}; if (label.value) item.label[locale] = label.value; else delete item.label[locale]; dirty = true; refreshNotice();
+              item.label ||= {}; if (label.value) item.label[locale] = label.value; else delete item.label[locale]; dirty = true; refreshNotice(); refreshSummary();
             });
             if (item.kind === 'path' || item.kind === 'external') {
               const href = control(fields, id + '-href-' + locale, copy.navigationHref + ' · ' + localeLabel, item.href[locale]);
-              href.addEventListener('input', () => { if (href.value) item.href[locale] = href.value; else delete item.href[locale]; dirty = true; refreshNotice(); });
+              href.addEventListener('input', () => { if (href.value) item.href[locale] = href.value; else delete item.href[locale]; dirty = true; refreshNotice(); refreshSummary(); });
             }
-            row.append(fields);
+            editor.append(fields);
             const notice = element('p', undefined, 'muted'); notice.id = id + '-notice-' + locale;
             row.append(notice);
             function refreshNotice() {
@@ -88,6 +111,8 @@ window.SettingsNavigation = (function () {
             }
             refreshNotice();
           }
+          details.append(editor);
+          row.append(details);
           const actions = element('div', undefined, 'form-actions');
           for (const [action, text] of [['up', copy.identityMoveUp], ['down', copy.identityMoveDown], ['remove', copy.identityRemoveLink]]) {
             const button = element('button', text, action === 'remove' ? 'btn-remove' : 'btn-secondary');
@@ -98,11 +123,11 @@ window.SettingsNavigation = (function () {
               if (busy) return;
               if (action === 'remove') {
                 if (!await AdminConfirm.ask({ title: text, body: names[slot] + ' · ' + (item.label?.[locales[0]] || targets[item.target] || item.href?.[locales[0]] || (index + 1)) + '\n' + copy.navigationRemoveConfirm, confirmLabel: text, danger: true })) return;
-                config[slot].splice(index, 1); dirty = true; paint('nav-add-' + slot);
+                config[slot].splice(index, 1); dirty = true; draft.mark(); paint('nav-add-' + slot);
               } else {
                 const next = index + (action === 'up' ? -1 : 1);
                 [config[slot][index], config[slot][next]] = [config[slot][next], config[slot][index]];
-                dirty = true; paint('nav-' + slot + '-' + next + '-kind');
+                dirty = true; draft.mark(); paint('nav-' + slot + '-' + next + '-kind');
               }
             });
             actions.append(button);
@@ -114,7 +139,7 @@ window.SettingsNavigation = (function () {
         add.setAttribute('aria-label', copy.navigationAdd + ' · ' + names[slot]);
         add.addEventListener('click', () => {
           if (busy || config[slot].length >= max) return;
-          config[slot].push({ kind: 'builtin', target: 'home' }); dirty = true;
+          config[slot].push({ kind: 'builtin', target: 'home' }); dirty = true; draft.mark();
           paint('nav-' + slot + '-' + (config[slot].length - 1) + '-kind');
         });
         section.append(list, add); root.append(section);
@@ -131,7 +156,7 @@ window.SettingsNavigation = (function () {
         config = data.config; updatedAt = data.updatedAt; locales = data.language.locales; pages = catalogue.pages;
         const social = $('navigationSocial'); social.replaceChildren();
         for (const link of data.socialLinks) social.append(element('li', link.label + ' — ' + link.url));
-        dirty = conflicted = false; paint(); status('');
+        dirty = conflicted = false; paint(); draft.clean(); status('');
       } catch { status(copy.navigationLoadFailed, true); }
       finally { lock(false); }
     }
@@ -148,7 +173,7 @@ window.SettingsNavigation = (function () {
         const result = await response.json();
         if (response.ok) {
           config = result.saved.config; updatedAt = result.saved.updatedAt; locales = result.saved.language.locales;
-          dirty = false; paint(); BuildReporting.renderOutcome($('navigationStatus'), 'navigation', result); $('navigationStatus').focus();
+          dirty = false; paint(); draft.clean(); BuildReporting.renderOutcome($('navigationStatus'), 'navigation', result); $('navigationStatus').focus();
         } else if (response.status === 409) { conflicted = true; status(copy.navigationConflict, true); }
         else if (response.status === 400) status(copy.navigationInvalid, true);
         else { conflicted = true; status(BuildReporting.text('unknown'), true); }
