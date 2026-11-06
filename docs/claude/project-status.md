@@ -4,6 +4,25 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Implemented locally:** writing-first Desk refinement (2026-11-06; distill, layout, clarify,
+  adapt and polish). Persistent New post and contextual Continue editing lead authoring; backup
+  advice moves above writing. Healthy publication sections are compact, nonzero exceptions stay
+  visible, and native Publication details holds full diagnostics and the unchanged confirmed
+  rebuild. Running/failed/unavailable build evidence stays visible outside it. Malformed or
+  unknown observations never become zero-count reassurance, and refresh preserves disclosure
+  state and keyboard focus. New copy lives in both i18n dictionaries. Standalone Desk actions
+  have 44px targets; absent thumbnails no longer reserve empty phone panels.
+  Uploader typecheck and full suite pass: 4,250 tests, 647 skipped without integration DB.
+  Site suite: 872 pass, 7 skip. Database-backed Astro check: zero errors/warnings/hints.
+  Browser smoke used working-tree asset overrides against the local app, actual empty-state
+  observations and intercepted populated/unavailable fixtures at 1440/780/390/320px.
+  DE/EN phone layouts, refresh recovery, retained disclosure, rebuild cancellation and menu
+  focus restoration were exercised; no writes were attempted and no page errors were observed.
+  The detector reports no findings but cannot resolve the absolute stylesheet URLs.
+  The temporary database bridge and browser tabs are closed. No code was deployed, pushed or
+  published; no CI or physical-device qualification is claimed. Rollback is the frontend/copy
+  change only; there is no schema, route, persisted-state or publication-pipeline migration.
+
 - **Implemented, PR #544 open:** Settings critique refinement (2026-11-06, all six requested passes).
   All seven tabs retain the Editorial desk identity. Unsaved-work tracking names independent
   save scopes, protects page exit, confirms discard, preserves failed saves and never stores

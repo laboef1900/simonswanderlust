@@ -84,6 +84,15 @@ On first run, when no users exist, `/login` shows a "Create the first admin"
 form. Fill in a username and password; the form closes once any user exists. Setup/login
 take you to the existing publishing **Desk**, not a snippet/frontmatter workflow.
 
+The Desk keeps **New post** in its header and offers **Continue editing** for the latest draft.
+Backup-off advice appears near the top for admins. **Publication** shows known differences and
+nonzero story/media counts; unknown or unavailable observations are not treated as all-clear.
+Use its **Refresh** action to reread publication observations. **Publication details** retains
+the full counts and build history, explains rebuild scope, and contains **Rebuild site now**
+with its existing confirmation. Failed/running/unavailable build status remains visible even
+when details are closed. Photo processing and the live-site link remain independent below.
+Opening details or refreshing never publishes anything; saved drafts stay private.
+
 On a genuinely fresh installation the admin Desk offers this checklist:
 
 1. **Admin account created** — informational, already done after setup.

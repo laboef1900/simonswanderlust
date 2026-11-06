@@ -171,7 +171,7 @@ describe('Desk build status authorization and recovery', () => {
     const root = h.document.getElementById('deskBuild')!;
     expect(root.hidden).toBe(false);
     expect(root.textContent).toContain(ui.en['admin.build.unavailable']);
-    expect(h.document.getElementById('deskNext')!.querySelector('a')?.href).toBe('/admin/editor.html');
+    expect(h.document.getElementById('deskNewPost')!.hidden).toBe(false);
     const retry = h.document.getElementById('publicationRefresh')!;
     h.recover();
     retry.click(); retry.click();

@@ -7,49 +7,66 @@
     <link rel="stylesheet" href="/admin/admin.css" />
     <link rel="stylesheet" href="/admin/onboarding.css" />
   </head>
-  <body>
+  <body class="desk-page">
     <header class="cms-page-meta">
       <h1>Desk</h1>
-      <p class="lede">What to write, what still needs publishing, and whether photos are still encoding.</p>
-      <div id="onboardingOpener" class="cms-page-actions" hidden></div>
+      <p id="deskIntro" class="lede"></p>
+      <div class="cms-page-actions">
+        <div id="onboardingOpener" hidden></div>
+        <a id="deskNewPost" class="btn-new" href="/admin/editor.html" hidden></a>
+      </div>
     </header>
 
     <main>
       <p id="deskStatus" class="muted" role="status"></p>
       <div id="deskError" class="err" role="alert" hidden></div>
-      <p id="publicationNotice" role="status"></p>
-      <button id="publicationRefresh" class="btn-secondary" type="button"></button>
+      <p id="deskBackupWarning" class="notice-warn desk-backup-warning" role="status" hidden>
+        <span id="deskBackupCopy"></span>
+        <a id="deskBackupSettings" href="/admin/settings.html#site"></a>
+      </p>
       <section id="onboardingChecklist" hidden></section>
 
       <section aria-labelledby="deskNextHeading">
-        <h2 id="deskNextHeading" class="desk-heading">Most recently edited draft</h2>
+        <h2 id="deskNextHeading" class="desk-heading"></h2>
         <div id="deskNext" aria-live="polite"></div>
       </section>
 
-      <section class="desk-list-block" aria-labelledby="deskUnpubHeading">
-        <h2 id="deskUnpubHeading" class="desk-heading"></h2>
-        <div id="deskUnpub" aria-live="polite"></div>
-      </section>
-      <section id="deskAttentionSection" class="desk-list-block" hidden>
-        <h2 id="deskAttentionHeading" class="desk-heading"></h2>
-        <div id="deskAttention" aria-live="polite"></div>
+      <section class="desk-publication" aria-labelledby="deskPublicationHeading">
+        <div class="desk-section-header">
+          <h2 id="deskPublicationHeading" class="desk-heading"></h2>
+          <button id="publicationRefresh" class="btn-secondary" type="button"></button>
+        </div>
+        <p id="publicationNotice" role="status"></p>
+        <p id="deskOverview" role="status" hidden></p>
+        <ul id="deskOverviewItems" class="desk-exceptions" hidden></ul>
+        <p id="deskBuildAlert" role="status" hidden></p>
+        <section class="desk-list-block" aria-labelledby="deskUnpubHeading">
+          <h3 id="deskUnpubHeading" class="desk-subheading"></h3>
+          <div id="deskUnpub" aria-live="polite"></div>
+        </section>
+        <section id="deskAttentionSection" class="desk-list-block" aria-labelledby="deskAttentionHeading" hidden>
+          <h3 id="deskAttentionHeading" class="desk-subheading"></h3>
+          <div id="deskAttention" aria-live="polite"></div>
+        </section>
+        <details id="deskPublicationDetails" class="desk-details" hidden>
+          <summary id="deskDetailsLabel"></summary>
+          <div class="desk-details-body">
+            <p id="deskBuild" role="status" hidden></p>
+            <p id="deskPublicationSummary" role="status" hidden></p>
+            <div id="deskRebuildLink" hidden>
+              <p id="deskRebuildHelp" class="muted"></p>
+              <button class="btn-primary" type="button" id="deskRebuild"></button>
+              <p id="deskRebuildOutcome" role="status"></p>
+            </div>
+          </div>
+        </details>
       </section>
 
       <section class="desk-meta" aria-labelledby="deskMetaHeading">
-        <h2 id="deskMetaHeading" class="desk-heading">Site</h2>
+        <h2 id="deskMetaHeading" class="desk-heading"></h2>
         <ul class="desk-meta-list">
           <li id="deskQueue" aria-live="polite"></li>
           <li id="deskRelease" aria-live="polite"></li>
-          <li id="deskBuild" role="status" hidden></li>
-          <li id="deskBackupWarning" class="notice-warn" hidden>
-            Automatic database backups are off.
-            <a href="/admin/settings.html#site">Turn them on in Site &amp; backups</a>.
-          </li>
-          <li id="deskPublicationSummary" role="status" hidden></li>
-          <li id="deskRebuildLink" hidden>
-            <button class="btn-primary" type="button" id="deskRebuild"></button>
-            <p id="deskRebuildOutcome" role="status"></p>
-          </li>
         </ul>
       </section>
     </main>
@@ -76,6 +93,16 @@
       $('deskAttentionHeading').textContent = PublicationState.text('attention');
       $('publicationRefresh').textContent = PublicationState.text('refresh');
       $('deskRebuild').textContent = PublicationState.text('rebuild');
+      $('deskIntro').textContent = copy.deskIntro;
+      $('deskNewPost').textContent = copy.deskNewPost;
+      $('deskNextHeading').textContent = copy.deskRecentDraft;
+      $('deskPublicationHeading').textContent = copy.deskPublication;
+      $('deskDetailsLabel').textContent = copy.deskDetails;
+      $('deskMetaHeading').textContent = copy.deskSite;
+      $('deskBackupCopy').textContent = copy.deskBackupOff;
+      $('deskBackupSettings').textContent = copy.deskBackupSettings;
+      $('deskRebuildHelp').textContent = copy.deskRebuildHelp;
+      $('publicationRefresh').setAttribute('aria-label', PublicationState.text('refreshLabel'));
 
       function say(msg) { $('deskStatus').textContent = msg; }
 
@@ -148,15 +175,13 @@
       function renderNext(post) {
         const root = $('deskNext');
         root.textContent = '';
+        $('deskNewPost').className = post ? 'cms-btn-ghost' : 'btn-new';
+        $('deskNextHeading').textContent = post ? copy.deskRecentDraft : copy.deskStartWriting;
         if (!post) {
           const empty = el('div', 'desk-empty');
           const p = el('p');
           p.textContent = copy.deskNoDrafts;
-          const cta = el('a', 'btn-new');
-          cta.href = '/admin/editor.html';
-          cta.textContent = 'New post';
           empty.appendChild(p);
-          empty.appendChild(cta);
           root.appendChild(empty);
           return;
         }
@@ -177,9 +202,9 @@
         const publication = el('p', 'muted');
         publication.textContent = PublicationState.label(post.publication, isAdmin);
         body.appendChild(publication);
-        const open = el('a', 'action-link');
+        const open = el('a', 'btn-new');
         open.href = editorHref(post.translationKey);
-        open.textContent = 'Continue editing';
+        open.textContent = copy.deskContinue;
         body.appendChild(open);
         card.appendChild(body);
         root.appendChild(card);
@@ -225,6 +250,8 @@
         const next = Desk.nextDraft(observedPosts);
         const newer = Desk.unpublished(observedPosts);
         const attention = Desk.attention(observedPosts);
+        $('deskUnpubHeading').hidden = !newer.length;
+        $('deskAttentionSection').hidden = !isAdmin || (!attention.length && !unavailable);
         if (!next && unavailable) setMessage($('deskNext'), PublicationState.text('unavailable'));
         else renderNext(next);
         if (!newer.length && unavailable) setMessage($('deskUnpub'), PublicationState.text('unavailable'));
@@ -241,6 +268,35 @@
             || links.find((link) => link.href === identity.href);
           // Keep an unchanged section steady; reveal cross-section or missing-link fallbacks.
           (nextFocus || $('publicationRefresh')).focus({ preventScroll: !!nextFocus && focusRoot.contains(nextFocus) });
+        }
+      }
+
+      function renderPublicationOverview(summary) {
+        const overview = Desk.publicationOverview(summary);
+        $('deskOverview').textContent = overview.message;
+        $('deskOverview').setAttribute('data-state', overview.state);
+        const list = $('deskOverviewItems');
+        list.textContent = '';
+        list.hidden = !overview.items.length;
+        overview.items.forEach((text) => {
+          const item = el('li');
+          item.textContent = text;
+          list.appendChild(item);
+        });
+      }
+
+      function renderBuildStatus(status) {
+        const alert = $('deskBuildAlert');
+        if (status) {
+          BuildReporting.renderStatus($('deskBuild'), status);
+          alert.hidden = !status.running && !['failed', 'interrupted'].includes(status.last?.result)
+            && status.record !== 'unreadable' && status.record !== 'not_persisted';
+          if (!alert.hidden) BuildReporting.renderStatus(alert, status);
+          else alert.textContent = '';
+        } else {
+          $('deskBuild').textContent = BuildReporting.text('unavailable');
+          alert.textContent = BuildReporting.text('unavailable');
+          alert.hidden = false;
         }
       }
 
@@ -267,7 +323,7 @@
           a.href = '/';
           a.target = '_blank';
           a.rel = 'noopener';
-          a.textContent = 'View live site';
+          a.textContent = copy.deskLiveSite;
           root.appendChild(a);
         } else {
           root.textContent = authenticatedContext.isAdmin ? copy.deskNoReleaseAdmin : copy.deskNoReleaseAuthor;
@@ -298,8 +354,8 @@
           renderObservedPosts();
           if (isAdmin) {
             $('deskPublicationSummary').textContent = PublicationState.summary(summary);
-            if (status) BuildReporting.renderStatus($('deskBuild'), status);
-            else $('deskBuild').textContent = BuildReporting.text('unavailable');
+            renderPublicationOverview(summary);
+            renderBuildStatus(status);
           }
         },
         unavailable() {
@@ -309,7 +365,8 @@
           $('publicationNotice').textContent = PublicationState.text('stale');
           if (isAdmin) {
             $('deskPublicationSummary').textContent = PublicationState.text('summaryUnavailable');
-            $('deskBuild').textContent = BuildReporting.text('unavailable');
+            renderPublicationOverview(null);
+            renderBuildStatus(null);
           }
         },
         unauthorized: redirectToLogin,
@@ -413,8 +470,10 @@
           authenticatedContext = context;
           isAdmin = context.isAdmin === true;
           Auth.renderHeader(context);
+          $('deskNewPost').hidden = false;
           $('deskBuild').hidden = !isAdmin;
-          $('deskAttentionSection').hidden = !isAdmin;
+          $('deskOverview').hidden = !isAdmin;
+          $('deskPublicationDetails').hidden = !isAdmin;
           $('deskPublicationSummary').hidden = !isAdmin;
           $('deskRebuildLink').hidden = !isAdmin;
           if (isAdmin) void loadBackupWarning();

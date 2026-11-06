@@ -20,6 +20,31 @@ window.Desk = (function () {
     return (posts || []).filter((p) => PublicationState.attention(p.publication)).sort(byUpdated);
   }
 
+  function publicationOverview(value) {
+    const unavailable = (message) => ({ state: 'unavailable', message, items: [] });
+    if (value?.availability !== 'available' || value.release !== 'known') {
+      return unavailable(PublicationState.summary(value));
+    }
+    const categories = ['notLive', 'olderVersionLive', 'unexpectedLocaleLive', 'unpublishedStillLive', 'deletedStillLive'];
+    const posts = value.posts;
+    const gallery = value.galleryDescriptions;
+    const count = (n) => Number.isSafeInteger(n) && n >= 0;
+    if (!posts || !gallery || !categories.every((key) => count(posts[key]))
+      || !count(gallery.photos) || !count(gallery.stories)) {
+      return unavailable(PublicationState.summary(null));
+    }
+    const items = categories.filter((key) => posts[key] > 0).map((key) =>
+      PublicationState.text('desk' + key[0].toUpperCase() + key.slice(1), { count: posts[key] }));
+    if (gallery.photos > 0 || gallery.stories > 0) {
+      items.push(PublicationState.text('deskGallery', gallery));
+    }
+    return {
+      state: items.length ? 'attention' : 'clear',
+      message: PublicationState.text(items.length ? 'deskAttention' : 'attentionEmpty'),
+      items,
+    };
+  }
+
   function encodeCount(stats) {
     if (!stats || !Number.isInteger(stats.pending) || stats.pending < 0
       || !Number.isInteger(stats.running) || stats.running < 0) return null;
@@ -80,6 +105,7 @@ window.Desk = (function () {
     nextDraft,
     unpublished,
     attention,
+    publicationOverview,
     encodeCount,
     releaseState,
     releaseFromResponse,

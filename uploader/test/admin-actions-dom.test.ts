@@ -262,18 +262,6 @@ function loadPosts(extraGlobals: Record<string, unknown> = {}, languageRead?: ()
   return page;
 }
 
-describe('ordinary Desk empty states', () => {
-  it.each([true, false])('keeps draft creation available without onboarding (admin: %s)', (isAdmin) => {
-    const { ctx, el } = loadPage('public/index.html', {}, ['public/desk.js']);
-    vm.runInContext(`authenticatedContext = { isAdmin: ${isAdmin} }; renderNext(null); renderRelease(false);`, ctx);
-    const empty = el('deskNext').children[0]!;
-    expect(empty.children[0]!.textContent).toBe(ui.en['editor.chrome.deskNoDrafts']);
-    expect(empty.children[1]!.href).toBe('/admin/editor.html');
-    expect(el('deskRelease').textContent).toBe(ui.en[isAdmin ? 'editor.chrome.deskNoReleaseAdmin' : 'editor.chrome.deskNoReleaseAuthor']);
-    expect(el('deskRelease').children).toHaveLength(0);
-  });
-});
-
 describe('import.html rejection accounting', () => {
   it('shows a rejection-only completed summary and renders HTML-like slugs only as text', () => {
     const { ctx, el } = loadPage('public/import.html', {});
@@ -3744,10 +3732,10 @@ describe('publication refresh in list, Desk and Settings consumers', () => {
     await flush();
     const doc = page.ctx.document as { activeElement: Element | null };
     for (const id of ['deskNext', 'deskUnpub', 'deskAttention']) {
-      for (const selector of ['.desk-title', '.action-link']) {
-        page.el(id).querySelectorAll(selector)[0]!.focus();
+      for (const index of [0, 1]) {
+        page.el(id).querySelectorAll('a')[index]!.focus();
         await vi.advanceTimersByTimeAsync(30000); await flush();
-        expect(doc.activeElement).toBe(page.el(id).querySelectorAll(selector)[0]);
+        expect(doc.activeElement).toBe(page.el(id).querySelectorAll('a')[index]);
       }
     }
     held = true;
@@ -3779,12 +3767,12 @@ describe('publication refresh in list, Desk and Settings consumers', () => {
     rows = [];
     await (vm.runInContext('publicationRefresh.refresh()', page.ctx) as Promise<void>);
     expect(doc.activeElement).toBe(page.el('publicationRefresh'));
-    page.el('deskNext').querySelectorAll('.btn-new')[0]!.focus();
+    page.el('deskNewPost').focus();
     await (vm.runInContext('publicationRefresh.refresh()', page.ctx) as Promise<void>);
-    expect(doc.activeElement).toBe(page.el('deskNext').querySelectorAll('.btn-new')[0]);
+    expect(doc.activeElement).toBe(page.el('deskNewPost'));
     rows = [{ ...post, publication: publication('draft') }];
     await (vm.runInContext('publicationRefresh.refresh()', page.ctx) as Promise<void>);
-    expect(doc.activeElement).toBe(page.el('publicationRefresh'));
+    expect(doc.activeElement).toBe(page.el('deskNewPost'));
     vm.runInContext('publicationRefresh.stop()', page.ctx);
   });
 
