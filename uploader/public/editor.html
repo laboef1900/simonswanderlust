@@ -41,6 +41,9 @@
           <button id="saveDraft" type="button">Save draft</button>
           <button id="publishBtn" type="button" class="btn-primary-publish" hidden>Publish</button>
           <button id="reviewStory" type="button" class="btn-secondary" aria-haspopup="dialog" aria-controls="storyReviewDialog">Review story</button>
+          <!-- Preview is a daily writing action, so it sits in the bar, not the menu.
+               Its accessible name keeps the full "not the live site" warning. -->
+          <button id="previewBtn" type="button" class="btn-secondary">Preview</button>
           <details class="editor-actions-menu" id="editorActionsMenu">
             <summary class="btn-secondary editor-actions-menu__trigger">More actions</summary>
             <div class="editor-actions-menu__panel">
@@ -48,7 +51,6 @@
                 <p class="section-label">Publish readiness</p>
                 <p id="mobileLocaleChip" class="locale-chip"></p>
               </div>
-              <button id="previewBtn" type="button" class="btn-secondary">Preview</button>
               <button id="unpublishBtn" type="button" class="btn-secondary" hidden>Unpublish</button>
             </div>
           </details>
@@ -71,7 +73,7 @@
         <div class="editor-canvas editor-writing-surface" id="editorWritingSurface">
           <!-- Advisory checks stay with the manuscript and never gate Publish. -->
           <div id="galleryMetadataWarnings" class="notice-warn" hidden></div>
-          <details id="altAudit" class="notice-warn alt-audit" hidden>
+          <details id="altAudit" class="notice-info alt-audit" hidden>
             <summary><span id="altAuditSummary" role="status"></span></summary>
             <p id="altAuditHelp"></p>
             <div id="altAuditList"></div>
@@ -378,12 +380,16 @@
 
             <div id="stopsContainer">
               <p class="section-label">Waypoints / stops</p>
-              <p id="waypointPrivacy" class="muted"></p>
-              <p id="stopRoutePrivacy" class="muted"></p>
-              <p id="stopRouteViaHelp" class="muted"></p>
               <div id="stopsList"></div>
               <button type="button" id="addStop" class="btn-secondary">Add stop</button>
-              <p class="muted"><a id="waypointAttribution" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer"></a></p>
+              <!-- The stops lead; what search, via points and routing do follows them,
+                   still visible and still side by side (spec #513 privacy notes). -->
+              <div class="stops-notes">
+                <p id="stopRouteViaHelp" class="muted"></p>
+                <p id="waypointPrivacy" class="muted"></p>
+                <p id="stopRoutePrivacy" class="muted"></p>
+                <p class="muted"><a id="waypointAttribution" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer"></a></p>
+              </div>
             </div>
           </details>
           <section class="editor-inspector-group stop-route" id="stopRoutePanel" aria-labelledby="stopRouteHeading">
@@ -779,8 +785,8 @@
         unauthorized: () => guard.redirectToLogin(),
       });
       publicationRetry.addEventListener('click', () => publicationRefresh.refresh());
-      $('previewBtn').textContent = PublicationState.text('preview');
-      $('previewBtn').title = PublicationState.text('previewMedia');
+      $('previewBtn').setAttribute('aria-label', PublicationState.text('preview'));
+      $('previewBtn').title = PublicationState.text('preview') + '. ' + PublicationState.text('previewMedia') + '.';
       // Delegated listeners cover every static field plus dynamic key-fact rows;
       // the EasyMDE bodies live in CodeMirror and need their own change hooks.
       const mainEl = document.querySelector('main');
@@ -1351,7 +1357,7 @@
       const titleImages = Object.fromEntries(['de', 'en'].map((locale) => [
         locale,
         EditorTitleImage.create({
-          locale, mount: $(locale + 'TitleImage'), copy: EditorImageCopy[locale],
+          locale, mount: $(locale + 'TitleImage'), copy: EditorImageCopy.en,
           getSlug: () => $(locale === 'de' ? 'slugFieldDe' : 'slugFieldEn').value.trim(),
           onChange: () => { guard.markDirty(); storyReview?.invalidate(); },
           onUnauthed: () => guard.redirectToLogin(),
@@ -1379,11 +1385,11 @@
       function galleryFailure(locale, error, retry) {
         if (error?.status === 401) { guard.redirectToLogin(); return; }
         const status = $(locale + 'BodyImgStatus');
-        status.textContent = EditorGalleryCopy[locale].analysisFailed;
+        status.textContent = EditorGalleryCopy.en.analysisFailed;
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'btn-secondary';
-        button.textContent = EditorGalleryCopy[locale].retry;
+        button.textContent = EditorGalleryCopy.en.retry;
         button.addEventListener('click', retry);
         status.appendChild(button);
       }
@@ -1411,7 +1417,7 @@
         const images = locale === 'de' ? deImages : enImages;
         const status = $(locale + 'BodyImgStatus');
         if (current.lines.some((line) => line.valid === false)) {
-          status.textContent = EditorGalleryCopy[locale].metadataBlocked + ' ' + EditorGalleryCopy[locale].metadataSyntax;
+          status.textContent = EditorGalleryCopy.en.metadataBlocked + ' ' + EditorGalleryCopy.en.metadataSyntax;
           galleryEditors[locale].revealLine(cm.posFromIndex(existing.start).line);
           const raw = document.createElement('code');
           raw.style.display = 'block';
@@ -1442,7 +1448,7 @@
         // An unterminated fence's extent runs to end-of-post, so there is no
         // safe range to replace. Say so instead of eating the rest of the body.
         if (existing && existing.unterminated) {
-          status.textContent = EditorGalleryCopy[locale].unterminated;
+          status.textContent = EditorGalleryCopy.en.unterminated;
           return;
         }
 
@@ -1501,7 +1507,7 @@
             const fresh = cm.getValue();
             if (ticket !== galleryRequest || galleryRevision[locale] !== revision || fresh !== body || cm.getValue() !== fresh) {
               await GalleryFence.analyze(fresh, { fresh: true });
-              status.textContent = EditorGalleryCopy[locale].stale;
+              status.textContent = EditorGalleryCopy.en.stale;
               return;
             }
             // Rewrite only our controls, retaining unrelated author directives.
@@ -1514,15 +1520,15 @@
               : '';
             const out = await GalleryFence.replaceFenceAt(fresh, cursor, fence);
             if (ticket !== galleryRequest || galleryRevision[locale] !== revision || cm.getValue() !== fresh) {
-              status.textContent = EditorGalleryCopy[locale].stale;
+              status.textContent = EditorGalleryCopy.en.stale;
               return;
             }
             if (out.blocked === 'unterminated') {
-              status.textContent = EditorGalleryCopy[locale].unterminated;
+              status.textContent = EditorGalleryCopy.en.unterminated;
               return;
             }
             if (out.blocked === 'invalid_metadata') {
-              status.textContent = EditorGalleryCopy[locale].metadataBlocked;
+              status.textContent = EditorGalleryCopy.en.metadataBlocked;
               await galleryMetadataWarnings.reopen(locale);
               return;
             }
@@ -1561,7 +1567,7 @@
           library: galleryLibrary,
           imageOrigin: EditorGalleryImageOrigin,
           toggle: $(locale + 'GalleryView'),
-          copy: EditorGalleryCopy[locale],
+          copy: EditorGalleryCopy.en,
           onEdit: (cursor) => galleryFor(locale, cursor),
           onUnauthed: () => guard.redirectToLogin(),
         });
@@ -1642,11 +1648,11 @@
               return;
             }
             if (galleryRevision[locale] !== revision || cm.getValue() !== snapshot || JSON.stringify(cm.listSelections()) !== JSON.stringify(selection)) {
-              statusEl.textContent = EditorGalleryCopy[locale].stale + ' ' + md;
+              statusEl.textContent = EditorGalleryCopy.en.stale + ' ' + md;
               return;
             }
             if (spot.blocked === 'unterminated') {
-              statusEl.textContent = EditorGalleryCopy[locale].unterminated + ' ' + md;
+              statusEl.textContent = EditorGalleryCopy.en.unterminated + ' ' + md;
             } else {
               const imagesMap = locale === 'de' ? deImages : enImages;
               imagesMap[body.src] = {
@@ -1968,6 +1974,9 @@
         summary.textContent = (images.length === 1 ? editorCopy.auditOne : editorCopy.auditOther)
           .replace('{count}', String(images.length));
         $('altAuditHelp').textContent = published ? editorCopy.auditPublished : editorCopy.auditHelp;
+        // Optional before publishing (information); a live story missing alt text is a warning.
+        box.classList.toggle('notice-warn', !!published);
+        box.classList.toggle('notice-info', !published);
         const groups = new Map();
         let nextFocus;
         images.forEach((img) => {

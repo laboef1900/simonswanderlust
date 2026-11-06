@@ -163,6 +163,11 @@ label {
 .card > label:first-child,
 .card-heading + label { margin-top: 0; }
 
+/* Fieldsets group controls for disabling and naming, never to draw a box:
+   sections inside the workspace are flat (DESIGN.md). */
+fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+legend { padding: 0; }
+
 input, textarea, select {
   width: 100%;
   min-height: var(--control-h);
@@ -369,16 +374,26 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   font-size: 0.8125rem;
 }
 
-/* The editor's alt-text audit is one of those: a result that will publish, or
-   already did, with photos no reader can see. It reuses .notice-warn rather
-   than inventing a second callout, and lists each photo as a real button so it
-   is keyboard reachable and jumps to the field that fixes it. */
+/* An advisory that never blocks anything (the editor's optional alt-text
+   review) reads as information, not as a warning: same shape, neutral ink. */
+.notice-info {
+  margin: 0.75rem 0 0;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--control-radius);
+  background: var(--canvas);
+  color: var(--ink);
+  font-size: 0.8125rem;
+}
+
+/* The editor's alt-text audit lists each photo as a real button so it is
+   keyboard reachable and jumps to the field that fixes it. */
 .alt-audit { margin: 0 0 1.25rem; }
-/* Inline disclosures (alt-text review, bulk selection, picker folders): a
-   drawn chevron in place of the UA triangle, matching the menus. */
-:is(.alt-audit, .selection-review, .media-picker__folders) > summary { display: flex; flex-wrap: wrap; align-items: center; gap: 0 0.5rem; list-style: none; }
-:is(.alt-audit, .selection-review, .media-picker__folders) > summary::-webkit-details-marker { display: none; }
-:is(.alt-audit, .selection-review, .media-picker__folders) > summary::before {
+/* Inline disclosures (alt-text review, bulk selection, picker folders, help
+   details): a drawn chevron in place of the UA triangle, matching the menus. */
+:is(.alt-audit, .selection-review, .media-picker__folders, .help-details) > summary { display: flex; flex-wrap: wrap; align-items: center; gap: 0 0.5rem; list-style: none; }
+:is(.alt-audit, .selection-review, .media-picker__folders, .help-details) > summary::-webkit-details-marker { display: none; }
+:is(.alt-audit, .selection-review, .media-picker__folders, .help-details) > summary::before {
   content: '';
   flex: none;
   width: 0.375rem;
@@ -387,14 +402,25 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   border-bottom: 1.5px solid currentColor;
   transform: rotate(-45deg);
 }
-:is(.alt-audit, .selection-review, .media-picker__folders)[open] > summary::before { transform: rotate(45deg); }
+:is(.alt-audit, .selection-review, .media-picker__folders, .help-details)[open] > summary::before { transform: rotate(45deg); }
+/* Background and caveats one click away, so the controls lead the page. */
+.help-details { margin: 0.75rem 0 0; color: var(--muted); font-size: 0.8125rem; }
+.help-details > summary {
+  width: fit-content;
+  min-height: var(--control-h-sm);
+  color: var(--studio-accent);
+  font-weight: 600;
+  cursor: pointer;
+}
+.help-details > summary:hover { color: var(--navy); }
+.help-details > :not(summary) { max-width: 65ch; margin: 0.25rem 0 0; }
+.help-details ul { padding-left: 1.1rem; }
+.help-details li + li { margin-top: 0.25rem; }
 .alt-audit p { margin: 0; }
 .alt-audit-list { list-style: none; margin: 0.5rem 0 0; padding: 0; }
 .alt-audit-list li { padding: 0.15rem 0; }
-/* The callout's own ink — the wording carries the meaning, the underline the
-   affordance. */
-.alt-audit-list .btn-link { color: var(--warn-ink); }
-.alt-audit-list .btn-link:where(:not(:disabled)):hover { color: var(--red-hover); }
+.alt-audit-list .btn-link { color: var(--studio-accent); }
+.alt-audit-list .btn-link:where(:not(:disabled)):hover { color: var(--navy); }
 
 /* ---- import progress (issue #92) ---- */
 .progress { margin-top: 0.75rem; }
@@ -453,6 +479,30 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   text-decoration: none;
 }
 .action-link:hover { color: var(--studio-accent-hover); text-decoration: underline; }
+
+/* Pages catalogue: flat compact rows like Posts, not a stack of cards. */
+#pagesList { border-top: 1px solid var(--line); }
+.pages-row {
+  display: grid;
+  grid-template-columns: minmax(8rem, 12rem) 8.5rem minmax(0, 1fr) minmax(0, max-content);
+  align-items: center;
+  gap: 0.5rem 1rem;
+  padding-block: 0.75rem;
+  border-bottom: 1px solid var(--line);
+}
+.pages-row > p { margin: 0; }
+.pages-row__state { justify-self: start; font-size: 0.8125rem; }
+.pages-row__kind { margin: 0; font-size: 0.9375rem; font-weight: 650; }
+.pages-row__titles { min-width: 0; color: var(--muted); font-size: 0.8125rem; overflow-wrap: anywhere; }
+.pages-row__actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 0.5rem 1rem; }
+.pages-row__actions .btn-remove { min-height: var(--control-h-sm); padding-block: 0.25rem; }
+.pages-row__fixed { max-width: 15rem; margin: 0; font-size: 0.75rem; text-align: right; }
+@media (max-width: 40rem) {
+  .pages-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .pages-row__titles { grid-column: 1 / -1; }
+  .pages-row__actions { grid-column: 1 / -1; justify-content: flex-start; }
+  .pages-row__fixed { max-width: none; text-align: left; }
+}
 
 /* Search / filter / sort toolbar (Posts, Media): fields share one wrapping
    row, captions use the label voice, and the disclosure links sit on the
@@ -590,7 +640,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .posts-page .posts-table th,
 .posts-page .posts-table td { min-width: 0; }
 .posts-page .posts-table .col-select { width: 2.75rem; }
-.posts-page .posts-table .col-thumb { width: 4rem; }
+.posts-page .posts-table .col-thumb { width: 7rem; }
 .posts-page .posts-table .col-title { width: auto; }
 .posts-page .posts-table .col-status { width: 10.5rem; }
 .posts-page .posts-table .col-languages { width: 6.5rem; }
@@ -598,7 +648,9 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .posts-page .posts-table .col-actions { width: 11rem; }
 .posts-page .posts-table .status-pill { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 .posts-page .posts-table .status-pill::before { flex-shrink: 0; }
-.posts-page .media-thumb { width: 3rem; height: 2.25rem; object-fit: cover; border-radius: 0.25rem; }
+/* Photography leads: a hero is the fastest way to recognise a story, so it is
+   large enough to read as a photograph, not an icon. */
+.posts-page .media-thumb { width: 6rem; height: 4rem; object-fit: cover; border-radius: 0.3rem; }
 .posts-page .posts-table tbody tr:hover { background: #fafbfc; }
 .posts-page .post-trip-meta { display: block; margin-top: 0.125rem; color: var(--muted); font-size: 0.75rem; line-height: 1.5; }
 .posts-page .post-language {
@@ -778,7 +830,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   /* Title row, then status + languages on one line, then date, then actions. */
   .posts-page .posts-table tbody tr {
     display: grid;
-    grid-template-columns: var(--control-h-sm) 3.25rem minmax(0, 1fr) auto;
+    grid-template-columns: var(--control-h-sm) 4.5rem minmax(0, 1fr) auto;
     gap: 0.375rem 0.5rem;
     padding-block: 0.75rem;
     border-bottom: 1px solid var(--line);
@@ -791,7 +843,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
     border: 0;
   }
   .posts-page .posts-table tbody td.col-select { grid-column: 1; grid-row: 1; }
-  .posts-page .posts-table tbody td.col-thumb { grid-column: 2; grid-row: 1; padding-top: 0.25rem; }
+  .posts-page .posts-table tbody td.col-thumb { grid-column: 2; grid-row: 1 / span 2; padding-top: 0.25rem; }
+  .posts-page .posts-table tbody .media-thumb { width: 4.5rem; height: 3rem; }
   .posts-page .posts-table tbody td.col-title { grid-row: 1; }
   .posts-page .posts-table tbody td.col-status { grid-column: 3; grid-row: 2; }
   .posts-page .posts-table tbody td.col-languages { grid-column: 4; grid-row: 2; }
@@ -861,17 +914,40 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .media-layout {
   display: grid;
-  grid-template-columns: 11rem minmax(0, 1fr) 16rem;
+  grid-template-columns: 11rem minmax(0, 1fr) 20rem;
   gap: 1.5rem;
   align-items: start;
 }
 .media-sidebar,
 .media-main,
 .media-detail { min-width: 0; }
-.media-detail .media-key { margin: 0; color: var(--muted); }
+.media-detail .media-key { margin: 0.5rem 0 0; color: var(--muted); }
 .media-detail > label:first-of-type { margin-top: 1rem; }
 .media-detail > button { margin-top: 1rem; }
 .media-detail > button + button { margin-left: 0.25rem; }
+/* The photo being described, large enough to judge what the alt text must say. */
+.media-detail__preview { margin: 0; }
+.media-detail__preview img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 22rem;
+  object-fit: contain;
+  border-radius: 0.5rem;
+  background: var(--canvas);
+}
+.media-detail__preview .thumb-placeholder {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 4 / 3;
+  border-radius: 0.5rem;
+  background: var(--canvas);
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+.media-detail__shot { margin-top: 0.5rem; color: var(--ink); font-size: 0.8125rem; }
+.media-detail__empty { margin: 0; color: var(--ink); font-size: 0.875rem; }
+.media-detail__hints { margin: 0.75rem 0 0; padding-left: 1.1rem; font-size: 0.8125rem; line-height: 1.6; }
 
 .folder-tree { list-style: none; margin: 0 0 0.75rem; padding: 0; }
 .folder-btn {
@@ -898,6 +974,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr));
   gap: 0.75rem;
 }
+/* The library itself: fewer, larger photos than the picker dialog. */
+.media-layout .media-grid { grid-template-columns: repeat(auto-fill, minmax(min(10.5rem, 40%), 1fr)); gap: 1rem; }
 .media-cell {
   position: relative; /* anchors .media-cell__order, the picker's position badge */
   display: flex;
@@ -941,8 +1019,19 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   line-clamp: 2;
   overflow-wrap: anywhere;
 }
-.media-cell__title { font-size: 0.75rem; font-weight: 500; line-height: 1.35; }
-.media-cell__used { color: var(--muted); font-size: 0.6875rem; line-height: 1.35; }
+.media-cell__title { font-size: 0.8125rem; font-weight: 600; line-height: 1.35; }
+/* A bare file name is a fallback, not a name: set back and one line. */
+.media-cell__title.is-filename { color: var(--muted); font-weight: 400; font-size: 0.75rem; -webkit-line-clamp: 1; line-clamp: 1; }
+.media-cell__used { color: var(--muted); font-size: 0.6875rem; line-height: 1.35; -webkit-line-clamp: 1; line-clamp: 1; }
+.media-cell__flag {
+  align-self: flex-start;
+  padding: 0.0625rem 0.375rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 0.25rem;
+  color: var(--muted);
+  font-size: 0.6875rem;
+  font-weight: 500;
+}
 
 .media-pager { display: flex; align-items: center; gap: 0.75rem; margin-top: 1rem; }
 .media-pager .muted { margin: 0; }
@@ -1077,9 +1166,19 @@ dialog.media-picker {
 }
 
 /* ---- key facts ---- */
-.keyfact-row { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; }
-.keyfact-label { flex: 1; }
-.keyfact-value { flex: 1.3; }
+/* Label above value: the inspector column is too narrow for two inputs side by
+   side, and a cut-off "39'6122 (Yuca" cannot be proofread. */
+.keyfact-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--control-h);
+  gap: 0.375rem 0.5rem;
+  align-items: center;
+  padding-block: 0.625rem;
+  border-bottom: 1px solid var(--line);
+}
+.keyfact-label { grid-column: 1; font-weight: 600; }
+.keyfact-value { grid-column: 1 / -1; grid-row: 2; }
+.keyfact-row .btn-remove { grid-column: 2; grid-row: 1; }
 
 /* ---- stops ---- */
 .stop-row {
@@ -1099,6 +1198,8 @@ dialog.media-picker {
 .stop-search-status:empty { display: none; }
 .stop-search-results { display: grid; gap: 0.5rem; margin-top: 0.5rem; }
 .stop-search-result { justify-content: flex-start; width: 100%; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.stops-notes { margin-top: 0.75rem; font-size: 0.75rem; line-height: 1.45; }
+.stops-notes p { margin: 0 0 0.375rem; }
 /* The × remove beside a key fact or stop: a square the height of its row. */
 :is(.keyfact-row, .stop-row) .btn-remove {
   flex: none;
@@ -1887,7 +1988,6 @@ body.settings-page .muted { max-width: 70ch; overflow-wrap: anywhere; }
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 0 1rem;
 }
-#identityFields, .identity-asset-fields { min-width: 0; margin: 0; padding: 0; border: 0; }
 .identity-assets { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--line); }
 .identity-asset-fields { margin-bottom: 1rem; }
 .identity-asset-fields legend { font-weight: 600; }
@@ -2950,6 +3050,15 @@ body.editor-page .locale-chip-link:where(:not(:disabled)):hover { background: no
     font-size: 0.75rem;
   }
 
+  /* The actions row is full with Save, Publish, Review, Preview and More, so the
+     story-details opener rides at the right end of the locale row instead of
+     wrapping onto a line of its own. */
+  body.editor-page #inspectorToggle {
+    position: absolute;
+    top: 0.4rem;
+    right: max(0.4rem, env(safe-area-inset-right));
+  }
+
   body.editor-page .editor-actions-menu__trigger {
     width: 3.5rem;
     padding-inline: 0.25rem;
@@ -3019,21 +3128,6 @@ body.editor-page .locale-chip-link:where(:not(:disabled)):hover { background: no
     flex: 1 1 9rem;
   }
 
-  body.editor-page .keyfact-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) var(--control-h);
-  }
-
-  body.editor-page .keyfact-row .keyfact-value {
-    grid-column: 1;
-  }
-
-  body.editor-page .keyfact-row .btn-remove {
-    grid-column: 2;
-    grid-row: 1 / span 3;
-    align-self: stretch;
-  }
-
   body.editor-page .form-row-2 {
     grid-template-columns: 1fr;
   }
@@ -3076,44 +3170,68 @@ body.editor-page .locale-chip-link:where(:not(:disabled)):hover { background: no
 }
 .editor-gallery__head h3 { margin: 0; font-size: 0.9375rem; font-weight: 650; }
 .editor-gallery__head button { margin-left: auto; }
-.editor-gallery__help { margin: 0.5rem 0 1rem; max-width: 65ch; }
+.editor-gallery__help { margin: 0.375rem 0 0.875rem; max-width: 65ch; font-size: 0.8125rem; }
+/* A visual index of the gallery, not a form: small tiles so a 30-photo gallery
+   stays a few rows of the manuscript instead of several screens. */
 .editor-gallery__photos {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
-  gap: 1.5rem 1rem;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 9.5rem), 1fr));
+  gap: 1rem 0.75rem;
   padding: 0;
   margin: 0;
   list-style: none;
 }
-.editor-gallery__photo { min-width: 0; }
+.editor-gallery__photo { min-width: 0; font-size: 0.8125rem; line-height: 1.4; }
 .editor-gallery__image {
   display: block;
   width: 100%;
-  height: 12rem;
-  object-fit: contain;
-  margin-bottom: 0.75rem;
+  aspect-ratio: 4 / 3;
+  height: auto;
+  object-fit: cover;
+  margin-bottom: 0.5rem;
   border-radius: 0.375rem;
   background: var(--canvas);
 }
-.editor-gallery__photo label { margin-top: 0.5rem; }
-.editor-gallery__photo textarea { min-height: 4rem; margin-bottom: 0.5rem; }
+.editor-gallery__photo label { margin-top: 0; font-size: 0.75rem; font-weight: 600; color: var(--muted); }
+.editor-gallery__alt-label { display: block; }
+.editor-gallery__alt-text {
+  display: -webkit-box;
+  margin-top: 0.125rem;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  color: var(--ink);
+  font-weight: 400;
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+.editor-gallery__alt-text[hidden] { display: none; }
+.editor-gallery__alt-text.is-missing {
+  display: inline-block;
+  padding: 0.0625rem 0.375rem;
+  border-radius: 0.25rem;
+  background: #faf3e7;
+  color: #855f25;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+.editor-gallery__photo textarea { min-height: 4rem; margin: 0.25rem 0 0.5rem; font-weight: 400; color: var(--ink); }
 .editor-gallery__photo button { white-space: normal; }
-.editor-gallery__caption, .editor-gallery__suggested-text { overflow-wrap: anywhere; }
+.editor-gallery__caption, .editor-gallery__suggested-text { margin-block: 0.25rem; overflow-wrap: anywhere; }
 .editor-gallery__status { margin-block: 0.5rem; }
 .editor-gallery__status:empty { display: none; }
 .editor-gallery__suggestion { padding-block: 0.5rem; border-top: 1px solid var(--line-strong); }
 .editor-gallery__suggestion button { margin-right: 0.5rem; }
-/* Media-backed descriptions are shown, not edited, here: a visibly inert field
-   plus the line naming where they are edited. */
-.editor-gallery__photo textarea[readonly] { background-color: var(--canvas); }
-.editor-gallery__source, .editor-gallery__local { margin-block: 0 0.5rem; overflow-wrap: anywhere; }
+/* Media-backed descriptions are shown as text; this line names where they are edited. */
+.editor-gallery__source, .editor-gallery__local { margin-block: 0.25rem 0.5rem; font-size: 0.75rem; overflow-wrap: anywhere; }
 .editor-gallery__retry { margin-bottom: 0.75rem; }
 
 
 /* ---- media library: AI photo details (media-ai.js, media-ai-dialog.js) ----
    A suggestion offered beside text the author already wrote reads as a note,
    never as a saved value: tinted, ruled, with its own explicit Use. */
-.posts-filters > .media-ai-open { margin-left: auto; }
+.posts-filters > .media-ai-open { flex: none; margin-left: auto; }
 .media-ai-suggest { margin-top: 0.75rem; }
 .media-ai-suggest > button { width: 100%; }
 .media-ai-suggest > .muted:empty { display: none; }
@@ -3130,8 +3248,6 @@ body.editor-page .locale-chip-link:where(:not(:disabled)):hover { background: no
 .media-ai-hint .btn-link { margin-left: 0.375rem; }
 
 dialog.media-ai { max-width: min(38rem, calc(100vw - 2rem)); }
-.media-ai__options,
-.media-ai__group { min-width: 0; margin: 0; padding: 0; border: 0; }
 .media-ai__group { margin-bottom: 1rem; }
 .media-ai__group > legend { margin-bottom: 0.25rem; padding: 0; font-size: 0.875rem; font-weight: 650; }
 .media-ai__group > .check-field { margin-top: 0.375rem; }

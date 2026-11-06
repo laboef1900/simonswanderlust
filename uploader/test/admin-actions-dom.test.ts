@@ -1713,6 +1713,14 @@ function loadSettingsPage(extra: Record<string, unknown> = {}) {
   }, ['public/tabs.js']);
 }
 
+/** Settings opens on Site identity; model lookups run only while AI models is shown. */
+const AI_MODELS_TAB = {
+  location: {
+    href: 'http://localhost/admin/settings.html#ai-models', origin: 'http://localhost',
+    pathname: '/admin/settings.html', search: '', hash: '#ai-models', protocol: 'http:',
+  },
+};
+
 /** Calls a top-level function the page script declared (vm puts it on the context). */
 async function callPage(ctx: Record<string, unknown>, name: string, ...args: unknown[]): Promise<void> {
   const fn = ctx[name];
@@ -1759,7 +1767,10 @@ async function chooseModel(el: (id: string) => Element, id: string, label: strin
   await el(id).fire('change');
 }
 
-/** settings.html over a contract-shaped fake API. `route` answers first; /settings is served from `state`. */
+/**
+ * settings.html over a contract-shaped fake API. `route` answers first; /settings is served from `state`.
+ * These tests drive the AI registry, so the page opens on its tab unless `hash` says otherwise.
+ */
 async function apiPage(initial: SettingsResponse, opts: {
   confirm?: (question: Question) => boolean | Promise<boolean>;
   route?: (request: ApiRequest, setState: (next: SettingsResponse) => void) => Response | undefined | Promise<Response | undefined>;
@@ -1793,7 +1804,7 @@ async function apiPage(initial: SettingsResponse, opts: {
     AdminConfirm: {
       ask: async (question: Question) => { questions.push(question); return opts.confirm ? opts.confirm(question) : true; },
     },
-    ...(opts.hash === undefined ? {} : {
+    ...(opts.hash === undefined ? AI_MODELS_TAB : {
       location: {
         href: 'http://localhost/admin/settings.html' + opts.hash, origin: 'http://localhost',
         pathname: '/admin/settings.html', search: '', hash: opts.hash, protocol: 'http:',
@@ -1825,11 +1836,11 @@ describe('settings.html tabs', () => {
     return { ...page, location, replaced, visible, title };
   }
 
-  it.each(['', '#', '#nope', '#__proto__'])('opens AI models for hash %j without rewriting the URL', (hash) => {
+  it.each(['', '#', '#nope', '#__proto__'])('opens Site identity for hash %j without rewriting the URL', (hash) => {
     const t = tabsPage(hash);
-    expect(t.visible()).toEqual(['panel-ai-models']);
-    expect(t.title()).toBe(' · AI models');
-    expect(t.el('tabbtn-ai-models').attrs['aria-selected']).toBe('true');
+    expect(t.visible()).toEqual(['panel-identity']);
+    expect(t.title()).toBe(' · ' + EDITOR_COPY.identityTab);
+    expect(t.el('tabbtn-identity').attrs['aria-selected']).toBe('true');
     expect(t.replaced).toEqual([]);
   });
 
@@ -1846,36 +1857,36 @@ describe('settings.html tabs', () => {
     expect(t.visible()).toEqual(['panel-identity']);
     expect(t.el('tabbtn-identity').tabIndex).toBe(0);
     expect(t.title()).toBe(' · ' + EDITOR_COPY.identityTab);
-    await t.el('tabbtn-identity').fire('keydown', { key: 'ArrowUp' });
-    expect(t.visible()).toEqual(['panel-comments']);
-    expect(t.replaced).toEqual(['#comments']);
+    await t.el('tabbtn-identity').fire('keydown', { key: 'ArrowDown' });
+    expect(t.visible()).toEqual(['panel-language']);
+    expect(t.replaced).toEqual(['#language']);
   });
 
   it('opens language settings directly and includes the panel in keyboard navigation', async () => {
     const t = tabsPage('#language');
     expect(t.visible()).toEqual(['panel-language']);
     expect(t.title()).toBe(' · Languages');
-    await t.el('tabbtn-language').fire('keydown', { key: 'ArrowDown' });
-    expect(t.visible()).toEqual(['panel-site']);
+    await t.el('tabbtn-language').fire('keydown', { key: 'ArrowUp' });
+    expect(t.visible()).toEqual(['panel-identity']);
   });
 
   it('a vertical index moves with Up/Down, Home/End, and mirrors the tab in the hash and title', async () => {
     const t = tabsPage();
     expect(t.el('settingsTabs').attrs['aria-orientation']).toBe('vertical');
-    await t.el('tabbtn-ai-models').fire('keydown', { key: 'ArrowRight' });
-    expect(t.visible()).toEqual(['panel-ai-models']);
-    await t.el('tabbtn-ai-models').fire('keydown', { key: 'ArrowDown' });
-    expect(t.visible()).toEqual(['panel-images']);
-    expect(t.el('tabbtn-images').focused).toBe(true);
-    expect(t.title()).toBe(' · Images');
-    await t.el('tabbtn-images').fire('keydown', { key: 'End' });
+    await t.el('tabbtn-identity').fire('keydown', { key: 'ArrowRight' });
+    expect(t.visible()).toEqual(['panel-identity']);
+    await t.el('tabbtn-identity').fire('keydown', { key: 'ArrowDown' });
+    expect(t.visible()).toEqual(['panel-language']);
+    expect(t.el('tabbtn-language').focused).toBe(true);
+    expect(t.title()).toBe(' · Languages');
+    await t.el('tabbtn-language').fire('keydown', { key: 'End' });
     expect(t.visible()).toEqual(['panel-site']);
     expect(t.title()).toBe(' · Site & backups');
     await t.el('tabbtn-site').fire('keydown', { key: 'ArrowDown' });
-    expect(t.visible()).toEqual(['panel-ai-models']);
-    await t.el('tabbtn-ai-models').fire('keydown', { key: 'ArrowUp' });
+    expect(t.visible()).toEqual(['panel-identity']);
+    await t.el('tabbtn-identity').fire('keydown', { key: 'ArrowUp' });
     await t.el('tabbtn-site').fire('keydown', { key: 'Home' });
-    expect(t.replaced).toEqual(['#images', '#site', '#ai-models', '#site', '#ai-models']);
+    expect(t.replaced).toEqual(['#language', '#site', '#identity', '#site', '#identity']);
   });
 
   it('a click selects the tab and a hashchange (back/forward, edited URL) selects it too', async () => {
@@ -1893,10 +1904,10 @@ describe('settings.html tabs', () => {
   it('below 72rem the strip is horizontal and its arrow keys follow', async () => {
     const t = tabsPage('', true);
     expect(t.el('settingsTabs').attrs['aria-orientation']).toBe('horizontal');
-    await t.el('tabbtn-ai-models').fire('keydown', { key: 'ArrowDown' });
-    expect(t.visible()).toEqual(['panel-ai-models']);
-    await t.el('tabbtn-ai-models').fire('keydown', { key: 'ArrowRight' });
-    expect(t.visible()).toEqual(['panel-images']);
+    await t.el('tabbtn-identity').fire('keydown', { key: 'ArrowDown' });
+    expect(t.visible()).toEqual(['panel-identity']);
+    await t.el('tabbtn-identity').fire('keydown', { key: 'ArrowRight' });
+    expect(t.visible()).toEqual(['panel-language']);
   });
 });
 
@@ -2889,7 +2900,7 @@ describe('settings.html AI configuration', () => {
 
   async function reviewPage(provider: ProviderView, network: (url: string, init?: RequestInit) => Promise<Response> = storedKey) {
     const fetcher = vi.fn(network);
-    const page = loadSettingsPage({ fetch: fetcher });
+    const page = loadSettingsPage({ fetch: fetcher, ...AI_MODELS_TAB });
     vm.runInContext(readFileSync('public/llm.js', 'utf8'), page.ctx);
     await callPage(page.ctx, 'fill', settingsResponse({
       aiProviders: provider.id === LOCAL.id ? [LOCAL] : [LOCAL, provider],
@@ -3052,7 +3063,7 @@ describe('settings.html against the real settings and provider routes', () => {
       return new Response(response.statusCode === 204 ? null : response.body, { status: response.statusCode });
     });
     const page = loadSettingsPage({
-      fetch: fetcher,
+      fetch: fetcher, ...AI_MODELS_TAB,
       AdminConfirm: { ask: async (question: Question) => { questions.push(question); return confirm(question); } },
     });
     vm.runInContext(readFileSync('public/llm.js', 'utf8'), page.ctx);

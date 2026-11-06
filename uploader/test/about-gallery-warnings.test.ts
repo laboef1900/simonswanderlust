@@ -126,11 +126,11 @@ describe('About page saved gallery warnings', () => {
     h.api.fill('en', { title: 'About', bodyMarkdown: source });
     await drain();
     const root = h.el('galleryMetadataWarnings');
-    expect(root.textContent).toContain(ui.de['editor.gallery.metadataAdvisory']);
+    expect(root.textContent).toContain(ui.en['editor.gallery.metadataAdvisory']);
     expect(root.textContent).toContain(ui.en['editor.gallery.metadataAdvisory']);
     h.el('saveBtn').click();
     await drain();
-    expect(root.textContent).toContain(ui.de['editor.gallery.metadataSaved']);
+    expect(root.textContent).toContain(ui.en['editor.gallery.metadataSaved']);
     expect(root.textContent).toContain(ui.en['editor.gallery.metadataSaved']);
     // #297: a failed rebuild after an acknowledged save is reported beside the saved state.
     expect(h.el('actionStatus').textContent).toContain(ui.en['admin.build.failedChange'].replace('{error}', ui.en['admin.build.failure.build_failed']));

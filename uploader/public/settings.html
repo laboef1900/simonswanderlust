@@ -8,32 +8,30 @@
   </head>
   <body class="settings-page">
     <header class="cms-page-meta">
-      <h1>Settings<span id="settingsTabTitle" class="settings-title-tab"> · AI models</span></h1>
+      <h1>Settings<span id="settingsTabTitle" class="settings-title-tab"></span></h1>
       <p class="lede" id="settingsIntro"></p>
     </header>
 
     <main class="settings-layout">
       <div class="settings-tabs" id="settingsTabs" role="tablist" aria-orientation="vertical">
-        <button type="button" role="tab" id="tabbtn-ai-models" aria-controls="panel-ai-models" aria-selected="true" data-tab="ai-models">AI models</button>
+        <button type="button" role="tab" id="tabbtn-identity" aria-controls="panel-identity" aria-selected="true" data-tab="identity"></button>
+        <button type="button" role="tab" id="tabbtn-language" aria-controls="panel-language" aria-selected="false" tabindex="-1" data-tab="language" data-language-copy="Tab"></button>
+        <button type="button" role="tab" id="tabbtn-navigation" aria-controls="panel-navigation" aria-selected="false" tabindex="-1" data-tab="navigation"></button>
         <button type="button" role="tab" id="tabbtn-images" aria-controls="panel-images" aria-selected="false" tabindex="-1" data-tab="images">Images</button>
         <button type="button" role="tab" id="tabbtn-comments" aria-controls="panel-comments" aria-selected="false" tabindex="-1" data-tab="comments">Comments</button>
-        <button type="button" role="tab" id="tabbtn-identity" aria-controls="panel-identity" aria-selected="false" tabindex="-1" data-tab="identity"></button>
-        <button type="button" role="tab" id="tabbtn-navigation" aria-controls="panel-navigation" aria-selected="false" tabindex="-1" data-tab="navigation"></button>
-        <button type="button" role="tab" id="tabbtn-language" aria-controls="panel-language" aria-selected="false" tabindex="-1" data-tab="language" data-language-copy="Tab"></button>
+        <button type="button" role="tab" id="tabbtn-ai-models" aria-controls="panel-ai-models" aria-selected="false" tabindex="-1" data-tab="ai-models">AI models</button>
         <button type="button" role="tab" id="tabbtn-site" aria-controls="panel-site" aria-selected="false" tabindex="-1" data-tab="site">Site &amp; backups</button>
       </div>
       <div class="settings-sections">
-      <section class="settings-panel" id="panel-ai-models" role="tabpanel" aria-labelledby="tabbtn-ai-models">
+      <section class="settings-panel" id="panel-ai-models" role="tabpanel" aria-labelledby="tabbtn-ai-models" hidden>
         <section class="card" id="providersSection" aria-labelledby="providersHeading">
           <div class="settings-section-head">
             <h2 id="providersHeading" class="card-heading">Providers</h2>
             <button id="addProvider" type="button" aria-describedby="providerLimit">Add provider</button>
           </div>
           <p id="providersHelp" class="muted">
-            API keys are stored encrypted on this server, one per provider. When a signed-in author
-            uses an AI feature, their browser receives the key of the provider assigned to that
-            feature, in memory only, and calls the provider directly — the server never calls a
-            model. Remote providers may charge for usage.
+            Keys are stored encrypted on this server. When an author uses an AI feature, their
+            browser calls the assigned provider directly. Remote providers may charge for usage.
           </p>
           <p id="providerLimit" class="muted" hidden>This is the limit of 20 providers. Delete one to add another.</p>
           <ul id="providerList" class="provider-list"></ul>
@@ -80,9 +78,8 @@
         <section class="card" id="useCaseSection" aria-labelledby="useCasesHeading">
           <h2 id="useCasesHeading" class="card-heading">Use case assignments</h2>
           <p id="useCasesHelp" class="muted">
-            Each feature uses the provider assigned here, or the default provider. Story review and
-            excerpts send the active language’s unsaved draft text; photo descriptions send a
-            resized photo and need a model that can read images.
+            Each feature uses the provider assigned here, or the default. Photo descriptions need a
+            model that can read images.
           </p>
           <div class="use-case-panel">
             <div class="use-case-row">
@@ -144,7 +141,7 @@
           <p class="section-label" id="captionDetailsHeading"></p>
           <div class="settings-field-pair">
             <div>
-              <label for="captionTimeoutMs">Timeout for photo descriptions (ms)</label>
+              <label for="captionTimeoutMs">Timeout for photo descriptions (milliseconds)</label>
               <input id="captionTimeoutMs" type="number" min="1000" max="600000" />
             </div>
             <div>
@@ -164,9 +161,8 @@
           </div>
           <p id="aiOut" class="page-status" role="status"></p>
           <p id="reviewTestHelp" class="muted">
-            Test review runs a built-in sample text — never a draft — through the selected story
-            review provider, model, instructions and timeout, using that provider’s stored key.
-            Nothing is saved. Provider usage charges may apply.
+            Runs a built-in sample text, never a draft, with the review settings above. Nothing is
+            saved; usage charges may apply.
           </p>
           <p id="reviewTestOut" class="page-status" role="status"></p>
         </section>
@@ -301,7 +297,7 @@
         </section>
       </section>
 
-      <section class="settings-panel" id="panel-identity" role="tabpanel" aria-labelledby="tabbtn-identity" hidden>
+      <section class="settings-panel" id="panel-identity" role="tabpanel" aria-labelledby="tabbtn-identity">
         <section class="card">
           <h2 id="identityHeading" class="card-heading"></h2>
           <p id="identityIntro" class="muted"></p>
@@ -419,24 +415,24 @@
             <input id="backupRetention" type="number" min="1" max="100" />
           </div>
         </div>
+        <p id="backupOffWarning" class="notice-warn" role="status" hidden>
+          Automatic database backups are off. Choose Daily or Weekly and save, or use Back up now before risky changes.
+        </p>
 
         <p class="section-label">WordPress import</p>
         <div class="settings-field-pair">
           <div>
-            <label for="importDelayMs">Delay between image downloads (ms)</label>
+            <label for="importDelayMs">Delay between photo downloads (milliseconds)</label>
             <input id="importDelayMs" type="number" min="0" max="10000" />
             <p class="muted">
-              How long to wait between fetching photos from the old site. 0 is as fast as
-              possible, which is what got the importer cut off after 37 images; 1200 completed
-              all 665.
+              Pause between photo downloads from the old site. 1200 avoids being blocked; 0 is fastest.
             </p>
           </div>
           <div>
             <label for="importRetries">Retries per image</label>
             <input id="importRetries" type="number" min="0" max="5" />
             <p class="muted">
-              Extra attempts after a download fails, spaced 5s / 15s / 45s. Only transient
-              failures are retried — a blocked address or a missing file is not.
+              Extra attempts after a temporary download failure (5s, 15s, 45s apart).
             </p>
           </div>
         </div>
@@ -450,16 +446,19 @@
         <p id="buildStatus" class="page-status" role="status"></p>
         <p id="publicationSummary" class="page-status" role="status"></p>
         <button id="publicationRefresh" class="btn-secondary" type="button"></button>
-        <section aria-labelledby="recoveryHeading">
-          <h3 id="recoveryHeading"></h3>
-          <p id="recoveryLocal" class="muted"></p>
-          <h4 id="recoveryAppHeading"></h4>
-          <p id="recoveryApp"></p>
-          <h4 id="recoveryOperatorHeading"></h4>
-          <p id="recoveryOperator"></p>
-          <p id="recoveryRebuild" class="muted"></p>
-          <p id="recoveryRetention" class="muted"></p>
-        </section>
+        <details class="help-details recovery-details">
+          <summary>What a full recovery needs</summary>
+          <section aria-labelledby="recoveryHeading">
+            <h3 id="recoveryHeading"></h3>
+            <p id="recoveryLocal" class="muted"></p>
+            <h4 id="recoveryAppHeading"></h4>
+            <p id="recoveryApp"></p>
+            <h4 id="recoveryOperatorHeading"></h4>
+            <p id="recoveryOperator"></p>
+            <p id="recoveryRebuild" class="muted"></p>
+            <p id="recoveryRetention" class="muted"></p>
+          </section>
+        </details>
         <p class="section-label">Last backup</p>
         <p id="backupStatus" class="page-status" role="status"></p>
         <p class="section-label">Backup files</p>
@@ -560,7 +559,7 @@
 
       function selectTabFromHash() {
         const hashed = String(location.hash).replace(/^#/, '');
-        const name = Object.hasOwn(TABS, hashed) ? hashed : 'ai-models';
+        const name = Object.hasOwn(TABS, hashed) ? hashed : 'identity';
         settingsTabs.select(name);
         showTabTitle(name);
         return name;
@@ -1376,6 +1375,8 @@
         $('backupRetention').value = s.backupRetention ?? 14;
         $('importDelayMs').value = s.importDelayMs ?? 1200;
         $('importRetries').value = s.importRetries ?? 3;
+        // Reflects the saved schedule, not an unsaved choice in the select.
+        $('backupOffWarning').hidden = (s.backupSchedule || 'off') !== 'off';
       }
 
       // #513 street routing: one OSRM base URL per travel mode; empty disables it.

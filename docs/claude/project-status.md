@@ -4,6 +4,25 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Implemented, PR #541 open:** Wanderlust Studio
+  admin critique follow-up (2026-11-06; impeccable critique 27/40, all five priority issues).
+  Media is photo-first: larger titled tiles with a quiet "No alt text" tag, a detail panel that
+  opens with the photo and camera line, selection-shortcut hints, one AI entry per scope, and
+  Rename/Delete disabled on All photos. The editor's gallery widget shows Media alt text as
+  text (no empty read-only boxes), key facts stack label over value, Preview sits in the
+  command bar, the pre-publish alt review is a neutral notice, and all editor chrome is
+  English in both locale tabs. Posts hero thumbnails are 6×4rem. Import, AI models,
+  Site & backups and waypoint help were cut to one line each with details in disclosures
+  (privacy notes stay visible). The journey editor uses the story editor's command bar and
+  locale tabs; Pages are flat rows; Users lists accounts first; fieldsets never draw a box;
+  Journeys has its own icon. Settings opens on Site identity; backups-off is flagged on
+  Settings and the admin Desk. No routes, schema, slugs or server behaviour changed. Uploader
+  and site Vitest suites and `tsc` pass; verified in Chromium at 1440 and 390px (editor also
+  at 320px) against a throwaway Postgres instance. Files: `uploader/public/{admin.css,media-browser.js,
+  media.html,editor.html,editor-galleries.js,editor-title-image.js,editor-linter.js,
+  editor-review.js,gallery-metadata-warnings.js,posts.html,index.html,import.html,
+  settings.html,users.html,pages.html,journey-editor.html,journey-editor.js,journeys.css,
+  auth.js}`, `site/src/i18n/ui.ts`, `DESIGN.md`.
 - **Implemented, PR #540 open:** travel map page refinement (2026-11-06), driven by two
   impeccable critiques (21/40, then 26/40). Trips are keyboard-focusable DOM pins showing
   their travel-log entry number (oldest = N°01, as `entryNumberOf`), explained by a legend.

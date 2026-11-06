@@ -132,7 +132,7 @@ window.EditorReview = (function () {
       catch (error) {
         if (!owns(request)) return;
         if (error?.status === 401) { invalidate(); options.on401(); return; }
-        const copy = EditorGalleryCopy[request.snapshot.story.locale];
+        const copy = EditorGalleryCopy.en;
         instant.replaceChildren(element('p', '', copy.analysisFailed));
         const retry = element('button', 'btn-secondary', copy.retry);
         retry.type = 'button';

@@ -46,9 +46,10 @@
           </div>
         </details>
       </div>`;
-    mount.setAttribute('lang', locale);
     mount.querySelectorAll('[data-copy]').forEach((el) => { el.textContent = copy[el.dataset.copy]; });
     const el = (name) => document.getElementById(prefix + name);
+    // English chrome; the alt text itself is locale content.
+    el('Alt')?.setAttribute('lang', locale);
     let image;
     let busy = false;
 
@@ -138,12 +139,12 @@
         const result = await root.UploadRecovery.run({
           file, fields: { key: 'trips/' + slug + '/title' }, ownerId, recovery: options.recovery,
           status: el('Status'), button: el('Upload'), onUnauthed,
-          copy: root.EditorCopy[locale],
+          copy: root.EditorCopy.en,
         });
         if (!result || !options.recovery.canAdopt(ownerId)) return;
         const current = get();
         if (current?.src !== previous?.src) {
-          el('Status').textContent = root.EditorCopy[locale].uploadNotApplied + ' ' + result.src;
+          el('Status').textContent = root.EditorCopy.en.uploadNotApplied + ' ' + result.src;
           return;
         }
         const newerAlt = el('Alt').value !== previousAlt ? el('Alt').value : '';
