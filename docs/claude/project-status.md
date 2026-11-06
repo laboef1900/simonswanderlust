@@ -4,7 +4,7 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
-- **Implemented, branch `feature/admin-critique-fixes` (uncommitted):** Wanderlust Studio
+- **Implemented, PR #541 open:** Wanderlust Studio
   admin critique follow-up (2026-11-06; impeccable critique 27/40, all five priority issues).
   Media is photo-first: larger titled tiles with a quiet "No alt text" tag, a detail panel that
   opens with the photo and camera line, selection-shortcut hints, one AI entry per scope, and
