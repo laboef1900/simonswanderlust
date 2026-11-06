@@ -67,8 +67,9 @@ arbitrary-language site builder.
 
 Optional AI tools can suggest excerpts, review a story and describe photographs. Choose
 local or remote providers independently for editorial work and photo descriptions.
-Review Story works on the unsaved active language; suggestions do not silently rewrite
-your article or gate publishing.
+Review Story checks the unsaved active language locally first. **Review with AI** explicitly
+sends it to the disclosed provider/model; suggestions never silently rewrite your article or
+gate publishing.
 
 For a large photo collection, generate titles, bilingual alt text, captions and tags in
 bulk. Fill empty fields by default; replacing existing descriptions is an explicit choice.

@@ -1197,13 +1197,15 @@ and the `<dialog>`s appended to `<body>` share one set:
 
 - The editor has no visible page title: the shell's h1 (New post / Edit post) is
   visually hidden, so the command bar opens the workspace. The command bar separates
-  primary actions (Save draft, Publish, Review story, **Preview**, More actions) from the
+  primary actions (Save draft, Publish, Review story, **Save & preview**, More actions) from the
   full-width save/readiness status row; the actions come first in the DOM, so Tab reaches
   Save before the status. On a live story Publish reads **Publish changes** (it replaces
   what readers see); below 52rem the word "changes" folds out of sight but stays in the
   accessible name, so the phone action row does not wrap. Save draft names its shortcut (⌘S / Ctrl+S) in its tooltip and
-  `aria-keyshortcuts`. Preview is a daily writing action, so it sits in the bar; its
-  accessible name keeps "Draft preview — not the live site". Re-reading the live state is
+  `aria-keyshortcuts`. **Save & preview** names its existing save-before-preview operation;
+  its accessible name keeps "Draft preview — not the live site", and its description explains
+  that it does not publish. Below 52rem the same Review story button moves into More (no
+  duplicate handler); closing Review returns focus to More when its button is hidden. Re-reading the live state is
   a small icon beside it (**Check the live site again**), not a full-height button. Above
   74rem readiness lives only in the status row, so More actions appears only when it holds
   Unpublish; below 74rem the menu also carries readiness. On phones the status is one
@@ -1212,16 +1214,19 @@ and the `<dialog>`s appended to `<body>` share one set:
   of disappearing behind ellipses.
 - The manuscript has its own toolbar (EasyMDE's is off): a roving `role="toolbar"` with
   one Tab stop and arrow keys inside, drawn stroke icons for bold, italic, heading, quote,
-  lists and link (shortcut in the tooltip), then labelled **Photo** and **Gallery**, and at
-  its right end the gallery-Markdown toggle and the pressed-state **Rendered view**. It
-  pins under the command bar in the workspace scroller, so every tool is in reach anywhere
+  lists and link (shortcut in the tooltip), the gallery-Markdown toggle, then labelled **Photo**
+  and **Gallery**, and the **Rendered / Write** switch. Below 52rem formatting and raw gallery
+  Markdown fold into a **Format** tray; Photo, Gallery and Rendered remain visible without
+  horizontal scrolling. Escape returns to Format; arrow navigation skips folded tools, and
+  resizing retains a visible toolbar focus target. The tray overlays rather than shifts prose.
+  The toolbar pins under the command bar in the workspace scroller, so every tool is in reach anywhere
   in a long story, and it is the top edge of the manuscript frame. **Photo** opens a tray
   under the bar — file (dashed drop edge), alt text, **Upload and insert**, **Suggest alt
   text**, **Choose from library** — that inserts at the cursor, never into a gallery
   fence, and then closes and returns the caret to the story; Escape closes it to its
   toggle. A library pick carries Media's alt for the open language unless one was typed.
-  Upload/gallery outcomes read in one status line under the bar. The rendered view is
-  read-only, so the editing controls wait while it is on.
+  Upload/gallery outcomes read in one status line under the bar. Rendered is a read-only
+  body view without saving; editing controls wait until the author selects Write.
 - All editor chrome is English like the rest of the admin, whichever locale tab is open:
   gallery widgets, title-image controls, gallery metadata advisories and their retry
   copy come from the English dictionary; only the author's own text (alt, captions) is
@@ -1270,21 +1275,41 @@ and the `<dialog>`s appended to `<body>` share one set:
   itself is not animated (it would reflow the whole manuscript each frame); the content
   fades and slides out with opacity/transform. The
   collapsed content is inert and hidden from assistive technology; the slide honours
-  reduced motion. At 74rem and below it is a modal drawer opened by an icon button
-  after More actions; the same header toggle closes it, and it traps Tab, closes on
+  reduced motion. At 74rem and below it is a modal drawer opened by the visibly labelled
+  **Details** button; the same header toggle closes it, and it traps Tab, closes on
   Escape or the scrim, and restores focus to its opener. The frame then holds the
   manuscript alone.
+- Within each locale, Story details leads with the hero thumbnail and excerpt, followed by
+  country and permalink. Key facts fold behind a live row count without removing their values
+  from the draft. The optional title image and expedition/route sections remain available.
+  The phone title uses a smaller display scale and tighter spacing to expose the manuscript sooner.
+  Below 52rem the audit-to-title gap, title-field margin and title-to-body gap are reduced
+  without shrinking the touch targets or changing the manuscript's reading size.
 - Hero image and title image are collapsible inspector sections (closed by default) with
   one box: a white panel with preview, alt text, status, then **Replace photo** (native
   file input with a dashed drop edge, upload, library) and **Adjust framing**. A closed
   section shows a small thumbnail of its photo beside Show. A loaded story opens Replace
   photo only when that image is missing; author actions never fold it under focus.
 - Excerpts grow with their text; no inner scrollbar or resize grip.
-- The slug's site prefix sits above the editable slug in the inspector, so neither half
-  truncates.
+- The slug's site prefix sits above the slug in the inspector, so neither half truncates.
+  A published, disabled permalink is styled as a quiet reference; editable slugs retain a field boundary.
 - Key facts stack label above value, each fact divided by a hairline. The value field
   wraps and grows with its text (one logical line: Enter and pasted breaks become spaces),
   so nothing is cut off in the inspector's narrow column. Row removal is a drawn ×.
+- Alt-text review is a compact disclosure rather than a full notice box. Its accessible
+  summary includes the count and advisory status. Expanded content distinguishes empty
+  descriptions from filename/title descriptions needing improvement, based on the existing
+  audit reasons. A four-photo queue shows safe-origin thumbnails, locale, reason and an
+  **Edit description** action. Language filtering, Previous/More photos and **Next unresolved**
+  keep large saved-draft backlogs navigable without changing the draft or its saved state.
+  Missing previews keep their text/action; filtering to no findings shows an empty state.
+  Live-publication warnings retain warning colour; the audit never gates Publish.
+- Opening **Review story** runs local quick checks and prepares a provider disclosure, not
+  inference. Provider kind, endpoint, model, fields sent and possible usage charges appear
+  above the checks. Only **Review with AI** sends the active unsaved language. The action
+  fetches fresh configuration; a changed destination/model/prompt/timeout requires another
+  explicit click after redisclosure. Retry preparation never silently starts inference.
+  Suggestions remain advisory, and applying a suggestion never saves or publishes.
 - **Expedition details** is closed by default; its summary line names what it holds
   ("3 Oct 2024 · RO · Europe · 1 stop") or what is missing ("Missing date"), and never
   forces itself open — the readiness chip's Trip link is the way in to a gap.

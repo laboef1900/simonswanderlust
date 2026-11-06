@@ -12,6 +12,30 @@ semantics, §7 UI contract, and §13 "share the editorial API key". Everything e
 crypto primitives, `ENCRYPTION_KEY` handling, backup v6, restore, author disclosure, browser-direct
 inference, no server egress — stays authoritative.
 
+### Editor review consent refinement — 2026-11-06
+
+The owner approved implementation by selecting AI review clarity and all four editor
+critique findings, then requesting “Run the 5 recommended actions”. This authorizes
+the editor interaction changes, not a provider-registry/API change or deployment.
+
+- Opening Story review runs local quick checks and loads configuration for disclosure;
+  it never invokes a model. The author explicitly chooses **Review with AI**.
+- Disclose provider kind, exact configured endpoint and model, the active locale's
+  title/excerpt/Markdown/hero description and image URL, and possible usage charges.
+  No key is rendered, logged, persisted, or retained while awaiting consent.
+- On explicit invocation, fetch a fresh bound config/key pair. If provider, endpoint,
+  model, prompt or timeout differs from the disclosed configuration, show the new
+  configuration and require another explicit invocation; do not silently send elsewhere.
+- Closing, changing locale/post or replacing the draft invalidates preparation and
+  inference. Late config/provider responses must not render or invoke a model.
+  Failed preparation leaves local checks available and offers configuration retry.
+- Existing browser-direct inference, server authorization, response shape, endpoint/key
+  binding, cancellation, explicit suggestion application and publication behavior remain
+  unchanged. No new credential lifetime beyond an active request is introduced.
+- Regression coverage must prove no automatic provider call, refreshed-destination
+  consent, cancellation during preparation/inference, secret-free disclosure and recovery.
+  Rollback is the frontend change only; no data/schema migration or credential rewrite.
+
 ## 1. Why
 
 The owner asked for the Settings page to manage AI like the CompendiQ reference (screenshot

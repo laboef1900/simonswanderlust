@@ -4,6 +4,42 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Implemented locally:** article-editor consent and remediation refinement (2026-11-06,
+  28/40 critique follow-up, all five recommended actions). Opening Story review runs local
+  checks only; provider kind/endpoint/model, sent fields and possible charges appear above
+  the checks. **Review with AI** is explicit, credentials are not retained while awaiting
+  that action, and changed configuration requires redisclosure and another click. The
+  alt-text backlog is a four-photo visual queue with language filtering, paging and
+  **Next unresolved**; missing previews remain actionable. Filtering does not mark the
+  draft dirty. Mobile has a visible **Details** label and tighter title/manuscript spacing.
+  Regression coverage includes consent, configuration changes, stale asynchronous work,
+  bounded queues, empty filters, safe thumbnails and keyboard focus. Uploader typecheck and
+  4,232 tests pass (647 skipped; database integration was not enabled). Site: 872 tests pass;
+  database-backed Astro check has zero errors/warnings/hints. Working-tree asset overrides
+  exercised the live article at 1440/900/720/390/320px, with 44px phone tools, no horizontal
+  overflow, queue paging/filtering, both locale tabs and Escape focus restoration.
+  A focused 320px check confirms the full provider/data disclosure is above the visible AI
+  action. No article was saved/published and the one explicit provider attempt was blocked
+  before transmission; no usage was incurred. Temporary browser recovery data and the
+  database-check proxy were removed. This round is not deployed or pushed; no CI result
+  or physical-device qualification is claimed.
+- **Implemented locally:** second article-editor critique refinement (2026-11-06, 29/40
+  snapshot; desktop inspector first). Hero thumbnail and excerpt lead the inspector; key
+  facts fold behind a live count and published permalinks read as quiet references without
+  changing their locks. Phones retain Photo/Gallery/Rendered while less-used tools live in a
+  Format tray; Review story moves into More and returns focus there on dismissal. The action
+  now reads **Save & preview**, preserving save-before-preview, while **Rendered / Write**
+  switches the unsaved body view. Alt-text review stays accessible and advisory, with separate
+  missing-description and improvement counts. No content, routes, persistence or publishing
+  contracts changed. Regression coverage exercises folded facts, responsive keyboard access,
+  review focus restoration and audit classification. Browser verification uses working-tree
+  asset overrides against the local stack, not a deployment. Verified desktop/intermediate
+  and 390/320px touch layouts, both locale tabs, rendered mode and keyboard dismissal;
+  no article content was saved. Uploader typecheck and 4,225 tests pass (647 skipped;
+  `TEST_DATABASE_URL` was unset); final editor DOM run passes all 223 tests.
+  Site: 872 tests pass; database-backed Astro check reports zero errors/warnings/hints.
+  The detector's six dynamic-image warnings and CSS-unresolved hierarchy warning are
+  not rendered defects. No physical-device qualification or CI result is claimed.
 - **Implemented, PR #542 open:** post editor critique
   actions (2026-11-06; impeccable critique of the editor, 27/40, all five priority issues
   and the minor list). The manuscript has its own pinned toolbar (EasyMDE's is off): stroke

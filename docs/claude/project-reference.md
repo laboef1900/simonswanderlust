@@ -25,8 +25,9 @@ returns paste-ready `heroImage` / `<RemoteImage>` / `<BodyImage>` snippets. Acce
 username/password accounts stored in Postgres, with HttpOnly session cookies. Everything runs on
 Simon's own server, in one container. AI inference remains **browser-direct**:
 editor-integrated alt-text suggestions (local by default, optional remote providers) and the **Review Story** drawer, which combines
-deterministic checks with optional provider-backed suggestions (#212–#215). It reviews
-unsaved active-locale content without autosaving or gating Publish. The Media page also
+deterministic checks with optional provider-backed suggestions (#212–#215). Opening it runs
+local checks; **Review with AI** explicitly sends the unsaved active language after provider,
+model, data and cost disclosure. It never autosaves or gates Publish. The Media page also
 suggests photo details (title, DE/EN alt + caption, tags) for one photo, or fills empty
 fields in bulk — the one AI path that saves, with opt-in overwrite
 (`docs/superpowers/specs/2026-10-18-media-ai-details-design.md`). The server never

@@ -1050,6 +1050,16 @@ the existing browser-held key into Anthropic's browser API access, not a new ser
 storage path. HTTP, non-default ports and lookalike origins do not receive these headers.
 See `docs/superpowers/specs/2026-11-04-anthropic-browser-access.md`.
 
+Opening Story review runs deterministic checks and reads `/ai-config` for disclosure, but
+does not contact the model provider. Provider kind, endpoint, model, fields sent and possible
+usage charges appear above the checks; only **Review with AI** authorizes inference.
+Preparation retains non-secret configuration metadata, not either returned credential.
+The explicit action re-reads the configuration and obtains its request-local key. If provider,
+endpoint, model, prompt or timeout changed, it displays the new disclosure and requires
+another click instead of sending to the changed configuration. Configuration retries do not
+implicitly authorize inference. This is a browser consent boundary, not a new server
+authorization rule; the existing `/ai-config` roles and browser-direct trust model remain.
+
 Model output is untrusted: both review parsers validate required fields, types and statuses,
 reject extra properties, strip Unicode controls, and cap text/list lengths. This is not
 HTML sanitization: the editor drawer renders results through `textContent`/input values,

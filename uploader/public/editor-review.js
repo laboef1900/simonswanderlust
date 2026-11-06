@@ -70,6 +70,10 @@ window.EditorReview = (function () {
     const instant = byId('reviewInstant');
     const semantic = byId('reviewSemantic');
     const status = byId('reviewStatus');
+    const copy = EditorCopy.en;
+    const destination = byId('reviewDestination');
+    byId('reviewData').textContent = copy.reviewData;
+    runButton.textContent = copy.reviewPrepare;
     let epoch = 0;
     let active = null;
     let applying = false;
@@ -85,6 +89,9 @@ window.EditorReview = (function () {
       if (active) active.controller.abort();
       active = null;
       semantic.setAttribute('aria-busy', 'false');
+      destination.textContent = '';
+      destination.hidden = true;
+      runButton.disabled = true;
     }
 
     function clearResults() {
@@ -93,6 +100,14 @@ window.EditorReview = (function () {
       status.replaceChildren();
       status.className = 'review-status';
       byId('reviewLocale').textContent = '';
+    }
+
+    function focusTrigger() {
+      const menu = trigger.closest('details');
+      // On phones Review lives in More, which closes when its action runs.
+      // Return to the visible menu opener rather than a hidden button.
+      const target = menu && !menu.open ? menu.querySelector('summary') : trigger;
+      target.focus();
     }
 
     function close(restoreFocus) {
@@ -104,7 +119,7 @@ window.EditorReview = (function () {
         queuedCloseEvents++;
         dialog.close();
       }
-      if (restoreFocus) trigger.focus();
+      if (restoreFocus) focusTrigger();
     }
 
     function invalidate() {
@@ -126,6 +141,8 @@ window.EditorReview = (function () {
     }
 
     function unavailable(message, settings) {
+      runButton.disabled = false;
+      runButton.textContent = active?.prepared ? copy.reviewStart : copy.reviewPrepare;
       say(message, false);
       status.className = 'review-status notice-warn';
       status.appendChild(element('span', 'status-badge review-badge review-badge--warn', 'Warning'));
@@ -135,7 +152,7 @@ window.EditorReview = (function () {
           link.href = '/admin/settings.html';
           status.appendChild(link);
         } else {
-          status.appendChild(element('p', '', 'Ask an administrator to check AI settings, then choose Review again.'));
+          status.appendChild(element('p', '', copy.reviewAdminHelp));
         }
       }
     }
@@ -263,7 +280,30 @@ window.EditorReview = (function () {
       }
     }
 
-    async function review(request) {
+    function describe(config) {
+      if (!config || !['lm-studio', 'openrouter', 'deepseek', 'custom'].includes(config.aiProvider) ||
+          typeof config.aiBaseUrl !== 'string' || typeof config.aiModel !== 'string' ||
+          !config.aiModel.trim() || typeof config.reviewPrompt !== 'string') return null;
+      let endpoint;
+      try { endpoint = new URL(config.aiBaseUrl); } catch (_) { return null; }
+      if (!['http:', 'https:'].includes(endpoint.protocol) || endpoint.username || endpoint.password ||
+          endpoint.search || endpoint.hash) return null;
+      return {
+        provider: config.aiProvider, endpoint: config.aiBaseUrl, model: config.aiModel,
+        prompt: config.reviewPrompt, timeout: config.reviewTimeoutMs,
+      };
+    }
+
+    function disclose(prepared) {
+      const names = { 'lm-studio': 'LM Studio', openrouter: 'OpenRouter', deepseek: 'DeepSeek', custom: copy.reviewCustom };
+      destination.textContent = copy.reviewDestination.replace('{provider}', names[prepared.provider])
+        .replace('{endpoint}', prepared.endpoint).replace('{model}', prepared.model);
+      destination.hidden = false;
+      runButton.textContent = copy.reviewStart;
+      runButton.disabled = false;
+    }
+
+    async function review(request, approved) {
       let config = null;
       let apiKey = null;
       let configured = false;
@@ -276,23 +316,31 @@ window.EditorReview = (function () {
           return;
         }
         if (!response.ok) {
-          unavailable('AI review settings could not be loaded. Quick checks are still available. Check the configuration and choose Review again.', true);
+          unavailable(copy.reviewConfigFailed, true);
           return;
         }
         config = await response.json();
         if (!owns(request)) return;
-        if (!config || !['lm-studio', 'openrouter', 'deepseek', 'custom'].includes(config.aiProvider) ||
-            typeof config.aiBaseUrl !== 'string' || !config.aiBaseUrl.trim() ||
-            typeof config.aiModel !== 'string' || !config.aiModel.trim() || typeof config.reviewPrompt !== 'string') {
+        const prepared = describe(config);
+        if (!prepared) {
           unavailable('AI review needs a valid provider, endpoint and model in AI settings. Quick checks are still available.', true);
+          return;
+        }
+        if (['openrouter', 'deepseek'].includes(config.aiProvider) && (typeof config.aiApiKey !== 'string' || !config.aiApiKey.trim())) {
+          unavailable(copy.reviewMissingKey, true);
+          return;
+        }
+        // Retain only disclosure metadata while waiting for consent. Fetch a fresh
+        // bound config/key pair on the explicit action; changed destinations need
+        // new consent rather than silently using the newly configured provider.
+        request.prepared = prepared;
+        disclose(prepared);
+        if (!approved || JSON.stringify(approved) !== JSON.stringify(prepared)) {
+          say(approved ? copy.reviewChanged : copy.reviewReady, false);
           return;
         }
         apiKey = config.aiApiKey;
         config.aiApiKey = null;
-        if (['openrouter', 'deepseek'].includes(config.aiProvider) && (typeof apiKey !== 'string' || !apiKey.trim())) {
-          unavailable('AI review needs an API key for the selected provider. Configure the key in AI settings, then choose Review again. Quick checks are still available.', true);
-          return;
-        }
         configured = true;
         say('Reviewing this draft with the configured model… Quick checks are ready below their headings.', true);
         const result = await window.LLM.reviewStory(config.aiBaseUrl, config.aiModel, config.reviewPrompt,
@@ -305,44 +353,51 @@ window.EditorReview = (function () {
         // Never display arbitrary provider/config errors: they can echo a draft
         // or a credential. The client exposes these fixed failure categories.
         if (!configured) {
-          unavailable('AI review settings are unavailable. Check your connection and AI settings, then choose Review again. Quick checks are still available.', true);
+          unavailable(copy.reviewConfigUnavailable, true);
         } else if (error.name === 'TimeoutError') {
-          unavailable('AI review timed out. Check that the model is running, then choose Review again. Quick checks are still available.', false);
+          unavailable(copy.reviewTimedOut, false);
         } else if (error.message === 'Editorial review HTTP 401' || error.message === 'Editorial review HTTP 403') {
-          unavailable('The AI provider refused access. Check the API key and model permissions in AI settings, then choose Review again. Quick checks are still available.', true);
+          unavailable(copy.reviewAuthentication, true);
         } else if (error.message === 'Invalid editorial review response' || error.message === 'Editorial review response was truncated') {
-          unavailable('The model did not return a complete structured review. Choose Review again or check the model in AI settings. Quick checks are still available.', true);
+          unavailable(copy.reviewIncomplete, true);
         } else {
-          unavailable('AI review could not connect or complete. Check the endpoint, model and browser CORS access in AI settings, then choose Review again. Quick checks are still available.', true);
+          unavailable(copy.reviewFailed, true);
         }
       } finally {
-        if (config && typeof config === 'object') config.aiApiKey = null;
+        if (config && typeof config === 'object') {
+          config.aiApiKey = null;
+          config.captionApiKey = null;
+        }
         apiKey = null;
         config = null;
       }
     }
 
-    function open() {
+    function begin(approved) {
       release();
       clearResults();
-      const request = { epoch, controller: new AbortController(), snapshot: options.capture() };
+      const request = { epoch, controller: new AbortController(), snapshot: options.capture(), prepared: null };
       active = request;
       byId('reviewLocale').textContent = request.snapshot.story.locale === 'de' ? 'Deutsch · DE' : 'English · EN';
       if (!dialog.open) dialog.showModal();
       void renderInstant(request);
       dialog.querySelector('.story-review__body').scrollTop = 0;
-      say('Loading AI review settings…', true);
+      say(copy.reviewPreparing, true);
       closeButton.focus();
-      void review(request);
+      void review(request, approved);
     }
 
+    function open() { begin(null); }
+
     trigger.addEventListener('click', open);
-    runButton.addEventListener('click', open);
+    runButton.addEventListener('click', () => {
+      if (!runButton.disabled) begin(active?.prepared || null);
+    });
     closeButton.addEventListener('click', () => close(true));
     dialog.addEventListener('cancel', (event) => { event.preventDefault(); close(true); });
     dialog.addEventListener('close', () => {
       if (queuedCloseEvents) { queuedCloseEvents--; return; }
-      if (!dialog.open) { release(); clearResults(); trigger.focus(); }
+      if (!dialog.open) { release(); clearResults(); focusTrigger(); }
     });
     dialog.addEventListener('keydown', (event) => {
       if (event.key === 'Escape') { event.preventDefault(); close(true); return; }
