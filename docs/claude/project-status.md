@@ -4,6 +4,42 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Implemented locally:** laptop-first CMS refinement (2026-11-06). Owner chose to retain
+  Editorial desk and permitted regrouping across writing, photography, journeys and navigation.
+  Desktop readiness is a counted Publish checklist with the existing field jumps and keyboard
+  dismissal; title sizing and placeholder contrast are tightened. Media gives unused inspector
+  space back to photos, folds uploads without hiding the queue, folds folders initially on
+  phones, and adds Enter/detail navigation plus a guarded Back to photos. The selected-photo
+  inspector pins on laptops; phone entry starts at the photograph rather than mid-form.
+  Journeys uses compact bilingual rows, truthful publication/dormant state, story counts and
+  enabled-locale title search. The license link is visually secondary but keeps its touch target.
+  Existing Desk, Posts and Settings workflows remain intentionally unchanged beyond shared
+  chrome; no new dashboard, routing, permissions, persistence or publication behavior was added.
+  New copy is in both dictionaries; DESIGN.md records the changed interactions.
+  Uploader typecheck and full suite pass: 4,253 tests, 647 skipped without TEST_DATABASE_URL.
+  The final media navigation suite passes 94 tests. Site: 872 pass, 7 skip.
+  Database-backed Astro check reports zero errors/warnings/hints.
+  Browser smoke used working-tree overrides against localhost at 1366px and 390px; Media,
+  Editor, Journeys and Settings had no horizontal overflow. Tested real photos, actual empty
+  journeys and clearly labelled intercepted journey fixtures; search/clear, checklist jumps,
+  Escape/menu focus, Enter/photo navigation and cancelled/confirmed metadata discard passed.
+  No page errors were observed. Server mutations were blocked; only the read-only gallery
+  analysis POST was allowed. No content was saved, published or sent to an AI provider.
+  The detector ran once: thick advisory borders and the audit heading level were corrected.
+  Inter is intentional; unresolved absolute stylesheet URLs and dynamic image placeholders
+  limit the static detector's typography/image findings. No production deployment or physical-device
+  qualification is claimed. Rollback is frontend/copy-only; persistent data is unchanged.
+  Pushed as PR [#546](https://github.com/laboef1900/simonswanderlust/pull/546) into `dev`.
+  The local app was rebuilt from `2b6a022` and recreated alone; Docker reports healthy,
+  with environment values and persistent mounts preserved. All six changed UI assets served
+  over HTTP match the source SHA-256 checksums. Browser smoke without overrides at 1366px
+  and 390px verified upload disclosure, photo details/return focus, phone folder disclosure,
+  checklist open/Escape and the actual empty journey catalogue; no page errors were observed.
+  No content was saved or published. The previous image remains available under
+  `ghcr.io/laboef1900/wanderlust-studio:local-before-cms-refinement` for local rollback.
+  PR checks are the authoritative CI result; build output also reports two moderate site
+  dependency vulnerabilities and existing license-notice review warnings, outside this UI change.
+
 - **Implemented locally:** writing-first Desk refinement (2026-11-06; distill, layout, clarify,
   adapt and polish). Persistent New post and contextual Continue editing lead authoring; backup
   advice moves above writing. Healthy publication sections are compact, nonzero exceptions stay

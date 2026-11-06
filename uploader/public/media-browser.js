@@ -15,6 +15,14 @@
   var $ = function (id) { return document.getElementById(id); };
   var api = window.MediaApi;
   var copy = window.EditorCopy[document.documentElement.lang === 'de' ? 'de' : 'en'];
+  $('mediaIntro').textContent = copy.mediaBrowseHelp;
+  $('mediaUploadLabel').textContent = copy.mediaUpload;
+  $('detailJump').textContent = copy.mediaDetails;
+  function revealDetail() {
+    $('detail').focus({ preventScroll: true });
+    $('detail').scrollIntoView({ block: 'start' });
+  }
+  $('detailJump').addEventListener('click', revealDetail);
 
   var state = {
     me: null,
@@ -217,6 +225,7 @@
   function renderFolders() {
     var list = $('folderTree');
     list.innerHTML = '';
+    $('mediaFolderLabel').textContent = copy.mediaFolders + ' · ' + (state.folder || copy.mediaAllPhotos);
     var mk = function (path, label, depth) {
       var li = document.createElement('li');
       var btn = el('button', 'folder-btn' + (state.folder === path ? ' is-current' : ''), label);
@@ -231,7 +240,7 @@
       li.appendChild(btn);
       list.appendChild(li);
     };
-    mk('', 'All photos', 0);
+    mk('', copy.mediaAllPhotos, 0);
     api.folderTree(state.folders).forEach(function (n) { mk(n.path, n.name, n.depth + 1); });
   }
 
@@ -434,6 +443,10 @@
       state.detailChanged = null;
     }
     var panel = $('detail');
+    panel.hidden = !item;
+    $('detailJump').hidden = !item;
+    var help = $('mediaSelectionHelp');
+    help.hidden = !!item;
     // Background completion must not remove a control between focus and typing.
     // Explicit actions (including Save) still refresh the clean panel normally.
     if (background && item && panel.dataset.key === item.key
@@ -446,14 +459,16 @@
     if (state.offers && (!item || state.offers.key !== item.key)) state.offers = null;
     if (!item) {
       delete panel.dataset.key;
-      panel.appendChild(el('p', 'media-detail__empty', 'Select a photo to see it larger and edit its title, alt text and caption.'));
+      help.innerHTML = '';
+      help.appendChild(el('p', 'media-detail__empty', 'Select a photo to see it larger and edit its title, alt text and caption.'));
       var hints = el('ul', 'media-detail__hints muted');
       [
         'Shift-click selects a range.',
         (isMac() ? '⌘' : 'Ctrl') + '-click adds or removes one photo.',
         (isMac() ? '⌘' : 'Ctrl') + '+A selects every photo on this page.',
+        copy.mediaOpenDetailsShortcut,
       ].forEach(function (hint) { hints.appendChild(el('li', null, hint)); });
-      panel.appendChild(hints);
+      help.appendChild(hints);
       if (selectionChanged) detailRefresh.endAction();
       return;
     }
@@ -461,6 +476,19 @@
     state.detailItem = item;
     state.detailGeneration++;
     state.detailRecovery = null;
+    var header = el('div', 'media-detail__header');
+    header.appendChild(el('h2', 'section-label', copy.mediaDetails));
+    var back = el('button', 'btn-link', copy.mediaBackToPhotos);
+    back.type = 'button';
+    back.id = 'detailBack';
+    back.addEventListener('click', function () {
+      if (!detailReplaceable(null)) return;
+      state.detailKey = null;
+      renderDetail();
+      focusCell(state.items.findIndex(function (photo) { return photo.key === item.key; }));
+    });
+    header.appendChild(back);
+    panel.appendChild(header);
     // The photo comes first: alt text and captions are written while looking at it.
     var preview = el('figure', 'media-detail__preview');
     if (item.thumbSrc) {
@@ -662,6 +690,9 @@
     }
     state.detailKey = key;
     render();
+    if (window.matchMedia('(max-width: 900px)').matches && !(ev && (ev.shiftKey || ev.ctrlKey || ev.metaKey))) {
+      revealDetail();
+    }
   }
 
   /** Roving tabindex + arrow keys; Space toggles, Shift+Arrow extends. */
@@ -673,6 +704,14 @@
       cols = Math.max(1, Math.round(grid.clientWidth / grid.firstElementChild.offsetWidth)) || 1;
     }
     var next = null;
+    if (ev.key === 'Enter') {
+      ev.preventDefault();
+      if (!detailReplaceable(keys[index])) return;
+      state.detailKey = keys[index];
+      renderDetail();
+      revealDetail();
+      return;
+    }
     if (ev.key === 'ArrowRight') next = index + 1;
     else if (ev.key === 'ArrowLeft') next = index - 1;
     else if (ev.key === 'ArrowDown') next = index + cols;
@@ -1268,8 +1307,10 @@
       return;
     }
     initialized = true;
+    $('mediaFolders').open = !window.matchMedia('(max-width: 900px)').matches;
     $('emptyChoosePhotos').textContent = copy.mediaChoosePhotos;
     $('emptyChoosePhotos').addEventListener('click', function () {
+      $('dropZone').open = true;
       $('fileInput').focus();
       $('fileInput').click();
     });

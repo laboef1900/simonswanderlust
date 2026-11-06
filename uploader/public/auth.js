@@ -215,7 +215,7 @@ window.Auth = (function () {
     shell.querySelector('.cms-masthead-right > .cms-brand-sub').textContent = identityDescriptor();
     const legal = document.createElement('a');
     legal.href = '/admin/legal/en.html';
-    legal.className = 'cms-btn-ghost';
+    legal.className = 'cms-legal-link';
     legal.textContent = copy.softwareNotices;
     shell.querySelector('.cms-sidebar-footer').prepend(legal);
 

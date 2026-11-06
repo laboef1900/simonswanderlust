@@ -1523,6 +1523,7 @@ describe('editor.html inline script against its own markup', () => {
       api.populateForm(pair);
       el('inspectorClose').click();
       expect(el('inspectorContent').hasAttribute('inert')).toBe(true);
+      el('publishChecklist').open = true;
   
       el('localeChip').querySelectorAll('button')
         .find((button) => button.textContent.startsWith('English missing country'))!.click();
@@ -1530,6 +1531,7 @@ describe('editor.html inline script against its own markup', () => {
       expect(el('inspectorContent').hasAttribute('inert')).toBe(false);
       expect(el('inspectorClose').getAttribute('aria-expanded')).toBe('true');
       expect(document.activeElement).toBe(el('enCountry'));
+      expect(el('publishChecklist').open).toBe(false);
     });
 
   it('opens a focus-managed mobile inspector and restores focus when it closes', async () => {
@@ -1620,12 +1622,13 @@ describe('editor.html inline script against its own markup', () => {
       expect(document.activeElement).toBe(el('enHeroFile'));
     });
 
-  it('closes the floating actions menu on an outside click or Escape, not on a click inside it', async () => {
-      const { el, document } = await loadEditor();
-      const menu = el('editorActionsMenu');
+  it.each(['editorActionsMenu', 'publishChecklist'])('dismisses %s without changing the draft and restores focus on Escape', async (id) => {
+      const { api, el, document } = await loadEditor();
+      const before = api.buildPayload();
+      const menu = el(id);
       const trigger = menu.querySelector('summary')!;
       menu.open = true;
-      menu.querySelector('.editor-actions-menu__readiness')!.click();
+      (id === 'editorActionsMenu' ? menu.querySelector('.editor-actions-menu__readiness')! : el('localeChip')).click();
       expect(menu.open).toBe(true);
       el('editorWritingSurface').click();
       expect(menu.open).toBe(false);
@@ -1634,6 +1637,7 @@ describe('editor.html inline script against its own markup', () => {
       trigger.fire('keydown', { key: 'Escape' });
       expect(menu.open).toBe(false);
       expect(document.activeElement).toBe(trigger);
+      expect(api.buildPayload()).toEqual(before);
     });
 
   it('shows the compact hero preview and framing disclosure only for a usable hero', async () => {

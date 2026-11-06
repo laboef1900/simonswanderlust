@@ -1,8 +1,15 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title></title><link rel="stylesheet" href="/admin/admin.css"></head><body>
-<header class="cms-page-meta"><h1 data-journey-copy="Title"></h1></header>
+<header class="cms-page-meta"><h1 data-journey-copy="Title"></h1><p class="lede" data-journey-copy="BrowseHelp"></p></header>
 <div class="cms-page-actions"><a href="/admin/journey-editor.html" class="btn-new" data-journey-copy="New"></a></div>
-<main><p id="journeyNotice" role="status" data-journey-copy="Loading"></p><p id="journeyError" class="err" role="alert" hidden></p><div id="journeyList"></div></main>
+<main>
+  <div id="journeyFilters" class="posts-filters" hidden>
+    <label class="filter-field"><span data-journey-copy="Search"></span><input id="journeySearch" type="search" autocomplete="off"></label>
+  </div>
+  <p id="journeyNotice" class="muted" role="status" data-journey-copy="Loading"></p>
+  <p id="journeyError" class="err" role="alert" hidden></p>
+  <div id="journeyList" class="journey-list"></div>
+</main>
 <script src="/admin/editor-image-copy.js"></script><script src="/admin/auth.js"></script><script src="/admin/language.js"></script><script src="/admin/journeys-ui.js"></script>
 <script>
 (async () => {
@@ -10,16 +17,49 @@
   try {
     const session = await Auth.ensureAuthed(); if (!session) return; Auth.renderHeader(session);
     const [result, language] = await Promise.all([JourneysUI.request(''), SiteLanguage.get()]);
-    document.getElementById('journeyNotice').textContent = result.journeys.length ? '' : text('Empty');
+    const notice = document.getElementById('journeyNotice');
+    const list = document.getElementById('journeyList');
+    const search = document.getElementById('journeySearch');
+    const records = [];
+    notice.textContent = result.journeys.length ? '' : text('Empty');
+    document.getElementById('journeyFilters').hidden = !result.journeys.length;
     for (const journey of result.journeys) {
-      const row = el('section', undefined, 'card');
-      const heading = el('h2', undefined, 'card-heading'); const link = el('a', journey.titles[language.primary] || text('New'));
-      link.href = '/admin/journey-editor.html?id=' + encodeURIComponent(journey.id); heading.append(link);
-      const state = el('p', text(journey.status === 'published' ? 'Published' : 'Draft') + (journey.hasUnpublishedChanges ? ' · ' + text('Changes') : ''), 'muted');
-      row.append(heading, state, el('p', text('Members') + ': ' + journey.memberCount));
-      if (journey.status === 'published') for (const locale of language.locales) if (!journey.live[locale]) row.append(el('p', text('Dormant', { locale: locale.toUpperCase() }), 'muted'));
-      document.getElementById('journeyList').append(row);
+      const row = el('section', undefined, 'journey-row');
+      const description = el('div', undefined, 'journey-row__description');
+      const heading = el('h2', undefined, 'journey-row__title');
+      const link = el('a', journey.titles[language.primary] || text('New'));
+      link.href = '/admin/journey-editor.html?id=' + encodeURIComponent(journey.id);
+      heading.append(link);
+      description.append(heading);
+      for (const locale of language.locales) {
+        if (locale !== language.primary && journey.titles[locale]) {
+          const translation = el('p', locale.toUpperCase() + ' · ' + journey.titles[locale], 'muted');
+          translation.lang = locale;
+          description.append(translation);
+        }
+      }
+      const state = el('div', undefined, 'journey-row__state');
+      state.append(el('span', text(journey.status === 'published' ? 'Published' : 'Draft'),
+        'status-pill ' + (journey.status === 'published' ? 'published' : 'draft')));
+      if (journey.hasUnpublishedChanges) state.append(el('span', text('Changes'), 'muted'));
+      if (journey.status === 'published') for (const locale of language.locales) {
+        if (!journey.live[locale]) description.append(el('p', text('Dormant', { locale: locale.toUpperCase() }), 'muted'));
+      }
+      const edit = el('a', text('Edit'), 'action-link');
+      edit.href = link.href;
+      row.append(description, state, el('p', text('StoryCount', { count: journey.memberCount }), 'journey-row__count'), edit);
+      list.append(row);
+      records.push({ row, title: language.locales.map(locale => journey.titles[locale] || '').join(' ').toLocaleLowerCase() });
     }
+    search.addEventListener('input', () => {
+      const query = search.value.trim().toLocaleLowerCase();
+      let matches = 0;
+      for (const record of records) {
+        record.row.hidden = !record.title.includes(query);
+        if (!record.row.hidden) matches++;
+      }
+      notice.textContent = matches ? '' : text('NoResults');
+    });
   } catch { document.getElementById('journeyNotice').textContent = ''; const error = document.getElementById('journeyError'); error.hidden = false; error.textContent = JourneysUI.text('Failed'); }
 })();
 </script></body></html>
