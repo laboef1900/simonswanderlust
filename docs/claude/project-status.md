@@ -4,6 +4,16 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Implemented, PR #540 open:** travel map page refinement (2026-11-06), driven by an
+  impeccable critique (21/40). Trips are now keyboard-focusable numbered DOM pins with
+  localized labels, and the popup uses the brand typography, a brand-red CTA and a localized
+  close label. Region filter buttons and a Reset view control replace the pulsing pin-count
+  pill. The destinations list is now a region-grouped ledger (date, country, coordinates) that
+  syncs with the map. The full map gained the basemap `error` fallback the mini and journey
+  maps already had, plus `cooperativeGestures` on touch. It also has a warm Protomaps palette
+  and 44px zoom controls. Slugs, routes, schema and content are unchanged. Files:
+  `site/src/components/pages/MapPage.astro`, `site/src/scripts/travel-map.ts`,
+  `site/src/styles/global.css`, `site/src/i18n/ui.ts`.
 - **Done:** release build tolerates Debian snapshot throttling (2026-11-05, owner-approved
   build-pipeline change). The v0.20.0 release run failed four times in `native-build` because
   `snapshot.debian.org` answered GitHub runners with `503 No healthy backends`, and
