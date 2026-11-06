@@ -27,8 +27,18 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
   analysis POST was allowed. No content was saved, published or sent to an AI provider.
   The detector ran once: thick advisory borders and the audit heading level were corrected.
   Inter is intentional; unresolved absolute stylesheet URLs and dynamic image placeholders
-  limit the static detector's typography/image findings. No CI, deployment or physical-device
+  limit the static detector's typography/image findings. No production deployment or physical-device
   qualification is claimed. Rollback is frontend/copy-only; persistent data is unchanged.
+  Pushed as PR [#546](https://github.com/laboef1900/simonswanderlust/pull/546) into `dev`.
+  The local app was rebuilt from `2b6a022` and recreated alone; Docker reports healthy,
+  with environment values and persistent mounts preserved. All six changed UI assets served
+  over HTTP match the source SHA-256 checksums. Browser smoke without overrides at 1366px
+  and 390px verified upload disclosure, photo details/return focus, phone folder disclosure,
+  checklist open/Escape and the actual empty journey catalogue; no page errors were observed.
+  No content was saved or published. The previous image remains available under
+  `ghcr.io/laboef1900/wanderlust-studio:local-before-cms-refinement` for local rollback.
+  PR checks are the authoritative CI result; build output also reports two moderate site
+  dependency vulnerabilities and existing license-notice review warnings, outside this UI change.
 
 - **Implemented locally:** writing-first Desk refinement (2026-11-06; distill, layout, clarify,
   adapt and polish). Persistent New post and contextual Continue editing lead authoring; backup
