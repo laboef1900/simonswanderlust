@@ -21,7 +21,9 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
   re-checks the live site with a small icon, hides More actions on desktop unless it holds
   Unpublish, and shows a one-line status on phones (pinned chrome 219px → 186px including the
   toolbar). Floating menus use one `--menu-shadow` instead of border plus blur; the inspector
-  column no longer animates its width. Save draft names ⌘S/Ctrl+S. No routes, schema, slugs
+  column no longer animates its width. Save draft names ⌘S/Ctrl+S; on a live story Publish
+  reads "Publish changes" (owner-chosen wording; "changes" folds visually on phones but
+  stays in the accessible name). No routes, schema, slugs
   or server behaviour changed. Not done: a Media link pre-filtered to the gallery's photos
   (Media has no URL filters yet). Uploader/site Vitest and `tsc` pass; verified in Chrome at
   1440 and 390px against the local stack. Files: `uploader/public/{editor.html,admin.css,

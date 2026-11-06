@@ -3290,6 +3290,16 @@ body.editor-page .locale-chip-link:where(:not(:disabled)):hover { background: no
 }
 
 @media (max-width: 52rem) {
+  /* "Publish changes" would wrap the action row; the word stays in the name. */
+  body.editor-page .publish-scope {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
   body.editor-page .editor-commandbar {
     grid-template-columns: minmax(0, 1fr);
   }

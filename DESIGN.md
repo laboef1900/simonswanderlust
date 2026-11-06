@@ -1199,7 +1199,9 @@ and the `<dialog>`s appended to `<body>` share one set:
   visually hidden, so the command bar opens the workspace. The command bar separates
   primary actions (Save draft, Publish, Review story, **Preview**, More actions) from the
   full-width save/readiness status row; the actions come first in the DOM, so Tab reaches
-  Save before the status. Save draft names its shortcut (⌘S / Ctrl+S) in its tooltip and
+  Save before the status. On a live story Publish reads **Publish changes** (it replaces
+  what readers see); below 52rem the word "changes" folds out of sight but stays in the
+  accessible name, so the phone action row does not wrap. Save draft names its shortcut (⌘S / Ctrl+S) in its tooltip and
   `aria-keyshortcuts`. Preview is a daily writing action, so it sits in the bar; its
   accessible name keeps "Draft preview — not the live site". Re-reading the live state is
   a small icon beside it (**Check the live site again**), not a full-height button. Above

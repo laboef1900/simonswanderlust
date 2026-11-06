@@ -1397,6 +1397,16 @@ describe('phone compose: preview and publish controls (#302)', () => {
     expect(h.el('publishBtn').hidden).toBe(!isAdmin);
     expect(h.el('unpublishBtn').hidden).toBe(true); // a draft has nothing to unpublish
   });
+
+  it.each([['draft', 'Publish'], ['published', 'Publish changes']] as const)(
+    'labels Publish for what it does to a %s story', async (status, label) => {
+      const h = await loadEditor({ isAdmin: true, search: '?tk=tk1', fetch: async (url, options) =>
+        url === '/posts/tk1' && !options?.method
+          ? response({ ...fullPair(), publication: publication(status), updatedAt: '2026-10-24T09:00:00.000Z' })
+          : saved([])(url, options) });
+      for (let i = 0; i < 8; i++) await settle();
+      expect(h.el('publishBtn').textContent).toBe(label);
+    });
 });
 
 describe('editor.html inline script against its own markup', () => {

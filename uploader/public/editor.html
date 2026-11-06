@@ -2134,6 +2134,18 @@
         const pub = $('publishBtn');
         if (pub) {
           pub.hidden = !reviewIsAdmin;
+          // On a live story the same action replaces what readers see. The
+          // "changes" half folds away visually on phones (the action row would
+          // wrap) but stays in the accessible name everywhere.
+          if (isPublished) {
+            // One inline run, so the button's flex gap never splits the words.
+            const label = document.createElement('span');
+            const scope = document.createElement('span');
+            scope.className = 'publish-scope';
+            scope.textContent = ' changes';
+            label.append('Publish', scope);
+            pub.replaceChildren(label);
+          } else pub.textContent = 'Publish';
           const blocked = !language || loadBlocked || (currentTk && publication.availability !== 'available') || gapCount(g) > 0;
           pub.disabled = blocked;
           pub.title = blocked ? 'Fill the missing fields before publishing.' : '';
