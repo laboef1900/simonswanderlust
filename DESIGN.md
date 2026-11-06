@@ -1112,16 +1112,28 @@ and the `<dialog>`s appended to `<body>` share one set:
   result-less `close()` never reuse an earlier acceptance; a typed confirmation also
   requires the current prompt's exact token.
 - **Sections** inside the white workspace are flat: stacked `.card`s divide by a hairline
-  (`--line`), never as cards inside the workspace card. Simple form pages (Users, Import)
-  keep fields at a `34rem` measure.
+  (`--line`), never as cards inside the workspace card. A `fieldset` only groups controls
+  for disabling and naming and never draws a box. Simple form pages (Users, Import)
+  keep fields at a `34rem` measure; a list page leads with its list (Users shows existing
+  accounts before Add a user, with Reload as a secondary button).
+- **Help** is one short line beside the control it explains. Background and caveats sit
+  in a `.help-details` disclosure ("How importing works", "What a full recovery needs");
+  a consequence the author must see before acting ("discards your edits to them") and a
+  privacy disclosure stay visible, after the controls rather than above them.
 - **Menus and disclosures** share one shape: outlined trigger with a drawn chevron and a
   floating panel (the editor's More actions, the Posts row's admin-only More actions); inline
-  disclosures (alt-text review, bulk selection, picker folders) use the same chevron in
-  place of the UA triangle. A floating panel closes like a menu: Escape returns focus to
-  its trigger, and a click outside it dismisses it.
-- **Locale tabs** are one segmented control in the story and generalized page editor.
+  disclosures (alt-text review, bulk selection, picker folders, help details) use the same
+  chevron in place of the UA triangle. A floating panel closes like a menu: Escape returns
+  focus to its trigger, and a click outside it dismisses it.
+- **Advisories** that never block anything (the editor's alt-text review before a publish)
+  use the neutral `.notice-info`; `.notice-warn` is for results with a consequence (a live
+  story missing alt text, backups off, an incomplete import).
+- **Locale tabs** are one segmented control in the story, journey and generalized page
+  editor, labelled in each language's own name (Deutsch, English).
   The **Pages** catalogue replaces About in the admin sidebar, using flat compact
-  rows and explicit Draft/Published text, not new card chrome. The incumbent About
+  rows like Posts — kind, a Draft/Published status pill (or "Not created yet"), the
+  enabled-locale titles and right-aligned **Edit**/**Create** action links — not new
+  card chrome. The incumbent About
   editor hosts each page kind: title/status above, lifecycle controls in the title
   row, and title/slug/body within the existing locale panel. About hides inapplicable
   slug/delete/unpublish controls. A never-public locale's slug stays editable.
@@ -1133,6 +1145,11 @@ and the `<dialog>`s appended to `<body>` share one set:
   entry shows one inactive locale with a notice and return to Language settings.
   Deletion uses the existing scoped confirmation dialog, never a second modal
   convention. Legal/Privacy explain author responsibility without seeded legal prose.
+- The **journey editor** follows the story editor rather than inventing a layout: a
+  command bar with **Back to Journeys** and the locale tabs on the left, Save draft /
+  Publish / Unpublish / Delete on the right and the status beneath; one locale panel at a
+  time with title, slug and intro beside the hero photo. Alt text and framing appear only
+  once a hero is chosen. The heading reads **New journey** until the first save.
 - **Navigation settings** uses the existing vertical tab and flat field-row pattern.
   Header/footer/legal sections show bounded item counts; each row exposes type,
   target and enabled-locale label/URL fields, with move up/down and confirmed removal.
@@ -1180,8 +1197,15 @@ and the `<dialog>`s appended to `<body>` share one set:
 
 - The editor has no visible page title: the shell's h1 (New post / Edit post) is
   visually hidden, so the command bar opens the workspace. The command bar separates
-  primary actions from the full-width save/readiness status row. Error/status text
-  wraps instead of disappearing behind ellipses.
+  primary actions (Save draft, Publish, Review story, **Preview**, More actions) from the
+  full-width save/readiness status row. Preview is a daily writing action, so it sits in
+  the bar; its accessible name keeps "Draft preview — not the live site". On phones the
+  story-details opener rides at the right end of the locale row so the actions fit one
+  line. Error/status text wraps instead of disappearing behind ellipses.
+- All editor chrome is English like the rest of the admin, whichever locale tab is open:
+  gallery widgets, title-image controls, gallery metadata advisories and their retry
+  copy come from the English dictionary; only the author's own text (alt, captions) is
+  marked with the manuscript's `lang`.
 - On a phone the editor stays the same editor (#302). Preview opens its tab inside the tap
   and fills it once the draft is saved — a tab opened after the save would be a blocked
   popup — and if the browser still blocks it, the status line says so with an **Open
@@ -1200,6 +1224,10 @@ and the `<dialog>`s appended to `<body>` share one set:
   lightbox captions. Edits apply only to this gallery in the active locale, commit with
   Insert/Update gallery, and Cancel discards them. The manuscript widget marks hidden
   captions explicitly. On phones, each reset button sits below its textarea.
+- The manuscript's gallery widget is a visual index, not a form: compact 4:3 tiles in
+  photo order, each with its alt text from Media shown as text (or a **No alt text yet**
+  tag) and the Edit in Media link. Only a photo that is not in Media keeps an editable
+  alt field there; a Review story jump to a non-editable photo lands on its shown text.
 - With gallery previews enabled, typing or pasting at either collapsed fence edge
   inserts prose on separate lines outside the gallery, including at the start or
   end of the manuscript. Arrow-key navigation and clicking the visually empty
@@ -1227,6 +1255,10 @@ and the `<dialog>`s appended to `<body>` share one set:
   section shows a small thumbnail of its photo beside Show. A loaded story opens Replace
   photo only when that image is missing; author actions never fold it under focus.
 - Excerpts grow with their text; no inner scrollbar or resize grip.
+- Key facts stack label above value, each fact divided by a hairline, so neither is
+  cut off in the inspector's narrow column.
+- Waypoints show their stops and **Add stop** first; the via-point note, the geocoding
+  privacy note and the routing privacy note follow together below them.
 - GPX editing is a flat section in Story details, not another dashboard. Its scoped native
   dialog closes the phone inspector first, then restores that drawer and the exact opener
   on dismissal. A fixed header/footer frame one scrollable body; touch actions are at least
@@ -1259,6 +1291,16 @@ and the `<dialog>`s appended to `<body>` share one set:
   details. Coordinate approximation is explicit. Excerpt suggestions have a plain-text
   preview, character count, and separate accept/dismiss actions; generation never looks
   like a saved edit.
+- **Media leads with the photograph.** The library grid uses larger tiles (≥10.5rem, two
+  columns on a phone) captioned with the photo's title; a photo without one shows its file
+  name set back in muted, one-line type, and a ready photo with no alt text in any locale
+  carries a quiet **No alt text** tag. The detail panel (20rem) opens with the photo itself,
+  then camera · date · pixel size and the key in mono, then the fields; lens and file sizes
+  stay under **File**. With nothing selected it says what selecting does and lists the
+  selection shortcuts (Shift-click, ⌘/Ctrl-click, ⌘/Ctrl+A). One AI entry per scope: the
+  toolbar's whole-view **Generate details with AI…** steps aside while a selection exists,
+  because the bulk bar's button acts on it. Rename and Delete are disabled on **All
+  photos**, which is a view, not a folder.
 - Media photo details follow the same rule in the detail panel: AI fills only empty
   fields (marked unsaved) and offers the rest as a tinted note with **Use**. The bulk
   dialog is the exception that saves, so it states scope, fields, destination and photo
@@ -1271,10 +1313,11 @@ and the `<dialog>`s appended to `<body>` share one set:
   still be running" (never "done"): the grid badge reports processing → ready/failed. While any
   transfer is unsettled, a warn-toned note asks to keep the tab open; it disappears once every
   file has a result, because encoding continues on the server without the tab.
-- Settings is one flat document per tab beside a quiet vertical tab index (**AI models**,
-  Images, Comments, Site identity, Site & backups), not a stack of competing cards. The active tab sits
-  on the accent-soft surface, is mirrored in the URL hash (unknown → AI models) and in
-  the title (**Settings · AI models**, the tab in muted weight). AI models holds the
+- Settings is one flat document per tab beside a quiet vertical tab index (**Site
+  identity**, Languages, Navigation, Images, Comments, AI models, Site & backups), not a
+  stack of competing cards. It opens on Site identity. The active tab sits on the
+  accent-soft surface, is mirrored in the URL hash (unknown → Site identity) and in the
+  title (**Settings · Site identity**, the tab in muted weight). AI models holds the
   **Providers** list — name with a small `default` badge, kind and key state as text,
   the base URL in mono, and right-aligned text actions Edit · Set default · Test ·
   Delete (Delete red, disabled actions dimmed with a stated reason) under an **Add
@@ -1287,6 +1330,10 @@ and the `<dialog>`s appended to `<body>` share one set:
   picker, a WebP/AVIF segmented choice and **Preview**, then the original and the result in
   two equal panes (stacked below 48rem) captioned with format, pixels, file size and saving,
   with a synchronized **1:1 pixels** view. Tabs still save independently.
+- While the saved database backup schedule is **Off**, Site & backups shows a
+  `.notice-warn` under the schedule and the admin's Desk repeats it in the Site list with
+  a link to `settings.html#site`; the Desk reads it from `GET /settings` and stays silent if
+  that read fails. Recovery details sit in a **What a full recovery needs** disclosure.
 - Site identity uses the same paired fields for enabled-locale taglines, profile details and
   admin descriptors, with shared site/author names above. Social links are an ordered list
   with labelled Move up, Move down and Remove actions; a seventh link cannot be added.

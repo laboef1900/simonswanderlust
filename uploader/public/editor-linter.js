@@ -199,7 +199,7 @@ window.EditorLinter = (function () {
 
   function metadataIn(input, doc) {
     var locale = input.locale === 'en' ? 'en' : 'de';
-    var copy = window.EditorGalleryCopy[locale];
+    var copy = window.EditorGalleryCopy.en;
     return result(window.GalleryFence.galleryWarnings(doc.analysis, locale).map(function (warning) {
       return Object.assign({}, warning, {
         target: 'gallery',

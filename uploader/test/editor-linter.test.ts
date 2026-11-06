@@ -277,7 +277,7 @@ describe('authoritative gallery quick checks', () => {
   });
 });
 
-describe('localized gallery metadata advisories', () => {
+describe('gallery metadata advisories', () => {
   it.each(['de', 'en'] as const)('reports original UTF-16 coordinates in %s without echoing malformed source as markup', async (locale) => {
     const line = '>   https://i/a | 10x20 | capton="<img src=x>"';
     const markdown = '🧭\n\n> - ~~~gallery extra\n' + line + '\n>   ~~~';
@@ -287,7 +287,8 @@ describe('localized gallery metadata advisories', () => {
     expect(result.findings[0]).toMatchObject({
       code: 'invalid_gallery_metadata', line: 4, column: line.indexOf('capton') + 1, target: 'gallery',
     });
-    expect(result.findings[0]!.message).toContain(ui[locale]['editor.gallery.metadataAdvisory']);
+    // Admin chrome is English whichever manuscript the advisory is about.
+    expect(result.findings[0]!.message).toContain(ui.en['editor.gallery.metadataAdvisory']);
     expect(result.findings[0]!.message).toContain('&quot;');
     expect(result.findings[0]!.message).not.toContain('<img');
     const repaired = markdown.replace('capton=', 'caption=');

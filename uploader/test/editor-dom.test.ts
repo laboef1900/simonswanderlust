@@ -2615,15 +2615,15 @@ describe('inline gallery editing', () => {
     expect(h.document.querySelectorAll('.editor-gallery')).toEqual([]);
     for (const locale of ['de', 'en'] as const) {
       const status = h.el(locale + 'GalleryView').parentElement!;
-      expect(status.textContent).toContain(ui[locale]['editor.gallery.analysisFailed']);
+      expect(status.textContent).toContain(ui.en['editor.gallery.analysisFailed']);
       expect(status.querySelectorAll('button').some((button) =>
-        !button.hidden && button.textContent === ui[locale]['editor.gallery.retry'])).toBe(true);
+        !button.hidden && button.textContent === ui.en['editor.gallery.retry'])).toBe(true);
     }
     h.editors[0]!.codemirror.setCursor({ line: 3, ch: 0 });
     h.el('deGallery').click();
     await settleAll();
     expect(h.galleryPickers).toEqual([]);
-    expect(h.el('deBodyImgStatus').textContent).toContain(ui.de['editor.gallery.analysisFailed']);
+    expect(h.el('deBodyImgStatus').textContent).toContain(ui.en['editor.gallery.analysisFailed']);
     expect(h.api.buildPayload()).toEqual(before);
     expect(h.dirtyCalls()).toBe(dirty);
     expect(h.editors[0]!.undoHistory).toEqual([]);
@@ -2650,7 +2650,7 @@ describe('inline gallery editing', () => {
     expect(h.api.buildPayload()).toEqual(before);
     expect(h.dirtyCalls()).toBe(dirty);
     expect(editor.undoHistory).toEqual([]);
-    expect(h.el('deBodyImgStatus').textContent).toBe(ui.de['editor.gallery.stale']);
+    expect(h.el('deBodyImgStatus').textContent).toBe(ui.en['editor.gallery.stale']);
     expect(h.galleryRequests.slice(requests).some((request) =>
       JSON.parse(String(request.options.body)).bodyMarkdown === before.de.bodyMarkdown)).toBe(true);
   });
@@ -2727,7 +2727,7 @@ describe('inline gallery editing', () => {
     // Refusal happens before opening: neither replacement nor removal can
     // acquire a picker callback for the unsafe range.
     expect(h.galleryPickers).toEqual([]);
-    expect(h.el('deBodyImgStatus').textContent).toBe(ui.de['editor.gallery.unterminated']);
+    expect(h.el('deBodyImgStatus').textContent).toBe(ui.en['editor.gallery.unterminated']);
     expect(h.dirtyCalls()).toBe(dirty);
     expect(h.api.buildPayload()).toEqual(before);
     expect(h.editors[0]!.undoHistory).toEqual([]);
@@ -3035,15 +3035,15 @@ describe('inline gallery editing', () => {
     expect(h.dirtyCalls()).toBe(dirty);
     expect(h.editors[0]!.undoHistory).toEqual([]);
     const status = h.el('deGalleryView').parentElement!;
-    expect(status.textContent).toContain(ui.de['editor.gallery.analysisFailed']);
+    expect(status.textContent).toContain(ui.en['editor.gallery.analysisFailed']);
     expect(status.querySelectorAll('button').some((button) =>
-      !button.hidden && button.textContent === ui.de['editor.gallery.retry'])).toBe(true);
+      !button.hidden && button.textContent === ui.en['editor.gallery.retry'])).toBe(true);
     expect(await h.api.doSaveDraft()).toBe(false);
     expect(h.requests.some((request) => request.options.method === 'POST')).toBe(false);
     expect(h.api.buildPayload()).toEqual(before);
     offline = false;
     status.querySelectorAll('button').find((button) =>
-      !button.hidden && button.textContent === ui.de['editor.gallery.retry'])!.click();
+      !button.hidden && button.textContent === ui.en['editor.gallery.retry'])!.click();
     await settleAll();
     const restored = h.api.buildPayload();
     expect((await normalizeGalleryFences(restored.de.bodyMarkdown, restored.de.images)).images['https://img/photo']?.alt)
@@ -3063,13 +3063,13 @@ describe('inline gallery editing', () => {
     const suggest = card.querySelector('.editor-gallery__suggest')!;
     suggest.click();
     await settle();
-    expect(status.textContent).toBe(ui.de['editor.gallery.truncated']);
+    expect(status.textContent).toBe(ui.en['editor.gallery.truncated']);
     expect(field.value).toBe('Original');
     expect(card.querySelector('.editor-gallery__suggestion')!.hidden).toBe(true);
     failure = new Error('Caption request failed. Check the provider, API key, vision model and browser CORS access.');
     suggest.click();
     await settle();
-    expect(status.textContent).toBe(ui.de['editor.gallery.failed']);
+    expect(status.textContent).toBe(ui.en['editor.gallery.failed']);
     expect(field.value).toBe('Original');
   });
 
@@ -3089,7 +3089,7 @@ describe('inline gallery editing', () => {
     await settleAll();
     const fields = h.document.querySelectorAll('.editor-gallery__alt');
     expect(fields.map((field) => field.readOnly)).toEqual([true, true, true, true]);
-    expect(h.document.querySelector('.editor-gallery__lookup')!.textContent).toBe(ui.de['editor.gallery.checking']);
+    expect(h.document.querySelector('.editor-gallery__lookup')!.textContent).toBe(ui.en['editor.gallery.checking']);
     waiting = false;
     pending.resolve(response(row));
     await settleAll();
@@ -3103,7 +3103,7 @@ describe('inline gallery editing', () => {
     expect(links.map((link) => [link.getAttribute('href'), link.target, link.rel, link.parentElement!.hidden]))
       .toEqual(Array(4).fill(['/admin/media.html', '_blank', 'noopener', false]));
     expect(h.document.querySelectorAll('.editor-gallery__source')[0]!.textContent)
-      .toContain(ui.de['editor.gallery.fromMedia'] + ' Market at dawn');
+      .toContain(ui.en['editor.gallery.fromMedia'] + ' Market at dawn');
     expect(h.document.querySelectorAll('.editor-gallery__suggest').map((button) => button.hidden)).toEqual([true, true, true, true]);
     expect(h.document.querySelectorAll('.editor-gallery__local').map((note) => note.hidden)).toEqual([true, true, true, true]);
     expect(h.document.querySelector('.editor-gallery__lookup')!.textContent).toBe('');
@@ -3133,7 +3133,7 @@ describe('inline gallery editing', () => {
     expect(fields.map((field) => [field.value, field.readOnly]))
       .toEqual([['Original', true], ['Original', true], ['English', true], ['English', true]]);
     const [deStatus, enStatus] = h.document.querySelectorAll('.editor-gallery__lookup');
-    expect(deStatus!.textContent).toBe(ui.de['editor.gallery.mediaFailed']);
+    expect(deStatus!.textContent).toBe(ui.en['editor.gallery.mediaFailed']);
     expect(enStatus!.textContent).toBe(ui.en['editor.gallery.mediaFailed']);
     expect(h.document.querySelectorAll('.editor-gallery__suggest').every((button) => button.hidden)).toBe(true);
     failing = false;
@@ -3229,7 +3229,7 @@ describe('inline gallery editing', () => {
     expect(shownCaptions(h)).toEqual([null, 'Nur hier | "lokal" <b>', null, 'Aus der Mediathek', 'Morning light']);
     expect(h.document.querySelectorAll('.editor-gallery__caption').flatMap((caption) => caption.querySelectorAll('b'))).toEqual([]);
     expect(h.document.querySelectorAll('.editor-gallery')
-      .map((gallery) => gallery.textContent.includes(ui.de['editor.gallery.captionsHidden'])))
+      .map((gallery) => gallery.textContent.includes(ui.en['editor.gallery.captionsHidden'])))
       .toEqual([true, false, false, false, false]);
     expect(h.api.buildPayload()).toEqual(before);
   });
@@ -3313,8 +3313,8 @@ describe('inline gallery editing', () => {
       return gallery.querySelectorAll('.editor-gallery__caption')
         .map((caption) => caption.hidden ? null : caption.textContent);
     };
-    expect(captionsIn('Galerie 1')).toEqual(['Aus der Mediathek', local]);
-    expect(captionsIn('Galerie 2')).toEqual(['Aus der Mediathek']);
+    expect(captionsIn('Gallery 1')).toEqual(['Aus der Mediathek', local]);
+    expect(captionsIn('Gallery 2')).toEqual(['Aus der Mediathek']);
     expect(h.requests.every((request) => (request.options.method ?? 'GET') === 'GET')).toBe(true);
   });
 });
@@ -3380,8 +3380,10 @@ describe('manuscript-first editor refinements', () => {
     h.flushDialogEvents();
     expect(h.el('tab-en').hidden).toBe(false);
     expect(h.el('enGalleryView').getAttribute('aria-pressed')).toBe('false');
-    expect(h.document.activeElement?.classList.contains('editor-gallery__alt')).toBe(true);
-    expect(h.document.activeElement?.value).toBe('Target');
+    // Media lookup is unresolved here, so the description is shown, not editable:
+    // the jump lands on that shown text.
+    expect(h.document.activeElement?.classList.contains('editor-gallery__alt-text')).toBe(true);
+    expect(h.document.activeElement?.textContent).toBe('Target');
     expect(h.api.buildPayload()).toEqual(before);
   });
 
@@ -3790,7 +3792,7 @@ describe('lossless gallery metadata warning flow', () => {
     await drain();
     const root = h.el('galleryMetadataWarnings');
     expect(root.hidden).toBe(false);
-    expect(root.textContent).toContain(ui.de['editor.gallery.metadataAdvisory']);
+    expect(root.textContent).toContain(ui.en['editor.gallery.metadataAdvisory']);
     expect(root.textContent).toContain(ui.en['editor.gallery.metadataAdvisory']);
     expect(root.querySelectorAll('img')).toHaveLength(0);
     expect(h.document.querySelectorAll('.editor-gallery')).toHaveLength(0);
@@ -3798,7 +3800,7 @@ describe('lossless gallery metadata warning flow', () => {
     h.el('deGallery').click();
     await drain();
     expect(h.galleryPickers).toHaveLength(0);
-    expect(h.el('deBodyImgStatus').textContent).toContain(ui.de['editor.gallery.metadataBlocked']);
+    expect(h.el('deBodyImgStatus').textContent).toContain(ui.en['editor.gallery.metadataBlocked']);
     expect(required(h.el('deBodyImgStatus'), 'code').textContent).toContain(malformed);
     expect(h.el('deBodyImgStatus').querySelectorAll('img')).toHaveLength(0);
     expect(h.editors[0]!.value()).toBe(source);
@@ -3822,7 +3824,7 @@ describe('lossless gallery metadata warning flow', () => {
     h.api.populateForm(pair());
     expect(await h.api.doSaveDraft()).toBe(true);
     const root = h.el('galleryMetadataWarnings');
-    expect(root.textContent).toContain(ui.de['editor.gallery.metadataSaved']);
+    expect(root.textContent).toContain(ui.en['editor.gallery.metadataSaved']);
     expect(root.textContent).toContain(ui.en['editor.gallery.metadataSaved']);
     expect(root.textContent).toContain('&quot;');
     const previous = root.textContent;
@@ -3888,7 +3890,7 @@ describe('lossless gallery metadata warning flow', () => {
     warningButton(h, 'de').click();
     await drain();
     expect(editor.selection).toBeNull();
-    expect(h.el('galleryMetadataWarnings').textContent).toContain(ui.de['editor.gallery.metadataCurrent']);
+    expect(h.el('galleryMetadataWarnings').textContent).toContain(ui.en['editor.gallery.metadataCurrent']);
     expect(editor.value()).toBe('Now entirely repaired');
   });
 });

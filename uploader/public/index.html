@@ -41,6 +41,10 @@
           <li id="deskQueue" aria-live="polite"></li>
           <li id="deskRelease" aria-live="polite"></li>
           <li id="deskBuild" role="status" hidden></li>
+          <li id="deskBackupWarning" class="notice-warn" hidden>
+            Automatic database backups are off.
+            <a href="/admin/settings.html#site">Turn them on in Site &amp; backups</a>.
+          </li>
           <li id="deskPublicationSummary" role="status" hidden></li>
           <li id="deskRebuildLink" hidden>
             <button class="btn-primary" type="button" id="deskRebuild"></button>
@@ -150,7 +154,7 @@
           p.textContent = copy.deskNoDrafts;
           const cta = el('a', 'btn-new');
           cta.href = '/admin/editor.html';
-          cta.textContent = 'New trip';
+          cta.textContent = 'New post';
           empty.appendChild(p);
           empty.appendChild(cta);
           root.appendChild(empty);
@@ -379,6 +383,16 @@
 
       function loadPosts() { return publicationRefresh.refresh(); }
 
+      // Advisory only: a missing or failed read leaves the warning hidden.
+      async function loadBackupWarning() {
+        try {
+          const response = await fetch('/settings', { cache: 'no-store' });
+          if (!response.ok) return;
+          const settings = await response.json();
+          $('deskBackupWarning').hidden = settings?.backupSchedule !== 'off';
+        } catch { /* the rest of the Desk does not depend on it */ }
+      }
+
       async function loadDesk() {
         $('deskError').hidden = true;
         $('deskError').textContent = '';
@@ -403,6 +417,7 @@
           $('deskAttentionSection').hidden = !isAdmin;
           $('deskPublicationSummary').hidden = !isAdmin;
           $('deskRebuildLink').hidden = !isAdmin;
+          if (isAdmin) void loadBackupWarning();
           Onboarding.init({
             root: $('onboardingChecklist'),
             openerRoot: $('onboardingOpener'),

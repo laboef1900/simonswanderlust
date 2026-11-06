@@ -129,6 +129,12 @@
 
   function say(msg) { $('out').textContent = msg; }
 
+  /** The shortcut modifier the visitor's own keyboard prints. */
+  function isMac() {
+    var nav = typeof navigator === 'undefined' ? null : navigator;
+    return !!nav && /Mac|iPhone|iPad/.test(nav.platform || nav.userAgent || '');
+  }
+
   function fail(err) {
     if (err && (err.status === 401 || err.code === 'owner_changed')) { uploads.pause(); say(copy.uploadNeedsAuth); return; }
     say('Error: ' + (err && err.message ? err.message : String(err)));
@@ -264,7 +270,13 @@
       var badge = api.statusLabel(item);
       if (badge) cell.appendChild(el('span', 'media-cell__badge', badge));
 
-      cell.appendChild(el('span', 'media-cell__title', item.title || item.key.split('/').pop()));
+      // A title the author gave reads as the photo's name; a bare file name is
+      // only a fallback and is set back, so the photograph leads the tile.
+      cell.appendChild(el('span', 'media-cell__title' + (item.title ? '' : ' is-filename'),
+        item.title || item.key.split('/').pop()));
+      if (item.status === 'ready' && !(item.alt && (item.alt.de || item.alt.en))) {
+        cell.appendChild(el('span', 'media-cell__flag', 'No alt text'));
+      }
       if (item.usedIn && item.usedIn.length) {
         // "(published version)": the live post still renders it although the
         // draft dropped it — the admin has to republish before it can go.
@@ -305,6 +317,12 @@
     $('prevPage').disabled = state.page <= 1;
     $('nextPage').disabled = state.page * state.pageSize >= state.total;
     $('aiAll').disabled = state.total === 0;
+    // One AI entry per scope: with a selection, the bulk bar's button acts on
+    // it, so the whole-view button steps aside instead of duplicating it.
+    $('aiAll').hidden = state.selected.length > 0;
+    // "All photos" is a view, not a folder: it cannot be renamed or deleted.
+    $('renameFolder').disabled = !state.folder;
+    $('deleteFolder').disabled = !state.folder;
   }
 
   /** A refused file names its reason and what to do instead; it was never sent. */
@@ -428,7 +446,14 @@
     if (state.offers && (!item || state.offers.key !== item.key)) state.offers = null;
     if (!item) {
       delete panel.dataset.key;
-      panel.appendChild(el('p', 'muted', 'Select a photo to edit its details.'));
+      panel.appendChild(el('p', 'media-detail__empty', 'Select a photo to see it larger and edit its title, alt text and caption.'));
+      var hints = el('ul', 'media-detail__hints muted');
+      [
+        'Shift-click selects a range.',
+        (isMac() ? '⌘' : 'Ctrl') + '-click adds or removes one photo.',
+        (isMac() ? '⌘' : 'Ctrl') + '+A selects every photo on this page.',
+      ].forEach(function (hint) { hints.appendChild(el('li', null, hint)); });
+      panel.appendChild(hints);
       if (selectionChanged) detailRefresh.endAction();
       return;
     }
@@ -436,7 +461,25 @@
     state.detailItem = item;
     state.detailGeneration++;
     state.detailRecovery = null;
-    panel.appendChild(el('p', 'section-label', 'Photo'));
+    // The photo comes first: alt text and captions are written while looking at it.
+    var preview = el('figure', 'media-detail__preview');
+    if (item.thumbSrc) {
+      var previewImg = document.createElement('img');
+      previewImg.src = item.thumbSrc;
+      // The fields below are this photo's description; the preview itself adds none.
+      previewImg.alt = '';
+      if (item.width && item.height) { previewImg.width = item.width; previewImg.height = item.height; }
+      preview.appendChild(previewImg);
+    } else {
+      preview.appendChild(el('span', 'thumb-placeholder', api.statusLabel(item) || 'No preview'));
+    }
+    var shot = [
+      item.exif && item.exif.camera,
+      item.exif && item.exif.takenAt ? api.formatTakenAt(item.exif.takenAt) : '',
+      item.width && item.height ? item.width + ' × ' + item.height : '',
+    ].filter(Boolean).join(' · ');
+    if (shot) preview.appendChild(el('figcaption', 'media-detail__shot', shot));
+    panel.appendChild(preview);
     panel.appendChild(el('p', 'media-key', item.key));
     renderSuggest(panel, item);
 
@@ -506,14 +549,12 @@
     renderImpact();
     if (selectionChanged) detailRefresh.endAction();
 
-    // EXIF is read-only. lat/lng are absent entirely for non-admins.
-    panel.appendChild(el('p', 'section-label', 'Camera'));
+    // EXIF is read-only. lat/lng are absent entirely for non-admins. Camera,
+    // date and size already sit under the preview.
+    panel.appendChild(el('p', 'section-label', 'File'));
     var dl = el('dl', 'keyfacts-mini');
     var rows = [
-      ['Taken', api.formatTakenAt(item.exif && item.exif.takenAt)],
-      ['Camera', item.exif && item.exif.camera],
       ['Lens', item.exif && item.exif.lens],
-      ['Size', item.width && item.height ? item.width + '×' + item.height : '—'],
       ['Original', api.formatBytes(item.origBytes)],
       ['Variants', api.formatBytes(item.variantBytes)],
     ];

@@ -207,7 +207,6 @@ window.EditorGalleries = (function () {
     function create(block, text, number) {
       const parsed = GalleryFence.parse(block.content);
       const root = el('section', 'editor-gallery');
-      root.setAttribute('lang', locale);
       root.setAttribute('aria-label', copy.gallery + ' ' + number);
       const controller = { text, root, alive: true, fields: [], marker: null, widget: null, observer: null, lookups: 0,
         cancel() { this.fields.forEach((field) => field.cancel()); } };
@@ -265,18 +264,34 @@ window.EditorGalleries = (function () {
         card.appendChild(image);
         card.appendChild(unavailable);
         const label = el('label');
-        const labelText = el('span', null, copy.photo + ' ' + (index + 1) + ' · ' + copy.alt);
+        const labelText = el('span', 'editor-gallery__alt-label', copy.photo + ' ' + (index + 1) + ' · ' + copy.alt);
         const input = el('textarea', 'editor-gallery__alt');
         input.rows = 3;
         input.maxLength = 1000;
         input.value = postAlt;
         input.readOnly = true;
+        // Text the author cannot edit here is shown as text, not as an inert field:
+        // a blank read-only box reads as "type here". The textarea stays the value
+        // of record for the editable (not-in-Media) state.
+        input.hidden = true;
+        const altText = el('span', 'editor-gallery__alt-text');
+        altText.tabIndex = -1; // a jump target for Review story, not a tab stop
+        // Chrome is English like the rest of the admin; the descriptions are locale content.
+        input.setAttribute('lang', locale);
+        const showAlt = (value) => {
+          altText.textContent = value || copy.noAlt;
+          altText.setAttribute('lang', value ? locale : 'en');
+          altText.classList.toggle('is-missing', !value);
+        };
+        showAlt(postAlt);
         card.appendChild(label);
         // CodeMirror clones widgets while measuring them. Implicit labels avoid
         // duplicate IDs targeting an invisible measurement copy.
         label.appendChild(labelText);
         label.appendChild(input);
+        label.appendChild(altText);
         const caption = el('p', 'editor-gallery__caption', postCaption);
+        caption.setAttribute('lang', locale);
         caption.hidden = !showCaptions || postCaption === '';
         card.appendChild(caption);
         // Library-backed photos: where the text comes from, and where to change it.
@@ -316,7 +331,7 @@ window.EditorGalleries = (function () {
         list.appendChild(card);
         let request;
         let version = 0;
-        const field = { src: line.src, input, image, state: 'pending',
+        const field = { src: line.src, input, altText, image, state: 'pending',
           cancel() {
             version += 1;
             request?.abort();
@@ -334,6 +349,8 @@ window.EditorGalleries = (function () {
             if (state !== 'missing') field.cancel();
             field.state = state;
             input.readOnly = state !== 'missing';
+            input.hidden = state !== 'missing';
+            altText.hidden = state === 'missing';
             suggest.hidden = state !== 'missing';
             localNote.hidden = state !== 'missing';
             source.hidden = state !== 'library';
@@ -342,11 +359,13 @@ window.EditorGalleries = (function () {
               labelText.textContent = copy.photo + ' ' + (index + 1) + ' · ' + copy.altFromMedia;
               input.value = current.alt;
               image.alt = current.alt;
+              showAlt(current.alt);
               caption.textContent = localCaption ?? current.caption;
               caption.hidden = !showCaptions || caption.textContent === '';
               sourceText.textContent = copy.fromMedia + ' ' + (current.title || fileName(current.key));
             } else {
               labelText.textContent = copy.photo + ' ' + (index + 1) + ' · ' + copy.alt;
+              showAlt(input.value);
             }
             controller.widget?.changed();
           } };
@@ -535,8 +554,10 @@ window.EditorGalleries = (function () {
           // focusing its real control, never a measurement clone.
           cm.scrollIntoView(range.from);
           cm.refresh();
-          field.input.focus({ preventScroll: true });
-          field.input.scrollIntoView({ block: 'center' });
+          // The editable field when there is one; otherwise the shown description.
+          const target = field.input.hidden ? field.altText : field.input;
+          target.focus({ preventScroll: true });
+          target.scrollIntoView({ block: 'center' });
           return true;
         }
         return false;

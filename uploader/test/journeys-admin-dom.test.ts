@@ -91,7 +91,7 @@ async function editor(options: { admin?: boolean; published?: boolean; single?: 
     },
   };
   context.window = context; vm.createContext(context);
-  for (const file of ['language.js', 'draft-guard.js', 'build-reporting.js', 'journeys-ui.js', 'journey-editor.js']) vm.runInContext(readFileSync('public/' + file, 'utf8'), context);
+  for (const file of ['language.js', 'tabs.js', 'draft-guard.js', 'build-reporting.js', 'journeys-ui.js', 'journey-editor.js']) vm.runInContext(readFileSync('public/' + file, 'utf8'), context);
   await settle();
   if (options.fetch) await vi.waitFor(() => expect(el('journeyFields').disabled).toBe(false));
   const submit = async () => {
