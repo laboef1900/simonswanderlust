@@ -1275,14 +1275,16 @@ and the `<dialog>`s appended to `<body>` share one set:
   itself is not animated (it would reflow the whole manuscript each frame); the content
   fades and slides out with opacity/transform. The
   collapsed content is inert and hidden from assistive technology; the slide honours
-  reduced motion. At 74rem and below it is a modal drawer opened by an icon button
-  after More actions; the same header toggle closes it, and it traps Tab, closes on
+  reduced motion. At 74rem and below it is a modal drawer opened by the visibly labelled
+  **Details** button; the same header toggle closes it, and it traps Tab, closes on
   Escape or the scrim, and restores focus to its opener. The frame then holds the
   manuscript alone.
 - Within each locale, Story details leads with the hero thumbnail and excerpt, followed by
   country and permalink. Key facts fold behind a live row count without removing their values
   from the draft. The optional title image and expedition/route sections remain available.
   The phone title uses a smaller display scale and tighter spacing to expose the manuscript sooner.
+  Below 52rem the audit-to-title gap, title-field margin and title-to-body gap are reduced
+  without shrinking the touch targets or changing the manuscript's reading size.
 - Hero image and title image are collapsible inspector sections (closed by default) with
   one box: a white panel with preview, alt text, status, then **Replace photo** (native
   file input with a dashed drop edge, upload, library) and **Adjust framing**. A closed
@@ -1297,7 +1299,17 @@ and the `<dialog>`s appended to `<body>` share one set:
 - Alt-text review is a compact disclosure rather than a full notice box. Its accessible
   summary includes the count and advisory status. Expanded content distinguishes empty
   descriptions from filename/title descriptions needing improvement, based on the existing
-  audit reasons. Live-publication warnings retain warning colour; the audit never gates Publish.
+  audit reasons. A four-photo queue shows safe-origin thumbnails, locale, reason and an
+  **Edit description** action. Language filtering, Previous/More photos and **Next unresolved**
+  keep large saved-draft backlogs navigable without changing the draft or its saved state.
+  Missing previews keep their text/action; filtering to no findings shows an empty state.
+  Live-publication warnings retain warning colour; the audit never gates Publish.
+- Opening **Review story** runs local quick checks and prepares a provider disclosure, not
+  inference. Provider kind, endpoint, model, fields sent and possible usage charges appear
+  above the checks. Only **Review with AI** sends the active unsaved language. The action
+  fetches fresh configuration; a changed destination/model/prompt/timeout requires another
+  explicit click after redisclosure. Retry preparation never silently starts inference.
+  Suggestions remain advisory, and applying a suggestion never saves or publishes.
 - **Expedition details** is closed by default; its summary line names what it holds
   ("3 Oct 2024 · RO · Europe · 1 stop") or what is missing ("Missing date"), and never
   forces itself open — the readiness chip's Trip link is the way in to a gap.

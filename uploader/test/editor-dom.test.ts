@@ -413,7 +413,7 @@ async function loadEditor(options: EditorOptions = {}) {
     guard.redirectToLogin = () => { redirects += 1; redirect(); };
     return guard;
   };
-  for (const file of ['journeys-ui.js', 'waypoint-lookup.js', 'editor-stop-route.js', 'posts-filter.js', 'editor-title-image.js', 'gallery-fence.js', 'gallery-metadata-warnings.js', 'media-api.js', 'gallery-library.js', 'editor-galleries.js', 'editor-linter.js', 'llm.js', 'editor-excerpt.js', 'country-centers.js', 'country-coordinates.js', 'tabs.js', 'editor-review.js', 'editor-inspector.js', 'image-markdown.js']) {
+  for (const file of ['journeys-ui.js', 'waypoint-lookup.js', 'editor-stop-route.js', 'posts-filter.js', 'editor-title-image.js', 'gallery-fence.js', 'gallery-metadata-warnings.js', 'media-api.js', 'gallery-library.js', 'editor-galleries.js', 'editor-linter.js', 'llm.js', 'editor-excerpt.js', 'country-centers.js', 'country-coordinates.js', 'tabs.js', 'editor-review.js', 'editor-alt-audit.js', 'editor-inspector.js', 'image-markdown.js']) {
     vm.runInContext(browserScript(file), ctx, {
       filename: resolve('public/' + file),
       importModuleDynamically: vm.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER,
@@ -1972,7 +1972,80 @@ function required(root: Element, selector: string): Element {
   return node;
 }
 
+interface ReviewControls { el(id: string): Element }
+async function startAiReview(h: ReviewControls) {
+  h.el('reviewStory').click();
+  await settle();
+  h.el('runReview').click();
+  await settle();
+}
+
 describe('Story review in the real editor', () => {
+  it('discloses the destination without contacting a provider or retaining credentials until explicit consent', async () => {
+    const provider = deferredReviews();
+    const prepared = { ...reviewConfig, aiApiKey: 'fixture-review-secret', captionApiKey: 'fixture-caption-secret' };
+    const configResponse = response({});
+    configResponse.json = async () => prepared;
+    let reads = 0;
+    const h = await loadEditor({
+      review: provider.review,
+      fetch: async () => ++reads === 1 ? configResponse : response(reviewConfig),
+    });
+    h.api.populateForm(fullPair());
+    const before = h.api.buildPayload();
+    h.el('reviewStory').click();
+    await settle();
+    expect(provider.calls).toEqual([]);
+    expect(h.el('reviewDestination').textContent).toContain(reviewConfig.aiBaseUrl);
+    expect(h.el('reviewDestination').textContent).toContain(reviewConfig.aiModel);
+    expect(h.el('storyReviewDialog').textContent).not.toContain('fixture-review-secret');
+    expect(h.el('storyReviewDialog').textContent).not.toContain('fixture-caption-secret');
+    expect(prepared.aiApiKey).toBeNull();
+    expect(prepared.captionApiKey).toBeNull();
+    expect(h.api.buildPayload()).toEqual(before);
+    h.el('runReview').click();
+    await settle();
+    expect(provider.calls[0]!.story.title).toBe(before.de.title);
+    h.el('closeReview').click();
+  });
+
+  it.each(['aiBaseUrl', 'aiModel', 'reviewPrompt'] as const)('requires new consent when the disclosed %s changes', async (field) => {
+    const provider = deferredReviews();
+    const changed = { ...reviewConfig, [field]: field === 'aiBaseUrl' ? 'https://different.invalid/v1' : 'changed' };
+    let reads = 0;
+    const h = await loadEditor({
+      review: provider.review,
+      fetch: async () => response(++reads === 1 ? reviewConfig : changed),
+    });
+    h.el('reviewStory').click();
+    await settle();
+    h.el('runReview').click();
+    await settle();
+    expect(provider.calls).toEqual([]);
+    expect(h.el('reviewDestination').textContent).toContain(changed.aiBaseUrl);
+    expect(h.el('reviewDestination').textContent).toContain(changed.aiModel);
+    h.el('runReview').click();
+    await settle();
+    expect(provider.calls).toHaveLength(1);
+    h.el('closeReview').click();
+  });
+
+  it('retries failed preparation without implicitly approving inference', async () => {
+    const provider = deferredReviews();
+    let reads = 0;
+    const h = await loadEditor({ review: provider.review, fetch: async () =>
+      ++reads === 1 ? response({}, 503) : response(reviewConfig) });
+    h.el('reviewStory').click();
+    await settle();
+    h.el('runReview').click();
+    await settle();
+    expect(provider.calls).toEqual([]);
+    expect(h.el('reviewDestination').hidden).toBe(false);
+    h.el('runReview').click();
+    await settle();
+    expect(provider.calls).toHaveLength(1);
+    h.el('closeReview').click();
+  });
   it('opens an accessible dialog and renders all quick checks before configuration resolves', async () => {
     const config = Promise.withResolvers<Response>();
     const h = await loadEditor({ fetch: () => config.promise });
@@ -2025,8 +2098,7 @@ describe('Story review in the real editor', () => {
     h.el(locale + 'Body').value = 'Stale hidden textarea';
     h.editors[locale === 'de' ? 0 : 1]!.value(snapshot.markdown);
     const before = h.api.buildPayload();
-    h.el('reviewStory').click();
-    await settle();
+    await startAiReview(h);
 
     const request = h.requests.find((request) => request.url === providerUrl)!;
     const payload = JSON.parse(String(request.options.body)) as { messages: { role: string; content: string }[] };
@@ -2042,7 +2114,7 @@ describe('Story review in the real editor', () => {
     expect(required(h.el('reviewSemantic'), '[data-review-criterion="internalLinks"]').textContent).toContain('Suggestion');
     expect(required(h.el('reviewSemantic'), '[data-review-action="title"]').disabled).toBe(false);
     expect(h.api.buildPayload()).toEqual(before);
-    expect(h.requests.map((request) => request.url)).toEqual(['/ai-config', providerUrl]);
+    expect(h.requests.map((request) => request.url)).toEqual(['/ai-config', '/ai-config', providerUrl]);
     h.el('closeReview').click();
     h.flushDialogEvents();
   });
@@ -2053,8 +2125,7 @@ describe('Story review in the real editor', () => {
     { name: 'malformed semantic response', provider: async () => response({ choices: [{ message: { content: '{"title":"private-provider-detail"}' } }] }) },
   ])('preserves instant checks and offers recovery after $name', async ({ provider }) => {
     const h = await loadEditor({ fetch: reviewNetwork(provider) });
-    h.el('reviewStory').click();
-    await settle();
+    await startAiReview(h);
     const quickChecks = h.el('reviewInstant').textContent;
     await settle();
 
@@ -2139,8 +2210,7 @@ describe('Story review in the real editor', () => {
     }
     const before = h.api.buildPayload();
     const dirtyBefore = h.dirtyCalls();
-    h.el('reviewStory').click();
-    await settle();
+    await startAiReview(h);
     expect(h.api.buildPayload()).toEqual(before);
     expect(h.dirtyCalls()).toBe(dirtyBefore);
 
@@ -2162,7 +2232,7 @@ describe('Story review in the real editor', () => {
     expect(after.de.bodyMarkdown).toBe(before.de.bodyMarkdown);
     expect(after.en.bodyMarkdown).toBe(before.en.bodyMarkdown);
     expect(after.shared).toEqual(before.shared);
-    expect(h.requests.map((request) => request.url)).toEqual(['/ai-config', providerUrl]);
+    expect(h.requests.map((request) => request.url)).toEqual(['/ai-config', '/ai-config', providerUrl]);
     h.el('closeReview').click();
     h.flushDialogEvents();
   });
@@ -2202,8 +2272,7 @@ describe('Story review in the real editor', () => {
   it('wraps keyboard focus including asynchronous actions and restores the trigger on Escape or Close', async () => {
     const h = await loadEditor({ fetch: reviewNetwork(async () => completion(reviewResult())) });
     h.el('reviewStory').focus();
-    h.el('reviewStory').click();
-    await settle();
+    await startAiReview(h);
     const dialog = h.el('storyReviewDialog');
     const controls = dialog.querySelectorAll('button, a[href], input, select, textarea, [tabindex]')
       .filter((control) => !control.disabled && control.tabIndex >= 0 && !control.closest('[hidden]'));
@@ -2246,8 +2315,7 @@ describe('Story review in the real editor', () => {
     result.practicalDetails.missingAspects = [hostile];
     result.internalLinks.linkOpportunities = [hostile];
     const h = await loadEditor({ fetch: reviewNetwork(async () => completion(result)) });
-    h.el('reviewStory').click();
-    await settle();
+    await startAiReview(h);
     for (const card of h.el('reviewSemantic').querySelectorAll('[data-review-criterion]')) {
       expect(card.textContent).toContain(hostile);
     }
@@ -2260,13 +2328,15 @@ describe('Story review in the real editor', () => {
   });
 
   describe.each(['configuration', 'provider'] as const)('late %s results', (stage) => {
-    it.each(['close and reopen', 'new run', 'locale change', 'same-post restore', 'field edit', 'body edit'])('cannot overwrite the current review after %s', async (transition) => {
+    it.each(stage === 'configuration'
+      ? ['close and reopen', 'locale change', 'same-post restore', 'field edit', 'body edit']
+      : ['close and reopen', 'new run', 'locale change', 'same-post restore', 'field edit', 'body edit'])('cannot overwrite the current review after %s', async (transition) => {
       const configs: PromiseWithResolvers<Response>[] = [];
       const provider = deferredReviews();
       const h = await loadEditor({
         review: provider.review,
         fetch: async () => {
-          if (stage === 'provider') return response(reviewConfig);
+          if (stage === 'provider' || configs.length >= 2) return response(reviewConfig);
           const config = Promise.withResolvers<Response>();
           configs.push(config);
           return config.promise;
@@ -2275,7 +2345,8 @@ describe('Story review in the real editor', () => {
       h.api.populateForm(fullPair());
       h.el('reviewStory').click();
       await settle();
-      const oldSignal = h.requests[0]!.options.signal!;
+      if (stage === 'provider') { h.el('runReview').click(); await settle(); }
+      const oldSignal = h.requests.at(-1)!.options.signal!;
       if (stage === 'provider') expect(provider.calls).toHaveLength(1);
       else expect(provider.calls).toHaveLength(0);
 
@@ -2300,6 +2371,7 @@ describe('Story review in the real editor', () => {
         configs[1]!.resolve(response(reviewConfig));
         await settle();
       }
+      if (transition !== 'new run') { h.el('runReview').click(); await settle(); }
       const currentCall = provider.calls.at(-1)!;
       expect(currentCall.story.locale).toBe(transition === 'locale change' ? 'en' : 'de');
       currentCall.result.resolve(reviewResult('Current review suggestion'));
@@ -2340,8 +2412,7 @@ describe('Story review in the real editor', () => {
 
     const provider = deferredReviews();
     const other = await loadEditor({ review: provider.review, fetch: async () => response(reviewConfig) });
-    other.el('reviewStory').click();
-    await settle();
+    await startAiReview(other);
     other.el('closeReview').click();
     provider.calls[0]!.result.reject(new Error('private-obsolete-failure'));
     await settle();
@@ -2354,8 +2425,7 @@ describe('Story review in the real editor', () => {
   it('makes already-rendered apply actions inert after a same-post restore', async () => {
     const h = await loadEditor({ fetch: reviewNetwork(async () => completion(reviewResult())) });
     h.api.populateForm(fullPair());
-    h.el('reviewStory').click();
-    await settle();
+    await startAiReview(h);
     const oldTitle = required(h.el('reviewSemantic'), '[data-review-action="title"]');
     const oldExcerpt = required(h.el('reviewSemantic'), '[data-review-action="excerpt"]');
     const revision = fullPair();
@@ -2384,8 +2454,7 @@ describe('Story review in the real editor', () => {
     englishGap.click();
     expect(h.el('tab-en').hidden).toBe(false);
     expect(h.document.activeElement).toBe(h.el('enExcerpt'));
-    h.el('reviewStory').click();
-    await settle();
+    await startAiReview(h);
     expect(provider.calls[0]!.story).toMatchObject({ locale: 'en', title: pair.en.title, excerpt: '' });
     h.el('closeReview').click();
     h.flushDialogEvents();
@@ -2422,8 +2491,7 @@ describe('Story review in the real editor', () => {
       },
     });
     h.api.populateForm(fullPair());
-    h.el('reviewStory').click();
-    await settle();
+    await startAiReview(h);
     await h.api.loadPost('different-post');
     expect(provider.calls[0]!.signal.aborted).toBe(true);
     const nextPayload = h.api.buildPayload();
@@ -3361,7 +3429,87 @@ describe('manuscript-first editor refinements', () => {
   const saved = fullPair();
   const readPost: Fetch = async (url) => response(url.endsWith('/alt-audit') ? emptyAudit : url.endsWith('/revisions') ? [] : saved);
 
-  it('keeps grouped advisory issues collapsed without stealing focus, and preserves disclosure/focus on refresh', async () => {
+  it('pages the entire saved backlog, filters locales, and clamps the page after refresh without changing the draft', async () => {
+    const h = await loadEditor();
+    h.api.populateForm(fullPair());
+    const before = h.api.buildPayload();
+    const dirtyBefore = h.dirtyCalls();
+    const images: AltAudit['images'] = Array.from({ length: 11 }, (_, index) => ({
+      locale: index < 9 ? 'de' : 'en', kind: 'body', src: 'https://img/photo-' + index, reason: 'empty',
+    }));
+    const visibleSources = () => h.el('altAuditList').querySelectorAll('button')
+      .map((button) => (JSON.parse(button.dataset.auditKey!) as string[])[2]);
+    h.api.renderAltAudit({ count: images.length, images }, false);
+    expect(visibleSources()).toEqual(images.slice(0, 4).map((image) => image.src));
+    h.el('altAuditNext').click();
+    expect(visibleSources()).toEqual(images.slice(4, 8).map((image) => image.src));
+    h.el('altAuditNext').click();
+    expect(visibleSources()).toEqual(images.slice(8).map((image) => image.src));
+    expect(h.el('altAuditNext').disabled).toBe(true);
+    h.api.renderAltAudit({ count: 2, images: images.slice(9) }, false);
+    expect(visibleSources()).toEqual(images.slice(9).map((image) => image.src));
+    expect(h.el('altAuditPrevious').disabled).toBe(true);
+    h.el('altAuditLocale').value = 'de';
+    h.el('altAuditLocale').fire('input');
+    h.el('altAuditLocale').fire('change');
+    expect(visibleSources()).toEqual([]);
+    expect(h.el('altAuditNextUnresolved').disabled).toBe(true);
+    expect(h.el('altAudit').hidden).toBe(false);
+    h.el('altAuditLocale').value = 'en';
+    h.el('altAuditLocale').fire('change');
+    expect(visibleSources()).toEqual(images.slice(9).map((image) => image.src));
+    expect(h.api.buildPayload()).toEqual(before);
+    expect(h.dirtyCalls()).toBe(dirtyBefore);
+  });
+
+  it('visits the next unresolved photo in the selected locale without pretending a visit resolves it', async () => {
+    const h = await loadEditor();
+    const pair = fullPair();
+    pair.en.bodyMarkdown = '![](https://img/one)\n\n![](https://img/two)';
+    pair.en.images = { 'https://img/one': { width: 900, height: 600 }, 'https://img/two': { width: 900, height: 600 } };
+    h.api.populateForm(pair);
+    const audit: AltAudit = { count: 2, images: ['one', 'two'].map((name) => ({
+      locale: 'en', kind: 'body', src: 'https://img/' + name, reason: 'empty',
+    })) };
+    h.api.renderAltAudit(audit, false);
+    h.el('altAuditLocale').value = 'en';
+    h.el('altAuditLocale').fire('change');
+    const before = h.api.buildPayload();
+    h.el('altAuditNextUnresolved').click();
+    await settle();
+    expect(h.el('tab-en').hidden).toBe(false);
+    expect(h.editors[1]!.selection!.from.line).toBe(0);
+    h.el('altAuditNextUnresolved').click();
+    await settle();
+    expect(h.editors[1]!.selection!.from.line).toBe(2);
+    h.el('altAuditNextUnresolved').click();
+    await settle();
+    expect(h.editors[1]!.selection!.from.line).toBe(0);
+    expect(h.el('altAuditCounts').textContent.match(/\d+/g)).toEqual(['2', '0']);
+    expect(h.api.buildPayload()).toEqual(before);
+  });
+
+  it('uses available same-origin image variants, rejects remote thumbnails, and keeps failed previews actionable', async () => {
+    const h = await loadEditor();
+    const pair = fullPair();
+    pair.de.images = {
+      'https://img/small': { width: 320, height: 240, format: 'jpeg' },
+      'https://untrusted.invalid/tracker': { width: 900, height: 600 },
+    };
+    h.api.populateForm(pair);
+    h.api.renderAltAudit({ count: 2, images: Object.keys(pair.de.images).map((src) => ({
+      locale: 'de', kind: 'body', src, reason: 'empty',
+    })) }, false);
+    const list = h.el('altAuditList');
+    const previews = list.querySelectorAll('img');
+    expect(previews.map((image) => image.getAttribute('src'))).toEqual(['https://img/small-320.jpeg']);
+    previews[0]!.fire('error');
+    expect(list.querySelectorAll('img')).toEqual([]);
+    expect(list.querySelectorAll('button').map((button) => (JSON.parse(button.dataset.auditKey!) as string[])[2]))
+      .toEqual(Object.keys(pair.de.images));
+  });
+
+  it('keeps advisory issues collapsed, escapes filenames, and preserves disclosure/focus on refresh', async () => {
       const h = await loadEditor();
       const audit: AltAudit = { count: 3, images: [
         { locale: 'de', kind: 'gallery', src: 'https://img/one', reason: 'filename' },
@@ -3376,15 +3524,9 @@ describe('manuscript-first editor refinements', () => {
       expect(h.document.activeElement).toBe(h.el('deTitle'));
       expect(h.el('altAuditCounts').textContent.match(/\d+/g)).toEqual(['1', '2']);
       const list = h.el('altAuditList');
-      expect(list.querySelectorAll('h3').map((heading) => heading.textContent)).toEqual([
-        'DE · ' + copy['editor.chrome.auditFilename'], 'EN · ' + copy['editor.chrome.auditEmpty'], 'DE · ' + copy['editor.chrome.auditTitle'],
-      ]);
-      expect(list.querySelectorAll('button').map((button) => button.textContent)).toEqual([
-        copy['editor.chrome.auditGallery'] + ' — one',
-        copy['editor.chrome.auditBody'] + ' — <img onerror=alert(1)>',
-        copy['editor.chrome.auditHero'] + ' — hero',
-      ]);
       expect(list.querySelector('img')).toBeNull();
+      expect(list.textContent).toContain('<img onerror=alert(1)>');
+      expect(list.querySelector('[onerror]')).toBeNull();
       h.el('altAudit').open = true;
       list.querySelector('button')!.focus();
       h.api.renderAltAudit(audit, false);

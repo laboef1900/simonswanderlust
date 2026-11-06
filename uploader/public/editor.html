@@ -60,7 +60,7 @@
             aria-label="Open story details"
             title="Open story details"
             hidden
-          ><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/><path d="m10 15-3-3 3-3"/></svg></button>
+          ><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/><path d="m10 15-3-3 3-3"/></svg><span id="inspectorToggleLabel"></span></button>
         </div>
 
         <!-- After the actions in the DOM so Tab reaches Save before the status
@@ -81,7 +81,20 @@
             <summary aria-labelledby="altAuditSummary altAuditAdvisory"><span id="altAuditSummary" role="status"></span><span id="altAuditAdvisory" class="alt-audit__advisory"></span></summary>
             <p id="altAuditCounts" class="muted"></p>
             <p id="altAuditHelp"></p>
-            <div id="altAuditList"></div>
+            <section class="alt-audit__queue" aria-labelledby="altAuditQueueHeading">
+              <h3 id="altAuditQueueHeading"></h3>
+              <div class="alt-audit__controls">
+                <label for="altAuditLocale" id="altAuditLocaleLabel"></label>
+                <select id="altAuditLocale"></select>
+                <p id="altAuditRange" role="status"></p>
+              </div>
+              <ul id="altAuditList" class="alt-audit-list"></ul>
+              <div class="alt-audit__navigation">
+                <button id="altAuditPrevious" type="button" class="btn-secondary"></button>
+                <button id="altAuditNext" type="button" class="btn-secondary"></button>
+                <button id="altAuditNextUnresolved" type="button" class="btn-secondary"></button>
+              </div>
+            </section>
             <p id="altAuditFeedback" role="status" hidden></p>
           </details>
 
@@ -539,6 +552,8 @@
       </header>
       <div class="story-review__body">
         <p id="reviewAdvisory" class="story-review__advisory">A snapshot of this language’s unsaved draft. Suggestions are advisory: nothing is saved or published, and body text is never replaced.</p>
+        <p id="reviewDestination" class="review-destination" hidden></p>
+        <p id="reviewData" class="story-review__advisory"></p>
         <section class="story-review__section" aria-labelledby="reviewInstantHeading">
           <h3 id="reviewInstantHeading">Quick checks</h3>
           <div id="reviewInstant" class="review-results"></div>
@@ -551,7 +566,7 @@
       </div>
       <footer class="story-review__footer">
         <p class="muted">Check suggestions for accuracy before applying.</p>
-        <button id="runReview" type="button" class="btn-secondary">Review again</button>
+        <button id="runReview" type="button" class="btn-secondary" aria-describedby="reviewDestination reviewData" disabled></button>
       </footer>
     </dialog>
     <dialog id="gpxDialog" class="gpx-dialog" aria-labelledby="gpxDialogHeading">
@@ -627,6 +642,7 @@
     <script src="/admin/media-picker.js"></script>
     <script src="/admin/editor-linter.js"></script>
     <script src="/admin/editor-review.js"></script>
+    <script src="/admin/editor-alt-audit.js"></script>
     <script src="/admin/editor-excerpt.js"></script>
     <script src="/admin/country-centers.js"></script>
     <script src="/admin/country-coordinates.js"></script>
@@ -650,6 +666,7 @@
       'use strict';
       const $ = (id) => document.getElementById(id);
       const editorCopy = EditorCopy.en;
+      $('inspectorToggleLabel').textContent = editorCopy.details;
 
       // ---- state ----
       let currentTk = null;       // translationKey, null = new post
@@ -884,7 +901,8 @@
       // Delegated listeners cover every static field plus dynamic key-fact rows;
       // the EasyMDE bodies live in CodeMirror and need their own change hooks.
       const mainEl = document.querySelector('main');
-      mainEl.addEventListener('input', () => {
+      mainEl.addEventListener('input', (event) => {
+        if (event.target.closest('#altAudit')) return;
         guard.markDirty();
         storyReview?.invalidate();
         excerptAssist?.invalidate();
@@ -2249,20 +2267,6 @@
       // only its WordPress filename needs editorial attention. This names
       // those photos. It NEVER gates anything: publishBtn.disabled is not
       // touched here, and the copy says the post publishes either way.
-      const ALT_AUDIT_WHERE = { hero: editorCopy.auditHero, body: editorCopy.auditBody, gallery: editorCopy.auditGallery };
-      const ALT_AUDIT_WHY = {
-        empty: editorCopy.auditEmpty,
-        'repeats-title': editorCopy.auditTitle,
-        filename: editorCopy.auditFilename,
-      };
-
-      // Variant URLs are long and all share a prefix; the file name is what the
-      // author recognises in a list.
-      function photoName(src) {
-        const clean = String(src).split('?')[0].split('#')[0];
-        const parts = clean.split('/');
-        return parts[parts.length - 1] || clean;
-      }
 
       // Reachability: each kind is fixed in a different control.
       async function jumpToPhoto(locale, kind, src) {
@@ -2296,64 +2300,26 @@
         feedback.textContent = editorCopy.auditMissing;
       }
 
-      function renderAltAudit(audit, published) {
-        const box = $('altAudit');
-        const summary = $('altAuditSummary');
-        const list = $('altAuditList');
-        const images = ((audit && audit.images) || []).filter((image) => requestedLocales().includes(image.locale));
-        const auditFocused = box.contains(document.activeElement);
-        const focused = list.contains(document.activeElement) ? document.activeElement : null;
-        const focusKey = focused && focused.dataset.auditKey;
-        list.replaceChildren();
-        $('altAuditFeedback').hidden = true;
-        if (!images.length) {
-          if (auditFocused) $(activeTab + 'Title').focus({ preventScroll: true });
-          box.hidden = true;
-          box.open = false;
-          summary.textContent = '';
-          return;
-        }
-        // Keep the author's disclosure state and caret across advisory refreshes.
-        box.hidden = false;
-        summary.textContent = (images.length === 1 ? editorCopy.auditOne : editorCopy.auditOther)
-          .replace('{count}', String(images.length));
-        const empty = images.filter((image) => image.reason === 'empty').length;
-        $('altAuditAdvisory').textContent = editorCopy.auditAdvisory;
-        $('altAuditCounts').textContent = editorCopy.auditCounts
-          .replace('{empty}', String(empty)).replace('{review}', String(images.length - empty));
-        $('altAuditHelp').textContent = published ? editorCopy.auditPublished : editorCopy.auditHelp;
-        // Optional before publishing (information); a live story missing alt text is a warning.
-        box.classList.toggle('notice-warn', !!published);
-        box.classList.toggle('notice-info', !published);
-        const groups = new Map();
-        let nextFocus;
-        images.forEach((img) => {
-          const groupKey = img.locale + ':' + img.reason;
-          let group = groups.get(groupKey);
-          if (!group) {
-            const section = document.createElement('section');
-            const heading = document.createElement('h3');
-            heading.textContent = img.locale.toUpperCase() + ' · ' + ALT_AUDIT_WHY[img.reason];
-            group = document.createElement('ul');
-            group.className = 'alt-audit-list';
-            section.appendChild(heading);
-            section.appendChild(group);
-            list.appendChild(section);
-            groups.set(groupKey, group);
-          }
-          const li = document.createElement('li');
-          const btn = document.createElement('button');
-          btn.type = 'button';
-          btn.className = 'btn-link';
-          btn.dataset.auditKey = JSON.stringify([img.locale, img.kind, img.src, img.reason]);
-          btn.textContent = ALT_AUDIT_WHERE[img.kind] + ' — ' + photoName(img.src);
-          btn.addEventListener('click', () => jumpToPhoto(img.locale, img.kind, img.src));
-          if (btn.dataset.auditKey === focusKey) nextFocus = btn;
-          li.appendChild(btn);
-          group.appendChild(li);
-        });
-        if (focused) (nextFocus || box.querySelector('summary')).focus({ preventScroll: true });
-      }
+      const altAuditQueue = EditorAltAudit.create({
+        locales: requestedLocales,
+        focusManuscript: () => $(activeTab + 'Title').focus({ preventScroll: true }),
+        jump: jumpToPhoto,
+        thumbnail: (image) => {
+          let url;
+          try { url = new URL(image.src); } catch (_) { return null; }
+          if (url.origin !== window.EditorGalleryImageOrigin || url.username || url.password ||
+              url.search || url.hash) return null;
+          const hero = image.kind === 'hero' && $(image.locale + 'HeroSrc').value === image.src;
+          const metadata = hero ? {
+            width: Number($(image.locale + 'HeroWidth').value),
+            format: $(image.locale + 'HeroFormat').value || undefined,
+          } : (image.locale === 'de' ? deImages : enImages)[image.src];
+          return PostsFilter.thumbUrl({
+            heroSrc: image.src, heroWidth: metadata?.width, heroFormat: metadata?.format,
+          });
+        },
+      });
+      function renderAltAudit(audit, published) { altAuditQueue.update(audit, published); }
 
       // Advisory, so every failure path is silent: a 401/500 here must never
       // interrupt a save or a publish, it just leaves the last rendering up.
