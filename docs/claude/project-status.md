@@ -4,6 +4,20 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Implemented locally:** compact article save feedback (2026-11-06). Successful draft
+  saves, including receipt-confirmed recovery, use the existing command-bar status rather
+  than duplicating it in a full-width recovery panel with **Check again**. Uncertain saves,
+  conflicts and account recovery retain their controls; newer edits remain unsaved.
+  Page-editor feedback and persistence/publication behavior are unchanged.
+  Editor regressions cover ordinary acknowledgements, lost responses, newer edits and failures.
+  Uploader typecheck and full suite pass: 4,253 tests; 647 skipped without TEST_DATABASE_URL.
+  Desktop (1440px) and mobile (390px) browser smoke used working-tree assets and intercepted
+  save responses, with no server writes: successful save hides the panel; failed reconciliation
+  exposes Check again; a manual receipt check hides it without replaying a write. No horizontal
+  overflow. Astro check could not load without DATABASE_URL; the saved local validation
+  database connection also refused connections. The detector's existing dynamic-image and
+  typography findings are limited by unresolved absolute stylesheet URLs. Not deployed.
+
 - **Implemented locally:** laptop-first CMS refinement (2026-11-06). Owner chose to retain
   Editorial desk and permitted regrouping across writing, photography, journeys and navigation.
   Desktop readiness is a counted Publish checklist with the existing field jumps and keyboard

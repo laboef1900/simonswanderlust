@@ -797,6 +797,8 @@
       });
       writeRecovery = WriteRecovery.create({
         kind: 'posts', guard, copy: editorCopy, anchor: $('actionError'),
+        // The command bar already announces saved/unsaved state; recovery is for problems.
+        showSavedNotice: false,
         resourceId: () => currentTk || initialTk, base: () => loadedUpdatedAt,
         collect: () => recoveryDraft || buildPayload(),
         restoreBase: (value) => { loadedUpdatedAt = value; },

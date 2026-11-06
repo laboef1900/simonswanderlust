@@ -1229,7 +1229,11 @@ and the `<dialog>`s appended to `<body>` share one set:
   visually hidden, so the command bar opens the workspace. The command bar separates
   primary actions (Save draft, Publish, Review story, **Save & preview**, More actions) from the
   full-width save/readiness status row; the actions come first in the DOM, so Tab reaches
-  Save before the status. On a live story Publish reads **Publish changes** (it replaces
+  Save before the status. Confirmed draft saves use this status row alone, including saves confirmed by a recovery
+  check. They never open a second success banner or offer **Check again** after success.
+  The recovery panel remains available for uncertain outcomes, conflicts and account changes;
+  edits made during a save remain visibly unsaved.
+  On a live story Publish reads **Publish changes** (it replaces
   what readers see); below 52rem the word "changes" folds out of sight but stays in the
   accessible name, so the phone action row does not wrap. Save draft names its shortcut (⌘S / Ctrl+S) in its tooltip and
   `aria-keyshortcuts`. **Save & preview** names its existing save-before-preview operation;
