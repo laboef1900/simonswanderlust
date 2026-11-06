@@ -4,7 +4,7 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
-- **Implemented locally:** Settings critique refinement (2026-11-06, all six requested passes).
+- **Implemented, PR #544 open:** Settings critique refinement (2026-11-06, all six requested passes).
   All seven tabs retain the Editorial desk identity. Unsaved-work tracking names independent
   save scopes, protects page exit, confirms discard, preserves failed saves and never stores
   field values/keys/files in browser storage. Identity text and image selections remain
@@ -25,7 +25,14 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
   and intercepted failed saves. No saved settings, backups, publication or paid AI requests
   were triggered. The detector reports the two hidden dynamic comparison images and cannot
   resolve the absolute CSS URL; these are not rendered broken-image boxes.
-  Not deployed or pushed; no CI or physical-device qualification is claimed.
+  Pushed on `feature/settings-ux-refinement`, stacked on editor PR #543; retarget to `dev`
+  after #543 merges. The local `app` container now runs code commit `15d4da8`, built as
+  `ghcr.io/laboef1900/wanderlust-studio:local`. Its healthcheck passes, all six served Settings
+  assets match the committed files, and direct browser smoke confirms desktop/390px rendering
+  and retained cross-tab changes without asset overrides. The published release is unchanged.
+  Existing app configuration and persistent data remain in place; only `app` was recreated.
+  Rollback image: `ghcr.io/laboef1900/wanderlust-studio:local-before-settings-15d4da8`.
+  No production deployment or physical-device qualification is claimed.
 
 - **Implemented locally:** article-editor consent and remediation refinement (2026-11-06,
   28/40 critique follow-up, all five recommended actions). Opening Story review runs local
