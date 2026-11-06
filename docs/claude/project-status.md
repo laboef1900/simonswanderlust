@@ -4,6 +4,31 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Implemented, PR #542 open:** post editor critique
+  actions (2026-11-06; impeccable critique of the editor, 27/40, all five priority issues
+  and the minor list). The manuscript has its own pinned toolbar (EasyMDE's is off): stroke
+  icons for formatting, labelled **Photo** and **Gallery**, the gallery-Markdown toggle and a
+  **Rendered view** toggle; a roving `role="toolbar"` that pins under the command bar and
+  scrolls sideways on phones. **Photo** opens an overlay tray (upload, suggest alt, choose
+  from library) that inserts at the cursor and returns the caret; the old image row below
+  the story is gone. Story details shrank from ~4,100px to ~1,900px: Expedition details is
+  closed with a summary line (date · code · region · stops, or "Missing …") instead of
+  auto-opening; Route along stops and GPX route fold with their status in the summary;
+  key-fact values wrap and grow; the slug prefix sits above the slug. Gallery widgets show
+  only alt text per photo, one Edit in Media link per gallery and the help line once. Review
+  groups a gallery's missing alt text into one finding with Open Media; the banner reads
+  "Alt text to review: N photos". The command bar puts actions before status in tab order,
+  re-checks the live site with a small icon, hides More actions on desktop unless it holds
+  Unpublish, and shows a one-line status on phones (pinned chrome 219px → 186px including the
+  toolbar). Floating menus use one `--menu-shadow` instead of border plus blur; the inspector
+  column no longer animates its width. Save draft names ⌘S/Ctrl+S; on a live story Publish
+  reads "Publish changes" (owner-chosen wording; "changes" folds visually on phones but
+  stays in the accessible name). No routes, schema, slugs
+  or server behaviour changed. Not done: a Media link pre-filtered to the gallery's photos
+  (Media has no URL filters yet). Uploader/site Vitest and `tsc` pass; verified in Chrome at
+  1440 and 390px against the local stack. Files: `uploader/public/{editor.html,admin.css,
+  editor-galleries.js,editor-review.js,editor-linter.js,editor-gpx.js}`,
+  `site/src/i18n/ui.ts`, `DESIGN.md`, `uploader/test/{editor-dom,admin-pages}.test.ts`.
 - **Implemented, PR #541 open:** Wanderlust Studio
   admin critique follow-up (2026-11-06; impeccable critique 27/40, all five priority issues).
   Media is photo-first: larger titled tiles with a quiet "No alt text" tag, a detail panel that

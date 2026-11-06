@@ -1198,10 +1198,30 @@ and the `<dialog>`s appended to `<body>` share one set:
 - The editor has no visible page title: the shell's h1 (New post / Edit post) is
   visually hidden, so the command bar opens the workspace. The command bar separates
   primary actions (Save draft, Publish, Review story, **Preview**, More actions) from the
-  full-width save/readiness status row. Preview is a daily writing action, so it sits in
-  the bar; its accessible name keeps "Draft preview — not the live site". On phones the
-  story-details opener rides at the right end of the locale row so the actions fit one
-  line. Error/status text wraps instead of disappearing behind ellipses.
+  full-width save/readiness status row; the actions come first in the DOM, so Tab reaches
+  Save before the status. On a live story Publish reads **Publish changes** (it replaces
+  what readers see); below 52rem the word "changes" folds out of sight but stays in the
+  accessible name, so the phone action row does not wrap. Save draft names its shortcut (⌘S / Ctrl+S) in its tooltip and
+  `aria-keyshortcuts`. Preview is a daily writing action, so it sits in the bar; its
+  accessible name keeps "Draft preview — not the live site". Re-reading the live state is
+  a small icon beside it (**Check the live site again**), not a full-height button. Above
+  74rem readiness lives only in the status row, so More actions appears only when it holds
+  Unpublish; below 74rem the menu also carries readiness. On phones the status is one
+  wrapping line ("Saved to server · Live ↻"), the story-details opener rides at the right
+  end of the locale row so the actions fit one line, and error/status text wraps instead
+  of disappearing behind ellipses.
+- The manuscript has its own toolbar (EasyMDE's is off): a roving `role="toolbar"` with
+  one Tab stop and arrow keys inside, drawn stroke icons for bold, italic, heading, quote,
+  lists and link (shortcut in the tooltip), then labelled **Photo** and **Gallery**, and at
+  its right end the gallery-Markdown toggle and the pressed-state **Rendered view**. It
+  pins under the command bar in the workspace scroller, so every tool is in reach anywhere
+  in a long story, and it is the top edge of the manuscript frame. **Photo** opens a tray
+  under the bar — file (dashed drop edge), alt text, **Upload and insert**, **Suggest alt
+  text**, **Choose from library** — that inserts at the cursor, never into a gallery
+  fence, and then closes and returns the caret to the story; Escape closes it to its
+  toggle. A library pick carries Media's alt for the open language unless one was typed.
+  Upload/gallery outcomes read in one status line under the bar. The rendered view is
+  read-only, so the editing controls wait while it is on.
 - All editor chrome is English like the rest of the admin, whichever locale tab is open:
   gallery widgets, title-image controls, gallery metadata advisories and their retry
   copy come from the English dictionary; only the author's own text (alt, captions) is
@@ -1225,9 +1245,12 @@ and the `<dialog>`s appended to `<body>` share one set:
   Insert/Update gallery, and Cancel discards them. The manuscript widget marks hidden
   captions explicitly. On phones, each reset button sits below its textarea.
 - The manuscript's gallery widget is a visual index, not a form: compact 4:3 tiles in
-  photo order, each with its alt text from Media shown as text (or a **No alt text yet**
-  tag) and the Edit in Media link. Only a photo that is not in Media keeps an editable
-  alt field there; a Review story jump to a non-editable photo lands on its shown text.
+  photo order, each showing only its alt text from Media (or a **No alt text yet** tag).
+  The photo's Media title is the image tooltip and part of its label for assistive
+  technology; the visible label appears only on an editable field. The gallery head links
+  to Media once (new tab, announced), and the explanatory help line appears once per
+  story, on the first gallery. Only a photo that is not in Media keeps an editable alt
+  field there; a Review story jump to a non-editable photo lands on its shown text.
 - With gallery previews enabled, typing or pasting at either collapsed fence edge
   inserts prose on separate lines outside the gallery, including at the start or
   end of the manuscript. Arrow-key navigation and clicking the visually empty
@@ -1242,8 +1265,10 @@ and the `<dialog>`s appended to `<body>` share one set:
   tinted column (`--canvas`, divided by `--line-strong`) so white fields read against it.
   It pins flush under the command bar and scrolls on its own. Its header carries one
   icon-only panel toggle (`panel-right-close` / `panel-right-open`, named Collapse /
-  Expand story details); collapsing slides the panel right into a slim tinted rail that
-  keeps only that toggle, and the writing column widens into the freed space. The
+  Expand story details); collapsing turns the column into a slim tinted rail that keeps
+  only that toggle, and the writing column widens into the freed space. The column switch
+  itself is not animated (it would reflow the whole manuscript each frame); the content
+  fades and slides out with opacity/transform. The
   collapsed content is inert and hidden from assistive technology; the slide honours
   reduced motion. At 74rem and below it is a modal drawer opened by an icon button
   after More actions; the same header toggle closes it, and it traps Tab, closes on
@@ -1255,10 +1280,19 @@ and the `<dialog>`s appended to `<body>` share one set:
   section shows a small thumbnail of its photo beside Show. A loaded story opens Replace
   photo only when that image is missing; author actions never fold it under focus.
 - Excerpts grow with their text; no inner scrollbar or resize grip.
-- Key facts stack label above value, each fact divided by a hairline, so neither is
-  cut off in the inspector's narrow column.
+- The slug's site prefix sits above the editable slug in the inspector, so neither half
+  truncates.
+- Key facts stack label above value, each fact divided by a hairline. The value field
+  wraps and grows with its text (one logical line: Enter and pasted breaks become spaces),
+  so nothing is cut off in the inspector's narrow column. Row removal is a drawn ×.
+- **Expedition details** is closed by default; its summary line names what it holds
+  ("3 Oct 2024 · RO · Europe · 1 stop") or what is missing ("Missing date"), and never
+  forces itself open — the readiness chip's Trip link is the way in to a gap.
 - Waypoints show their stops and **Add stop** first; the via-point note, the geocoding
   privacy note and the routing privacy note follow together below them.
+- **Route along stops** and **GPX route** fold like the sections around them; each
+  summary carries its live status line, so the state reads without opening them. A GPX
+  error opens its section before taking focus.
 - GPX editing is a flat section in Story details, not another dashboard. Its scoped native
   dialog closes the phone inspector first, then restores that drawer and the exact opener
   on dismissal. A fixed header/footer frame one scrollable body; touch actions are at least

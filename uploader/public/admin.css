@@ -69,6 +69,10 @@
   --control-radius: 0.375rem;
   --control-font: 0.875rem;
   --focus-ring: 2px solid var(--studio-accent);
+  /* Floating menus (row More actions, editor More actions, account menu):
+     elevation is declared once, as a shadow — a tight contact layer for the
+     edge and a soft offset layer for lift — never a border plus a blur. */
+  --menu-shadow: 0 1px 3px rgb(20 42 66 / 16%), 0 12px 28px -8px rgb(20 42 66 / 24%);
 }
 /* Touch: 44px targets, and 16px field text — iOS Safari zooms the whole page
    into any focused field below 16px, which then pans sideways (#302, H5). */
@@ -82,6 +86,20 @@
    toggles `.hidden` (Unpublish, Retry, panels, status lines) would leave the
    element on screen. Keep it global and !important. */
 [hidden] { display: none !important; }
+
+/* Named for assistive technology, not drawn: the gallery photo labels and
+   "(opens a new tab)" suffixes. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
 
 body {
   margin: 0;
@@ -764,10 +782,9 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   gap: 0.125rem;
   min-width: 11rem;
   padding: 0.375rem;
-  border: 1px solid var(--line-strong);
   border-radius: 0.5rem;
   background: var(--surface);
-  box-shadow: 0 12px 28px -8px rgb(20 42 66 / 22%);
+  box-shadow: var(--menu-shadow);
 }
 .posts-page .post-more-actions button {
   justify-content: flex-start;
@@ -1200,14 +1217,25 @@ dialog.media-picker {
 .stop-search-result { justify-content: flex-start; width: 100%; text-align: left; white-space: normal; overflow-wrap: anywhere; }
 .stops-notes { margin-top: 0.75rem; font-size: 0.75rem; line-height: 1.45; }
 .stops-notes p { margin: 0 0 0.375rem; }
-/* The × remove beside a key fact or stop: a square the height of its row. */
+/* The × remove beside a key fact or stop: a square the height of its row,
+   drawn in the editor's stroke icon style. */
 :is(.keyfact-row, .stop-row) .btn-remove {
   flex: none;
   width: var(--control-h);
   padding: 0;
-  font-size: 1.125rem;
   line-height: 1;
 }
+.editor-icon-remove svg {
+  width: 1rem;
+  height: 1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+/* A value wraps and grows (fitTextarea) rather than clipping; one row high
+   until the text needs more. */
+.keyfact-value { min-height: var(--control-h); }
 
 /* ---- locale tabs (editor, About) ----
    A segmented control; tabs.js toggles the panels with `hidden`. */
@@ -1314,6 +1342,7 @@ dialog.story-review {
 .review-findings li + li { margin-top: 0.65rem; }
 .review-findings p { margin-top: 0; }
 .review-findings .review-jump { padding: 0.25rem 0; font-size: 0.8125rem; }
+.review-findings .review-media-link { margin-left: 1rem; font-size: 0.8125rem; font-weight: 600; }
 .review-suggestion { margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--line); }
 .review-suggestion .review-suggestion__text { margin: 0 0 0.6rem; white-space: pre-wrap; }
 .review-status { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin: 0 0 0.75rem; font-size: 0.875rem; }
@@ -1722,10 +1751,9 @@ body.login-page #submit { width: 100%; margin-top: 1.5rem; }
   display: grid;
   gap: 0.125rem;
   padding: 0.375rem;
-  border: 1px solid var(--line-strong);
   border-radius: 0.5rem;
   background: var(--surface);
-  box-shadow: 0 12px 28px -8px rgb(20 42 66 / 22%);
+  box-shadow: var(--menu-shadow);
 }
 .cms-user-info {
   display: flex;
@@ -2311,7 +2339,41 @@ body.editor-page .editor-commandbar__nav > .action-link {
   white-space: nowrap;
 }
 
+/* Re-checks the live site: an icon beside the state it reads, sized like the
+   small controls, quiet until hovered. Its name is "Check the live site again". */
+body.editor-page .editor-status-refresh {
+  width: var(--control-h-sm);
+  min-height: var(--control-h-sm);
+  margin-left: -0.625rem;
+  padding: 0;
+  border-color: transparent;
+  background-color: transparent;
+  color: var(--muted);
+}
+
+body.editor-page .editor-status-refresh:where(:not(:disabled)):hover {
+  background-color: var(--studio-accent-soft);
+  color: var(--ink);
+}
+
+body.editor-page .editor-status-refresh svg {
+  width: 0.9375rem;
+  height: 0.9375rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 body.editor-page .editor-actions-menu { position: relative; }
+
+/* Desktop shows readiness in the status row, so the menu would repeat it;
+   with nothing else to offer (no Unpublish) the menu is not drawn at all. */
+@media not all and (max-width: 74rem) {
+  body.editor-page .editor-actions-menu__readiness { display: none; }
+  body.editor-page .editor-actions-menu:not(:has(#unpublishBtn:not([hidden]))) { display: none; }
+}
 
 /* <summary> carries .btn-secondary for its colours; the button box (height,
    padding, type) is the same as every other control's. */
@@ -2363,10 +2425,9 @@ body.editor-page .editor-actions-menu__panel {
   min-width: 13rem;
   gap: 0.125rem;
   padding: 0.375rem;
-  border: 1px solid var(--line-strong);
   border-radius: 0.5rem;
   background: var(--surface);
-  box-shadow: 0 12px 28px -8px rgb(20 42 66 / 22%);
+  box-shadow: var(--menu-shadow);
 }
 
 body.editor-page .editor-actions-menu__panel button {
@@ -2413,6 +2474,9 @@ body.editor-page .alt-audit summary {
   font-weight: 600;
 }
 
+/* Help prose keeps a reading measure even in the wide manuscript column. */
+body.editor-page .alt-audit #altAuditHelp { max-width: 70ch; }
+
 body.editor-page .alt-audit h3 {
   margin: 1.25rem 0 0;
   font-size: 0.875rem;
@@ -2439,7 +2503,9 @@ body.editor-page .editor-workspace {
   border: 1px solid var(--line);
   border-radius: var(--editor-frame-radius);
   background: var(--surface);
-  transition: grid-template-columns 280ms var(--editor-ease-out);
+  /* The column switch is not animated: transitioning the track would reflow
+     the whole manuscript (and every gallery widget) on each frame. The
+     inspector content fades and slides with transform/opacity instead. */
 }
 
 body.editor-page .editor-workspace::before {
@@ -2452,7 +2518,6 @@ body.editor-page .editor-workspace::before {
   border-left: 1px solid var(--line-strong);
   border-radius: 0 calc(var(--editor-frame-radius) - 1px) calc(var(--editor-frame-radius) - 1px) 0;
   background: var(--editor-inspector-surface);
-  transition: width 280ms var(--editor-ease-out);
 }
 
 body.editor-page .editor-canvas {
@@ -2681,6 +2746,157 @@ body.editor-page .hero-focus output { color: var(--muted); }
 /* The manuscript body gets more height than About's. */
 body.editor-page .EasyMDEContainer .CodeMirror { min-height: clamp(22rem, 52vh, 38rem); }
 
+/* ---- manuscript bar ----
+   The editor's own toolbar replaces EasyMDE's: it pins under the command bar
+   (sticky in the workspace scroller), so formatting, Photo and Gallery stay in
+   reach anywhere in a long story. It is the top edge of the manuscript frame;
+   the EasyMDE container below continues it. */
+body.editor-page .manuscript-tools {
+  position: sticky;
+  top: var(--editor-commandbar-height);
+  z-index: 30;
+  background: var(--surface);
+}
+
+body.editor-page .manuscript-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  border: 1px solid var(--line-control);
+  border-bottom-color: var(--line);
+  border-radius: 0.5rem 0.5rem 0 0;
+  background: var(--surface);
+}
+
+body.editor-page .manuscript-bar__group {
+  display: flex;
+  align-items: center;
+  gap: 0.125rem;
+}
+
+body.editor-page .manuscript-bar__group + .manuscript-bar__group {
+  padding-left: 0.25rem;
+  border-left: 1px solid var(--line);
+}
+
+body.editor-page .manuscript-bar__group--view {
+  margin-left: auto;
+}
+
+body.editor-page .manuscript-bar__group + .manuscript-bar__group--view { border-left: 0; }
+
+body.editor-page .manuscript-bar__btn {
+  min-width: var(--control-h-sm);
+  min-height: var(--control-h-sm);
+  padding: 0 0.375rem;
+  border-color: transparent;
+  border-radius: 0.375rem;
+  background-color: transparent;
+  color: var(--ink);
+}
+
+body.editor-page .manuscript-bar__btn--text { padding-inline: 0.5rem 0.625rem; }
+body.editor-page .manuscript-bar__group--view .manuscript-bar__btn--text { padding-inline: 0.625rem; color: var(--muted); }
+
+body.editor-page .manuscript-bar__btn svg {
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+body.editor-page .manuscript-bar__btn:where(:not(:disabled)):hover {
+  background-color: var(--studio-accent-soft);
+  color: var(--ink);
+}
+
+/* Pressed (rendered view) and expanded (photo panel) read as one state. */
+body.editor-page .manuscript-bar__btn:is([aria-pressed='true'], [aria-expanded='true']) {
+  border-color: var(--studio-accent);
+  background-color: var(--studio-accent-soft);
+  color: var(--ink);
+}
+
+body.editor-page .manuscript-bar__btn:focus-visible { outline-offset: -2px; }
+
+/* The frame continues below the bar: square top, the bar's rule as its edge. */
+body.editor-page .manuscript-tools ~ .EasyMDEContainer {
+  border-top: 0;
+  border-radius: 0 0 0.5rem 0.5rem;
+}
+
+/* The photo tray drops out of the bar and lies over the text, like a menu,
+   so opening it never shifts the story under the caret; Escape, the Photo
+   toggle or a finished insert closes it. Elevation is the menu shadow. */
+body.editor-page .manuscript-photo {
+  position: absolute;
+  z-index: 1;
+  top: 100%;
+  right: 0;
+  left: 0;
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.875rem;
+  border-radius: 0 0 0.5rem 0.5rem;
+  background: var(--canvas);
+  box-shadow: var(--menu-shadow);
+}
+
+body.editor-page .manuscript-photo__fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
+  gap: 0.75rem;
+}
+
+body.editor-page .manuscript-photo__fields label { margin-top: 0; }
+
+body.editor-page .manuscript-photo__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+body.editor-page .manuscript-photo__actions .muted {
+  margin: 0 0 0 auto;
+  font-size: 0.75rem;
+}
+
+body.editor-page .manuscript-tools__status {
+  margin: 0;
+  padding: 0.375rem 0.75rem;
+  border-inline: 1px solid var(--line-control);
+  border-bottom: 1px solid var(--line);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+
+body.editor-page .manuscript-tools__status:empty { display: none; }
+
+body.editor-page .manuscript-tools__status button { margin-left: 0.5rem; }
+
+@media (max-width: 40rem) {
+  body.editor-page .manuscript-photo__fields { grid-template-columns: minmax(0, 1fr); }
+  body.editor-page .manuscript-photo__actions .muted { margin-left: 0; flex-basis: 100%; }
+  /* One pinned row, scrolled sideways, not three wrapped ones: on a phone
+     every pinned line is writing space lost. Arrow keys still walk it. */
+  body.editor-page .manuscript-bar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+  body.editor-page .manuscript-bar__group,
+  body.editor-page .manuscript-bar__btn { flex: none; }
+  body.editor-page .manuscript-bar__group--view { margin-left: 0; }
+}
+
 /* The inspector is a sticky column inside the editor frame that collapses to
    a slim rail on desktop, and a focus-managed drawer at narrow widths. Its
    groups are divided by rules rather than nested cards. It pins flush under
@@ -2815,6 +3031,46 @@ body.editor-page .editor-inspector details:not(.editor-disclosure) > summary::af
 }
 
 body.editor-page .editor-inspector details:not(.editor-disclosure)[open] > summary::after { content: 'Hide'; }
+
+/* A folded section names itself and its state: "Expedition details" over
+   "12 Feb 2021 · MX · North America · 6 stops", "GPX route" over
+   "No route attached". */
+body.editor-page .editor-section-title {
+  display: grid;
+  flex: 1;
+  gap: 0.125rem;
+  min-width: 0;
+  padding-block: 0.25rem;
+}
+
+body.editor-page .editor-section-summary {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+body.editor-page .editor-section-summary:empty { display: none; }
+body.editor-page .editor-section-summary.is-incomplete { color: #855f25; }
+
+/* Nested in a ruled group (Route, GPX): the group draws the rule. */
+body.editor-page .editor-inspector-group > details > summary { margin: 0; }
+body.editor-page .editor-inspector-group > details[open] > summary { margin-bottom: 0.5rem; }
+
+/* The inspector column is too narrow for prefix and slug side by side; both
+   halves used to truncate. The prefix sits above the editable slug. */
+body.editor-page .editor-inspector .slug-preview { display: grid; }
+
+body.editor-page .editor-inspector .slug-base {
+  max-width: none;
+  padding-block: 0.375rem;
+  border-right: 0;
+  border-bottom: 1px solid var(--line);
+  line-height: 1.4;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 
 body.editor-page .editor-inspector .muted { overflow-wrap: anywhere; }
 
@@ -3001,13 +3257,16 @@ body.editor-page .locale-chip-link:where(:not(:disabled)):hover { background: no
     display: none;
   }
 
+  /* One wrapping line — "Saved to server · Live ↻" — not a stack of rows:
+     the whole bar stays pinned, so every line here costs writing space. */
   body.editor-page .editor-commandbar__status {
     grid-column: 1 / -1;
     grid-row: 2;
-    display: grid;
-    gap: 0.15rem;
+    gap: 0 0.75rem;
     overflow: visible;
   }
+
+  body.editor-page .editor-commandbar__status > p { font-size: 0.75rem; }
 
   body.editor-page .editor-commandbar__status .locale-chip {
     display: none;
@@ -3031,6 +3290,16 @@ body.editor-page .locale-chip-link:where(:not(:disabled)):hover { background: no
 }
 
 @media (max-width: 52rem) {
+  /* "Publish changes" would wrap the action row; the word stays in the name. */
+  body.editor-page .publish-scope {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
   body.editor-page .editor-commandbar {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -3110,20 +3379,6 @@ body.editor-page .locale-chip-link:where(:not(:disabled)):hover { background: no
     font-size: clamp(1.65rem, 8vw, 2.15rem);
   }
 
-  body.editor-page .slug-preview {
-    display: grid;
-  }
-
-  body.editor-page .slug-base {
-    max-width: none;
-    padding-block: 0.375rem;
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
-    line-height: 1.4;
-    white-space: normal;
-    overflow-wrap: anywhere;
-  }
-
   body.editor-page .hero-actions-row > * {
     flex: 1 1 9rem;
   }
@@ -3169,7 +3424,7 @@ body.editor-page .locale-chip-link:where(:not(:disabled)):hover { background: no
   gap: 0.5rem 0.75rem;
 }
 .editor-gallery__head h3 { margin: 0; font-size: 0.9375rem; font-weight: 650; }
-.editor-gallery__head button { margin-left: auto; }
+.editor-gallery__head .editor-gallery__media-link { margin-left: auto; font-size: 0.8125rem; font-weight: 600; }
 .editor-gallery__help { margin: 0.375rem 0 0.875rem; max-width: 65ch; font-size: 0.8125rem; }
 /* A visual index of the gallery, not a form: small tiles so a 30-photo gallery
    stays a few rows of the manuscript instead of several screens. */
@@ -3223,8 +3478,8 @@ body.editor-page .locale-chip-link:where(:not(:disabled)):hover { background: no
 .editor-gallery__status:empty { display: none; }
 .editor-gallery__suggestion { padding-block: 0.5rem; border-top: 1px solid var(--line-strong); }
 .editor-gallery__suggestion button { margin-right: 0.5rem; }
-/* Media-backed descriptions are shown as text; this line names where they are edited. */
-.editor-gallery__source, .editor-gallery__local { margin-block: 0.25rem 0.5rem; font-size: 0.75rem; overflow-wrap: anywhere; }
+/* Photos not in Media keep their alt with the article; this line says so. */
+.editor-gallery__local { margin-block: 0.25rem 0.5rem; font-size: 0.75rem; overflow-wrap: anywhere; }
 .editor-gallery__retry { margin-bottom: 0.75rem; }
 
 

@@ -553,10 +553,10 @@ describe('admin page wiring', () => {
   });
 
 
-  it('EasyMDE built-in autosave stays disabled (DraftGuard owns persistence)', () => {
+  it('EasyMDE built-in autosave stays disabled on About (DraftGuard owns persistence)', () => {
     // @ai-warning do not re-enable EasyMDE autosave: it is body-only and would
     // fight the full-form DraftGuard stash (duplicate writes, partial restores).
-    expect(editor.match(/autosave: \{ enabled: false \}/g)).toHaveLength(2);
+    // The post editor's instances are checked where they are built (editor-dom.test.ts).
     expect(about.match(/autosave: \{ enabled: false \}/g)).toHaveLength(2);
   });
 });
