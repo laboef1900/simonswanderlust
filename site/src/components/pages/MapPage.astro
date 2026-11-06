@@ -40,7 +40,7 @@ const indexedTrips = trips.map((trip, index) => ({ trip, index }));
       </div>
       {trips.length > 0 && (
         <div class="flex flex-wrap items-center gap-2" role="group" aria-label={t('map.filterRegionLabel')}>
-          <span class="mr-2 font-mono text-xs font-semibold tracking-log text-navy/70">
+          <span class="mr-2 hidden font-mono text-xs font-semibold tracking-log text-navy/70 sm:inline">
             {trips.length} {countLabel(trips.length, t('map.pinCountOne'), t('map.pinCount'))}
           </span>
           {activeRegions.length > 1 && (

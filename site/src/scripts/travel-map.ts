@@ -82,7 +82,7 @@ export function baseStyle(): StyleSpecification {
   } as StyleSpecification;
 }
 
-function createMap(container: HTMLElement, options?: { cooperativeGestures?: boolean }): MapLibreMap {
+function createMap(container: HTMLElement, options?: { cooperativeGestures?: boolean; renderWorldCopies?: boolean }): MapLibreMap {
   // Like the editor's gpx-map: v6 returns a partial Map rather than throwing
   // when WebGL2 is unavailable. Probe before allocating that partial instance.
   const context = document.createElement('canvas').getContext('webgl2');
@@ -94,6 +94,9 @@ function createMap(container: HTMLElement, options?: { cooperativeGestures?: boo
     style: baseStyle(),
     attributionControl: {},
     ...(options?.cooperativeGestures ? { cooperativeGestures: true } : {}),
+    // DOM markers are placed once and do not repeat across world copies, so a
+    // map that shows them must not draw a second, pin-less copy of the world.
+    ...(options?.renderWorldCopies === false ? { renderWorldCopies: false } : {}),
   });
   if (!map.getCanvas().getContext('webgl2')) {
     // A context can still fail after the probe. remove() itself throws on a
@@ -117,7 +120,7 @@ export function initFullMap(
   geojson: PinCollection,
   labels: FullMapLabels,
 ): void {
-  const map = createMap(container, { cooperativeGestures: true });
+  const map = createMap(container, { cooperativeGestures: true, renderWorldCopies: false });
   map.addControl(new NavigationControl({ showCompass: false }));
 
   let basemapFailed = false;
@@ -261,40 +264,14 @@ export function initFullMap(
     }
   };
 
+  // Pins are DOM markers (keyboard-reachable, labelled), not a WebGL circle
+  // layer: a layer duplicates them under every badge and, in world copies,
+  // shows a second set without numbers. Markers also survive a style swap.
   const mountPins = () => {
-    map.addSource('pins', { type: 'geojson', data: geojson });
-    map.addLayer({
-      id: 'pins',
-      type: 'circle',
-      source: 'pins',
-      paint: {
-        'circle-radius': 7,
-        'circle-color': '#d23b30',
-        'circle-stroke-width': 2,
-        'circle-stroke-color': '#fff',
-      },
-    });
-
-    map.on('click', 'pins', (e) => {
-      const f = e.features?.[0];
-      if (!f || !f.properties) return;
-      const href = typeof f.properties.href === 'string' ? f.properties.href : '';
-      const idx = geojson.features.findIndex((item) => item.properties.href === href);
-      if (idx !== -1) openPinPopup(idx);
-    });
-
-    map.on('mouseenter', 'pins', () => {
-      map.getCanvas().style.cursor = 'pointer';
-    });
-    map.on('mouseleave', 'pins', () => {
-      map.getCanvas().style.cursor = '';
-    });
-
     if (!markersMounted) {
       markersMounted = true;
       mountDomMarkersAndControls();
     }
-
     fitRegionBounds(activeRegion);
     container.dataset.ready = 'true';
   };

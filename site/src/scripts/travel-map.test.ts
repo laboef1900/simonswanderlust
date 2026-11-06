@@ -347,7 +347,7 @@ describe('story track map', () => {
     expect(stopMap.bounds).toEqual([[1, 2], [3, 4]]);
   });
 
-  it('keeps the full map pin-only and mounts accessible DOM pins, region filters, and error recovery', () => {
+  it('draws pins only as accessible DOM markers and keeps region filters and error recovery working', () => {
     document.body.innerHTML = `
       <button type="button" data-map-region="all" aria-pressed="true">All</button>
       <button type="button" data-map-region="europe" aria-pressed="false">Europe</button>
@@ -374,8 +374,9 @@ describe('story track map', () => {
     );
     const map = state.maps[0]!;
     map.events.get('load')!();
-    expect([...map.sources.keys()]).toEqual(['pins']);
-    expect(map.layers.map((layer) => layer.type)).toEqual(['circle']);
+    // No WebGL pin layer: it would duplicate the badges and repeat, unnumbered, in world copies.
+    expect([...map.sources.keys()]).toEqual([]);
+    expect(map.layers).toEqual([]);
 
     const pins = el.querySelectorAll<HTMLButtonElement>('.travel-map-pin');
     expect(pins).toHaveLength(2);
@@ -406,10 +407,11 @@ describe('story track map', () => {
     expect(document.querySelector<HTMLElement>('[data-region-group="south-america"]')!.hidden).toBe(false);
     expect(map.bounds).toMatchObject({ points: [[1, 2], [-78.5, -0.2]] });
 
-    // Basemap failure switches to fallback style and restores pins without duplicating DOM markers.
+    // Basemap failure swaps to the fallback style; the DOM pins survive and are not duplicated.
     map.events.get('error')!();
+    expect(map.sources.size).toBe(0);
     map.events.get('style.load')!();
-    expect(map.sources.has('pins')).toBe(true);
     expect(el.querySelectorAll('.travel-map-pin')).toHaveLength(2);
+    expect(el.dataset.ready).toBe('true');
   });
 });
