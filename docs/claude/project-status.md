@@ -4,7 +4,7 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
-- **Implemented on `feature/editor-critique-actions`, no PR yet:** post editor critique
+- **Implemented, PR #542 open:** post editor critique
   actions (2026-11-06; impeccable critique of the editor, 27/40, all five priority issues
   and the minor list). The manuscript has its own pinned toolbar (EasyMDE's is off): stroke
   icons for formatting, labelled **Photo** and **Gallery**, the gallery-Markdown toggle and a
