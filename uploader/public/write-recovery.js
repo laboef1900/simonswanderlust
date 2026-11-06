@@ -142,7 +142,7 @@ window.WriteRecovery = (function () {
       attempts = attempts.filter(item => item.saveId !== attempt.saveId);
       comparison = null;
       needsProbe = false;
-      status = options.guard.isDirty() ? copy.saveNewer : copy.writeSaved;
+      status = options.showSavedNotice === false ? '' : options.guard.isDirty() ? copy.saveNewer : copy.writeSaved;
       if (options.guard.isDirty() || attempts.length) options.guard.stashNow();
       render();
       return true;

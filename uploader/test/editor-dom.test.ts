@@ -1136,6 +1136,8 @@ describe('authenticated editor write recovery', () => {
     expect(h.api.buildPayload().updatedAt).toBe(stored.updatedAt);
     expect(h.api.buildPayload().de.title).toBe('Newer unsent title');
     expect(h.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveUnsaved']);
+    expect(h.document.querySelector('.write-recovery')!.hidden).toBe(true);
+    expect(h.el('actionStatus').textContent).toBe(ui.en['editor.chrome.saveNewer']);
     expect(h.requests.filter(({ options }) => options.method === 'PUT')).toHaveLength(1);
     expect(h.requests.filter(({ url }) => url === '/posts/tk1')).toHaveLength(5);
     const drafts = Array.from({ length: h.local.length }, (_, index) => JSON.parse(h.local.getItem(h.local.key(index)!)!));
@@ -3644,9 +3646,12 @@ describe('manuscript-first editor refinements', () => {
     pending.resolve(response(saved));
     expect(await saving).toBe(true);
     expect(h.el('draftSaveState').textContent).toBe(copy['editor.chrome.saveUnsaved']);
+    expect(h.document.querySelector('.write-recovery')!.hidden).toBe(true);
+    expect(h.el('actionStatus').textContent).toBe(copy['editor.chrome.saveNewer']);
     expect(h.api.buildPayload().de.title).toBe('Newer edit');
     expect(await h.api.doSaveDraft()).toBe(true);
     expect(h.el('draftSaveState').textContent).toBe(copy['editor.chrome.saveSaved']);
+    expect(h.document.querySelector('.write-recovery')!.hidden).toBe(true);
   });
 
   it.each(['network', 500, 409, 401])('keeps edited content unsaved when saving fails (%s)', async (failure) => {
