@@ -1171,6 +1171,11 @@ and the `<dialog>`s appended to `<body>` share one set:
   Publish / Unpublish / Delete on the right and the status beneath; one locale panel at a
   time with title, slug and intro beside the hero photo. Alt text and framing appear only
   once a hero is chosen. The heading reads **New journey** until the first save.
+- The **journey catalogue** uses flat, compact rows: primary-locale title, enabled secondary
+  titles, publication state, unpublished changes, story count and **Edit journey**. Dormant
+  published locales stay explicit. Title search searches enabled locales only, ignores case
+  and surrounding whitespace, and distinguishes no matches from an empty catalogue.
+  Below 68rem the description spans the row, with state/count beside the edit action.
 - **Navigation settings** uses the existing vertical tab and flat field-row pattern.
   Header/footer/legal sections show bounded item counts. Collapsed rows summarize the
   destination and effective labels in each enabled locale, including default labels.
@@ -1195,6 +1200,8 @@ and the `<dialog>`s appended to `<body>` share one set:
   outside click); the trigger's accessible name stays “Account menu for …”. Admin-only pages appear
   in the sidebar for admins only. Roles and server authorization are unchanged. Publish and
   destructive actions retain their existing red treatment.
+  **Software license and source** remains a 44px-high, underlined secondary link above the
+  account control, not an outlined command button.
 - The shell is exactly the viewport and the workspace is its only scroll container:
   masthead, sidebar and the canvas gutter around the workspace never scroll away. The
   workspace carries a minimal shadow that surrounds it on every side — an ambient blur plus a
@@ -1230,8 +1237,13 @@ and the `<dialog>`s appended to `<body>` share one set:
   that it does not publish. Below 52rem the same Review story button moves into More (no
   duplicate handler); closing Review returns focus to More when its button is hidden. Re-reading the live state is
   a small icon beside it (**Check the live site again**), not a full-height button. Above
-  74rem readiness lives only in the status row, so More actions appears only when it holds
-  Unpublish; below 74rem the menu also carries readiness. On phones the status is one
+  74rem readiness lives in a native **Publish checklist** disclosure in the status row:
+  a live missing-field count, then the existing locale/trip links in its floating panel.
+  A gap link closes it before revealing its field; Escape closes it and restores summary
+  focus. It never changes the draft or implies a successful publication. More actions
+  appears only when it holds Unpublish; below 74rem that menu carries readiness instead.
+  The desktop manuscript title is a fixed 2rem; its placeholder uses `--muted`.
+  On phones the status is one
   wrapping line ("Saved to server · Live ↻"), the story-details opener rides at the right
   end of the locale row so the actions fit one line, and error/status text wraps instead
   of disappearing behind ellipses.
@@ -1376,10 +1388,19 @@ and the `<dialog>`s appended to `<body>` share one set:
 - **Media leads with the photograph.** The library grid uses larger tiles (≥10.5rem, two
   columns on a phone) captioned with the photo's title; a photo without one shows its file
   name set back in muted, one-line type, and a ready photo with no alt text in any locale
-  carries a quiet **No alt text** tag. The detail panel (20rem) opens with the photo itself,
-  then camera · date · pixel size and the key in mono, then the fields; lens and file sizes
-  stay under **File**. With nothing selected it says what selecting does and lists the
-  selection shortcuts (Shift-click, ⌘/Ctrl-click, ⌘/Ctrl+A). One AI entry per scope: the
+  carries a quiet **No alt text** tag. With no detail selected the grid takes the inspector's
+  space; selection guidance and keyboard shortcuts live under Folders. The detail panel
+  (20rem) has a quiet **Photo details / Back to photos** header, then the photo itself,
+  camera · date · pixel size and the key in mono, then fields; lens and file sizes
+  stay under **File**. The laptop inspector pins within the workspace and scrolls independently.
+  Enter opens the focused photo without changing bulk selection; **Photo details** also moves
+  focus into the panel. On phones an unmodified photo tap reveals the panel from its top.
+  Back to photos asks before discarding unsaved metadata and restores the photo's grid focus.
+  Folders uses a native disclosure, initially open on laptops and folded on phones, naming
+  the current folder even when closed. **Upload photos** is a separate native disclosure:
+  its closed summary still accepts drops, its open body holds the native file input,
+  and the upload queue stays outside it. An empty-library upload opens it before focusing
+  the chooser. One AI entry per scope: the
   toolbar's whole-view **Generate details with AI…** steps aside while a selection exists,
   because the bulk bar's button acts on it. Rename and Delete are disabled on **All
   photos**, which is a view, not a folder.

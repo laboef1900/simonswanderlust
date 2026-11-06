@@ -6,15 +6,17 @@
     <title>Media</title>
     <link rel="stylesheet" href="/admin/admin.css" />
   </head>
-  <body>
+  <body class="media-page">
     <header class="cms-page-meta">
       <h1>Media</h1>
-      <p class="lede">Drop photos to upload them, sort them into folders, and give each one a title, alt text and caption. Uploads return immediately — the responsive variants encode in the background.</p>
+      <p id="mediaIntro" class="lede"></p>
     </header>
 
     <main>
-      <section class="card">
-        <div id="dropZone" class="drop-zone">
+      <section class="card media-upload">
+        <details id="dropZone" class="media-upload__disclosure help-details">
+          <summary id="mediaUploadLabel"></summary>
+          <div class="drop-zone">
           <p><strong>Drop photos here</strong> to upload them into the selected folder.</p>
           <!-- Drag-and-drop is an enhancement; the visible file input is the
                real control, so the feature is keyboard-operable. -->
@@ -22,19 +24,23 @@
             <span>Or choose files</span>
             <input id="fileInput" type="file" accept="image/*" multiple />
           </label>
-        </div>
+          </div>
+        </details>
         <div id="uploadQueue" class="upload-queue" hidden></div>
       </section>
 
       <section class="card media-layout">
         <aside class="media-sidebar">
-          <p class="section-label">Folders</p>
+          <details id="mediaFolders" class="media-folders help-details" open>
+          <summary id="mediaFolderLabel"></summary>
           <ul id="folderTree" class="folder-tree"></ul>
           <div class="folder-actions">
             <button id="newFolder" type="button" class="btn-secondary">New folder</button>
             <button id="renameFolder" type="button" class="btn-secondary">Rename</button>
             <button id="deleteFolder" type="button" class="btn-remove">Delete</button>
           </div>
+          <div id="mediaSelectionHelp" class="media-selection-help"></div>
+          </details>
         </aside>
 
         <div class="media-main">
@@ -55,6 +61,7 @@
             </label>
             <button type="button" id="fMore" class="btn-link filter-reset" aria-expanded="false" aria-controls="fExtra">More filters</button>
             <button type="button" id="aiAll" class="btn-secondary media-ai-open">Generate details with AI…</button>
+            <button type="button" id="detailJump" class="btn-secondary" hidden></button>
             <div class="posts-filters-extra" id="fExtra" hidden>
               <label class="filter-field">
                 <span>Sort</span>
@@ -111,7 +118,7 @@
           </div>
         </div>
 
-        <aside id="detail" class="media-detail"></aside>
+        <aside id="detail" class="media-detail" tabindex="-1" hidden></aside>
       </section>
       <p id="out" class="page-status" role="status"></p>
 

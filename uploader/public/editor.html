@@ -67,7 +67,10 @@
              line; the grid still draws it as the bar's second row. -->
         <div class="editor-commandbar__status">
           <p id="draftSaveState" class="editor-save-state" role="status"></p>
-          <p id="localeChip" class="locale-chip"></p>
+          <details id="publishChecklist" class="editor-readiness help-details">
+            <summary><span id="publishChecklistLabel"></span><span id="publishChecklistCount" class="editor-readiness__count"></span></summary>
+            <p id="localeChip" class="locale-chip"></p>
+          </details>
           <p id="actionStatus" class="muted" role="status"></p>
           <p id="actionError" class="err" role="alert" hidden></p>
         </div>
@@ -82,7 +85,7 @@
             <p id="altAuditCounts" class="muted"></p>
             <p id="altAuditHelp"></p>
             <section class="alt-audit__queue" aria-labelledby="altAuditQueueHeading">
-              <h3 id="altAuditQueueHeading"></h3>
+              <h2 id="altAuditQueueHeading" class="section-label"></h2>
               <div class="alt-audit__controls">
                 <label for="altAuditLocale" id="altAuditLocaleLabel"></label>
                 <select id="altAuditLocale"></select>
@@ -893,6 +896,7 @@
       $('previewBtn').setAttribute('aria-label', editorCopy.previewAction + ' — ' + PublicationState.text('preview'));
       $('previewBtn').title = editorCopy.previewHelp + ' ' + PublicationState.text('previewMedia') + '.';
       $('previewHelp').textContent = editorCopy.previewHelp;
+      $('publishChecklistLabel').textContent = editorCopy.publishChecklist;
       // Cmd/Ctrl+S already saves (keydown handler below); say so where Save is.
       const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '');
       const shortcutLabel = (key) => (isMac ? '⌘' : 'Ctrl+') + key;
@@ -1014,6 +1018,16 @@
       });
       document.addEventListener('click', (event) => {
         if (actionsMenu.open && !actionsMenu.contains(event.target)) actionsMenu.open = false;
+      });
+      const checklist = $('publishChecklist');
+      checklist.addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape' || !checklist.open) return;
+        event.preventDefault();
+        checklist.open = false;
+        checklist.querySelector('summary').focus();
+      });
+      document.addEventListener('click', (event) => {
+        if (checklist.open && !checklist.contains(event.target)) checklist.open = false;
       });
 
       // ---- manuscript bar: formatting, photo, gallery ----
@@ -2155,6 +2169,7 @@
       }
       function gapCount(g) { return g.de.length + g.en.length + g.trip.length; }
       function jumpToGap(kind, field) {
+        $('publishChecklist').open = false;
         if (kind === 'de' || kind === 'en') {
           if (tabsApi && tabsApi.select) tabsApi.select(kind);
           activateLocale(kind);
@@ -2233,6 +2248,10 @@
         const g = allPublishGaps();
         renderLocaleChip(chip, g);
         renderLocaleChip(mobileChip, g);
+        const remaining = gapCount(g);
+        $('publishChecklistCount').textContent = remaining
+          ? editorCopy.publishChecklistRemaining.replace('{count}', String(remaining))
+          : editorCopy.publishChecklistComplete;
         renderExpeditionSummary(g.trip);
         // Publishing is admin-only on the server; an author is never offered a
         // control that can only answer 403 (#302 "authors see no Publish").
