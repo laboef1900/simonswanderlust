@@ -27,6 +27,7 @@
               English <span class="lang-code" aria-hidden="true">EN</span>
             </button>
           </div>
+          <button id="translateArticle" type="button" class="btn-secondary" aria-haspopup="dialog" aria-controls="articleTranslationDialog" hidden></button>
         </div>
 
         <div class="editor-commandbar__actions">
@@ -67,6 +68,7 @@
              line; the grid still draws it as the bar's second row. -->
         <div class="editor-commandbar__status">
           <p id="draftSaveState" class="editor-save-state" role="status"></p>
+          <button id="translationUndo" type="button" class="btn-link" hidden></button>
           <details id="publishChecklist" class="editor-readiness help-details">
             <summary><span id="publishChecklistLabel"></span><span id="publishChecklistCount" class="editor-readiness__count"></span></summary>
             <p id="localeChip" class="locale-chip"></p>
@@ -557,6 +559,39 @@
       </div>
     </main>
 
+    <dialog id="articleTranslationDialog" class="article-translation" aria-labelledby="translationHeading" aria-describedby="translationData translationLibrary">
+      <header class="article-translation__header">
+        <h2 id="translationHeading"></h2>
+        <button id="translationClose" type="button" class="btn-secondary" autofocus></button>
+      </header>
+      <div class="article-translation__body">
+        <p id="translationDestination" class="article-translation__destination"></p>
+        <p id="translationData"></p>
+        <p id="translationLibrary" class="muted"></p>
+        <p id="translationWarnings" class="notice-warn"></p>
+        <p id="translationStatus" role="status" aria-live="polite" aria-atomic="true"></p>
+        <a id="translationSettings" href="/admin/settings.html#ai" target="_blank" rel="noopener"></a>
+        <section id="translationResult" hidden>
+          <label id="translationTitleLabel" for="translationTitle"></label>
+          <textarea id="translationTitle" rows="2" readonly></textarea>
+          <label id="translationExcerptLabel" for="translationExcerpt"></label>
+          <textarea id="translationExcerpt" rows="4" readonly></textarea>
+          <label id="translationBodyLabel" for="translationBody"></label>
+          <textarea id="translationBody" class="article-translation__source" rows="16" readonly></textarea>
+          <label id="translationImagesLabel" for="translationImages"></label>
+          <textarea id="translationImages" class="article-translation__source" rows="6" readonly></textarea>
+          <label id="translationReplaceRow" class="check-field" hidden>
+            <input id="translationReplace" type="checkbox" />
+            <span id="translationReplaceLabel"></span>
+          </label>
+        </section>
+      </div>
+      <footer class="article-translation__footer">
+        <button id="translationRun" type="button" aria-describedby="translationDestination translationData" disabled></button>
+        <button id="translationApply" type="button" hidden disabled></button>
+      </footer>
+    </dialog>
+
     <dialog id="storyReviewDialog" class="story-review" aria-labelledby="storyReviewHeading" aria-describedby="reviewAdvisory">
       <header class="story-review__header">
         <div>
@@ -659,6 +694,7 @@
     <script src="/admin/media-picker.js"></script>
     <script src="/admin/editor-linter.js"></script>
     <script src="/admin/editor-review.js"></script>
+    <script src="/admin/editor-translation.js"></script>
     <script src="/admin/editor-alt-audit.js"></script>
     <script src="/admin/editor-excerpt.js"></script>
     <script src="/admin/country-centers.js"></script>
@@ -697,6 +733,9 @@
       // cannot be checked against what is stored, so it is never saved.
       let storyReview = null;
       let excerptAssist = null;
+      let articleTranslation = null;
+      let translationApplying = false;
+      let translationGalleryChange = false;
       let reviewIsAdmin = false;
       let pendingSaves = 0;
       let confirmingSave = false;
@@ -707,6 +746,7 @@
         if (loadBlocked) return Promise.resolve(false);
         const epoch = writeEpoch;
         pendingSaves += 1;
+        articleTranslation?.invalidate();
         renderDraftState();
         const result = writeTail.then(() => epoch === writeEpoch && !loadBlocked ? write() : false).finally(() => {
           pendingSaves -= 1;
@@ -748,6 +788,7 @@
           $(locale + 'Included').disabled = publishedLocales[locale];
           $(locale + 'CoverageHelp').textContent = SiteLanguage.text(publishedLocales[locale] ? 'CoverageLocked' : 'CoverageHelp');
         }
+        articleTranslation?.refresh();
       }
 
       // ---- slugify ----
@@ -804,6 +845,7 @@
         recovery: () => writeRecovery?.exportState(),
         collect: () => recoveryDraft || collectDraft(),
         onChange: (dirty) => {
+          articleTranslation?.changed(translationGalleryChange);
           if (dirty && !pendingSaves) setStatus('');
           renderDraftState();
         },
@@ -814,9 +856,10 @@
         showSavedNotice: false,
         resourceId: () => currentTk || initialTk, base: () => loadedUpdatedAt,
         collect: () => recoveryDraft || buildPayload(),
-        restoreBase: (value) => { loadedUpdatedAt = value; },
+        restoreBase: (value) => { loadedUpdatedAt = value; articleTranslation?.invalidate(); },
         error: (body, status) => showErr(SiteLanguage.error(body) || (editorCopy.writeRefused + ' ' + status)),
         adopt: async (body, attempt, acknowledgement) => {
+          articleTranslation?.invalidate();
           // Gallery diagnostics ride only on this tab's own acknowledgement, never a probe.
           if (acknowledgement) galleryMetadataWarnings.saved(acknowledgement.galleryWarnings, attempt.sentPayload);
           if (!currentTk) {
@@ -840,6 +883,7 @@
           setStatus(isPublished ? editorCopy.saveLiveUnchanged : '');
         },
         rebase: (body) => {
+          articleTranslation?.invalidate();
           currentTk = body.translationKey;
           loadedUpdatedAt = body.updatedAt;
           loadedSlugs.de = body.de?.slug || '';
@@ -870,6 +914,7 @@
         const state = pendingSaves ? 'saveSaving' : guard.isDirty() ? 'saveUnsaved' : currentTk ? 'saveSaved' : 'saveNew';
         const el = $('draftSaveState');
         if (el.textContent !== editorCopy[state]) el.textContent = editorCopy[state];
+        articleTranslation?.refresh();
       }
       renderDraftState();
       const publicationLine = document.createElement('p');
@@ -921,13 +966,17 @@
       // the EasyMDE bodies live in CodeMirror and need their own change hooks.
       const mainEl = document.querySelector('main');
       mainEl.addEventListener('input', (event) => {
+        if (translationApplying) return;
         if (event.target.closest('#altAudit') || event.target.closest('.rich-text-editor')) return;
         guard.markDirty();
         storyReview?.invalidate();
         excerptAssist?.invalidate();
       });
-      function onBodyChange() {
-        if (!populatingBody) guard.markDirty();
+      function onBodyChange(_cm, change) {
+        if (translationApplying) return;
+        translationGalleryChange = change?.origin === '+gallery-alt';
+        try { if (!populatingBody) guard.markDirty(); }
+        finally { translationGalleryChange = false; }
         storyReview?.invalidate();
         excerptAssist?.invalidate();
         updateLocaleChip();
@@ -1132,6 +1181,7 @@
           galleryLibrary, images: () => locale === 'de' ? deImages : enImages, thumbnailUrl: PostsFilter.thumbUrl,
           onEditGallery: (sourceStart) => galleryFor(locale, sourceStart),
           onModeChange: () => {
+            articleTranslation?.invalidate();
             closeFormat();
             closePhotoPanel(locale);
             const list = usable();
@@ -1193,6 +1243,7 @@
         storyReview?.invalidate();
         excerptAssist?.invalidate();
         activeTab = tab;
+        articleTranslation?.invalidate();
         syncInspectorLocale(tab);
         (tab === 'en' ? enMDE : deMDE).codemirror.refresh();
         fitTextarea($(tab + 'Title'));
@@ -2260,6 +2311,7 @@
       // Adding or removing a stop is a click, not an input event.
       $('stopsContainer').addEventListener('click', () => renderExpeditionSummary(tripGaps()));
       function updateLocaleChip() {
+        articleTranslation?.refresh();
         const chip = $('localeChip');
         const mobileChip = $('mobileLocaleChip');
         if (!chip || !mobileChip) return;
@@ -2392,6 +2444,67 @@
           return false;
         }
       }
+
+      function translationSnapshot() {
+        const draft = buildPayload();
+        for (const locale of ['de', 'en']) {
+          draft[locale].title = $(locale + 'Title').value;
+          draft[locale].excerpt = $(locale + 'Excerpt').value;
+        }
+        return {
+          identity: currentTk, formVersion, base: loadedUpdatedAt, generation: guard.snapshot(),
+          sourceLocale: activeTab, targetLocale: activeTab === 'de' ? 'en' : 'de',
+          locales: [...(language?.locales || [])], omitted: { ...omitted },
+          blocked: loadBlocked || pendingSaves > 0 || writeRecovery.unresolved(), recovery: writeRecovery.exportState(),
+          modes: ['de', 'en'].map((locale) => bodyEditors[locale].isVisual()),
+          publication: structuredClone(publication), publishedLocales: { ...publishedLocales }, draft: structuredClone(draft),
+          // Preserve exact unsaved field spellings too: the save payload trims
+          // strings, normalizes numbers and omits incomplete shared rows.
+          raw: Array.from(mainEl.querySelectorAll('input, textarea, select'))
+            .filter((field) => field.type !== 'file' && !field.closest('#altAudit') &&
+              !field.closest('.editor-gallery') && !field.closest('.EasyMDEContainer') &&
+              !field.closest('.rich-text-editor'))
+            .map((field) => [field.id, field.value, field.checked]),
+        };
+      }
+      function commitTranslation(locale, patch) {
+        const cm = mdeFor(locale).codemirror;
+        const title = $(locale + 'Title');
+        const excerpt = $(locale + 'Excerpt');
+        const images = locale === 'de' ? deImages : enImages;
+        const before = { title: title.value, excerpt: excerpt.value, bodyMarkdown: cm.getValue(), images: structuredClone(images) };
+        const assignFields = (value) => {
+          title.value = value.title;
+          excerpt.value = value.excerpt;
+          for (const key of Object.keys(images)) delete images[key];
+          Object.assign(images, value.images);
+        };
+        translationApplying = true;
+        try {
+          bodyEditors[locale].sourceTransaction(() => {
+            assignFields(patch);
+            cm.replaceRange(patch.bodyMarkdown, { line: 0, ch: 0 }, cm.posFromIndex(cm.getValue().length), 'article-translation');
+          }, () => assignFields(before));
+        } finally { translationApplying = false; }
+        return before;
+      }
+      articleTranslation = EditorTranslation.create({
+        copy: editorCopy, capture: translationSnapshot, flush: flushGalleryEdits, commit: commitTranslation,
+        availability: () => ({ locales: language?.locales || [], blocked: loadBlocked || pendingSaves > 0 || writeRecovery.unresolved() }),
+        didCommit: (locale) => {
+          storyReview?.invalidate();
+          excerptAssist?.invalidate();
+          guard.markDirty();
+          const backedUp = guard.stashNow();
+          tabsApi.select(locale);
+          activateLocale(locale);
+          fitTextarea($(locale + 'Title'));
+          fitTextarea($(locale + 'Excerpt'));
+          updateLocaleChip();
+          return backedUp;
+        },
+        notice: setStatus, on401: () => guard.redirectToLogin(),
+      });
       function snapshotIntent() {
         return { snap: guard.snapshot(), payload: structuredClone(buildPayload()), skipped: partialStopCount() };
       }
@@ -2690,6 +2803,7 @@
       // never merges with what was already on screen.
       function populateForm(post) {
         ++formVersion;
+        articleTranslation?.invalidate();
         storyReview?.invalidate();
         excerptAssist?.invalidate();
         Object.values(galleryEditors).forEach((editor) => editor.reset());
@@ -2745,6 +2859,7 @@
       // Returns false only when it redirected to /login (callers must stop);
       // true otherwise — even on a failed load, so a local stash can still be offered.
       async function loadPost(tk, { snapshot, deferRouteRefresh = false } = {}) {
+        articleTranslation?.invalidate();
         publicationRefresh.beginAction();
         const controller = new AbortController();
         const deadline = setTimeout(() => controller.abort(), 10000);
@@ -3059,6 +3174,7 @@
         // recovered. Do not promote a route-only read to a reviewed token.
         if (!loadBlocked && !await gpxEditor.refresh()) loadBlocked = true;
         document.querySelector('main').addEventListener('input', updateLocaleChip);
+        articleTranslation.refresh();
         updateLocaleChip();
       })();
     </script>

@@ -153,6 +153,23 @@ interface Row { locale: Locale; slug: string; status: string; omitted: boolean; 
     await expect(posts.upsertDraft(next)).rejects.toMatchObject({ code: 'reserved_slug', owner: { type: 'app', name: 'settings' } });
   });
 
+  it('retains a grandfathered translation slug when editing its existing story', async () => {
+    const posts = pgPostStore(pool);
+    const saved = await posts.upsertDraft(story());
+    await pool.query("UPDATE posts SET slug='translation' WHERE translation_key=$1 AND locale='de'", [saved.translationKey]);
+    const existing = (await posts.get(saved.translationKey))!;
+    await expect(posts.upsertDraft({ ...existing, de: { ...existing.de, title: 'Existing translation route' } }))
+      .resolves.toMatchObject({ de: { slug: 'translation' } });
+  });
+
+  it('reserves the translation root namespace for new stories without reserving the secondary namespace', async () => {
+    const posts = pgPostStore(pool);
+    const next = story(); next.de.slug = 'translation';
+    await expect(posts.upsertDraft(next)).rejects.toMatchObject({ code: 'reserved_slug', owner: { type: 'app', name: 'translation' } });
+    next.de.slug = 'new-root-story'; next.en.slug = 'translation';
+    await expect(posts.upsertDraft(next)).resolves.toMatchObject({ en: { slug: 'translation' } });
+  });
+
   it.each(modes)('publishes the requested set and preserves every slug across bootstrap in $primary / $locales', async (mode) => {
     const language = pgLanguageStore(pool); await language.update(mode);
     const posts = pgPostStore(pool); const input = story();

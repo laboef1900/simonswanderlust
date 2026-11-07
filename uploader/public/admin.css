@@ -3938,3 +3938,49 @@ dialog.media-ai { max-width: min(38rem, calc(100vw - 2rem)); }
 .write-recovery summary { cursor: pointer; font-weight: 600; }
 .write-recovery pre { white-space: pre-wrap; overflow-wrap: anywhere; max-inline-size: 100%; font-size: 0.875rem; }
 .write-recovery h3 { margin-block: 1.25rem 0.5rem; }
+
+/* Translation protects consent and full-draft review without leaving the desk. */
+body.editor-page .editor-commandbar__nav { flex-wrap: wrap; }
+body.editor-page #translateArticle { white-space: normal; }
+body.editor-page #translationUndo { margin: 0; min-height: 2.75rem; }
+dialog.article-translation {
+  width: min(54rem, calc(100vw - 2rem));
+  max-width: none;
+  max-height: calc(100dvh - 2rem);
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 0.75rem;
+  color: var(--ink);
+  background: var(--canvas);
+}
+.article-translation[open] { display: flex; flex-direction: column; }
+.article-translation::backdrop { background: rgb(20 42 66 / 45%); }
+.article-translation__header, .article-translation__footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex: none;
+  padding: 1rem 1.5rem;
+}
+.article-translation__header { border-bottom: 1px solid var(--line); }
+.article-translation__header h2 { margin: 0; font-size: 1.25rem; }
+.article-translation__body { min-height: 0; padding: 0.75rem 1.5rem 1.5rem; overflow-y: auto; overscroll-behavior: contain; }
+.article-translation__body > p { max-width: 72ch; font-size: 0.875rem; }
+.article-translation__destination { overflow-wrap: anywhere; font-weight: 600; }
+.article-translation__body p:empty { display: none; }
+.article-translation__body textarea { width: 100%; resize: vertical; color: var(--ink); }
+.article-translation__source { white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono); font-size: 0.8125rem; }
+.article-translation__body #translationResult { margin-top: 1.5rem; }
+.article-translation__body #translationReplaceRow { align-items: flex-start; gap: 0.75rem; margin-top: 1.25rem; }
+.article-translation__body #translationReplaceRow input { flex: none; margin-top: 0.25rem; }
+.article-translation__footer { border-top: 1px solid var(--line); justify-content: flex-end; }
+.article-translation button { min-height: 2.75rem; white-space: normal; }
+@media (max-width: 32rem) {
+  dialog.article-translation { width: calc(100vw - 1rem); max-height: calc(100dvh - 1rem); }
+  .article-translation__header, .article-translation__footer { padding: 0.75rem 1rem; }
+  .article-translation__body { padding-inline: 1rem; }
+  .article-translation__footer button { width: 100%; }
+  body.editor-page #translateArticle { font-size: 0.75rem; padding-inline: 0.5rem; }
+}

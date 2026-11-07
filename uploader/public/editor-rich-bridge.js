@@ -14,6 +14,7 @@ window.EditorRichBridge = (function () {
     let writingSource = false;
     let writingRich = false;
     let destroyed = false;
+    let sourceTransactionDepth = 0;
 
     function sourceSelection() {
       const range = cm.listSelections()[0];
@@ -54,7 +55,7 @@ window.EditorRichBridge = (function () {
       cm.refresh();
     }
     function sourceChanged() {
-      if (destroyed || writingSource || !rich) return;
+      if (destroyed || sourceTransactionDepth || writingSource || !rich) return;
       writingRich = true;
       try {
         const markdown = cm.getValue();
@@ -65,21 +66,21 @@ window.EditorRichBridge = (function () {
       refreshFormatting();
     }
     function sourceSelectionChanged() {
-      if (destroyed || writingSource || writingRich || !rich) return;
+      if (destroyed || sourceTransactionDepth || writingSource || writingRich || !rich) return;
       writingRich = true;
       try { rich.setSelection(sourceSelection()); }
       finally { writingRich = false; }
       refreshFormatting();
     }
     function richSelectionChanged() {
-      if (destroyed || writingRich || !rich || mode !== 'visual') return;
+      if (destroyed || sourceTransactionDepth || writingRich || !rich || mode !== 'visual') return;
       writingSource = true;
       try { writeSelection(rich.getSelection()); }
       finally { writingSource = false; }
       refreshFormatting();
     }
     function richChanged(markdown) {
-      if (destroyed || writingRich || !rich) return;
+      if (destroyed || sourceTransactionDepth || writingRich || !rich) return;
       const before = cm.getValue();
       if (before === markdown) return;
       // Keep source markers and undo instead of replacing CodeMirror's document.
@@ -163,6 +164,32 @@ window.EditorRichBridge = (function () {
       } catch (_) { unavailable(); }
     }
 
+    // A full-field commit must not enter ProseMirror until every field succeeds.
+    // Restoring source/history/selection on failure is deliberately invisible to
+    // the rich engine: replaying a rollback there would destroy its redo branch.
+    function sourceTransaction(commit, rollback) {
+      const before = cm.getValue();
+      const history = structuredClone(cm.getHistory());
+      const selections = structuredClone(cm.listSelections());
+      let committed = false;
+      sourceTransactionDepth++;
+      try {
+        cm.operation(commit);
+        committed = true;
+      } catch (failure) {
+        cm.operation(() => {
+          rollback();
+          cm.setValue(before);
+          cm.setHistory(history);
+          cm.setSelections(selections);
+        });
+        throw failure;
+      } finally {
+        sourceTransactionDepth--;
+        if (committed && !sourceTransactionDepth) sourceChanged();
+      }
+    }
+
     visualButton.textContent = copy.visualMode;
     markdownButton.textContent = copy.markdownMode;
     visualButton.title = copy.visualHelp;
@@ -181,7 +208,7 @@ window.EditorRichBridge = (function () {
     } catch (_) { unavailable(); }
 
     return {
-      setMode, focus, replaceDocument,
+      setMode, focus, replaceDocument, sourceTransaction,
       isVisual: () => mode === 'visual',
       command(name) { if (rich && mode === 'visual') { rich.command(name); refreshFormatting(); } },
       undo() { if (rich && mode === 'visual') rich.undo(); else cm.undo(); },

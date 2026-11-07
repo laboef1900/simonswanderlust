@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -32,8 +32,10 @@ async function documents(directory: string, prefix = '', all = false): Promise<s
 }
 
 // Unlike container tests, this migrates an empty real Postgres schema and runs
-// the production Astro config/loaders. Both output and content cache are private;
-// neither the developer's dist nor their database's public schema is modified.
+// the production Astro config/loaders. Output, content cache and public assets are
+// private; generated legal notices remain covered by legal-assets.test.ts, per the
+// documented #291 branding boundary. All other public assets remain in the scan.
+// Neither the developer's dist nor their database's public schema is modified.
 // TEST_DATABASE_URL is required in CI, as for the uploader integration suites.
 describe.skipIf(!databaseUrl)('real zero-content Astro builds', () => {
   const schema = 'empty_build_' + randomUUID().replaceAll('-', '');
@@ -49,6 +51,11 @@ describe.skipIf(!databaseUrl)('real zero-content Astro builds', () => {
     // trap by building into <site>/.build-tmp (uploader/src/build.ts); .astro/ is ignored.
     await mkdir(join(siteRoot, '.astro', 'test-builds'), { recursive: true });
     directory = await mkdtemp(join(siteRoot, '.astro', 'test-builds', 'empty-build-'));
+    const publicSource = join(siteRoot, 'public');
+    await cp(publicSource, join(directory, 'public'), {
+      recursive: true,
+      filter: (source) => source !== join(publicSource, 'legal'),
+    });
     admin = new pg.Pool({ connectionString: databaseUrl });
     await admin.query(`CREATE SCHEMA ${schema}`);
     const target = new URL(databaseUrl!);
@@ -72,7 +79,7 @@ describe.skipIf(!databaseUrl)('real zero-content Astro builds', () => {
     await pool.query('UPDATE site_language SET primary_locale=$1, enabled_locales=$2', [primary, [...locales]]);
     const outDir = join(directory, name);
     const cacheDir = join(directory, name + '-cache');
-    const config = { root: siteRoot, outDir, cacheDir, vite: { envDir: join(cacheDir, 'empty-env') } };
+    const config = { root: siteRoot, publicDir: join(directory, 'public'), outDir, cacheDir, vite: { envDir: join(cacheDir, 'empty-env') } };
     const env: NodeJS.ProcessEnv = { ...process.env, DATABASE_URL: isolatedUrl, ASTRO_TELEMETRY_DISABLED: '1' };
     delete env.SITE_LANGUAGE_JSON;
     delete env.SITE_IDENTITY_JSON;

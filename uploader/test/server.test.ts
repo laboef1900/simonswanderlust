@@ -45,6 +45,7 @@ import { normalizeIdentityUpload } from '../src/site-identity-assets.js';
 import * as disk from '../src/disk.js';
 import * as bodyRenderer from '../../site/src/lib/render-markdown.js';
 import * as gallerySource from '../../site/src/lib/gallery-source.js';
+import * as articleTranslation from '../../site/src/lib/article-translation.js';
 import * as altAudit from '../src/alt-audit.js';
 
 let dir: string;
@@ -417,6 +418,141 @@ describe('POST /gallery/analyze', () => {
       error.mockRestore();
       await b.app.close();
     }
+  });
+});
+
+describe('article translation source endpoints', () => {
+  const source = {
+    sourceLocale: 'de', targetLocale: 'en',
+    source: { title: 'Titel', excerpt: 'Kurz', bodyMarkdown: 'Ein **Weg**.', images: {} },
+  };
+
+  it.each(['prepare', 'validate'])('requires a live session for %s and never caches refusals', async (action) => {
+    const b = build();
+    const { cookie } = await authed(b, { isAdmin: false });
+    await b.sessions.destroy(cookie.sid);
+    try {
+      for (const cookies of [undefined, cookie]) {
+        const res = await b.app.inject({ method: 'POST', url: '/translation/' + action, cookies, payload: source });
+        expect(res.statusCode).toBe(401);
+        expect(res.headers['cache-control']).toBe('no-store');
+      }
+    } finally { await b.app.close(); }
+  });
+
+  it('prepares and validates the unsaved snapshot for authors without content stores, settings, credentials, logs or network', async () => {
+    const settings = fakeStore();
+    const secrets = memorySecretsStore();
+    const { builder, calls } = stubBuilder();
+    const b = build({ settings, secrets, builder });
+    const { cookie } = await authed(b, { isAdmin: false });
+    const unused = [
+      vi.spyOn(b.posts, 'get'), vi.spyOn(b.posts, 'list'), vi.spyOn(b.posts, 'upsertDraft'), vi.spyOn(b.posts, 'publish'),
+      vi.spyOn(b.pages, 'get'), vi.spyOn(b.pages, 'save'), vi.spyOn(b.media, 'get'), vi.spyOn(b.media, 'patch'),
+      vi.spyOn(b.media, 'descriptions'), vi.spyOn(b.media, 'upsert'),
+      vi.spyOn(settings, 'get'), vi.spyOn(settings, 'update'), vi.spyOn(secrets, 'has'), vi.spyOn(secrets, 'get'),
+      vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network forbidden')),
+      vi.spyOn(console, 'log').mockImplementation(() => {}), vi.spyOn(console, 'warn').mockImplementation(() => {}),
+      vi.spyOn(console, 'error').mockImplementation(() => {}),
+    ];
+    try {
+      const before = await readdir(dir);
+      const prepared = await b.app.inject({ method: 'POST', url: '/translation/prepare', cookies: cookie, payload: source });
+      expect(prepared.statusCode).toBe(200);
+      expect(prepared.headers['cache-control']).toBe('no-store');
+      const plan = prepared.json<{ slots: { id: string; text: string }[]; warnings: string[] }>();
+      expect(Object.keys(plan).sort()).toEqual(['slots', 'warnings']);
+      expect(plan.slots.map(slot => slot.text)).toEqual(expect.arrayContaining(['Titel', 'Kurz']));
+      const output = { translations: plan.slots.map(slot => ({ id: slot.id, text: 'Translated ' + slot.text })) };
+      const validated = await b.app.inject({
+        method: 'POST', url: '/translation/validate', cookies: cookie, payload: { ...source, output },
+      });
+      expect(validated.statusCode).toBe(200);
+      expect(validated.headers['cache-control']).toBe('no-store');
+      expect(Object.keys(validated.json()).sort()).toEqual(['bodyMarkdown', 'excerpt', 'images', 'title']);
+      expect(validated.json()).toMatchObject({ title: 'Translated Titel', excerpt: 'Translated Kurz', images: {} });
+      expect(validated.json().bodyMarkdown).toContain('**Translated Weg**');
+      for (const spy of unused) expect(spy).not.toHaveBeenCalled();
+      expect(calls).toEqual([]);
+      expect(b.enqueued).toEqual([]);
+      expect(await readdir(dir)).toEqual(before);
+    } finally {
+      for (const spy of unused) spy.mockRestore();
+      await b.app.close();
+    }
+  });
+
+  it('rejects malformed, oversized and untrusted output with fixed codes instead of reflecting source', async () => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const marker = 'PRIVATE-UNSAVED-SOURCE';
+    try {
+      for (const action of ['prepare', 'validate']) {
+        const route = '/translation/' + action;
+        const malformed = await b.app.inject({ method: 'POST', url: route, cookies: cookie,
+          headers: { 'content-type': 'application/json' }, payload: '{"private":"' + marker + '"' });
+        expect(malformed.statusCode).toBe(400);
+        expect(malformed.json()).toEqual({ code: 'translation_invalid_input', error: 'translation_invalid_input' });
+        expect(malformed.headers['cache-control']).toBe('no-store');
+        const oversized = await b.app.inject({ method: 'POST', url: route, cookies: cookie,
+          payload: { ...source, padding: marker.repeat(110000) } });
+        expect(oversized.statusCode).toBe(413);
+        expect(oversized.json()).toEqual({ code: 'translation_input_limit', error: 'translation_input_limit' });
+        expect(oversized.headers['cache-control']).toBe('no-store');
+      }
+      for (const payload of [
+        null, [], {}, { ...source, sourceLocale: marker }, { ...source, source: { ...source.source, title: 7 } },
+        { ...source, ranges: [{ start: 0, end: 10 }] },
+      ]) {
+        const res = await b.app.inject({ method: 'POST', url: '/translation/prepare', cookies: cookie,
+          headers: { 'content-type': 'application/json' }, payload: JSON.stringify(payload) });
+        expect(res.statusCode).toBe(400);
+        expect(res.json().code).toBe('translation_invalid_input');
+        expect(res.body).not.toContain(marker);
+      }
+      const limit = await b.app.inject({ method: 'POST', url: '/translation/prepare', cookies: cookie,
+        payload: { ...source, source: { ...source.source, bodyMarkdown: 'x'.repeat(100001) } } });
+      expect(limit.statusCode).toBe(413);
+      expect(limit.json().code).toBe('translation_input_limit');
+      const invalid = await b.app.inject({ method: 'POST', url: '/translation/validate', cookies: cookie,
+        payload: { ...source, output: { title: marker, bodyMarkdown: '<script>' + marker + '</script>' } } });
+      expect(invalid.statusCode).toBe(400);
+      expect(invalid.json().code).toBe('translation_invalid_output');
+      expect(invalid.body).not.toContain(marker);
+    } finally { await b.app.close(); }
+  });
+
+  it.each(['prepare', 'validate'] as const)('sanitizes unexpected %s diagnostics without source logging', async (action) => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const analyze = action === 'prepare' ? vi.spyOn(articleTranslation, 'prepareTranslation')
+      : vi.spyOn(articleTranslation, 'validateTranslation');
+    analyze.mockRejectedValueOnce(new Error('PRIVATE SOURCE parser diagnostic'));
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await b.app.inject({ method: 'POST', url: '/translation/' + action, cookies: cookie, payload: source });
+      expect(res.statusCode).toBe(500);
+      expect(res.json()).toEqual({ code: 'translation_failed', error: 'Article translation analysis failed.' });
+      expect(res.headers['cache-control']).toBe('no-store');
+      expect(log).not.toHaveBeenCalled();
+    } finally { analyze.mockRestore(); log.mockRestore(); await b.app.close(); }
+  });
+
+  it.each([
+    ['translation_invalid_input', 400], ['translation_input_limit', 413], ['translation_unsupported_source', 422],
+    ['translation_invalid_output', 400], ['translation_structure_mismatch', 422],
+  ] as const)('maps %s to a fixed safe HTTP %i response', async (code, status) => {
+    const b = build();
+    const { cookie } = await authed(b);
+    const analyze = vi.spyOn(articleTranslation, 'validateTranslation')
+      .mockRejectedValueOnce(new articleTranslation.TranslationError(code));
+    try {
+      const res = await b.app.inject({ method: 'POST', url: '/translation/validate', cookies: cookie,
+        payload: { ...source, output: { translations: [] } } });
+      expect(res.statusCode).toBe(status);
+      expect(res.json()).toEqual({ code, error: code });
+      expect(res.headers['cache-control']).toBe('no-store');
+    } finally { analyze.mockRestore(); await b.app.close(); }
   });
 });
 
@@ -2010,6 +2146,217 @@ describe('AI credential boundaries', () => {
     expect((await saving).statusCode).toBe(200);
     expect((await config).json()).toMatchObject({ aiProvider: 'deepseek', aiApiKey: 'fixture' });
     await b.app.close();
+  });
+});
+
+describe('article translation assignment API', () => {
+  it('saves only the requested translation fields, validates strictly, and retains other assignments', async () => {
+    const settings = fakeStore(registry([remote('review'), remote('vision'), remote('translation')], {
+      reviewProviderId: 'review', captionProviderId: 'vision',
+    }));
+    const b = build({ settings });
+    const admin = await authed(b);
+    const author = await authed(b, { username: 'author', isAdmin: false });
+    const payload = { translationProviderId: 'translation', translationModel: 'translate-model', translationTimeoutMs: 130000 };
+    try {
+      for (const cookies of [undefined, author.cookie]) {
+        const res = await b.app.inject({ method: 'POST', url: '/settings', cookies, payload });
+        expect(res.statusCode).toBe(cookies ? 403 : 401);
+        expect(res.headers['cache-control']).toBe('no-store');
+      }
+      const before = settings.get();
+      const saved = await b.app.inject({ method: 'POST', url: '/settings', cookies: admin.cookie, payload });
+      expect(saved.statusCode).toBe(200);
+      expect(saved.headers['cache-control']).toBe('no-store');
+      expect(saved.json()).toMatchObject(payload);
+      expect(settings.get()).toEqual({ ...before, ...payload });
+      for (const invalid of [
+        { translationProviderId: 'gone' }, { translationProviderId: '' }, { translationModel: 7 },
+        { translationModel: 'x'.repeat(101) }, { translationTimeoutMs: '120000' },
+        { translationTimeoutMs: 4999 }, { translationTimeoutMs: 300001 }, { translationTimeoutMs: 5000.1 },
+      ]) {
+        const res = await b.app.inject({ method: 'POST', url: '/settings', cookies: admin.cookie, payload: invalid });
+        expect(res.statusCode).toBe(400);
+        expect(settings.get()).toEqual({ ...before, ...payload });
+      }
+      const restored = await b.app.inject({ method: 'POST', url: '/settings', cookies: admin.cookie,
+        payload: { translationProviderId: null } });
+      expect(restored.json()).toMatchObject({ ...payload, translationProviderId: null });
+    } finally { await b.app.close(); }
+  });
+
+  it('prevents deletion while translation alone is assigned and only removes its key after reassignment', async () => {
+    const secrets = memorySecretsStore();
+    await secrets.set('ai_provider_key:translation', 'fixture-translation');
+    await secrets.set('ai_provider_key:review', 'fixture-review');
+    const settings = fakeStore(registry([remote('translation'), remote('review')], {
+      translationProviderId: 'translation', reviewProviderId: 'review',
+    }));
+    const b = build({ settings, secrets });
+    const { cookie } = await authed(b);
+    try {
+      const remove = () => b.app.inject({ method: 'DELETE', url: '/ai-providers/translation', cookies: cookie });
+      const refused = await remove();
+      expect(refused.statusCode).toBe(409);
+      expect(refused.json()).toMatchObject({ code: 'provider_in_use', useCases: ['translation'] });
+      expect(await secrets.get('ai_provider_key:translation')).toBe('fixture-translation');
+      expect((await b.app.inject({ method: 'POST', url: '/settings', cookies: cookie,
+        payload: { translationProviderId: null } })).statusCode).toBe(200);
+      expect((await remove()).statusCode).toBe(200);
+      expect(await secrets.get('ai_provider_key:translation')).toBeNull();
+      expect(await secrets.get('ai_provider_key:review')).toBe('fixture-review');
+      expect(settings.get()).toMatchObject({ reviewProviderId: 'review', captionProviderId: null, translationProviderId: null });
+    } finally { await b.app.close(); }
+  });
+
+  it('returns exactly the resolved translation provider with its own key, and defaults never change model assignments', async () => {
+    const secrets = memorySecretsStore();
+    for (const id of ['review', 'vision', 'translation']) await secrets.set('ai_provider_key:' + id, 'fixture-' + id);
+    const translator = remote('translation', 'anthropic', 'https://api.anthropic.com/v1');
+    const settings = fakeStore(registry([remote('review'), remote('vision'), translator], {
+      aiDefaultProviderId: 'review', captionProviderId: 'vision', translationProviderId: 'translation',
+      translationModel: 'translation-model', translationTimeoutMs: 200000,
+    }));
+    const b = build({ settings, secrets });
+    const { cookie } = await authed(b, { isAdmin: false });
+    const get = vi.spyOn(secrets, 'get');
+    const has = vi.spyOn(secrets, 'has');
+    try {
+      const config = () => b.app.inject({ url: '/ai-config?purpose=translation', cookies: cookie });
+      const expected = {
+        providerId: translator.id, providerName: translator.name, providerKind: translator.kind,
+        baseUrl: translator.baseUrl, model: 'translation-model', timeoutMs: 200000, apiKey: 'fixture-translation',
+      };
+      const response = await config();
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['cache-control']).toBe('no-store');
+      expect(response.json()).toEqual(expected);
+      expect(get.mock.calls).toEqual([['ai_provider_key:translation']]);
+      expect(has).not.toHaveBeenCalled();
+      get.mockClear();
+      const review = await b.app.inject({ url: '/ai-config', cookies: cookie });
+      const caption = await b.app.inject({ url: '/ai-config?purpose=caption', cookies: cookie });
+      expect(review.json().aiApiKey).toBe('fixture-review');
+      expect(caption.json().captionApiKey).toBe('fixture-vision');
+      for (const other of [review, caption]) {
+        expect(other.body).not.toContain('fixture-translation');
+        expect(other.json()).not.toHaveProperty('translationModel');
+        expect(other.json()).not.toHaveProperty('providerId');
+      }
+      expect(get.mock.calls).toEqual([['ai_provider_key:review'], ['ai_provider_key:vision']]);
+      settings.update({ aiDefaultProviderId: 'vision' });
+      expect((await config()).json()).toEqual(expected);
+      settings.update({ translationProviderId: null });
+      expect((await config()).json()).toEqual({
+        ...expected, providerId: 'vision', providerName: 'Remote vision', providerKind: 'openrouter',
+        baseUrl: 'https://openrouter.ai/api/v1', apiKey: 'fixture-vision',
+      });
+      settings.update({ translationProviderId: 'translation' });
+      await secrets.delete('ai_provider_key:translation');
+      expect((await config()).json()).toEqual({ ...expected, apiKey: null });
+      expect(settings.get()).toMatchObject({ aiModel: SETTINGS.aiModel, lmModel: SETTINGS.lmModel, captionProviderId: 'vision' });
+      for (const query of ['?purpose=translation&purpose=caption', '?purpose=translate', '?purpose=']) {
+        expect((await b.app.inject({ url: '/ai-config' + query, cookies: cookie })).statusCode).toBe(400);
+      }
+      const anonymous = await b.app.inject({ url: '/ai-config?purpose=translation' });
+      expect(anonymous.statusCode).toBe(401);
+      expect(anonymous.headers['cache-control']).toBe('no-store');
+    } finally { get.mockRestore(); has.mockRestore(); await b.app.close(); }
+  });
+
+  it('isolates local translation from unavailable unrelated secrets and sanitizes remote secret failures', async () => {
+    const secrets = memorySecretsStore();
+    const get = vi.spyOn(secrets, 'get').mockRejectedValue(new Error('PRIVATE SECRET FAILURE'));
+    const has = vi.spyOn(secrets, 'has').mockRejectedValue(new Error('PRIVATE SECRET FAILURE'));
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const settings = fakeStore(registry([remote('remote')], {
+      aiDefaultProviderId: 'remote', translationProviderId: 'lm-studio',
+    }));
+    const b = build({ secrets, settings });
+    const { cookie } = await authed(b, { isAdmin: false });
+    try {
+      const local = await b.app.inject({ url: '/ai-config?purpose=translation', cookies: cookie });
+      expect(local.json()).toEqual({
+        providerId: 'lm-studio', providerName: 'Local LM Studio', providerKind: 'lm-studio',
+        baseUrl: 'http://localhost:1234/v1', model: 'qwen2.5-7b-instruct', timeoutMs: 120000, apiKey: null,
+      });
+      expect(get).not.toHaveBeenCalled();
+      expect(has).not.toHaveBeenCalled();
+      settings.update({ translationProviderId: null });
+      const remoteConfig = await b.app.inject({ url: '/ai-config?purpose=translation', cookies: cookie });
+      expect(remoteConfig.statusCode).toBe(503);
+      expect(remoteConfig.headers['cache-control']).toBe('no-store');
+      expect(remoteConfig.body).not.toContain('PRIVATE');
+      expect(get.mock.calls).toEqual([['ai_provider_key:remote']]);
+      expect(has).not.toHaveBeenCalled();
+      expect(log).not.toHaveBeenCalled();
+    } finally { get.mockRestore(); has.mockRestore(); log.mockRestore(); await b.app.close(); }
+  });
+
+  it('binds remote translation config to the key and endpoint committed by a concurrent provider update', async () => {
+    const secrets = memorySecretsStore();
+    const originalSet = secrets.set;
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    secrets.set = async (key, value) => { entered.resolve(); await release.promise; await originalSet(key, value); };
+    const b = build({ secrets, settings: fakeStore(registry([remote('translation')], { translationProviderId: 'translation' })) });
+    const { cookie } = await authed(b);
+    try {
+      const saving = injectAuthoring(b.app, { method: 'PUT', url: '/ai-providers/translation', cookies: cookie,
+        payload: { apiKey: 'fixture-new', baseUrl: 'https://new-translator.example/v1' } }).then(r => r);
+      await entered.promise;
+      let resolved = false;
+      const config = b.app.inject({ url: '/ai-config?purpose=translation', cookies: cookie }).then(r => { resolved = true; return r; });
+      await nextTurn();
+      expect(resolved).toBe(false);
+      release.resolve();
+      expect((await saving).statusCode).toBe(200);
+      expect((await config).json()).toMatchObject({ providerId: 'translation', baseUrl: 'https://new-translator.example/v1', apiKey: 'fixture-new' });
+    } finally { release.resolve(); await b.app.close(); }
+  });
+
+  it('serves local translation while unrelated key writes are queued without reading any secret', async () => {
+    const secrets = memorySecretsStore();
+    const originalSet = secrets.set;
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    secrets.set = async (key, value) => { entered.resolve(); await release.promise; await originalSet(key, value); };
+    const get = vi.spyOn(secrets, 'get');
+    const b = build({ secrets, settings: fakeStore(registry([remote('review')], { reviewProviderId: 'review' })) });
+    const { cookie } = await authed(b);
+    try {
+      const saving = injectAuthoring(b.app, { method: 'PUT', url: '/ai-providers/review', cookies: cookie,
+        payload: { apiKey: 'fixture-review' } }).then(r => r);
+      await entered.promise;
+      const local = await b.app.inject({ url: '/ai-config?purpose=translation', cookies: cookie });
+      expect(local.statusCode).toBe(200);
+      expect(local.json()).toMatchObject({ providerId: 'lm-studio', apiKey: null });
+      expect(get).not.toHaveBeenCalled();
+      release.resolve();
+      expect((await saving).statusCode).toBe(200);
+    } finally { release.resolve(); get.mockRestore(); await b.app.close(); }
+  });
+
+  it('re-resolves a queued translation assignment change back to local without decrypting its old provider', async () => {
+    const secrets = memorySecretsStore();
+    const originalHas = secrets.has;
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    secrets.has = async key => { entered.resolve(); await release.promise; return originalHas(key); };
+    const get = vi.spyOn(secrets, 'get');
+    const b = build({ secrets, settings: fakeStore(registry([remote('translation')], { translationProviderId: 'translation' })) });
+    const { cookie } = await authed(b);
+    try {
+      const saving = b.app.inject({ method: 'POST', url: '/settings', cookies: cookie,
+        payload: { translationProviderId: 'lm-studio' } }).then(r => r);
+      await entered.promise;
+      const config = b.app.inject({ url: '/ai-config?purpose=translation', cookies: cookie }).then(r => r);
+      await nextTurn();
+      release.resolve();
+      expect((await saving).statusCode).toBe(200);
+      expect((await config).json()).toMatchObject({ providerId: 'lm-studio', providerKind: 'lm-studio', apiKey: null });
+      expect(get).not.toHaveBeenCalled();
+    } finally { release.resolve(); get.mockRestore(); await b.app.close(); }
   });
 });
 

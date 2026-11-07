@@ -1656,6 +1656,9 @@ interface SettingsResponse {
   aiDefaultProviderId: string;
   reviewProviderId: string | null;
   captionProviderId: string | null;
+  translationProviderId: string | null;
+  translationModel: string;
+  translationTimeoutMs: number;
   aiModel: string;
   reviewPrompt: string;
   reviewTimeoutMs: number;
@@ -1684,6 +1687,7 @@ const DEEPSEEK: ProviderView = { id: 'deepseek', name: 'DeepSeek', kind: 'deepse
 function settingsResponse(overrides: Partial<SettingsResponse> = {}): SettingsResponse {
   return {
     aiProviders: [LOCAL], aiDefaultProviderId: 'lm-studio', reviewProviderId: null, captionProviderId: null,
+    translationProviderId: null, translationModel: 'translation-model', translationTimeoutMs: 120000,
     aiModel: 'review-model', reviewPrompt: 'Review prompt', reviewTimeoutMs: 60000,
     lmModel: 'vision-model', captionPrompt: 'Caption prompt', captionTimeoutMs: 60000, captionMaxTokens: 8000, captionMaxEdge: 768,
     backupSchedule: 'off', backupRetention: 14, convertJpeg: true, webpQuality: 75, avifQuality: 55,
@@ -1741,6 +1745,7 @@ function pageText(el: (id: string) => Element): string {
     'providersOut', 'providerFormOut', 'providerKeyHelp', 'providerKeyMoveWarning', 'providerUrlWarning',
     'reviewResolved', 'reviewDestination', 'captionResolved', 'captionDestination', 'aiOut', 'reviewTestOut', 'out',
     'reviewModelStatus', 'captionModelStatus',
+    'translationResolved', 'translationDestination', 'translationModelStatus', 'translationProviderWarn',
   ].map((id) => el(id).textContent).concat(descendants(el('providerList')).map((n) => n.textContent)).join('\n');
 }
 
@@ -2556,7 +2561,7 @@ describe('settings.html providers', () => {
     const { el } = page;
     await rowButton(providerRow(el, 'OpenRouter'), 'Set default').click();
     expect(page.questions).toHaveLength(1);
-    for (const part of [EDITOR_COPY.settingsWriting, EDITOR_COPY.settingsCaptions, ROUTER.baseUrl, LOCAL.baseUrl]) {
+    for (const part of [EDITOR_COPY.settingsWriting, EDITOR_COPY.settingsCaptions, EDITOR_COPY.settingsTranslation, ROUTER.baseUrl, LOCAL.baseUrl]) {
       expect(page.questions[0]!.body).toContain(part);
     }
     expect(page.requests).toEqual([]);
@@ -2570,7 +2575,7 @@ describe('settings.html providers', () => {
   });
 
   it('Set default does not ask when every use case is explicitly assigned', async () => {
-    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER], reviewProviderId: 'lm-studio', captionProviderId: 'lm-studio' }));
+    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER], reviewProviderId: 'lm-studio', captionProviderId: 'lm-studio', translationProviderId: 'lm-studio' }));
     await rowButton(providerRow(page.el, 'OpenRouter'), 'Set default').click();
     expect(page.questions).toEqual([]);
     expect(page.requests[0]).toEqual({ url: '/settings', method: 'POST', body: { aiDefaultProviderId: 'openrouter' } });
@@ -2737,7 +2742,7 @@ describe('settings.html model lists', () => {
     expect(pageText(el)).not.toContain('fixture-stored-key');
   });
 
-  it('two use cases on one provider share a single lookup', async () => {
+  it('all three use cases on one provider share a single lookup', async () => {
     const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER], aiDefaultProviderId: 'openrouter' }), { route: storedKey });
     await callPage(page.ctx, 'init');
     expect(calls(page.requests)).toEqual(['GET /settings', 'GET /ai-providers/openrouter/credential']);
@@ -2818,7 +2823,7 @@ describe('settings.html model lists', () => {
   });
 
   it('a stored key that cannot be loaded, or a missing required key, fails without asking the provider', async () => {
-    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER, DEEPSEEK], reviewProviderId: 'openrouter', captionProviderId: 'deepseek' }), {
+    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER, DEEPSEEK], reviewProviderId: 'openrouter', captionProviderId: 'deepseek', translationProviderId: 'openrouter' }), {
       route: (request) => (request.url.endsWith('/credential') ? Response.json({ error: 'Secrets unavailable.' }, { status: 503 }) : undefined),
     });
     const { el } = page;
@@ -2840,6 +2845,97 @@ describe('settings.html model lists', () => {
 });
 
 describe('settings.html use case assignments', () => {
+  it('saves an independent translation assignment without changing review/photo values or the separate provider draft', async () => {
+    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, DEEPSEEK] }), { hash: '#images' });
+    const { el } = page;
+    await el('addProvider').click();
+    el('providerName').value = 'Pending provider';
+    el('providerApiKey').value = 'fixture-keep-request-local';
+    await el('providerForm').fire('input');
+    el('translationProviderId').value = 'deepseek';
+    await el('translationProviderId').fire('change');
+    expect(el('translationProviderWarn').textContent).toContain('“DeepSeek” has no stored API key');
+    await chooseModel(el, 'translationModel', 'Other model ID…');
+    el('translationModelOtherInput').value = ' translation-2 ';
+    await el('translationModelOtherInput').fire('input');
+    el('translationTimeoutSeconds').value = '130.123';
+    await el('useCaseSection').fire('input');
+    await el('saveAi').click();
+    expect(calls(page.requests)).toEqual(['POST /settings']);
+    expect(page.requests[0]!.body).toEqual({
+      reviewProviderId: null, captionProviderId: null, aiModel: 'review-model', lmModel: 'vision-model',
+      reviewPrompt: 'Review prompt', reviewTimeoutMs: 60000, captionPrompt: 'Caption prompt',
+      captionTimeoutMs: 60000, captionMaxEdge: 768, captionMaxTokens: 8000,
+      translationProviderId: 'deepseek', translationModel: 'translation-2', translationTimeoutMs: 130123,
+    });
+    expect(el('translationModel').value).toBe('translation-2');
+    expect(el('translationModelOther').hidden).toBe(true);
+    expect(el('aiOut').textContent).toBe(EDITOR_COPY.writingSaved);
+    expect(el('translationResolved').textContent).toBe('→ DeepSeek / translation-2');
+    expect(el('reviewModelOther').hidden).toBe(true);
+    expect(el('aiModel').value).toBe('review-model');
+    expect(el('lmModel').value).toBe('vision-model');
+    expect(el('providerName').value).toBe('Pending provider');
+    expect(el('providerApiKey').value).toBe('fixture-keep-request-local');
+    expect(el('settingsDraftStatus').textContent).not.toContain(EDITOR_COPY.settingsAiSection);
+    expect(el('settingsDraftStatus').textContent).toContain(EDITOR_COPY.settingsProvider);
+    expect(page.storageWrite).not.toHaveBeenCalled();
+    expect(pageText(el)).not.toContain('fixture-keep-request-local');
+  });
+
+  it('a registry/default refresh preserves pending translation model and timeout until the shared AI save', async () => {
+    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER] }), { hash: '#images' });
+    await chooseModel(page.el, 'translationModel', 'Other model ID…');
+    page.el('translationModelOtherInput').value = 'pending-translation';
+    await page.el('translationModelOtherInput').fire('input');
+    page.el('translationTimeoutSeconds').value = '200';
+    await page.el('useCaseSection').fire('input');
+    await rowButton(providerRow(page.el, ROUTER.name), 'Set default').click();
+    expect(page.el('translationModelOtherInput').value).toBe('pending-translation');
+    expect(page.el('translationTimeoutSeconds').value).toBe('200');
+    expect(page.el('translationDestination').textContent).toBe(ROUTER.baseUrl);
+    expect(page.el('settingsDraftStatus').textContent).toContain(EDITOR_COPY.settingsAiSection);
+    await page.el('saveAi').click();
+    expect(page.requests.at(-1)!.body).toMatchObject({
+      translationProviderId: null, translationModel: 'pending-translation', translationTimeoutMs: 200000,
+    });
+    expect(page.el('settingsDraftStatus').textContent).not.toContain(EDITOR_COPY.settingsAiSection);
+  });
+
+  it('retains a refused translation save and blocks retry when the registry refresh fails', async () => {
+    let failedRefresh = false;
+    const page = await apiPage(settingsResponse(), {
+      hash: '#images',
+      route(request) {
+        if (request.method === 'POST') {
+          failedRefresh = true;
+          return Response.json({ error: 'Translation timeout is out of range.' }, { status: 400 });
+        }
+        return failedRefresh ? Response.json({}, { status: 503 }) : undefined;
+      },
+    });
+    page.el('translationTimeoutSeconds').value = '301';
+    await page.el('useCaseSection').fire('input');
+    await page.el('saveAi').click();
+    expect(page.el('translationTimeoutSeconds').value).toBe('301');
+    expect(page.el('aiOut').textContent).toContain('Translation timeout is out of range.');
+    expect(page.el('aiOut').textContent).toContain(EDITOR_COPY.settingsRegistryUnavailable);
+    expect(page.el('saveAi').disabled).toBe(true);
+    const before = page.requests.length;
+    await page.el('saveAi').click();
+    expect(page.requests).toHaveLength(before);
+    expect(page.el('settingsDraftStatus').textContent).toContain(EDITOR_COPY.settingsAiSection);
+  });
+
+  it('names a saved translation assignment when refusing provider deletion', async () => {
+    const page = await apiPage(settingsResponse({
+      aiProviders: [LOCAL, ROUTER], translationProviderId: 'openrouter',
+    }), { hash: '#images' });
+    await rowButton(providerRow(page.el, ROUTER.name), 'Delete').click();
+    expect(page.requests).toEqual([]);
+    expect(page.el('providersOut').textContent).toContain(EDITOR_COPY.settingsTranslation);
+  });
+
   it('offers Default — <name> first, and the resolved line follows the selection and model live', async () => {
     const { el } = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER], captionProviderId: 'openrouter' }));
     const options = el('reviewProviderId').children;
@@ -2898,6 +2994,7 @@ describe('settings.html use case assignments', () => {
       reviewProviderId: 'openrouter', captionProviderId: null, aiModel: 'review-2', lmModel: 'vision-2',
       reviewPrompt: 'R', reviewTimeoutMs: 45123, captionPrompt: 'C', captionTimeoutMs: 30001, captionMaxEdge: 1024,
       captionMaxTokens: 4096,
+      translationProviderId: null, translationModel: 'translation-model', translationTimeoutMs: 120000,
     });
     // The saved values come back as the new "saved" models; Other closes.
     expect(el('aiModel').value).toBe('review-2');
@@ -3230,6 +3327,19 @@ describe('settings.html against the real settings and provider routes', () => {
     expect(assignedCaption).toMatchObject({
       captionProvider: 'anthropic', captionBaseUrl: created!.baseUrl, captionApiKey: 'fixture-created-key',
     });
+    const localTranslation = (await app.inject({ url: '/ai-config?purpose=translation', cookies })).json();
+    expect(localTranslation).toMatchObject({ providerKind: 'lm-studio', apiKey: null, model: 'qwen2.5-7b-instruct' });
+    el('translationProviderId').value = created!.id;
+    await el('translationProviderId').fire('change');
+    await chooseModel(el, 'translationModel', 'remote-model');
+    el('translationTimeoutSeconds').value = '180';
+    await el('saveAi').click();
+    const assignedTranslation = (await app.inject({ url: '/ai-config?purpose=translation', cookies })).json();
+    expect(assignedTranslation).toEqual({
+      providerId: created!.id, providerName: 'Anthropic', providerKind: 'anthropic', baseUrl: created!.baseUrl,
+      model: 'remote-model', timeoutMs: 180000, apiKey: 'fixture-created-key',
+    });
+    expect(settings.get()).toMatchObject({ aiModel: 'remote-model', lmModel: defaultSettings().lmModel });
   });
 
   it('saves the photo output budget, refuses an invalid one without saving, and reloads the saved value', async () => {

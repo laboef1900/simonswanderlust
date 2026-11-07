@@ -32,6 +32,14 @@ suggests photo details (title, DE/EN alt + caption, tags) for one photo, or fill
 fields in bulk — the one AI path that saves, with opt-in overwrite
 (`docs/superpowers/specs/2026-10-18-media-ai-details-design.md`). The server never
 contacts a model.
+Article translation (#550) independently assigns provider/model/timeout and translates the
+latest unsaved active locale into the other enabled, non-omitted side of the same pair.
+Browser-direct inference receives only bounded article-local text slots; authenticated
+prepare/validate endpoints preserve source structure without writing content. Explicit
+consent, full review, replacement confirmation and atomic draft application precede the
+normal Save/Preview pipeline. Gallery identities, occurrence overrides, Media authority,
+manual slugs and unrelated target fields remain unchanged; whole-field Undo is available.
+See `docs/superpowers/specs/2026-11-07-issue-550-ai-article-translation.md`.
 See `docs/superpowers/specs/2026-07-05-ai-alt-text-editor-integration-design.md`. (An earlier
 standalone batch-uploader variant was removed in July 2026 and restored in this slimmer,
 editor-integrated form; the 2026-06-22 spec is historical.) See `uploader/README.md`,
