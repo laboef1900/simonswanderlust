@@ -2496,6 +2496,7 @@
         didCommit: (locale) => {
           storyReview?.invalidate();
           excerptAssist?.invalidate();
+          galleryEditors[locale].refresh();
           guard.markDirty();
           const backedUp = guard.stashNow();
           tabsApi.select(locale);

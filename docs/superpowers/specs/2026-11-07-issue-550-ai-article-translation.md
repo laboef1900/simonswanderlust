@@ -163,3 +163,11 @@ retained it, Undo restored `Old caption`, and save/reopen/preview retained the t
 caption. Markdown was byte-identical and CodeMirror history depth stayed unchanged.
 These corrections preserve the approved architecture; final focused re-review and CI
 outcomes are recorded on the PR.
+
+Focused re-review then identified the separate Markdown gallery-widget consumer: avoiding
+an identical-body edit also avoids its normal CodeMirror change notification. The successful
+Apply/Undo completion hook now explicitly refreshes that locale's gallery editor. The
+regression waits for existing widgets to settle and asserts their actual captions and alt
+fields, rather than mock refresh calls. Chromium reproduced stale `Old caption` / `Old alt`
+before this correction; afterward Apply showed `First view` / `A mountain` and Undo restored
+both originals, with unchanged body history. Failed transactions still never reach this hook.

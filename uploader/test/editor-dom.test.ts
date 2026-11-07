@@ -5525,8 +5525,18 @@ describe('explicit article translation of the current unsaved pair', () => {
     }
   });
 
-  it('applies and undoes metadata-only translation without replacing an identical body or its history', async () => {
-    const h = await loadEditor({ fetch: network(), translate: async (request) => translated(request) });
+  it('applies and undoes metadata-only translation in already-mounted Markdown galleries', async () => {
+    const h = await loadEditor({
+      fetch: network({ other: async (url) => {
+        if (url.startsWith('/media?')) return response({ total: 1, items: [{
+          key: 'anchor', src: 'https://img/anchor', title: 'Unrelated library photo',
+          alt: { de: '', en: '' }, caption: { de: '', en: '' },
+        }] });
+        if (url.startsWith('/media/items/')) return response({ error: 'image not found' }, 404);
+        return response([]);
+      } }),
+      translate: async (request) => translated(request),
+    });
     const pair = fullPair();
     const body = '```gallery\n#layout: slider\nhttps://img/local\n```';
     pair.de.bodyMarkdown = body;
@@ -5534,23 +5544,23 @@ describe('explicit article translation of the current unsaved pair', () => {
     pair.de.images = { 'https://img/local': { width: 900, height: 600, alt: 'Ein Berg', caption: 'Aussicht' } };
     pair.en.images = { 'https://img/local': { width: 900, height: 600, alt: 'Old alt', caption: 'Old caption' } };
     h.api.populateForm(pair);
+    h.el('deMarkdownMode').click(); h.el('enMarkdownMode').click();
+    await flush();
+    const captions = () => h.document.querySelectorAll('.editor-gallery__caption').map((node) => node.textContent);
+    const alts = () => h.document.querySelectorAll('.editor-gallery__alt').map((node) => node.value);
+    expect(captions()).toEqual(['Aussicht', 'Old caption']);
+    expect(alts()).toEqual(['Ein Berg', 'Old alt']);
     const before = h.api.buildPayload();
-    const cm = h.editors[1]!.codemirror;
-    const history = cm.getHistory();
-    const rich = h.richEditors[1]!;
-    const sets = rich.setCalls.length;
     await start(h); consent(h); h.el('translationApply').click();
+    await flush();
     expect(h.api.buildPayload().en.bodyMarkdown).toBe(body);
     expect(h.api.buildPayload().en.images['https://img/local']?.caption).toBe('EN Aussicht');
-    expect(rich.metadataCalls).toHaveLength(1);
-    expect(rich.metadataCalls[0]).toEqual(h.api.buildPayload().en.images);
-    expect(rich.setCalls).toHaveLength(sets);
-    expect(cm.getHistory()).toEqual(history);
+    expect(captions()).toEqual(['Aussicht', 'EN Aussicht']);
+    expect(alts()).toEqual(['Ein Berg', 'EN Ein Berg']);
     h.el('translationUndo').click();
+    await flush();
     expect(h.api.buildPayload()).toEqual(before);
-    expect(rich.metadataCalls).toHaveLength(2);
-    expect(rich.metadataCalls[1]).toEqual(before.en.images);
-    expect(rich.setCalls).toHaveLength(sets);
-    expect(cm.getHistory()).toEqual(history);
+    expect(captions()).toEqual(['Aussicht', 'Old caption']);
+    expect(alts()).toEqual(['Ein Berg', 'Old alt']);
   });
 });

@@ -60,3 +60,6 @@ Metadata-only translation commits also call the presentation-only
 `refreshImageMetadata()` hook. Gallery and inline-image views reread current local maps
 without changing the ProseMirror document or undo/redo history; failed field commits never
 refresh views. Identical source text does not create a synthetic CodeMirror body edit.
+The successful Apply/Undo completion hook separately refreshes the Markdown gallery editor,
+whose widgets otherwise refresh only on body changes. This keeps both view consumers current
+without manufacturing a canonical-document edit or refreshing a failed transaction.
