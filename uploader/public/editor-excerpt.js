@@ -17,8 +17,8 @@ window.EditorExcerpt = (function () {
     'excerptTimeout', 'excerptRefused', 'excerptInvalidOutput', 'excerptFailed', 'excerptSettingsLink',
     'excerptAskAdmin',
   ];
-  const PROVIDERS = ['lm-studio', 'openrouter', 'deepseek', 'custom'];
-  const KEYED_PROVIDERS = ['openrouter', 'deepseek'];
+  const PROVIDERS = ['lm-studio', 'openrouter', 'deepseek', 'anthropic', 'custom'];
+  const KEYED_PROVIDERS = ['openrouter', 'deepseek', 'anthropic'];
   const LOCALES = ['de', 'en'];
   const DRAFT_FIELDS = ['locale', 'identity', 'title', 'markdown', 'excerpt'];
   const CONFIG_TIMEOUT_MS = 15000;

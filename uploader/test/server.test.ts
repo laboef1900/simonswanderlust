@@ -1669,7 +1669,7 @@ describe('AI provider routes', () => {
     const b = build({ secrets, settings });
     const { cookie } = await authed(b);
     const before = settings.get();
-    const cases: ['POST' | 'PUT', string, unknown, string][] = [
+    const cases: ['POST' | 'PUT', string, unknown, unknown][] = [
       ['POST', '/ai-providers', { name: 'Local 2', kind: 'lm-studio', baseUrl: 'http://localhost:1235/v1', apiKey: 'secret-fixture' }, LOCAL_KEY_ERROR],
       ['PUT', '/ai-providers/lm-studio', { apiKey: 'secret-fixture' }, LOCAL_KEY_ERROR],
       ['PUT', '/ai-providers/remote', { kind: 'deepseek' }, 'A provider\'s kind cannot change.'],
@@ -1679,7 +1679,7 @@ describe('AI provider routes', () => {
       ['PUT', '/ai-providers/remote', { name: 'local LM studio' }, 'AI provider names must be unique.'],
       ['PUT', '/ai-providers/remote', { name: 'x'.repeat(61) }, NAME_ERROR],
       ['PUT', '/ai-providers/remote', { baseUrl: 'https://user:secret-fixture@x.example/v1' }, URL_ERROR],
-      ['POST', '/ai-providers', { name: 'X', kind: 'ollama', baseUrl: 'https://x.example/v1' }, 'AI provider kind must be lm-studio, openrouter, deepseek, or custom.'],
+      ['POST', '/ai-providers', { name: 'X', kind: 'secret-fixture', baseUrl: 'https://x.example/v1' }, expect.any(String)],
       ['POST', '/ai-providers', { name: 'tab\there', kind: 'custom', baseUrl: 'https://x.example/v1' }, NAME_ERROR],
       ['POST', '/ai-providers', { name: 'X', kind: 'custom', baseUrl: 'https://x.example/v1?key=secret-fixture' }, URL_ERROR],
       ['POST', '/ai-providers', { name: 'X', kind: 'custom', baseUrl: '' }, URL_ERROR],

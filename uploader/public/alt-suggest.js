@@ -18,8 +18,8 @@ window.AltSuggest = (function () {
     }
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const config = await res.json();
-    if ((config.captionProvider === 'openrouter' || config.captionProvider === 'deepseek') && !config.captionApiKey) {
-      throw new Error('Configure the shared API key in Settings first.');
+    if (['openrouter', 'deepseek', 'anthropic'].includes(config.captionProvider) && !config.captionApiKey) {
+      throw new Error('Configure the provider API key in Settings first.');
     }
     return config;
   }

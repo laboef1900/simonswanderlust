@@ -1049,6 +1049,11 @@ also receives request-local `anthropic-dangerous-direct-browser-access: true` an
 the existing browser-held key into Anthropic's browser API access, not a new server fetch or
 storage path. HTTP, non-default ports and lookalike origins do not receive these headers.
 See `docs/superpowers/specs/2026-11-04-anthropic-browser-access.md`.
+The `anthropic` registry kind (2026-11-07) is a remote, API-key-required client preset,
+not a new transport or trust boundary. Existing Custom entries are preserved.
+Admin authorization, encrypted per-provider slots, endpoint/key binding, destination-change
+confirmation, local-caption isolation and no-store responses remain unchanged. Preset URLs
+remain editable; the kind alone never enables Anthropic headers on another origin.
 
 Opening Story review runs deterministic checks and reads `/ai-config` for disclosure, but
 does not contact the model provider. Provider kind, endpoint, model, fields sent and possible
