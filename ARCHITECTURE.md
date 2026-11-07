@@ -785,7 +785,7 @@ normal close restores the trigger. Review output is rendered as text and is not 
 ### AI provider registry (2026-10-19)
 
 `settings.json` holds `aiProviders` (1–20 entries of `{ id, name, kind, baseUrl }`, `kind` one
-of `lm-studio` / `openrouter` / `deepseek` / `custom`), `aiDefaultProviderId`, and one
+of `lm-studio` / `openrouter` / `deepseek` / `anthropic` / `custom`), `aiDefaultProviderId`, and one
 assignment per use case — `reviewProviderId` (Story review & excerpts) and
 `captionProviderId` (Photo descriptions: alt text and media details) — where `null` follows
 the default. Validation guarantees every reference resolves; a hand-edited dangling id is

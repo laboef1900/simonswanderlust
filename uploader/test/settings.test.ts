@@ -296,6 +296,19 @@ describe('AI provider registry validation', () => {
   const withProviders = (aiProviders: unknown, extra: Record<string, unknown> = {}) =>
     ({ ...DEFAULTS, aiProviders, ...extra }) as unknown as Settings;
 
+  it('preserves Anthropic assignments and existing Custom entries across a settings reload', () => {
+    const path = join(dir, 'settings.json');
+    const anthropic = provider('claude', { kind: 'anthropic', baseUrl: 'https://api.anthropic.com/v1' });
+    const custom = provider('existing', { baseUrl: anthropic.baseUrl });
+    const store = createSettingsStore({ path, defaults: DEFAULTS });
+    store.update({ aiProviders: [LOCAL, custom, anthropic], reviewProviderId: anthropic.id, captionProviderId: anthropic.id });
+    const reloaded = createSettingsStore({ path, defaults: DEFAULTS });
+    expect(reloaded.get().aiProviders).toEqual([LOCAL, custom, anthropic]);
+    expect(resolveProvider(reloaded.get(), reloaded.get().reviewProviderId)).toEqual(anthropic);
+    expect(resolveProvider(reloaded.get(), reloaded.get().captionProviderId)).toEqual(anthropic);
+    expect(reloaded.pendingAiMigration()).toBeNull();
+  });
+
   it('accepts 1 to 20 providers and refuses 0 or 21', () => {
     const many = (n: number) => [LOCAL, ...Array.from({ length: n - 1 }, (_, i) => provider(`p-${i}`))];
     expect(() => validate(withProviders(many(1)))).not.toThrow();

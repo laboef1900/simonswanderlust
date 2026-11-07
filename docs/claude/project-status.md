@@ -4,6 +4,21 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Implemented locally:** Anthropic in Settings → AI models → Add provider → Kind
+  (2026-11-07, owner-requested). Prefills the official `/v1` endpoint and uses existing
+  per-provider credentials and browser-direct transport. Reviews, excerpts and photo
+  descriptions recognize the kind; missing-key checks apply before provider calls.
+  Existing Custom Anthropic providers are unchanged. Regression coverage includes
+  persisted settings, real provider routes, key isolation and editor consent.
+  Chromium exercised the actual Add form, missing-key feedback, save, model discovery,
+  assignment and a parsed excerpt against intercepted provider responses on an isolated
+  runtime; no live Anthropic credentials or production writes were used.
+  Uploader typecheck passed; full suite: 4,297 passed, 647 skipped without
+  `TEST_DATABASE_URL`. Astro check: 153 files, zero errors/warnings/hints against the
+  local database through a temporary loopback tunnel. CI and deployment not run.
+  Contract and downgrade precautions: the Anthropic-kind addendum in
+  `docs/superpowers/specs/2026-10-19-ai-provider-registry-design.md`.
+
 - **Implemented locally:** rich-text post editor (2026-11-07), following the owner's
   reference and explicit Visual-with-Markdown choice. Tiptap Visual is the default;
   EasyMDE remains an editable source mode over the same synchronous Markdown draft.

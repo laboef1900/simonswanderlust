@@ -1649,7 +1649,7 @@ describe('posts.html row actions', () => {
 // Fixtures mirror the AI provider registry contract (spec 2026-10-19 §4): the
 // settings response every /settings and /ai-providers route answers with.
 
-type ProviderKind = 'lm-studio' | 'openrouter' | 'deepseek' | 'custom';
+type ProviderKind = 'lm-studio' | 'openrouter' | 'deepseek' | 'anthropic' | 'custom';
 interface ProviderView { id: string; name: string; kind: ProviderKind; baseUrl: string; hasApiKey: boolean }
 interface SettingsResponse {
   aiProviders: ProviderView[];
@@ -3190,14 +3190,19 @@ describe('settings.html against the real settings and provider routes', () => {
     }
   });
 
-  it('a provider added with a key and assigned to review is what /ai-config hands out, and only to review', async () => {
+  it('adds Anthropic, discovers models and binds its key only to assigned use cases', async () => {
     const { el, ctx, fetcher, app, cookies, settings, secrets } = await realPage();
     await el('addProvider').click();
-    el('providerName').value = 'Router';
+    el('providerKind').value = 'anthropic';
+    await el('providerKind').fire('change');
+    expect(el('providerName').value).toBe('Anthropic');
+    expect(el('providerBaseUrl').value).toBe('https://api.anthropic.com/v1');
+    await el('testProviderForm').click();
+    expect(fetcher.mock.calls.some(([url]) => String(url).startsWith('https://api.anthropic.com'))).toBe(false);
     el('providerApiKey').value = 'fixture-created-key';
     await el('providerForm').fire('submit');
-    const created = settings.get().aiProviders.find((p) => p.name === 'Router');
-    expect(created).toMatchObject({ kind: 'openrouter', baseUrl: 'https://openrouter.ai/api/v1' });
+    const created = settings.get().aiProviders.find((p) => p.name === 'Anthropic');
+    expect(created).toMatchObject({ kind: 'anthropic', baseUrl: 'https://api.anthropic.com/v1' });
     expect(await secrets.get('ai_provider_key:' + created!.id)).toBe('fixture-created-key');
     expect(el('providerApiKey').value).toBe('');
     expect(pageText(el)).not.toContain('fixture-created-key');
@@ -3205,7 +3210,7 @@ describe('settings.html against the real settings and provider routes', () => {
     el('reviewProviderId').value = created!.id;
     await el('reviewProviderId').fire('change');
     await callPage(ctx, 'ensureModels');
-    const listing = fetcher.mock.calls.find(([url]) => String(url) === 'https://openrouter.ai/api/v1/models');
+    const listing = fetcher.mock.calls.find(([url]) => String(url) === 'https://api.anthropic.com/v1/models');
     expect(new Headers(listing?.[1]?.headers).get('authorization')).toBe('Bearer fixture-created-key');
     expect(pageText(el)).not.toContain('fixture-created-key');
     await chooseModel(el, 'aiModel', 'remote-model');
@@ -3214,10 +3219,17 @@ describe('settings.html against the real settings and provider routes', () => {
 
     const config = (await app.inject({ url: '/ai-config', cookies })).json();
     expect(config).toMatchObject({
-      aiProvider: 'openrouter', aiBaseUrl: 'https://openrouter.ai/api/v1', hasAiApiKey: true, aiApiKey: 'fixture-created-key',
+      aiProvider: 'anthropic', aiBaseUrl: 'https://api.anthropic.com/v1', hasAiApiKey: true, aiApiKey: 'fixture-created-key',
     });
     const caption = (await app.inject({ url: '/ai-config?purpose=caption', cookies })).json();
     expect(caption).toMatchObject({ captionProvider: 'lm-studio', captionApiKey: null });
+    el('captionProviderId').value = created!.id;
+    await el('captionProviderId').fire('change');
+    await el('saveAi').click();
+    const assignedCaption = (await app.inject({ url: '/ai-config?purpose=caption', cookies })).json();
+    expect(assignedCaption).toMatchObject({
+      captionProvider: 'anthropic', captionBaseUrl: created!.baseUrl, captionApiKey: 'fixture-created-key',
+    });
   });
 
   it('saves the photo output budget, refuses an invalid one without saving, and reloads the saved value', async () => {

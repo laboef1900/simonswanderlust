@@ -576,7 +576,7 @@ Author-facing detail is in [`../docs/authoring-workflow.md`](../docs/authoring-w
 ## AI alt-text (browser-direct providers)
 
 Settings → **AI models** keeps a **Providers** list (Local LM Studio by default; add
-OpenRouter, DeepSeek, or any custom HTTP(S) OpenAI-compatible endpoint, each with its own
+OpenRouter, DeepSeek, Anthropic, or any custom HTTP(S) OpenAI-compatible endpoint, each with its own
 name, base URL and, for remote providers, its own encrypted API key) and a **Use case
 assignments** grid. **Photo descriptions** (alt text and media details) picks a provider —
 or follows the default — and a model; its prompt/timeout/output budget/max edge are independent
@@ -599,10 +599,10 @@ with the typed key if one is entered. Listing sends no photo and does not verify
 support. Custom providers must allow browser CORS. Local LM Studio providers never hold or
 receive a key.
 
-**Direct Anthropic:** add a **Custom** provider with base URL
-`https://api.anthropic.com/v1` and an Anthropic API key, then use **Test** and assign
-the desired Claude model to each use case. Keep an existing Anthropic Custom provider;
-there is no migration or need to re-enter its stored key for this fix. For this exact
+**Direct Anthropic:** choose **Anthropic** in **Add provider → Kind**. This prefills
+`https://api.anthropic.com/v1`; enter an Anthropic API key, then use **Test** and assign
+the desired Claude model to each use case. Existing Anthropic Custom providers continue
+to work without migration or key re-entry. For this exact
 HTTPS origin, the client adds Anthropic's browser-access opt-in and API-version headers
 to model discovery and all AI requests. Completions use Anthropic's documented
 OpenAI-compatible endpoint. A successful model listing does not verify model access,
