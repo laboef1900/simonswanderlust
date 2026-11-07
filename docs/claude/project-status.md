@@ -4,6 +4,17 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Implemented locally:** borderless Visual manuscript focus (2026-11-07,
+  owner-requested). Removed the enclosing focus outline; the existing steel-blue
+  native blinking caret marks the insertion point, and the writing surface uses
+  the text cursor. Toolbar and other control focus rings remain unchanged.
+  Working-tree CSS was exercised in Chromium at 1440px and 390px: keyboard entry,
+  typing, native undo, visible caret and no horizontal overflow. No server writes.
+  This is styling-only; content, saving and focus order are unchanged.
+  Uploader typecheck and full suite pass (4,297 passed; 647 database-dependent tests
+  skipped). Local Astro check is blocked by missing `DATABASE_URL`. The design
+  detector flags only the existing, explicitly required Inter font. Not deployed.
+
 - **Implemented and locally verified:** protected AI article translation (#550,
   2026-11-07). Independent provider/model/timeout assignment; browser-direct text-only
   inference; latest unsaved DE↔EN content within the same pair; explicit consent,
