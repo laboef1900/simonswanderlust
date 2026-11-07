@@ -19,6 +19,11 @@ major upgrade; the rest of the admin remains vanilla JavaScript.
 
 Operate mode, extending Editorial desk. One white document canvas, quiet sticky formatting tools, unboxed title and rendered editable prose, and the existing collapsible Story details column. Keep desktop and phone controls keyboard accessible; preserve the existing focus-managed phone drawer, locale tabs, review disclosure and save feedback. Inter and existing steel-blue/neutral tokens remain authoritative. No public-site redesign.
 
+Owner refinement (2026-11-07): the Visual manuscript stays unboxed while focused.
+Its native steel-blue blinking insertion caret and text pointer identify the writing
+surface; do not draw an enclosing focus outline. Toolbar and other controls retain
+their focus rings. Focus order and native caret behavior remain unchanged.
+
 Visual is the default writing mode. Markdown is an explicit editable source mode, not a read-only preview. Both operate on the same Markdown body used by current draft saving, recovery, review, gallery analysis and publication. No autosave or new external service.
 
 Use a self-hosted Tiptap editor and a locally built browser bundle. Retain EasyMDE for the genuine Markdown mode and its established gallery authoring tools. Rich-text transactions synchronously update the Markdown draft; source edits and programmatic edits update the visual document without feedback loops. Merely opening a story or changing mode must not dirty or rewrite its source.
