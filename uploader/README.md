@@ -20,6 +20,26 @@ and editable in Markdown; Visual paste is plain text. Galleries retain their dir
 order, captions and URLs and use the existing Media picker and metadata authority.
 If Visual initialization fails, the Markdown editor remains available.
 
+**Translate with AI** uses the latest unsaved active language to prepare the other enabled,
+non-omitted language of the same story. Configure its independent provider/model/timeout
+under Settings → AI models → Article translation. Opening the dialog is free of inference;
+the explicit run action discloses destination, content and possible provider charges.
+Review the full result and confirm replacement of existing target content before applying.
+Only title, excerpt, manuscript text and permitted article-local image text change:
+manual slugs, shared fields, publication state and unrelated target fields remain intact.
+Media descriptions stay authoritative, while repeated-photo caption overrides, empty
+overrides, hidden captions and gallery structure retain their occurrence-specific meaning.
+Unsupported syntax and headings targeted by local fragments are preserved with a warning.
+
+Translation never retries automatically, saves, publishes or uploads images. Cancellation,
+draft/locale/configuration changes and invalid or truncated results apply nothing. After
+application, **Undo translation** restores the complete target patch until another edit
+invalidates that recovery point; ordinary body undo and draft recovery also remain available.
+Use the existing **Save draft** / **Save & preview** flow and normal save-conflict handling.
+Source limits are 100,000 manuscript characters and 2,000 text slots; the reviewed output is
+bounded and must preserve the original document structure. See the
+[#550 design](../docs/superpowers/specs/2026-11-07-issue-550-ai-article-translation.md).
+
 The owner approved a build-only bundler exception for this editor on 2026-11-07:
 `npm run copy:vendor` uses esbuild to bundle its TypeScript into a self-hosted asset.
 Other admin code remains vanilla; there is no editor CDN. Dependency controls and the

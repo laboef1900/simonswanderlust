@@ -587,13 +587,15 @@ describe('settings.html AI provider registry', () => {
   });
 
   it('pairs each use case with a provider select, a model select, a bounded Other ID field and an announced model-list status', () => {
-    for (const [provider, model, status] of [
-      ['reviewProviderId', 'aiModel', 'reviewModelStatus'], ['captionProviderId', 'lmModel', 'captionModelStatus'],
+    for (const [provider, model, status, other] of [
+      ['reviewProviderId', 'aiModel', 'reviewModelStatus', 'aiModelOther'],
+      ['captionProviderId', 'lmModel', 'captionModelStatus', 'lmModelOther'],
+      ['translationProviderId', 'translationModel', 'translationModelStatus', 'translationModelOtherInput'],
     ] as const) {
       expect(markup).toMatch(new RegExp(`<select id="${provider}"`));
       expect(markup).toMatch(new RegExp(`<select id="${model}"[^>]*aria-describedby="${status}"`));
       // A typed model ID keeps the 100-character cap of the text field it replaced.
-      expect(markup).toMatch(new RegExp(`<input id="${model}Other" type="text" maxlength="100"`));
+      expect(markup).toMatch(new RegExp(`<input id="${other}" type="text" maxlength="100"`));
       expect(markup).toMatch(new RegExp(`<p id="${status}"[^>]*role="status"`));
     }
     expect(markup).not.toMatch(/<datalist|list="/);

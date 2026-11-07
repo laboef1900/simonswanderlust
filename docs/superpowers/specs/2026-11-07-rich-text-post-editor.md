@@ -44,3 +44,22 @@ Browser smoke against working-tree assets: real populated post, visual typing an
 ## Recovery
 
 Rollback the frontend assets and dependencies together; stored content is still Markdown and needs no migration. Keep all existing server sanitization, image-origin validation and publish checks unchanged. Before release, require human review of Markdown preservation and browser evidence; local implementation is not deployment approval.
+
+## Article translation integration (#550, 2026-11-07)
+
+The [issue-specific design](2026-11-07-issue-550-ai-article-translation.md) adds a synchronous
+source transaction to the existing bridge. Source and selection synchronization into
+ProseMirror is deferred until all translated target fields commit. Failure restores
+CodeMirror content, history and selection without touching ProseMirror's undo/redo history.
+Success synchronizes once; a rich-view failure retains the complete canonical Markdown
+draft and reports the fallback. Real-engine regressions exercise existing undo/redo content
+in both modes, including failed field callbacks. Translation uses ordinary dirty/recovery/
+save handling and a guarded full-field Undo; locale switching preserves body histories.
+
+Metadata-only translation commits also call the presentation-only
+`refreshImageMetadata()` hook. Gallery and inline-image views reread current local maps
+without changing the ProseMirror document or undo/redo history; failed field commits never
+refresh views. Identical source text does not create a synthetic CodeMirror body edit.
+The successful Apply/Undo completion hook separately refreshes the Markdown gallery editor,
+whose widgets otherwise refresh only on body changes. This keeps both view consumers current
+without manufacturing a canonical-document edit or refreshing a failed transaction.

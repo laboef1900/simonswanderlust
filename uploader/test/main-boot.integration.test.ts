@@ -16,6 +16,7 @@ import { pgSecretsStore } from '../src/secrets.js';
 import { pgJourneyStore } from '../src/journeys.js';
 import { pgMediaStore } from '../src/media-store.js';
 import sharp from 'sharp';
+import { createSettingsStore, defaultSettings } from '../src/settings.js';
 
 import { seedSiteIdentity, type IdentityRecord } from '../src/site-identity.js';
 const url = process.env.TEST_DATABASE_URL;
@@ -487,6 +488,7 @@ maybe.each(['split', 'loopback'] as const)('production boot (src/main.ts, Postgr
     const saved = JSON.parse(await readFile(settingsPath, 'utf8'));
     expect(saved).toMatchObject({
       aiDefaultProviderId: 'openrouter', reviewProviderId: 'openrouter', captionProviderId: 'lm-studio', commentsEnabled: true,
+      translationProviderId: null, translationModel: 'qwen2.5-7b-instruct', translationTimeoutMs: 120000,
     });
     expect(saved).not.toHaveProperty('aiProvider');
     expect(JSON.parse(await readFile(`${settingsPath}.pre-ai-registry`, 'utf8'))).toMatchObject({ aiProvider: 'openrouter' });
@@ -506,5 +508,83 @@ maybe.each(['split', 'loopback'] as const)('production boot (src/main.ts, Postgr
     });
     const caption = await fetch(`${base}/ai-config?purpose=caption`, { headers: { cookie } });
     expect(await caption.json()).toMatchObject({ captionProvider: 'lm-studio', captionApiKey: null });
+    const translation = await fetch(`${base}/ai-config?purpose=translation`, { headers: { cookie } });
+    expect(translation.headers.get('cache-control')).toBe('no-store');
+    expect(await translation.json()).toEqual({
+      providerId: 'openrouter', providerName: 'OpenRouter', providerKind: 'openrouter',
+      baseUrl: 'https://openrouter.ai/api/v1', model: 'qwen2.5-7b-instruct', timeoutMs: 120000, apiKey: 'boot-legacy-fixture',
+    });
+  });
+
+  it('persists the translation assignment and isolates its encrypted key while source analysis leaves real content unchanged', async () => {
+    const login = await fetch(`${base}/login`, {
+      method: 'POST', headers: { 'content-type': 'application/json', origin: base },
+      body: JSON.stringify({ username, password }),
+    });
+    expect(login.status).toBe(200);
+    const cookie = (login.headers.get('set-cookie') ?? '').split(';')[0]!;
+    const headers = { 'content-type': 'application/json', origin: base, cookie };
+    const beforeSettings = createSettingsStore({ path: settingsPath, defaults: defaultSettings() }).get();
+    const originalKey = await pgSecretsStore(pool, encryptionKey).get('ai_provider_key:openrouter');
+    const added = await fetch(`${base}/ai-providers`, { method: 'POST', headers, body: JSON.stringify({
+      name: 'Translation fixture', kind: 'custom', baseUrl: 'https://translation.example/v1', apiKey: 'boot-translation-fixture',
+    }) });
+    expect(added.status).toBe(201);
+    const addedBody = await added.json() as { aiProviders: { id: string; name: string }[] };
+    const providerId = addedBody.aiProviders.find(provider => provider.name === 'Translation fixture')!.id;
+    try {
+      const assignment = { translationProviderId: providerId, translationModel: 'translation-fixture-model', translationTimeoutMs: 180000 };
+      const saved = await fetch(`${base}/settings`, { method: 'POST', headers, body: JSON.stringify(assignment) });
+      expect(saved.status).toBe(200);
+      const reloaded = createSettingsStore({ path: settingsPath, defaults: defaultSettings() }).get();
+      expect(reloaded).toMatchObject(assignment);
+      expect(reloaded.reviewProviderId).toBe(beforeSettings.reviewProviderId);
+      expect(reloaded.captionProviderId).toBe(beforeSettings.captionProviderId);
+      expect(reloaded.aiModel).toBe(beforeSettings.aiModel);
+      expect(reloaded.lmModel).toBe(beforeSettings.lmModel);
+      const config = await fetch(`${base}/ai-config?purpose=translation`, { headers: { cookie } });
+      expect(await config.json()).toEqual({
+        providerId, providerName: 'Translation fixture', providerKind: 'custom', baseUrl: 'https://translation.example/v1',
+        model: 'translation-fixture-model', timeoutMs: 180000, apiKey: 'boot-translation-fixture',
+      });
+      expect(await pgSecretsStore(pool, encryptionKey).get('ai_provider_key:openrouter')).toBe(originalKey);
+      const refused = await fetch(`${base}/ai-providers/${providerId}`, { method: 'DELETE', headers: { origin: base, cookie } });
+      expect(refused.status).toBe(409);
+      expect(await refused.json()).toMatchObject({ code: 'provider_in_use', useCases: ['translation'] });
+
+      const postsBefore = (await pool.query('SELECT * FROM posts ORDER BY translation_key, locale')).rows;
+      const mediaBefore = (await pool.query('SELECT * FROM media ORDER BY key')).rows;
+      const secretsBefore = (await pool.query('SELECT * FROM app_secrets ORDER BY key')).rows;
+      const images = { [`${imageOrigin}/${heroKey}`]: { width: 640, height: 400, alt: 'Lokaler Berg', caption: 'Lokaler Text' } };
+      const source = {
+        sourceLocale: 'de', targetLocale: 'en',
+        source: { title: 'Berge', excerpt: 'Eine Reise', images,
+          bodyMarkdown: `Ein Weg.\n\n![Lokaler Berg](${imageOrigin}/${heroKey})\n\n\`\`\`gallery\n#layout: grid\n${imageOrigin}/${heroKey} | caption-override="Aussicht"\n\`\`\`` },
+      };
+      const prepare = await fetch(`${base}/translation/prepare`, { method: 'POST', headers, body: JSON.stringify(source) });
+      expect(prepare.status).toBe(200);
+      const plan = await prepare.json() as { slots: { id: string; text: string }[] };
+      const output = { translations: plan.slots.map(slot => ({ id: slot.id, text: 'Translated ' + slot.text })) };
+      const translated = await fetch(`${base}/translation/validate`, {
+        method: 'POST', headers, body: JSON.stringify({ ...source, output }),
+      });
+      expect(translated.status).toBe(200);
+      expect(translated.headers.get('cache-control')).toBe('no-store');
+      const translatedBody = await translated.json() as { title: string; bodyMarkdown: string };
+      expect(translatedBody.title).toBe('Translated Berge');
+      expect(translatedBody.bodyMarkdown).toContain(`${imageOrigin}/${heroKey}`);
+      expect(translatedBody.bodyMarkdown).toContain('#layout: grid');
+      expect((await pool.query('SELECT * FROM posts ORDER BY translation_key, locale')).rows).toEqual(postsBefore);
+      expect((await pool.query('SELECT * FROM media ORDER BY key')).rows).toEqual(mediaBefore);
+      expect((await pool.query('SELECT * FROM app_secrets ORDER BY key')).rows).toEqual(secretsBefore);
+    } finally {
+      const restored = await fetch(`${base}/settings`, { method: 'POST', headers, body: JSON.stringify({
+        translationProviderId: beforeSettings.translationProviderId,
+        translationModel: beforeSettings.translationModel, translationTimeoutMs: beforeSettings.translationTimeoutMs,
+      }) });
+      expect(restored.status).toBe(200);
+      expect((await fetch(`${base}/ai-providers/${providerId}`, { method: 'DELETE', headers: { origin: base, cookie } })).status).toBe(200);
+      expect(await pgSecretsStore(pool, encryptionKey).get(`ai_provider_key:${providerId}`)).toBeNull();
+    }
   });
 });

@@ -1294,6 +1294,14 @@ and the `<dialog>`s appended to `<body>` share one set:
 - Gallery blocks remain part of the canonical Markdown draft. Visual gallery editing uses
   the existing Media picker and preserves directives, ordering, captions and source URLs;
   Markdown mode exposes the underlying fence.
+- **Translate with AI** stays beside the locale tabs. Its native dialog
+  names the direction and provider/endpoint/model before an explicit inference action, then
+  shows readonly title, excerpt, complete Markdown and article-local image text for review.
+  Existing target content requires a separate unchecked replacement confirmation. Apply and
+  Discard remain distinct; cancellation never applies partial output. The dialog traps focus,
+  returns it to the trigger, and scrolls within a narrow phone viewport without horizontal
+  overflow. A nearby **Undo translation** restores the complete applied patch until intervening
+  edits invalidate it. Save, Preview and Publish retain their existing meanings.
 - Story details sits beside the manuscript on desktop as a tinted column (`--canvas`,
   divided by `--line-strong`) so white fields read against it.
   It pins flush under the command bar and scrolls on its own. Its header carries one
@@ -1417,11 +1425,11 @@ and the `<dialog>`s appended to `<body>` share one set:
   **Providers** list — name with a small `default` badge, kind and key state as text,
   the base URL in mono, and right-aligned text actions Edit · Set default · Test ·
   Delete (Delete red, disabled actions dimmed with a stated reason) under an **Add
-  provider** primary; add/edit is an inline tinted form, never a card. Two flat task sections,
-  **Story review & excerpts** and **Photo descriptions**, each own their provider/model pair,
-  resolved destination and privacy note. Prompts, timeouts and photo limits sit behind each
-  task's **Advanced settings** disclosure. **Test story review** sits with that task and names
-  its sample-data/possible-charge scope. One pinned **Save AI settings** saves both assignments
+  provider** primary; add/edit is an inline tinted form, never a card. Three flat task sections,
+  **Story review & excerpts**, **Photo descriptions** and **Article translation**, each own
+  their provider/model pair, resolved destination and privacy note. Prompts, timeouts and photo
+  limits sit behind each task's **Advanced settings** disclosure. **Test story review** names
+  its sample-data/possible-charge scope. One pinned **Save AI settings** saves all assignments
   without contacting a provider. A shared model-list failure notice avoids duplicated diagnosis.
   Model dropdowns fill from the
   provider's own list; a saved model it does not list stays as "(saved, not listed)", and

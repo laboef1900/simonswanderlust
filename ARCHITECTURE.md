@@ -782,13 +782,31 @@ without invalidating the other suggestion. No body rewrite, autosave or publish 
 introduced. Source jumps close before focusing EasyMDE's zero-indexed line or hero alt;
 normal close restores the trigger. Review output is rendered as text and is not persisted.
 
+### Protected article translation (#550)
+
+`site/src/lib/article-translation.ts` uses the canonical source parser and positioned text
+to extract bounded article-local slots, then reconstructs and validates the complete target
+against the original document structure. Authenticated, no-store `POST /translation/prepare`
+and `/translation/validate` never write content or contact a provider. URLs, image identities,
+dimensions, gallery directives and occurrence boundaries remain source-owned; Media remains
+authoritative. Unsupported source and locally targeted headings remain unchanged.
+
+`public/editor-translation.js` owns explicit consent, current-draft/configuration checks,
+review and replacement confirmation. `LLM.translateArticle` sends only text slots from the
+browser in one bounded attempt. Application uses a deferred-sync source transaction in
+`editor-rich-bridge.js`, updates only the target allowlist, and preserves failed-commit
+histories. Whole-field Undo and existing dirty/recovery/optimistic-save paths are reused.
+No new persistence model, autosave, publication, Media write or upload is introduced.
+See the [issue design](docs/superpowers/specs/2026-11-07-issue-550-ai-article-translation.md).
+
 ### AI provider registry (2026-10-19)
 
 `settings.json` holds `aiProviders` (1–20 entries of `{ id, name, kind, baseUrl }`, `kind` one
 of `lm-studio` / `openrouter` / `deepseek` / `anthropic` / `custom`), `aiDefaultProviderId`, and one
-assignment per use case — `reviewProviderId` (Story review & excerpts) and
-`captionProviderId` (Photo descriptions: alt text and media details) — where `null` follows
-the default. Validation guarantees every reference resolves; a hand-edited dangling id is
+assignment per use case — `reviewProviderId` (Story review & excerpts),
+`captionProviderId` (Photo descriptions: alt text and media details), and
+`translationProviderId` (Article translation) — where `null` follows the default.
+Validation guarantees every reference resolves; a hand-edited dangling id is
 repaired on load and logged by field name. Postgres `app_secrets` holds one AES-256-GCM key
 per remote provider under `ai_provider_key:<id>`; local providers never hold one.
 
@@ -797,11 +815,12 @@ per remote provider under `ai_provider_key:<id>`; local providers never hold one
 | `GET` / `POST /settings` | admin | registry + assignments + kept fields; presence only (`hasApiKey`) |
 | `POST /ai-providers`, `PUT` / `DELETE /ai-providers/:id` | admin | provider CRUD with optional key set/replace/remove |
 | `GET /ai-providers/:id/credential` | admin | key for Settings' model lookup and **Test** (browser calls only `<baseUrl>/models`) |
-| `GET /ai-config[?purpose=caption]` | author | resolved provider + that provider's key, consumer shape unchanged |
+| `GET /ai-config[?purpose=caption]` | author | resolved review/caption provider + its key; existing consumer shape unchanged |
+| `GET /ai-config?purpose=translation` | author | only translation provider identity/endpoint, model, timeout and request-local key |
 
 Default `GET /ai-config` returns the review provider's `kind` as `aiProvider`, its base URL as
-`aiBaseUrl`, and its own key. Local caption config never queries or decrypts secrets and does
-not wait on the settings queue, so a broken remote credential cannot break local captions.
+`aiBaseUrl`, and its own key. Local caption and translation configs never query or decrypt
+secrets and do not wait on the settings queue, so broken remote credentials cannot break them.
 Remote reads serialize with settings writes and fail closed on secret errors. Every config and
 settings surface is `Cache-Control: no-store`. The first boot of this release migrates a
 pre-registry `settings.json` (deterministic ids, `settings.json.pre-ai-registry` kept) and

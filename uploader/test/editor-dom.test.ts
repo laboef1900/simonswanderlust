@@ -18,6 +18,7 @@ import { REGIONS } from '../src/db.js';
 import type { AltAudit } from '../src/alt-audit.js';
 import { publication } from './publication-client-fixture.js';
 import { publishTokens } from './publish-tokens.js';
+import { prepareTranslation, validateTranslation } from '../../site/src/lib/article-translation.js';
 
 
 beforeAll(async () => { await analyzeGallerySource(''); });
@@ -45,6 +46,12 @@ interface ReviewStory {
 
 type Review = (baseUrl: string, model: string, prompt: string, story: ReviewStory, apiKey: string | null, timeoutMs: number, signal: AbortSignal) => Promise<EditorialReviewResult>;
 type Fetch = (url: string, options?: RequestInit) => Promise<Response>;
+interface TranslationRequest {
+  baseUrl: string; model: string; apiKey: string | null; timeoutMs: number;
+  sourceLocale: 'de' | 'en'; targetLocale: 'de' | 'en';
+  slots: { id: string; text: string }[]; signal: AbortSignal;
+}
+type TranslationOutput = { translations: { id: string; text: string }[] };
 
 interface EditorOptions {
   language?: { primary: 'de' | 'en'; locales: ('de' | 'en')[] };
@@ -56,6 +63,7 @@ interface EditorOptions {
   storage?: Map<string, string>;
   galleryFetch?: Fetch;
   review?: Review;
+  translate?: (request: TranslationRequest) => Promise<TranslationOutput>;
   isAdmin?: boolean;
   richText?: 'missing' | 'throws';
   mobile?: boolean;
@@ -185,11 +193,12 @@ async function loadEditor(options: EditorOptions = {}) {
   }
   class EasyMDE {
     private text = '';
-    private readonly changes: (() => void)[] = [];
+    private readonly changes: ((...args: unknown[]) => void)[] = [];
     private readonly cursorChanges: (() => void)[] = [];
     private readonly markers = new Set<{ start: number; end: number; cleared: boolean }>();
     private documentVersion = 0;
     readonly undoHistory: string[] = [];
+    readonly redoHistory: string[] = [];
     input = dom.document.createElement('textarea');
     cursor: { line: number; ch: number } | null = null;
     selection: { from: { line: number; ch: number }; to: { line: number; ch: number } } | null = null;
@@ -201,22 +210,36 @@ async function loadEditor(options: EditorOptions = {}) {
       undo: () => {
         const previous = this.undoHistory.pop();
         if (previous !== undefined) {
+          this.redoHistory.push(this.text);
           this.text = previous;
           for (const callback of this.changes) callback();
         }
       },
-      on: (event: string, callback: () => void) => {
+      redo: () => {
+        const next = this.redoHistory.pop();
+        if (next !== undefined) {
+          this.undoHistory.push(this.text);
+          this.text = next;
+          for (const callback of this.changes) callback();
+        }
+      },
+      on: (event: string, callback: (...args: unknown[]) => void) => {
         if (event === 'change' || event === 'changes') this.changes.push(callback);
         else if (event === 'cursorActivity') this.cursorChanges.push(callback);
       },
-      off: (event: string, callback: () => void) => {
+      off: (event: string, callback: (...args: unknown[]) => void) => {
         const listeners = event === 'cursorActivity' ? this.cursorChanges : this.changes;
         const index = listeners.indexOf(callback);
         if (index !== -1) listeners.splice(index, 1);
       },
       refresh() {},
       setOption: (name: string, value: unknown) => { this.cmOptions[name] = value; },
-      clearHistory: () => { this.undoHistory.length = 0; },
+      clearHistory: () => { this.undoHistory.length = 0; this.redoHistory.length = 0; },
+      getHistory: () => ({ done: [...this.undoHistory], undone: [...this.redoHistory] }),
+      setHistory: (history: { done: string[]; undone: string[] }) => {
+        this.undoHistory.splice(0, this.undoHistory.length, ...history.done);
+        this.redoHistory.splice(0, this.redoHistory.length, ...history.undone);
+      },
       getValue: () => this.text,
       getLine: (line: number) => this.text.split('\n')[line] ?? '',
       setValue: (value: string) => { this.value(value); },
@@ -239,6 +262,10 @@ async function loadEditor(options: EditorOptions = {}) {
         this.selection = { from, to };
         this.cursor = to;
         for (const callback of this.cursorChanges) callback();
+      },
+      setSelections: (selections: { anchor: { line: number; ch: number }; head: { line: number; ch: number } }[]) => {
+        const range = selections[0]!;
+        this.codemirror.setSelection(range.anchor, range.head);
       },
       scrollIntoView() {},
       focus: () => { this.focusCalls += 1; this.input.focus(); },
@@ -270,10 +297,11 @@ async function loadEditor(options: EditorOptions = {}) {
           },
         };
       },
-      replaceRange: (value: string, from: { line: number; ch: number }, to: { line: number; ch: number }) => {
+      replaceRange: (value: string, from: { line: number; ch: number }, to: { line: number; ch: number }, origin?: string) => {
         const start = this.codemirror.indexFromPos(from);
         const end = this.codemirror.indexFromPos(to);
         this.undoHistory.push(this.text);
+        this.redoHistory.length = 0;
         this.text = this.text.slice(0, start) + value + this.text.slice(end);
         const delta = value.length - (end - start);
         for (const marker of this.markers) {
@@ -281,7 +309,7 @@ async function loadEditor(options: EditorOptions = {}) {
           else if (start > marker.start && end < marker.end) marker.end += delta;
           else if (start < marker.end && end > marker.start) marker.cleared = true;
         }
-        for (const callback of this.changes) callback();
+        for (const callback of this.changes) callback(this.codemirror, { origin });
       },
     };
     value(value?: string): string {
@@ -303,6 +331,7 @@ async function loadEditor(options: EditorOptions = {}) {
     private selection = { from: 0, to: 0 };
     readonly commands: string[] = [];
     readonly setCalls: string[] = [];
+    readonly metadataCalls: Record<string, unknown>[] = [];
     private readonly undoHistory: string[] = [];
     private readonly redoHistory: string[] = [];
     readonly input = dom.document.createElement('div');
@@ -320,6 +349,7 @@ async function loadEditor(options: EditorOptions = {}) {
       this.undoHistory.push(this.text);
       this.text = text;
     }
+    refreshImageMetadata() { this.metadataCalls.push(structuredClone(this.settings.images())); }
     edit(text: string) {
       this.undoHistory.push(this.text);
       this.redoHistory.length = 0;
@@ -517,13 +547,14 @@ async function loadEditor(options: EditorOptions = {}) {
     guard.redirectToLogin = () => { redirects += 1; redirect(); };
     return guard;
   };
-  for (const file of ['journeys-ui.js', 'waypoint-lookup.js', 'editor-stop-route.js', 'posts-filter.js', 'editor-title-image.js', 'gallery-fence.js', 'gallery-metadata-warnings.js', 'media-api.js', 'gallery-library.js', 'editor-galleries.js', 'editor-linter.js', 'llm.js', 'editor-excerpt.js', 'country-centers.js', 'country-coordinates.js', 'tabs.js', 'editor-review.js', 'editor-alt-audit.js', 'editor-inspector.js', 'image-markdown.js']) {
+  for (const file of ['journeys-ui.js', 'waypoint-lookup.js', 'editor-stop-route.js', 'posts-filter.js', 'editor-title-image.js', 'gallery-fence.js', 'gallery-metadata-warnings.js', 'media-api.js', 'gallery-library.js', 'editor-galleries.js', 'editor-linter.js', 'llm.js', 'editor-excerpt.js', 'country-centers.js', 'country-coordinates.js', 'tabs.js', 'editor-review.js', 'editor-translation.js', 'editor-alt-audit.js', 'editor-inspector.js', 'image-markdown.js']) {
     vm.runInContext(browserScript(file), ctx, {
       filename: resolve('public/' + file),
       importModuleDynamically: vm.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER,
     });
   }
   if (options.review) (ctx.LLM as { reviewStory: Review }).reviewStory = options.review;
+  if (options.translate && ctx.LLM && typeof ctx.LLM === 'object') Reflect.set(ctx.LLM, 'translateArticle', options.translate);
   await vm.runInContext(script, ctx);
   const api = vm.runInContext('({ populateForm, buildPayload, loadPost, doSaveDraft, renderAltAudit })', ctx) as EditorApi;
   return {
@@ -5101,5 +5132,435 @@ describe('Visual and Markdown editing share the real draft', () => {
     expect(h.richEditors[0]!.getMarkdown()).toBe('Corrected source after the failure');
     h.richEditors[0]!.edit('Resumed visual editing');
     expect(h.api.buildPayload().de.bodyMarkdown).toBe('Resumed visual editing');
+  });
+});
+
+describe('explicit article translation of the current unsaved pair', () => {
+  interface TranslationHarness { el(id: string): Element }
+  const config = { providerId: 'local', providerName: 'Local text', providerKind: 'lm-studio',
+    baseUrl: 'http://localhost:1234/v1', model: 'translation-model', timeoutMs: 120000, apiKey: null };
+  const translated = (request: TranslationRequest): TranslationOutput => ({
+    translations: request.slots.map(({ id, text }) => ({ id, text: request.targetLocale.toUpperCase() + ' ' + text })),
+  });
+  const flush = async () => { for (let i = 0; i < 15; i++) await settle(); };
+  function network(options: { configuration?: () => object; other?: Fetch; prepare?: Fetch; validate?: Fetch } = {}): Fetch {
+    return async (url, init = {}) => {
+      if (url === '/ai-config?purpose=translation') return response(options.configuration?.() ?? config);
+      if (url === '/translation/prepare' && options.prepare) return options.prepare(url, init);
+      if (url === '/translation/validate' && options.validate) return options.validate(url, init);
+      if (url.startsWith('/translation/')) {
+        const input = JSON.parse(String(init.body));
+        try {
+          if (url.endsWith('/prepare')) return response(await prepareTranslation(input));
+          // Match the authenticated route: output is a separate compiler
+          // argument, not an extra key on its strict source-input contract.
+          const { output, ...sourceInput } = input;
+          return response(await validateTranslation(sourceInput, output));
+        }
+        catch (error) { return response({ code: error instanceof Error && 'code' in error ? error.code : 'translation_failed', error: 'Safe fixed error' }, 422); }
+      }
+      return options.other ? options.other(url, init) : response([]);
+    };
+  }
+  async function start(h: TranslationHarness) {
+    h.el('translateArticle').click();
+    await flush();
+    expect(h.el('articleTranslationDialog').dataset.state).toBe('ready');
+    h.el('translationRun').click();
+    await flush();
+  }
+  function consent(h: TranslationHarness) {
+    h.el('translationReplace').checked = true;
+    h.el('translationReplace').fire('change');
+  }
+  function editablePair() {
+    const pair = fullPair();
+    pair.de.bodyMarkdown = 'Reise **nach Hause**.\n\n```gallery\n#layout: slider\n#captions: hidden\nhttps://img/photo | 900x600 | caption-override="Hier"\nhttps://img/photo | 900x600 | caption-override=""\n```\n\n![Berge](https://img/inline)\n';
+    pair.en.bodyMarkdown = pair.de.bodyMarkdown.replace('Reise', 'Journey').replace('Berge', 'Mountains');
+    pair.de.images = { 'https://img/photo': { width: 900, height: 600, alt: 'Berg', caption: 'Tal', format: 'jpeg' },
+      'https://img/inline': { width: 700, height: 400, alt: 'Weg' } };
+    pair.en.images = { 'https://img/unrelated': { width: 500, height: 300, caption: 'Keep me' } };
+    pair.en.titleImage = { src: 'https://img/title', width: 1000, height: 400, alt: 'Existing title image' };
+    return pair;
+  }
+
+  it.each(['de', 'en'] as const)('translates latest unsaved %s text, reviews all fields, and applies only the target allowlist', async (locale) => {
+    const calls: TranslationRequest[] = [];
+    const h = await loadEditor({ fetch: network(), translate: async (request) => { calls.push(request); return translated(request); } });
+    h.api.populateForm(editablePair());
+    const target = locale === 'de' ? 'en' : 'de';
+    h.el('tabbtn-' + locale).click();
+    h.el(locale + 'Title').value = 'Latest unsaved title';
+    h.el(locale + 'Title').fire('input');
+    h.el(locale + 'Excerpt').value = 'Latest unsaved excerpt';
+    h.el(locale + 'Excerpt').fire('input');
+    const cm = h.editors[locale === 'de' ? 0 : 1]!.codemirror;
+    cm.replaceRange('Unsaved start\n\n', { line: 0, ch: 0 }, { line: 0, ch: 0 }, '+input');
+    const before = h.api.buildPayload();
+    h.el('translateArticle').click();
+    await flush();
+    expect(calls).toHaveLength(0);
+    expect(h.el('translationDestination').textContent).toContain(config.baseUrl);
+    expect(h.el('translationDestination').textContent).toContain(config.model);
+    expect(h.el('translationData').textContent).toMatch(/charges/i);
+    h.el('translationRun').click();
+    await flush();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.sourceLocale).toBe(locale);
+    expect(calls[0]!.targetLocale).toBe(target);
+    expect(calls[0]!.slots.map((slot) => slot.text)).toEqual(expect.arrayContaining(['Latest unsaved title', 'Latest unsaved excerpt', 'Unsaved start']));
+    expect(JSON.stringify(calls[0]!.slots)).not.toContain('https://img/');
+    expect(h.api.buildPayload()).toEqual(before);
+    expect(h.el('translationResult').hidden).toBe(false);
+    expect(h.el('translationTitle').value).toBe(target.toUpperCase() + ' Latest unsaved title');
+    expect(h.el('translationBody').value).toContain('Unsaved start');
+    expect(h.el('translationApply').disabled).toBe(true);
+    h.el('translationApply').click();
+    expect(h.api.buildPayload()).toEqual(before);
+    consent(h);
+    h.el('translationApply').click();
+    const after = h.api.buildPayload();
+    expect(after[locale]).toEqual(before[locale]);
+    expect(after.shared).toEqual(before.shared);
+    expect(after.translationKey).toEqual(before.translationKey);
+    expect(after.updatedAt).toEqual(before.updatedAt);
+    const { title: _title, excerpt: _excerpt, bodyMarkdown: _body, images: _images, ...unrelated } = after[target];
+    const { title: _oldTitle, excerpt: _oldExcerpt, bodyMarkdown: _oldBody, images: _oldImages, ...oldUnrelated } = before[target];
+    expect(unrelated).toEqual(oldUnrelated);
+    expect(after[target].images).toMatchObject(before[target].images);
+    expect(h.el('tabbtn-' + target).getAttribute('aria-selected')).toBe('true');
+    expect(h.richEditors[target === 'de' ? 0 : 1]!.getMarkdown()).toBe(after[target].bodyMarkdown);
+    expect(latestStash(h.local, 'new')!.payload[target].bodyMarkdown).toBe(after[target].bodyMarkdown);
+    expect(h.requests.some(({ url, options }) => url === '/posts' || options.method === 'PUT' || /publish|upload/.test(url))).toBe(false);
+    expect(h.el('translationUndo').hidden).toBe(false);
+    h.el('translationUndo').click();
+    expect(h.api.buildPayload()).toEqual(before);
+    expect(h.el('translationUndo').hidden).toBe(true);
+  });
+
+  it.each(['visual', 'markdown', 'unavailable'] as const)('keeps normal body history and dedicated whole-field undo in %s mode', async (mode) => {
+    const h = await loadEditor({ fetch: network(), translate: async (request) => translated(request), richText: mode === 'unavailable' ? 'throws' : undefined });
+    const pair = fullPair();
+    pair.en.slug = '';
+    h.api.populateForm(pair);
+    if (mode === 'markdown') { h.el('deMarkdownMode').click(); h.el('enMarkdownMode').click(); }
+    h.editors[1]!.codemirror.replaceRange(' prior edit', { line: 0, ch: 5 }, { line: 0, ch: 5 }, '+input');
+    const before = h.api.buildPayload();
+    await start(h);
+    consent(h); h.el('translationApply').click();
+    expect(h.api.buildPayload().en.slug).toBe('');
+    const translatedBody = h.api.buildPayload().en.bodyMarkdown;
+    h.el('tabbtn-de').click(); h.el('tabbtn-en').click();
+    if (mode === 'visual') h.richEditors[1]!.undo();
+    else h.editors[1]!.codemirror.undo();
+    expect(h.api.buildPayload().en.bodyMarkdown).toBe(before.en.bodyMarkdown);
+    expect(h.api.buildPayload().en.title).not.toBe(before.en.title);
+    expect(h.el('translationUndo').hidden).toBe(true);
+    if (mode === 'visual') h.richEditors[1]!.redo();
+    else h.editors[1]!.codemirror.redo();
+    expect(h.api.buildPayload().en.bodyMarkdown).toBe(translatedBody);
+  });
+
+  it('retains a completed canonical translation when the rich view fails, and warns separately if stash fails', async () => {
+    const h = await loadEditor({ fetch: network(), translate: async (request) => translated(request) });
+    h.api.populateForm(fullPair());
+    await start(h); consent(h);
+    h.richEditors[1]!.failSet = true;
+    vm.runInContext('localStorage.setItem = () => { throw new Error(\"quota\"); }', h.ctx);
+    h.el('translationApply').click();
+    expect(h.api.buildPayload().en.title).toMatch(/^EN /);
+    expect(h.el('enMarkdownBody').hidden).toBe(false);
+    expect(h.el('enRichError').hidden).toBe(false);
+    expect(h.el('actionStatus').textContent).toContain('local backup');
+    expect(h.el('translationUndo').hidden).toBe(false);
+  });
+
+  it('rolls back every field, source history and selection without syncing the rich engine on a synchronous commit failure', async () => {
+    const h = await loadEditor({ fetch: network(), translate: async (request) => translated(request) });
+    h.api.populateForm(editablePair());
+    const target = h.editors[1]!.codemirror;
+    target.replaceRange(' old', { line: 0, ch: 5 }, { line: 0, ch: 5 }, '+input');
+    target.setSelection({ line: 0, ch: 1 }, { line: 0, ch: 3 });
+    await start(h); consent(h);
+    const before = h.api.buildPayload(), history = target.getHistory(), selection = target.listSelections();
+    const richSets = [...h.richEditors[1]!.setCalls], dirty = h.dirtyCalls();
+    let fail = true;
+    target.on('change', () => { if (fail) { fail = false; throw new Error('injected synchronous commit failure'); } });
+    h.el('translationApply').click();
+    expect(h.api.buildPayload()).toEqual(before);
+    expect(target.getHistory()).toEqual(history);
+    expect(target.listSelections()).toEqual(selection);
+    expect(h.richEditors[1]!.setCalls).toEqual(richSets);
+    expect(h.el('tabbtn-de').getAttribute('aria-selected')).toBe('true');
+    expect(h.dirtyCalls()).toBe(dirty);
+    expect(h.el('translationStatus').textContent).toContain('restored');
+  });
+
+  it.each(['providerId', 'providerName', 'providerKind', 'baseUrl', 'model', 'timeoutMs'] as const)('requires renewed explicit consent after %s changes', async (field) => {
+    const fresh: Record<string, unknown> = { ...config };
+    const calls: TranslationRequest[] = [];
+    const h = await loadEditor({ fetch: network({ configuration: () => fresh }),
+      translate: async (request) => { calls.push(request); return translated(request); } });
+    h.api.populateForm(fullPair());
+    h.el('translateArticle').click(); await flush();
+    fresh[field] = field === 'timeoutMs' ? 60000 : field === 'providerKind' ? 'custom' : field === 'baseUrl' ? 'https://another.example/v1' : 'changed';
+    h.el('translationRun').click(); await flush();
+    expect(calls).toHaveLength(0);
+    expect(h.el('translationStatus').textContent).toContain('changed');
+    h.el('translationRun').click(); await flush();
+    expect(calls).toHaveLength(1);
+    expect(h.el('articleTranslationDialog').dataset.state).toBe('review');
+  });
+
+  it.each(['source', 'target', 'shared', 'programmatic', 'locale', 'mode', 'coverage', 'reload', 'recovery', 'base'] as const)('aborts and ignores late output after a %s change', async (change) => {
+    const pending = Promise.withResolvers<TranslationOutput>();
+    let request: TranslationRequest | undefined;
+    const h = await loadEditor({ fetch: network({ other: async (url) => response(url === '/posts/tk1' ? fullPair() : []) }),
+      translate: (value) => { request = value; return pending.promise; } });
+    h.api.populateForm(fullPair());
+    await start(h);
+    expect(request).toBeDefined();
+    if (change === 'source' || change === 'target' || change === 'shared') {
+      const field = h.el(change === 'source' ? 'deTitle' : change === 'target' ? 'enExcerpt' : 'fmRoute');
+      field.value += ' newer'; field.fire('input');
+    } else if (change === 'programmatic') h.editors[1]!.value('Newer body');
+    else if (change === 'locale') h.el('tabbtn-en').click();
+    else if (change === 'mode') h.el('deMarkdownMode').click();
+    else if (change === 'coverage') { h.el('enIncluded').checked = false; h.el('enIncluded').fire('change'); }
+    else if (change === 'reload') await h.api.loadPost('tk1');
+    else if (change === 'recovery') h.api.populateForm(fullPair());
+    else vm.runInContext('loadedUpdatedAt = \"new-save-base\"; articleTranslation.invalidate()', h.ctx);
+    expect(request!.signal.aborted).toBe(true);
+    const newer = h.api.buildPayload();
+    pending.resolve(translated(request!)); await flush();
+    expect(h.api.buildPayload()).toEqual(newer);
+    expect(h.el('translationResult').hidden).toBe(true);
+    expect(h.el('translationApply').hidden).toBe(true);
+  });
+
+  it('checks exact whole-draft equality at apply even without an input event and revokes replacement consent', async () => {
+    const h = await loadEditor({ fetch: network(), translate: async (request) => translated(request) });
+    h.api.populateForm(fullPair()); await start(h); consent(h);
+    h.el('fmRoute').value += ' silent change';
+    const before = h.api.buildPayload();
+    h.el('translationApply').click();
+    expect(h.api.buildPayload()).toEqual(before);
+    expect(h.el('translationReplace').checked).toBe(false);
+    expect(h.el('translationStatus').textContent).toContain('changed');
+  });
+
+  it.each(['cancel', 'escape', 'discard'] as const)('%s never mutates the pair and restores visible trigger focus', async (kind) => {
+    const pending = Promise.withResolvers<TranslationOutput>();
+    let request: TranslationRequest | undefined;
+    const h = await loadEditor({ fetch: network(), mobile: true,
+      translate: (value) => { request = value; return kind === 'discard' ? Promise.resolve(translated(value)) : pending.promise; } });
+    h.api.populateForm(fullPair()); const before = h.api.buildPayload();
+    await start(h);
+    if (kind === 'escape') h.el('articleTranslationDialog').fire('keydown', { key: 'Escape' });
+    else h.el('translationClose').click();
+    expect(request!.signal.aborted).toBe(true);
+    pending.resolve(translated(request!)); await flush(); h.flushDialogEvents();
+    expect(h.api.buildPayload()).toEqual(before);
+    expect(h.el('articleTranslationDialog').open).toBe(false);
+    expect(h.document.activeElement).toBe(h.el('translateArticle'));
+  });
+
+  it('hides single-language targets and requires explicit existing coverage enablement', async () => {
+    for (const primary of ['de', 'en'] as const) {
+      const single = await loadEditor({ language: { primary, locales: [primary] } });
+      expect(single.el('translateArticle').hidden).toBe(true);
+    }
+    const translate = vi.fn(async (request: TranslationRequest) => translated(request));
+    const h = await loadEditor({ fetch: network(), translate });
+    const pair = fullPair(); pair.en.omitted = true; h.api.populateForm(pair);
+    h.el('translateArticle').click(); await flush();
+    expect(h.el('translationStatus').textContent).toContain('coverage');
+    expect(h.el('translationRun').disabled).toBe(true);
+    expect(translate).not.toHaveBeenCalled();
+    expect(h.api.buildPayload().en.omitted).toBe(true);
+    h.el('translationClose').click();
+    h.el('enIncluded').checked = true; h.el('enIncluded').fire('change');
+    await start(h);
+    expect(translate).toHaveBeenCalledTimes(1);
+  });
+
+  it('never exposes provider details or partial patches on validation, limit, configuration and inference errors', async () => {
+    for (const failure of ['translation_structure_mismatch', 'translation_input_limit', 'config', 'provider'] as const) {
+      const translate = vi.fn(async (request: TranslationRequest) => {
+        if (failure === 'provider') throw new Error('private provider detail');
+        return translated(request);
+      });
+      const h = await loadEditor({ translate, fetch: network({
+        configuration: () => failure === 'config' ? { ...config, model: '' } : config,
+        prepare: failure === 'translation_input_limit' ? async () => response({ code: failure, error: 'private diagnostic' }, 413) : undefined,
+        validate: failure === 'translation_structure_mismatch' ? async () => response({ code: failure, error: 'private diagnostic' }, 422) : undefined,
+      }) });
+      h.api.populateForm(fullPair()); const before = h.api.buildPayload();
+      h.el('translateArticle').click(); await flush();
+      if (failure !== 'config' && failure !== 'translation_input_limit') { h.el('translationRun').click(); await flush(); }
+      expect(h.el('articleTranslationDialog').dataset.state).toBe('error');
+      expect(h.el('translationStatus').textContent).not.toContain('private');
+      expect(h.api.buildPayload()).toEqual(before);
+      expect(translate).toHaveBeenCalledTimes(failure === 'config' || failure === 'translation_input_limit' ? 0 : 1);
+    }
+  });
+
+  it('flushes the latest pending gallery description before preparing or sending any slots', async () => {
+    const pending = Promise.withResolvers<Response>();
+    let hold = false;
+    let waitingBody = '';
+    const calls: TranslationRequest[] = [];
+    const h = await loadEditor({
+      fetch: network({ other: async (url) => url.startsWith('/media?')
+        ? response({ total: 1, items: [{ key: 'anchor', src: 'https://img/anchor', alt: {}, caption: {} }] })
+        : url.startsWith('/media/items/') ? response({ error: 'not found' }, 404) : response([]) }),
+      galleryFetch: async (_url, init) => {
+        const body = JSON.parse(String(init?.body)).bodyMarkdown as string;
+        if (hold) { waitingBody = body; return pending.promise; }
+        return response(await analyzeGallerySource(body));
+      },
+      translate: async (request) => { calls.push(request); return translated(request); },
+    });
+    h.api.populateForm(editablePair()); await flush();
+    const field = h.document.querySelector('.editor-gallery__alt')!;
+    expect(field).not.toBeNull();
+    hold = true;
+    field.value = 'Latest local alt'; field.fire('input'); await settle();
+    h.el('translateArticle').click(); await settle();
+    expect(h.el('articleTranslationDialog').dataset.state).toBe('preparing');
+    expect(h.requests.filter(({ url }) => url.startsWith('/translation/'))).toHaveLength(0);
+    hold = false;
+    pending.resolve(response(await analyzeGallerySource(waitingBody)));
+    await flush();
+    expect(h.el('articleTranslationDialog').dataset.state).toBe('ready');
+    h.el('translationRun').click(); await flush();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.slots.some(({ text }) => text === 'Latest local alt')).toBe(true);
+    expect(h.api.buildPayload().de.bodyMarkdown).toContain('Latest local alt');
+  });
+
+  it.each(['config', 'validation'] as const)('discards a late %s response after replacement consent/context changes', async (boundary) => {
+    const pending = Promise.withResolvers<Response>();
+    let hold = false;
+    const baseNetwork = network({ validate: boundary === 'validation' ? async (_url, init) => {
+      if (hold) return pending.promise;
+      const { output, ...input } = JSON.parse(String(init?.body));
+      return response(await validateTranslation(input, output));
+    } : undefined });
+    const h = await loadEditor({ translate: async (request) => translated(request),
+      fetch: (url, init) => boundary === 'config' && hold && url === '/ai-config?purpose=translation'
+        ? pending.promise : baseNetwork(url, init) });
+    h.api.populateForm(fullPair());
+    h.el('translateArticle').click(); await flush();
+    hold = true; h.el('translationRun').click(); await flush();
+    h.el('enTitle').value = 'New target while awaiting response'; h.el('enTitle').fire('input');
+    const before = h.api.buildPayload();
+    pending.resolve(response(boundary === 'config' ? { ...config, apiKey: 'never-stashed' } : {
+      title: 'Stale', excerpt: 'Stale', bodyMarkdown: 'Stale', images: {},
+    }));
+    await flush();
+    expect(h.api.buildPayload()).toEqual(before);
+    expect(h.el('translationResult').hidden).toBe(true);
+    expect(h.el('translationReplace').checked).toBe(false);
+    expect(JSON.stringify(stashRecords(h.local))).not.toContain('never-stashed');
+  });
+
+  it('recovers an applied translation through the existing full-draft stash, then preserves optimistic save conflict protection', async () => {
+    const posts = memoryPostStore();
+    await posts.upsertDraft(fullPair());
+    const base = (await posts.get('tk1'))!.updatedAt.toISOString();
+    const persisted: Fetch = async (url, init) => {
+      if (url === '/posts/tk1' && init?.method === 'PUT') {
+        const payload = JSON.parse(String(init.body)) as PostPair & { updatedAt: string };
+        try { return response(await posts.upsertDraft(payload, new Date(payload.updatedAt))); }
+        catch (error) {
+          if (error instanceof PostError) return response({ code: error.code, error: error.message }, 409);
+          throw error;
+        }
+      }
+      return response(url === '/posts/tk1' ? await posts.get('tk1') : []);
+    };
+    const h = await loadEditor({ search: '?tk=tk1', fetch: network({ other: persisted }),
+      translate: async (request) => translated(request) });
+    await start(h); consent(h); h.el('translationApply').click();
+    const applied = h.api.buildPayload();
+    const stash = latestStash(h.local, 'post:tk1')!;
+    expect(stash.payload.en.bodyMarkdown).toBe(applied.en.bodyMarkdown);
+    const recovered = await loadEditor({ search: '?tk=tk1', confirm: true,
+      stash: { key: 'swl:draft:tk1', payload: stash.payload, recovery: stash.recovery }, fetch: persisted });
+    expect(recovered.api.buildPayload().en.bodyMarkdown).toBe(applied.en.bodyMarkdown);
+    const original = (await posts.get('tk1'))!;
+    await posts.upsertDraft({ ...original, en: { ...original.en, title: 'Another writer' } }, original.updatedAt);
+    expect(await recovered.api.doSaveDraft()).toBe(false);
+    const sent = recovered.requests.find(({ url, options }) => url === '/posts/tk1' && options.method === 'PUT')!;
+    expect(JSON.parse(String(sent.options.body)).updatedAt).toBe(base);
+    expect(recovered.api.buildPayload().en.bodyMarkdown).toBe(applied.en.bodyMarkdown);
+    expect(recovered.el('draftSaveState').textContent).toMatch(/unsaved/i);
+    expect(storedComparison(recovered).compare.hidden).toBe(false);
+    expect((await posts.get('tk1'))!.en.title).toBe('Another writer');
+  });
+
+  it('revokes dedicated Undo after a newer target edit rather than overwriting it', async () => {
+    const h = await loadEditor({ fetch: network(), translate: async (request) => translated(request) });
+    h.api.populateForm(fullPair()); await start(h); consent(h); h.el('translationApply').click();
+    h.el('enTitle').value = 'My later title'; h.el('enTitle').fire('input');
+    const newer = h.api.buildPayload();
+    expect(h.el('translationUndo').hidden).toBe(true);
+    h.el('translationUndo').click();
+    expect(h.api.buildPayload()).toEqual(newer);
+  });
+
+  it('renders hostile-looking title text inertly and rejects extra patch fields', async () => {
+    const patch = { title: '<img src=x onerror=alert(1)>', excerpt: '<script>example</script>', bodyMarkdown: 'Plain body', images: {} };
+    for (const extra of [false, true]) {
+      const h = await loadEditor({ fetch: network({ validate: async () => response(extra ? { ...patch, slug: 'never-apply' } : patch) }),
+        translate: async (request) => translated(request) });
+      h.api.populateForm(fullPair()); const before = h.api.buildPayload();
+      await start(h);
+      expect(h.el('articleTranslationDialog').querySelector('img')).toBeNull();
+      expect(h.el('articleTranslationDialog').querySelector('script')).toBeNull();
+      expect(h.api.buildPayload()).toEqual(before);
+      if (extra) expect(h.el('translationResult').hidden).toBe(true);
+      else expect(h.el('translationTitle').value).toBe(patch.title);
+    }
+  });
+
+  it('applies and undoes metadata-only translation in already-mounted Markdown galleries', async () => {
+    const h = await loadEditor({
+      fetch: network({ other: async (url) => {
+        if (url.startsWith('/media?')) return response({ total: 1, items: [{
+          key: 'anchor', src: 'https://img/anchor', title: 'Unrelated library photo',
+          alt: { de: '', en: '' }, caption: { de: '', en: '' },
+        }] });
+        if (url.startsWith('/media/items/')) return response({ error: 'image not found' }, 404);
+        return response([]);
+      } }),
+      translate: async (request) => translated(request),
+    });
+    const pair = fullPair();
+    const body = '```gallery\n#layout: slider\nhttps://img/local\n```';
+    pair.de.bodyMarkdown = body;
+    pair.en.bodyMarkdown = body;
+    pair.de.images = { 'https://img/local': { width: 900, height: 600, alt: 'Ein Berg', caption: 'Aussicht' } };
+    pair.en.images = { 'https://img/local': { width: 900, height: 600, alt: 'Old alt', caption: 'Old caption' } };
+    h.api.populateForm(pair);
+    h.el('deMarkdownMode').click(); h.el('enMarkdownMode').click();
+    await flush();
+    const captions = () => h.document.querySelectorAll('.editor-gallery__caption').map((node) => node.textContent);
+    const alts = () => h.document.querySelectorAll('.editor-gallery__alt').map((node) => node.value);
+    expect(captions()).toEqual(['Aussicht', 'Old caption']);
+    expect(alts()).toEqual(['Ein Berg', 'Old alt']);
+    const before = h.api.buildPayload();
+    await start(h); consent(h); h.el('translationApply').click();
+    await flush();
+    expect(h.api.buildPayload().en.bodyMarkdown).toBe(body);
+    expect(h.api.buildPayload().en.images['https://img/local']?.caption).toBe('EN Aussicht');
+    expect(captions()).toEqual(['Aussicht', 'EN Aussicht']);
+    expect(alts()).toEqual(['Ein Berg', 'EN Ein Berg']);
+    h.el('translationUndo').click();
+    await flush();
+    expect(h.api.buildPayload()).toEqual(before);
+    expect(captions()).toEqual(['Aussicht', 'Old caption']);
+    expect(alts()).toEqual(['Ein Berg', 'Old alt']);
   });
 });

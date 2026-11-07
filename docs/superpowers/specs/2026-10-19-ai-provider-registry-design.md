@@ -360,3 +360,18 @@ assigned providers' keys, non-atomic secret/settings writes, no AAD binding betw
 Decision: the owner selected **"Approve implementation"** (ask prompt in the implementing session,
 2026-10-19), over the alternatives "Approve, but keep legacy key" and "Not yet". Conditions: none
 beyond this spec; approval covers implementation only — the final-HEAD merge decision is separate.
+
+## 12. Article translation assignment (#550, 2026-11-07)
+
+The [issue-specific approved design](2026-11-07-issue-550-ai-article-translation.md) adds
+`translationProviderId` (null follows default), `translationModel` (default
+`qwen2.5-7b-instruct`) and `translationTimeoutMs` (default 120000). It extends validation,
+load recovery, default resolution, provider deletion constraints and the shared AI Settings
+save scope. Review/excerpt and caption assignments remain independent.
+
+Authenticated `GET /ai-config?purpose=translation` discloses only its resolved provider's
+identity, endpoint, model, timeout and request-local key. Local providers never access
+secrets; remote reads preserve the existing serialized endpoint/key binding. No new
+credentials, server inference or model-side persistence are introduced. Translation
+consent/review, structural validation, no-retry behavior and the scoped approval exception
+are defined in the issue-specific design, not retroactively waived by this registry spec.

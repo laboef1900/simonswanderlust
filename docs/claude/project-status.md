@@ -4,6 +4,27 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Implemented and locally verified:** protected AI article translation (#550,
+  2026-11-07). Independent provider/model/timeout assignment; browser-direct text-only
+  inference; latest unsaved DE↔EN content within the same pair; explicit consent,
+  complete structural validation, review/replacement confirmation and atomic draft apply.
+  Galleries, image identities, occurrence overrides, Media authority, manual slugs,
+  shared/publication fields and unrelated target fields are preserved. Visual/Markdown,
+  full-field Undo, recovery and optimistic save conflicts use the existing editor pipeline.
+  Independent design/security approval used `openai-codex/gpt-6-astra` (high), under the
+  owner-authorized issue-specific exception. Both full local test suites were executed;
+  corrections and previously skipped database suites were rerun separately against disposable
+  PostgreSQL 18. Uploader typecheck and Astro check passed (155 files, no diagnostics).
+  Actual Chromium exercised all four direction/mode combinations through save/reopen/preview,
+  failure/cancel/stale/consent/coverage handling, full-draft recovery and real save conflict;
+  desktop/phone views and keyboard controls were verified with a free local provider fixture.
+  Independent PR review additionally caught the AI-settings recovery fragment and
+  metadata-only Visual gallery refresh; both were reproduced and corrected, with
+  navigation and real-engine regressions plus actual browser before/after verification.
+  No production data, paid inference or publication. Detailed evidence and the single
+  acceptance checklist are in the #550 design/plan; final PR review and CI are recorded on
+  the PR. Not merged or deployed.
+
 - **Implemented locally:** Anthropic in Settings → AI models → Add provider → Kind
   (2026-11-07, owner-requested). Prefills the official `/v1` endpoint and uses existing
   per-provider credentials and browser-direct transport. Reviews, excerpts and photo
