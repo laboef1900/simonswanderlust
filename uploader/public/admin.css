@@ -2409,10 +2409,7 @@ body.editor-page {
   --editor-rail-width: calc(var(--control-h) + 1rem);
   --editor-commandbar-height: 0px;
   --editor-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-  /* One ruled frame holds the manuscript and Story details. The inspector is
-     the tinted column inside it: --muted is 5.2:1 and --line-control 3.2:1 on
-     --canvas (see :root), and white fields stand out against it. */
-  --editor-frame-radius: 0.75rem;
+  /* The shell is the document frame; only the inspector needs a divider. */
   --editor-inspector-surface: var(--canvas);
   overflow-x: clip;
 }
@@ -2706,21 +2703,16 @@ body.editor-page .alt-audit #altAuditFeedback:not([hidden]) {
   font-weight: 600;
 }
 
-/* The frame: manuscript and inspector share one rule. The inspector's tinted
-   column is painted by ::before so it spans the frame's full height while the
-   inspector itself stays a sticky, independently scrolling column; the
-   column narrows with the grid track when the panel collapses. No stacking
-   context here: the phone drawer and its scrim must still cover the command
-   bar. The pseudo-element paints before the (positioned) inspector. */
+/* A continuous document canvas beside an independently scrolling inspector.
+   No stacking context: the mobile drawer still covers the command bar. */
 body.editor-page .editor-workspace {
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--editor-inspector-width);
   align-items: start;
-  width: min(100% - 2 * var(--editor-gutter), 90rem);
-  margin: var(--editor-gutter) auto;
-  border: 1px solid var(--line);
-  border-radius: var(--editor-frame-radius);
+  width: 100%;
+  min-height: calc(var(--cms-workspace-h) - var(--editor-commandbar-height));
+  margin: 0;
   background: var(--surface);
   /* The column switch is not animated: transitioning the track would reflow
      the whole manuscript (and every gallery widget) on each frame. The
@@ -2734,8 +2726,7 @@ body.editor-page .editor-workspace::before {
   right: 0;
   bottom: 0;
   width: var(--editor-inspector-width);
-  border-left: 1px solid var(--line-strong);
-  border-radius: 0 calc(var(--editor-frame-radius) - 1px) calc(var(--editor-frame-radius) - 1px) 0;
+  border-left: 1px solid var(--line);
   background: var(--editor-inspector-surface);
 }
 
@@ -2747,17 +2738,24 @@ body.editor-page .editor-canvas {
 }
 
 body.editor-page .editor-writing-surface {
-  width: min(100%, 58rem);
+  width: min(100%, 56rem);
   min-width: 0;
   margin: 0 auto;
-  padding: clamp(1rem, 2.4vw, 2rem);
+  padding: 2rem clamp(1.25rem, 3vw, 3rem) 4rem;
 }
 
-/* Proximity, not nested cards, separates parts of the manuscript; the title's
-   own rule already divides it from the story. */
-body.editor-page .editor-writing-surface .editor-card + .editor-card { margin-top: 1.75rem; }
-body.editor-page .editor-writing-surface__title > label:first-child {
-  margin-top: 0;
+/* The document itself supplies the hierarchy; labels remain accessible. */
+body.editor-page .editor-writing-surface .editor-card + .editor-card { margin-top: 1rem; }
+body.editor-page .editor-writing-surface__title > label:first-child,
+body.editor-page .editor-writing-surface__body > .editor-card-title {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 body.editor-page .editor-card-header {
@@ -2788,7 +2786,7 @@ body.editor-page .editor-title-input {
   margin: 0;
   padding: 0.25rem 0;
   border: 0;
-  border-bottom: 2px solid var(--line-strong);
+  border-bottom: 2px solid transparent;
   border-radius: 0;
   background: transparent;
   color: var(--ink);
@@ -2803,11 +2801,11 @@ body.editor-page .editor-title-input::placeholder {
   font-weight: 700;
 }
 
-/* The title keeps its ruled-line look; focus thickens and colours the rule. */
+/* Focus reveals the title's editing boundary without boxing the document. */
 body.editor-page .editor-title-input:focus {
   border-bottom-color: var(--studio-accent);
   outline: none;
-  box-shadow: 0 1px 0 var(--studio-accent);
+  box-shadow: none;
 }
 
 /* Hero is a compact manuscript preview; optional replacement and crop
@@ -2965,11 +2963,7 @@ body.editor-page .hero-focus output { color: var(--muted); }
 /* The manuscript body gets more height than About's. */
 body.editor-page .EasyMDEContainer .CodeMirror { min-height: clamp(22rem, 52vh, 38rem); }
 
-/* ---- manuscript bar ----
-   The editor's own toolbar replaces EasyMDE's: it pins under the command bar
-   (sticky in the workspace scroller), so formatting, Photo and Gallery stay in
-   reach anywhere in a long story. It is the top edge of the manuscript frame;
-   the EasyMDE container below continues it. */
+/* The quiet formatting strip remains at hand throughout a long document. */
 body.editor-page .manuscript-tools {
   position: sticky;
   top: var(--editor-commandbar-height);
@@ -2982,10 +2976,10 @@ body.editor-page .manuscript-bar {
   flex-wrap: wrap;
   align-items: center;
   gap: 0.25rem;
-  padding: 0.25rem;
-  border: 1px solid var(--line-control);
-  border-bottom-color: var(--line);
-  border-radius: 0.5rem 0.5rem 0 0;
+  padding: 0.375rem 0;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
   background: var(--surface);
 }
 
@@ -3051,10 +3045,171 @@ body.editor-page .manuscript-bar__btn:is([aria-pressed='true'], [aria-expanded='
 
 body.editor-page .manuscript-bar__btn:focus-visible { outline-offset: -2px; }
 
-/* The frame continues below the bar: square top, the bar's rule as its edge. */
-body.editor-page .manuscript-tools ~ .EasyMDEContainer {
-  border-top: 0;
-  border-radius: 0 0 0.5rem 0.5rem;
+/* Source mode shares the same document surface, not a nested form frame. */
+body.editor-page .markdown-editor .EasyMDEContainer {
+  border: 0;
+  border-radius: 0;
+}
+
+body.editor-page .markdown-editor .EasyMDEContainer:focus-within {
+  outline: none;
+}
+
+body.editor-page .markdown-editor .EasyMDEContainer .CodeMirror {
+  padding: 1.25rem 0;
+  font-family: var(--mono);
+  font-size: 0.875rem;
+  line-height: 1.8;
+}
+
+/* Visual writing and source mode share the same measure and toolbar. */
+body.editor-page .rich-text-editor {
+  min-width: 0;
+  padding-block: 1.25rem 3rem;
+}
+
+body.editor-page .rich-text-editor .tiptap {
+  min-height: 28rem;
+  max-width: 72ch;
+  margin-inline: auto;
+  outline: none;
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 1rem;
+  line-height: 1.85;
+  overflow-wrap: anywhere;
+  caret-color: var(--studio-accent);
+}
+
+body.editor-page .rich-text-editor .tiptap:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 0.5rem;
+  border-radius: 0.125rem;
+}
+
+body.editor-page .rich-text-editor ::selection {
+  background: var(--studio-accent-soft);
+  color: var(--ink);
+}
+
+body.editor-page .rich-text-editor :is(p, ul, ol, pre, blockquote, table) {
+  margin-block: 0 1.25rem;
+}
+
+body.editor-page .rich-text-editor :is(h1, h2, h3, h4, h5, h6) {
+  margin-block: 2rem 0.75rem;
+  font-weight: 700;
+  line-height: 1.4;
+  letter-spacing: -0.02em;
+}
+
+body.editor-page .rich-text-editor h1 { font-size: 1.75rem; }
+body.editor-page .rich-text-editor h2 { font-size: 1.5rem; }
+body.editor-page .rich-text-editor h3 { font-size: 1.25rem; }
+body.editor-page .rich-text-editor :is(h4, h5, h6) { font-size: 1.0625rem; }
+body.editor-page .rich-text-editor .tiptap > :first-child { margin-top: 0; }
+body.editor-page .rich-text-editor :is(ul, ol) { padding-left: 1.5rem; }
+body.editor-page .rich-text-editor li { margin-block: 0.25rem; }
+body.editor-page .rich-text-editor li > p { margin-block: 0.25rem; }
+body.editor-page .rich-text-editor li > :is(ul, ol) { margin-block: 0.25rem 0.5rem; }
+
+body.editor-page .rich-text-editor blockquote {
+  margin-inline: 0;
+  padding-left: 1.25rem;
+  border-left: 1px solid var(--studio-accent);
+  color: var(--muted);
+}
+
+body.editor-page .rich-text-editor code {
+  padding: 0.125rem 0.25rem;
+  border-radius: 0.25rem;
+  background: var(--canvas);
+  font-family: var(--mono);
+  font-size: 0.875em;
+}
+
+body.editor-page .rich-text-editor pre {
+  max-width: 100%;
+  padding: 1rem;
+  overflow-x: auto;
+  border-radius: 0.375rem;
+  background: var(--canvas);
+  font-size: 0.875rem;
+  line-height: 1.7;
+  tab-size: 2;
+}
+
+body.editor-page .rich-text-editor pre code { padding: 0; background: none; }
+body.editor-page .rich-text-editor a { color: var(--studio-accent-hover); text-underline-offset: 0.2em; }
+body.editor-page .rich-text-editor img { display: block; max-width: 100%; height: auto; border-radius: 0.25rem; }
+body.editor-page .rich-text-editor hr { margin-block: 2rem; border: 0; border-top: 1px solid var(--line-strong); }
+
+body.editor-page .rich-text-editor table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+body.editor-page .rich-text-editor :is(th, td) {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--line-strong);
+  text-align: left;
+  vertical-align: top;
+}
+
+body.editor-page .rich-text-editor th { background: var(--canvas); }
+body.editor-page .rich-text-editor :is(th, td) p { margin: 0; }
+body.editor-page .rich-text-editor .selectedCell { background: var(--studio-accent-soft); }
+
+body.editor-page .rich-text-editor ul[data-type='taskList'] { padding: 0; list-style: none; }
+body.editor-page .rich-text-editor li[data-type='taskItem'] { display: flex; gap: 0.625rem; align-items: baseline; }
+body.editor-page .rich-text-editor li[data-type='taskItem'] > label { flex: none; margin: 0; }
+body.editor-page .rich-text-editor li[data-type='taskItem'] > div { flex: 1; min-width: 0; }
+
+body.editor-page .rich-text-source {
+  margin-block: 1.5rem;
+  padding: 0.875rem 1rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 0.375rem;
+  background: var(--canvas);
+}
+
+body.editor-page .rich-text-source pre {
+  margin: 0.5rem 0 0;
+  padding: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+body.editor-page .rich-text-gallery {
+  margin-block: 1.5rem;
+  padding-block: 1rem;
+  border-block: 1px solid var(--line);
+}
+
+body.editor-page .rich-text-gallery-items {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
+  gap: 0.625rem;
+  margin-block: 0.75rem;
+}
+
+body.editor-page .rich-text-gallery-items img {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+}
+
+body.editor-page .rich-text-gallery-edit {
+  min-height: var(--control-h);
+  background: var(--surface);
+  color: var(--ink);
+  border-color: var(--line-control);
+}
+
+body.editor-page .rich-text-editor .ProseMirror-selectednode {
+  outline: var(--focus-ring);
+  outline-offset: 0.25rem;
 }
 
 /* The photo tray drops out of the bar and lies over the text, like a menu,
@@ -3097,7 +3252,7 @@ body.editor-page .manuscript-photo__actions .muted {
 body.editor-page .manuscript-tools__status {
   margin: 0;
   padding: 0.375rem 0.75rem;
-  border-inline: 1px solid var(--line-control);
+  border-inline: 0;
   border-bottom: 1px solid var(--line);
   font-size: 0.8125rem;
   overflow-wrap: anywhere;
@@ -3121,7 +3276,7 @@ body.editor-page .editor-inspector {
   position: sticky;
   top: var(--editor-commandbar-height);
   min-width: 0;
-  max-height: calc(var(--cms-workspace-h) - var(--editor-commandbar-height) - 2 * var(--editor-gutter));
+  max-height: calc(var(--cms-workspace-h) - var(--editor-commandbar-height));
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -3143,8 +3298,8 @@ body.editor-page .editor-inspector__header {
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  padding: 0.75rem 0 0.75rem 0.25rem;
-  border-bottom: 1px solid var(--line-strong);
+  padding: 0.375rem 0 0.375rem 0.25rem;
+  border-bottom: 1px solid var(--line);
   background: var(--editor-inspector-surface);
 }
 
@@ -3599,9 +3754,7 @@ body.editor-page .locale-chip-link:where(:not(:disabled)):hover { background: no
   body.editor-page .editor-workspace {
     display: block;
     width: 100%;
-    margin: 0.25rem 0;
-    border-inline: 0;
-    border-radius: 0;
+    margin: 0;
   }
 
   body.editor-page .editor-canvas {
@@ -3615,7 +3768,7 @@ body.editor-page .locale-chip-link:where(:not(:disabled)):hover { background: no
 
   body.editor-page .editor-title-input {
     min-height: 2.75rem;
-    font-size: clamp(1.5rem, 6.5vw, 1.875rem);
+    font-size: 1.75rem;
   }
 
   body.editor-page .editor-writing-surface .editor-card + .editor-card { margin-top: 0.5rem; }

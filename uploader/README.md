@@ -10,6 +10,21 @@ stack: [`../ARCHITECTURE.md`](../ARCHITECTURE.md). Security model: [`../SECURITY
 > XMP, no IPTC. The untouched `-orig` retains everything but is never served. Widening that list
 > is a privacy change; see [`../SECURITY.md`](../SECURITY.md).
 
+## Story editor
+
+The post editor opens in Visual mode using self-hosted Tiptap; **Markdown** switches to
+the editable EasyMDE source. Markdown is the canonical draft, updated synchronously from
+visual edits and shared by save, recovery, review and publishing. Opening or switching
+modes preserves unchanged source exactly. Unsupported syntax and raw HTML stay inert
+and editable in Markdown; Visual paste is plain text. Galleries retain their directives,
+order, captions and URLs and use the existing Media picker and metadata authority.
+If Visual initialization fails, the Markdown editor remains available.
+
+The owner approved a build-only bundler exception for this editor on 2026-11-07:
+`npm run copy:vendor` uses esbuild to bundle its TypeScript into a self-hosted asset.
+Other admin code remains vanilla; there is no editor CDN. Dependency controls and the
+review point are in the [rich-text spec](../docs/superpowers/specs/2026-11-07-rich-text-post-editor.md).
+
 ## Contract
 
 Filenames: `{key}-{width}.{format}` at widths 640/1280/1920 (plus the source's
@@ -803,7 +818,7 @@ automatic slug still derives from the title. Body prose is never replaced. Save 
 or Publish remains an explicit, separate action; warnings and provider failures do not
 gate either action or bypass their existing validation.
 
-Quick-check links jump to the actual Markdown line in EasyMDE, or the hero alt field.
+Quick-check links jump to the relevant body editing target or the hero alt field.
 Escape/Close returns focus to Review Story; a jump instead focuses its editing target.
 The drawer traps keyboard focus, scrolls on narrow screens and respects reduced motion.
 

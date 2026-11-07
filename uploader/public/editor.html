@@ -126,6 +126,7 @@
                     <button type="button" class="manuscript-bar__btn" data-format="bullets" aria-label="Bulleted list"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/></svg></button>
                     <button type="button" class="manuscript-bar__btn" data-format="numbers" aria-label="Numbered list"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 6h11"/><path d="M10 12h11"/><path d="M10 18h11"/><path d="M4 6h1v4"/><path d="M4 10h2"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/></svg></button>
                     <button type="button" class="manuscript-bar__btn" data-format="link" aria-label="Link"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>
+                    <button type="button" class="manuscript-bar__btn" data-format="code"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 6-6 6 6 6"/><path d="m16 6 6 6-6 6"/><path d="m14 3-4 18"/></svg></button>
                   </div>
                     <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="deGalleryView"></button>
                   </div>
@@ -134,7 +135,8 @@
                     <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="deGallery"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>Gallery</button>
                   </div>
                   <div class="manuscript-bar__group manuscript-bar__group--view">
-                    <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" data-format="preview" aria-pressed="false"></button>
+                    <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="deVisualMode" data-editor-mode="visual" aria-controls="deRichBody" aria-pressed="false"></button>
+                    <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="deMarkdownMode" data-editor-mode="markdown" aria-controls="deMarkdownBody" aria-pressed="true"></button>
                   </div>
                 </div>
                 <p id="deBodyImgStatus" class="muted manuscript-tools__status" role="status"></p>
@@ -157,8 +159,12 @@
                   </div>
                 </div>
               </div>
-              <label for="deBody" hidden>Body (Markdown)</label>
-              <textarea id="deBody" aria-label="Body (Markdown, DE)"></textarea>
+              <p id="deRichError" class="notice-warn" role="alert" hidden></p>
+              <div id="deRichBody" class="rich-text-editor" hidden></div>
+              <div id="deMarkdownBody" class="markdown-editor">
+                <label for="deBody" hidden>Body (Markdown)</label>
+                <textarea id="deBody" aria-label="Body (Markdown, DE)"></textarea>
+              </div>
             </div>
           </section>
 
@@ -184,6 +190,7 @@
                     <button type="button" class="manuscript-bar__btn" data-format="bullets" aria-label="Bulleted list"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/></svg></button>
                     <button type="button" class="manuscript-bar__btn" data-format="numbers" aria-label="Numbered list"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 6h11"/><path d="M10 12h11"/><path d="M10 18h11"/><path d="M4 6h1v4"/><path d="M4 10h2"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/></svg></button>
                     <button type="button" class="manuscript-bar__btn" data-format="link" aria-label="Link"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>
+                    <button type="button" class="manuscript-bar__btn" data-format="code"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 6-6 6 6 6"/><path d="m16 6 6 6-6 6"/><path d="m14 3-4 18"/></svg></button>
                   </div>
                     <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="enGalleryView"></button>
                   </div>
@@ -192,7 +199,8 @@
                     <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="enGallery"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>Gallery</button>
                   </div>
                   <div class="manuscript-bar__group manuscript-bar__group--view">
-                    <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" data-format="preview" aria-pressed="false"></button>
+                    <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="enVisualMode" data-editor-mode="visual" aria-controls="enRichBody" aria-pressed="false"></button>
+                    <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="enMarkdownMode" data-editor-mode="markdown" aria-controls="enMarkdownBody" aria-pressed="true"></button>
                   </div>
                 </div>
                 <p id="enBodyImgStatus" class="muted manuscript-tools__status" role="status"></p>
@@ -215,8 +223,12 @@
                   </div>
                 </div>
               </div>
-              <label for="enBody" hidden>Body (Markdown)</label>
-              <textarea id="enBody" aria-label="Body (Markdown, EN)"></textarea>
+              <p id="enRichError" class="notice-warn" role="alert" hidden></p>
+              <div id="enRichBody" class="rich-text-editor" hidden></div>
+              <div id="enMarkdownBody" class="markdown-editor">
+                <label for="enBody" hidden>Body (Markdown)</label>
+                <textarea id="enBody" aria-label="Body (Markdown, EN)"></textarea>
+              </div>
             </div>
           </section>
 
@@ -637,6 +649,8 @@
     <script src="/admin/draft-guard.js"></script>
     <script src="/admin/write-recovery.js"></script>
     <script src="/admin/vendor/easymde.min.js"></script>
+    <script src="/admin/vendor/editor-rich-text.js"></script>
+    <script src="/admin/editor-rich-bridge.js"></script>
     <script src="/admin/llm.js"></script>
     <script src="/admin/alt-suggest.js"></script>
     <script src="/admin/media-api.js"></script>
@@ -756,10 +770,9 @@
       // @ai-warning EasyMDE's built-in autosave stays disabled on purpose: it is
       // body-only and per-textarea. DraftGuard below stashes the FULL form
       // (all frontmatter fields, both locales) instead.
-      // The toolbar is the editor's own .manuscript-bar (wired below), so it
-      // can pin under the command bar and carry Photo/Gallery. EasyMDE's own
-      // view shortcuts go too: the bar's rendered-view toggle tracks its state,
-      // and side-by-side/fullscreen have no place in the workspace.
+      // One manuscript bar controls the active editable view. EasyMDE remains
+      // the real Markdown editor; its read-only preview/fullscreen shortcuts
+      // are disabled so they cannot hide the synchronized writing surface.
       const MDE_OPTIONS = {
         spellChecker: false,
         autoDownloadFontAwesome: false,
@@ -908,7 +921,7 @@
       // the EasyMDE bodies live in CodeMirror and need their own change hooks.
       const mainEl = document.querySelector('main');
       mainEl.addEventListener('input', (event) => {
-        if (event.target.closest('#altAudit')) return;
+        if (event.target.closest('#altAudit') || event.target.closest('.rich-text-editor')) return;
         guard.markDirty();
         storyReview?.invalidate();
         excerptAssist?.invalidate();
@@ -1033,16 +1046,24 @@
       });
 
       // ---- manuscript bar: formatting, photo, gallery ----
-      // EasyMDE's static commands act on the instance's current selection,
-      // which CodeMirror keeps while focus sits on the bar. One Tab stop per
-      // bar (roving tabindex); arrow keys, Home and End move inside it.
+      // Both engines retain their selection while focus sits on the bar.
+      // One Tab stop per bar; arrow keys, Home and End move inside it.
       const FORMAT = {
         bold: 'toggleBold', italic: 'toggleItalic', heading: 'toggleHeadingSmaller',
         quote: 'toggleBlockquote', bullets: 'toggleUnorderedList', numbers: 'toggleOrderedList',
-        link: 'drawLink', preview: 'togglePreview',
+        link: 'drawLink', code: 'toggleCodeBlock',
       };
       const FORMAT_KEYS = { bold: 'B', italic: 'I', link: 'K' };
       const mdeFor = (locale) => (locale === 'en' ? enMDE : deMDE);
+      const galleryLibrary = GalleryLibrary.create({
+        client: MediaApi.makeClient({ onUnauthed: () => guard.redirectToLogin() }),
+        imageOrigin: EditorGalleryImageOrigin,
+      });
+      const bodyEditors = {};
+      function revealSourceLine(locale, line) {
+        bodyEditors[locale].setMode('markdown');
+        galleryEditors[locale].revealLine(line);
+      }
       function wireManuscriptBar(locale) {
         const bar = $(locale + 'ManuscriptBar');
         const formatToggle = $(locale + 'FormatToggle');
@@ -1103,34 +1124,31 @@
           rove(target);
           target.focus();
         });
-        const preview = bar.querySelector('[data-format="preview"]');
-        preview.textContent = editorCopy.renderMode;
-        preview.setAttribute('aria-label', editorCopy.renderMode);
-        // The rendered view is read-only: every control that edits the text waits.
-        // State is tracked here, not read back: EasyMDE marks its preview active
-        // only after a timeout, and this button is its only switch.
-        let previewOn = false;
-        function syncPreview() {
-          const on = previewOn;
-          preview.setAttribute('aria-pressed', String(on));
-          preview.textContent = on ? editorCopy.writeMode : editorCopy.renderMode;
-          preview.setAttribute('aria-label', preview.textContent);
-          preview.title = editorCopy.renderHelp;
-          all().forEach((button) => { if (button !== preview) button.disabled = on; });
-          if (on) { closeFormat(); closePhotoPanel(locale); }
-          rove(preview);
-        }
+        bodyEditors[locale] = EditorRichBridge.create({
+          mde: mdeFor(locale), element: $(locale + 'RichBody'), source: $(locale + 'MarkdownBody'),
+          error: $(locale + 'RichError'), visualButton: $(locale + 'VisualMode'), markdownButton: $(locale + 'MarkdownMode'),
+          galleryToggle: $(locale + 'GalleryView'), formatButtons: bar.querySelectorAll('[data-format]'),
+          locale, imageOrigin: EditorGalleryImageOrigin, copy: editorCopy, galleryCopy: EditorGalleryCopy.en,
+          galleryLibrary, images: () => locale === 'de' ? deImages : enImages, thumbnailUrl: PostsFilter.thumbUrl,
+          onEditGallery: (sourceStart) => galleryFor(locale, sourceStart),
+          onModeChange: () => {
+            closeFormat();
+            closePhotoPanel(locale);
+            const list = usable();
+            rove(list.includes(document.activeElement) ? document.activeElement : list.find((button) => button.tabIndex === 0) || list[0]);
+          },
+        });
         bar.querySelectorAll('[data-format]').forEach((button) => {
           const name = button.dataset.format;
+          if (name === 'code') button.setAttribute('aria-label', editorCopy.codeBlock);
           const label = button.getAttribute('aria-label');
           const key = FORMAT_KEYS[name];
-          button.title = name === 'preview' ? editorCopy.renderHelp
-            : key ? label + ' (' + shortcutLabel(key) + ')' : label;
+          button.title = key ? label + ' (' + shortcutLabel(key) + ')' : label;
           if (key) button.setAttribute('aria-keyshortcuts', 'Meta+' + key + ' Control+' + key);
           button.addEventListener('click', () => {
-            EasyMDE[FORMAT[name]](mdeFor(locale));
-            if (name === 'preview') { previewOn = !previewOn; syncPreview(); }
-            else closeFormat();
+            if (bodyEditors[locale].isVisual()) bodyEditors[locale].command(name);
+            else EasyMDE[FORMAT[name]](mdeFor(locale));
+            closeFormat();
           });
         });
         const toggle = $(locale + 'PhotoToggle');
@@ -1211,7 +1229,7 @@
         root: $('galleryMetadataWarnings'),
         editors: { de: deMDE.codemirror, en: enMDE.codemirror },
         activate: (locale) => { tabsApi.select(locale); activateLocale(locale); },
-        reveal: (locale, line) => galleryEditors[locale].revealLine(line),
+        reveal: revealSourceLine,
         onUnauthed: () => guard.redirectToLogin(),
       });
 
@@ -1270,7 +1288,7 @@
             activateLocale(locale);
             inspectorApi.close();
             const cm = (locale === 'en' ? enMDE : deMDE).codemirror;
-            galleryEditors[locale].revealLine(finding.line - 1);
+            revealSourceLine(locale, finding.line - 1);
             cm.setCursor({ line: finding.line - 1, ch: (finding.column || 1) - 1 });
             cm.focus();
           }
@@ -1732,7 +1750,7 @@
         const status = $(locale + 'BodyImgStatus');
         if (current.lines.some((line) => line.valid === false)) {
           status.textContent = EditorGalleryCopy.en.metadataBlocked + ' ' + EditorGalleryCopy.en.metadataSyntax;
-          galleryEditors[locale].revealLine(cm.posFromIndex(existing.start).line);
+          revealSourceLine(locale, cm.posFromIndex(existing.start).line);
           const raw = document.createElement('code');
           raw.style.display = 'block';
           raw.style.whiteSpace = 'pre-wrap';
@@ -1852,8 +1870,9 @@
             cm.replaceRange(out.text, cm.posFromIndex(out.start), cm.posFromIndex(out.end));
             // Past the blank line after the block — never on the closing ```,
             // where the next upload or keystroke would reopen the fence (#333).
-            cm.setCursor(cm.posFromIndex(out.cursor));
+            bodyEditors[locale].setSelection({ from: out.cursor, to: out.cursor });
             guard.markDirty();
+            bodyEditors[locale].focus();
             // Count the lines actually written, not the photos picked: serialize
             // drops a newly picked photo whose dimensions are unusable.
             const written = fence ? GalleryFence.parse(fence.slice(fence.indexOf('\n') + 1, fence.lastIndexOf('\n'))).lines.length : 0;
@@ -1869,10 +1888,6 @@
       $('deGallery').addEventListener('click', () => galleryFor('de'));
       $('enGallery').addEventListener('click', () => galleryFor('en'));
 
-      const galleryLibrary = GalleryLibrary.create({
-        client: MediaApi.makeClient({ onUnauthed: () => guard.redirectToLogin() }),
-        imageOrigin: EditorGalleryImageOrigin,
-      });
       for (const locale of ['de', 'en']) {
         galleryEditors[locale] = EditorGalleries.attach({
           cm: (locale === 'de' ? deMDE : enMDE).codemirror,
@@ -1954,7 +1969,7 @@
         if (spot.relocated) {
           const from = cm.posFromIndex(spot.start);
           cm.replaceRange(spot.text, from, from);
-          cm.setCursor(cm.posFromIndex(spot.cursor));
+          bodyEditors[locale].setSelection({ from: spot.cursor, to: spot.cursor });
         } else {
           cm.replaceSelection(md);
         }
@@ -1965,7 +1980,7 @@
       // The panel has done its job: back to writing, right after the photo.
       function finishPhotoInsert(locale) {
         closePhotoPanel(locale);
-        mdeFor(locale).codemirror.focus();
+        bodyEditors[locale].focus();
       }
 
       async function uploadBodyImg(locale) {
@@ -2185,7 +2200,8 @@
           if (inInspector) inspectorApi.reveal(el);
           else {
             inspectorApi.close();
-            if (el && el.focus) el.focus();
+            if (field === 'body') bodyEditors[kind].focus();
+            else if (el && el.focus) el.focus();
           }
           return;
         }
@@ -2300,6 +2316,7 @@
         if (tabsApi && tabsApi.select) tabsApi.select(locale);
         activateLocale(locale);
         inspectorApi.close();
+        bodyEditors[locale].setMode('markdown');
         if (kind === 'gallery' && await galleryEditors[locale].focusPhoto(src)) return;
         if (kind === 'body') {
           const cm = (locale === 'de' ? deMDE : enMDE).codemirror;
@@ -2634,7 +2651,6 @@
         $(loc + 'Excerpt').value = data.excerpt || '';
         fitTextarea($(loc + 'Excerpt'));
         populateKeyFacts(loc, data.keyFacts);
-        const mde = loc === 'de' ? deMDE : enMDE;
         // Written unconditionally: buildPayload() omits heroImage when unset, so
         // a restore payload without it must CLEAR the hero fields rather than
         // leave a previously loaded value on screen (no field resurrection).
@@ -2662,7 +2678,7 @@
           Object.assign(map, data.images);
         }
         populatingBody = true;
-        try { mde.value(data.bodyMarkdown || ''); }
+        try { bodyEditors[loc].replaceDocument(data.bodyMarkdown || ''); }
         finally { populatingBody = false; }
         galleryEditors[loc].refresh();
         void galleryMetadataWarnings.reopen(loc);

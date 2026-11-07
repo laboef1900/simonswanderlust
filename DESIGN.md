@@ -1251,21 +1251,17 @@ and the `<dialog>`s appended to `<body>` share one set:
   wrapping line ("Saved to server · Live ↻"), the story-details opener rides at the right
   end of the locale row so the actions fit one line, and error/status text wraps instead
   of disappearing behind ellipses.
-- The manuscript has its own toolbar (EasyMDE's is off): a roving `role="toolbar"` with
-  one Tab stop and arrow keys inside, drawn stroke icons for bold, italic, heading, quote,
-  lists and link (shortcut in the tooltip), the gallery-Markdown toggle, then labelled **Photo**
-  and **Gallery**, and the **Rendered / Write** switch. Below 52rem formatting and raw gallery
-  Markdown fold into a **Format** tray; Photo, Gallery and Rendered remain visible without
-  horizontal scrolling. Escape returns to Format; arrow navigation skips folded tools, and
-  resizing retains a visible toolbar focus target. The tray overlays rather than shifts prose.
-  The toolbar pins under the command bar in the workspace scroller, so every tool is in reach anywhere
-  in a long story, and it is the top edge of the manuscript frame. **Photo** opens a tray
-  under the bar — file (dashed drop edge), alt text, **Upload and insert**, **Suggest alt
-  text**, **Choose from library** — that inserts at the cursor, never into a gallery
-  fence, and then closes and returns the caret to the story; Escape closes it to its
-  toggle. A library pick carries Media's alt for the open language unless one was typed.
-  Upload/gallery outcomes read in one status line under the bar. Rendered is a read-only
-  body view without saving; editing controls wait until the author selects Write.
+- The unboxed title and editable prose share a quiet white document canvas. A compact,
+  sticky toolbar pins beneath the command bar: a roving `role="toolbar"` with one Tab stop
+  and arrow keys, formatting controls, **Photo**, **Gallery**, and an editable
+  **Visual / Markdown** mode switch. Visual is the default; Markdown exposes the actual
+  EasyMDE source editor, not a read-only rendered view. Below 52rem less-used formatting
+  folds into an overlay **Format** tray, while the primary writing controls remain reachable.
+  Escape returns focus to Format; resizing retains a visible toolbar focus target.
+  **Photo** opens a tray for upload, alt text, suggestions and the library picker, inserting
+  at the caret and returning focus to the story. Upload/gallery outcomes use one status line.
+  This extends the existing Editorial desk palette and type rather than introducing a new
+  visual system; the existing tokens and design sidecar remain unchanged.
 - All editor chrome is English like the rest of the admin, whichever locale tab is open:
   gallery widgets, title-image controls, gallery metadata advisories and their retry
   copy come from the English dictionary; only the author's own text (alt, captions) is
@@ -1295,18 +1291,11 @@ and the `<dialog>`s appended to `<body>` share one set:
   to Media once (new tab, announced), and the explanatory help line appears once per
   story, on the first gallery. Only a photo that is not in Media keeps an editable alt
   field there; a Review story jump to a non-editable photo lands on its shown text.
-- With gallery previews enabled, typing or pasting at either collapsed fence edge
-  inserts prose on separate lines outside the gallery, including at the start or
-  end of the manuscript. Arrow-key navigation and clicking the visually empty
-  boundary must not prefix the opener or suffix the closer. Undo/redo, local alt
-  edits, picker replacements, and the raw-Markdown toggle retain their existing
-  behavior; the saved Markdown remains the source of truth. Undo/redo restores
-  the caret with the inserted text, not at the fence or trailing padding, so
-  continued typing stays in the same paragraph. Consecutive typing remains one
-  undo group.
-- Story details sits beside the manuscript on desktop, inside the same ruled frame: one
-  `--line` border and 12px radius hold both columns, and the inspector is the frame's
-  tinted column (`--canvas`, divided by `--line-strong`) so white fields read against it.
+- Gallery blocks remain part of the canonical Markdown draft. Visual gallery editing uses
+  the existing Media picker and preserves directives, ordering, captions and source URLs;
+  Markdown mode exposes the underlying fence.
+- Story details sits beside the manuscript on desktop as a tinted column (`--canvas`,
+  divided by `--line-strong`) so white fields read against it.
   It pins flush under the command bar and scrolls on its own. Its header carries one
   icon-only panel toggle (`panel-right-close` / `panel-right-open`, named Collapse /
   Expand story details); collapsing turns the column into a slim tinted rail that keeps
@@ -1316,8 +1305,8 @@ and the `<dialog>`s appended to `<body>` share one set:
   collapsed content is inert and hidden from assistive technology; the slide honours
   reduced motion. At 74rem and below it is a modal drawer opened by the visibly labelled
   **Details** button; the same header toggle closes it, and it traps Tab, closes on
-  Escape or the scrim, and restores focus to its opener. The frame then holds the
-  manuscript alone.
+  Escape or the scrim, and restores focus to its opener. The manuscript retains its
+  unboxed document surface.
 - Within each locale, Story details leads with the hero thumbnail and excerpt, followed by
   country and permalink. Key facts fold behind a live row count without removing their values
   from the draft. The optional title image and expedition/route sections remain available.

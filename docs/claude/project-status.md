@@ -4,6 +4,26 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Implemented locally:** rich-text post editor (2026-11-07), following the owner's
+  reference and explicit Visual-with-Markdown choice. Tiptap Visual is the default;
+  EasyMDE remains an editable source mode over the same synchronous Markdown draft.
+  Untouched source is preserved, unsupported syntax and raw HTML stay inert, and galleries
+  retain their directives through the existing Media picker. The owner approved the
+  editor-only self-hosted esbuild exception; the rest of the admin stays vanilla. See the
+  [spec](../superpowers/specs/2026-11-07-rich-text-post-editor.md).
+  Browser smoke used a real post with writes intercepted (503): mode roundtrip, DE/EN,
+  gallery insertion/edit/cancel, mobile focus and overflow, formatting, typing, undo/redo,
+  safe raw HTML/source preservation and latest save payload were exercised without stored changes.
+  Screenshots: `.impeccable/review/editor-rich-desktop.png` and
+  `.impeccable/review/editor-rich-mobile.png`. Site tests: 872 passed, 7 skipped;
+  Astro check: 153 files clean. Uploader typecheck and full suite pass: 4,293 tests;
+  647 skipped without TEST_DATABASE_URL. Production dependency audit: zero vulnerabilities.
+  Independent review found three Markdown edge cases (link cursor offsets, literal image-alt
+  entities and unterminated fences); regressions reproduced them before the fixes and pass
+  afterward. Browser checks confirm source repair restores Visual editing. The substitute
+  finish reviewer scored all three fixes resolved; its verdict was `ship` for those fixes.
+  Human review of the authoring boundary remains required before release. Not deployed.
+
 - **Implemented locally:** compact article save feedback (2026-11-06). Successful draft
   saves, including receipt-confirmed recovery, use the existing command-bar status rather
   than duplicating it in a full-width recovery panel with **Check again**. Uncertain saves,
