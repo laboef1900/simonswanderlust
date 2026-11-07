@@ -19,6 +19,7 @@ import { ui } from '../../site/src/i18n/ui.js';
 import { renderGpxCopy } from '../src/gpx-copy.js';
 import { renderStopRouteCopy } from '../src/stop-route-copy.js';
 import { publication, loadPublicationState } from './publication-client-fixture.js';
+import { Window } from '../../site/node_modules/happy-dom/lib/index.js';
 
 // posts.html, settings.html and comments.html run their actions as plain
 // top-level browser code. Load each inline script in a vm context backed by a
@@ -1916,6 +1917,20 @@ describe('settings.html tabs', () => {
     expect(t.title()).toBe(' · Comments');
     expect(t.el('tabbtn-comments').tabIndex).toBe(0);
     expect(t.el('tabbtn-ai-models').tabIndex).toBe(-1);
+  });
+
+  it('opens the AI assignment panel when following translation configuration recovery', async () => {
+    const window = new Window();
+    try {
+      const editor = new window.DOMParser().parseFromString(readFileSync('public/editor.html', 'utf8'), 'text/html');
+      const link = editor.querySelector('#translationSettings')!;
+      const destination = new URL(link.getAttribute('href')!, 'http://localhost/admin/editor.html');
+      expect(destination.pathname).toBe('/admin/settings.html');
+      const t = tabsPage(destination.hash);
+      expect(t.visible()).toEqual(['panel-ai-models']);
+      expect(t.el('tabbtn-ai-models').attrs['aria-selected']).toBe('true');
+      expect(t.el('tabbtn-ai-models').tabIndex).toBe(0);
+    } finally { await window.happyDOM.close(); }
   });
 
   it('opens the identity deep link and includes it in keyboard navigation', async () => {

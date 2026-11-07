@@ -570,7 +570,7 @@
         <p id="translationLibrary" class="muted"></p>
         <p id="translationWarnings" class="notice-warn"></p>
         <p id="translationStatus" role="status" aria-live="polite" aria-atomic="true"></p>
-        <a id="translationSettings" href="/admin/settings.html#ai" target="_blank" rel="noopener"></a>
+        <a id="translationSettings" href="/admin/settings.html#ai-models" target="_blank" rel="noopener"></a>
         <section id="translationResult" hidden>
           <label id="translationTitleLabel" for="translationTitle"></label>
           <textarea id="translationTitle" rows="2" readonly></textarea>
@@ -2483,7 +2483,9 @@
         try {
           bodyEditors[locale].sourceTransaction(() => {
             assignFields(patch);
-            cm.replaceRange(patch.bodyMarkdown, { line: 0, ch: 0 }, cm.posFromIndex(cm.getValue().length), 'article-translation');
+            if (cm.getValue() !== patch.bodyMarkdown) {
+              cm.replaceRange(patch.bodyMarkdown, { line: 0, ch: 0 }, cm.posFromIndex(cm.getValue().length), 'article-translation');
+            }
           }, () => assignFields(before));
         } finally { translationApplying = false; }
         return before;

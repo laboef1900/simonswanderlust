@@ -331,6 +331,7 @@ async function loadEditor(options: EditorOptions = {}) {
     private selection = { from: 0, to: 0 };
     readonly commands: string[] = [];
     readonly setCalls: string[] = [];
+    readonly metadataCalls: Record<string, unknown>[] = [];
     private readonly undoHistory: string[] = [];
     private readonly redoHistory: string[] = [];
     readonly input = dom.document.createElement('div');
@@ -348,6 +349,7 @@ async function loadEditor(options: EditorOptions = {}) {
       this.undoHistory.push(this.text);
       this.text = text;
     }
+    refreshImageMetadata() { this.metadataCalls.push(structuredClone(this.settings.images())); }
     edit(text: string) {
       this.undoHistory.push(this.text);
       this.redoHistory.length = 0;
@@ -5521,5 +5523,34 @@ describe('explicit article translation of the current unsaved pair', () => {
       if (extra) expect(h.el('translationResult').hidden).toBe(true);
       else expect(h.el('translationTitle').value).toBe(patch.title);
     }
+  });
+
+  it('applies and undoes metadata-only translation without replacing an identical body or its history', async () => {
+    const h = await loadEditor({ fetch: network(), translate: async (request) => translated(request) });
+    const pair = fullPair();
+    const body = '```gallery\n#layout: slider\nhttps://img/local\n```';
+    pair.de.bodyMarkdown = body;
+    pair.en.bodyMarkdown = body;
+    pair.de.images = { 'https://img/local': { width: 900, height: 600, alt: 'Ein Berg', caption: 'Aussicht' } };
+    pair.en.images = { 'https://img/local': { width: 900, height: 600, alt: 'Old alt', caption: 'Old caption' } };
+    h.api.populateForm(pair);
+    const before = h.api.buildPayload();
+    const cm = h.editors[1]!.codemirror;
+    const history = cm.getHistory();
+    const rich = h.richEditors[1]!;
+    const sets = rich.setCalls.length;
+    await start(h); consent(h); h.el('translationApply').click();
+    expect(h.api.buildPayload().en.bodyMarkdown).toBe(body);
+    expect(h.api.buildPayload().en.images['https://img/local']?.caption).toBe('EN Aussicht');
+    expect(rich.metadataCalls).toHaveLength(1);
+    expect(rich.metadataCalls[0]).toEqual(h.api.buildPayload().en.images);
+    expect(rich.setCalls).toHaveLength(sets);
+    expect(cm.getHistory()).toEqual(history);
+    h.el('translationUndo').click();
+    expect(h.api.buildPayload()).toEqual(before);
+    expect(rich.metadataCalls).toHaveLength(2);
+    expect(rich.metadataCalls[1]).toEqual(before.en.images);
+    expect(rich.setCalls).toHaveLength(sets);
+    expect(cm.getHistory()).toEqual(history);
   });
 });

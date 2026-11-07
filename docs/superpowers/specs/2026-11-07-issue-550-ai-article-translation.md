@@ -138,3 +138,28 @@ Before implementation, local prerequisites were prepared: Node v26.13.0, clean d
   defects. Actual runtime images loaded after the isolated image-host correction.
 - No paid provider requests, automatic retries, publishing, releases or deployments occurred.
   Temporary provider/photo/database helpers are outside the committed deliverable.
+
+## Independent PR review corrections
+
+Independent workflow and security reviewers of PR #551, both
+`openai-codex/gpt-6-astra` (high), identified two actionable defects:
+
+1. The configuration recovery link used `#ai`, which Settings treated as unknown and opened
+   Site identity. It now uses `#ai-models`; a DOM navigation regression follows the real
+   editor destination through Settings' tab dispatcher. Actual Chromium reproduced the
+   wrong destination before the fix and reached the AI assignment panel afterward.
+2. Identical gallery-only source/target Markdown could change local fallback metadata without
+   refreshing the existing Visual node views. Successful atomic transactions now refresh
+   metadata-dependent views independently of Markdown equality, with no document/history
+   transaction. Views reread current maps while retaining Media and occurrence-override
+   precedence; failed transactions never refresh them. Identical-body Apply/Undo avoids
+   unnecessary CodeMirror replacements. Real-engine coverage includes rollback, undo/redo,
+   ownership and inline rendition metadata.
+
+The second defect was reproduced in the actual app with an unresolved-photo gallery:
+review contained `First view`, but the old Visual caption remained after Apply. After the
+fix and rebuilt self-hosted bundle, Apply immediately displayed `First view`, mode switching
+retained it, Undo restored `Old caption`, and save/reopen/preview retained the translated
+caption. Markdown was byte-identical and CodeMirror history depth stayed unchanged.
+These corrections preserve the approved architecture; final focused re-review and CI
+outcomes are recorded on the PR.

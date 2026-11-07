@@ -186,7 +186,13 @@ window.EditorRichBridge = (function () {
         throw failure;
       } finally {
         sourceTransactionDepth--;
-        if (committed && !sourceTransactionDepth) sourceChanged();
+        if (committed && !sourceTransactionDepth) {
+          sourceChanged();
+          // Identical Markdown can still have a different local image map.
+          // Refresh presentation only after the complete field commit succeeds.
+          try { rich?.refreshImageMetadata(); }
+          catch (_) { unavailable(); }
+        }
       }
     }
 

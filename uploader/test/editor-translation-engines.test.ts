@@ -2,13 +2,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { Window } from '../../site/node_modules/happy-dom/lib/index.js';
 import type { Editor } from '@tiptap/core';
-import type { RichEditor, RichEditorOptions } from '../src/editor-rich-text.js';
+import type { EditorImageMetadata, RichEditor, RichEditorOptions } from '../src/editor-rich-text.js';
 import { closeHistory, undoDepth, redoDepth } from '@tiptap/pm/history';
 import { ui } from '../../site/src/i18n/ui.js';
 
 interface Position { line: number; ch: number }
 interface CodeMirror {
   getValue(): string;
+  historySize(): { undo: number; redo: number };
   listSelections(): { anchor: Position; head: Position }[];
   setSelection(anchor: Position, head: Position): void;
   posFromIndex(index: number): Position;
@@ -30,7 +31,7 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-async function mount() {
+async function mount(options: Pick<RichEditorOptions, 'images' | 'galleryLibrary' | 'thumbnailUrl'> & { markdown?: string } = {}) {
   const window = new Window({ url: 'https://images.example/admin/editor.html' });
   windows.push(window);
   for (const name of ['window', 'document', 'navigator', 'Node', 'Element', 'HTMLElement', 'MutationObserver', 'DOMParser', 'NodeFilter', 'ClipboardEvent', 'KeyboardEvent'] as const) {
@@ -43,7 +44,7 @@ async function mount() {
   // loading boundary as editor-rich-text.test.ts (ProseMirror detects the DOM).
   const { createRichEditor } = await import('../src/editor-rich-text.js');
   const richEditors: RichEditor[] = [];
-  Object.assign(window, { structuredClone, RichTextEditor: { create(options: RichEditorOptions) {
+  Object.assign(window, { structuredClone, richFixture: options, RichTextEditor: { create(options: RichEditorOptions) {
     const rich = createRichEditor(options);
     richEditors.push(rich);
     return rich;
@@ -58,13 +59,14 @@ async function mount() {
       spellChecker: false, toolbar: false, status: false });
     window.cm = mde.codemirror;
     cm.setOption('historyEventDelay', 0);
-    mde.value('First'); cm.clearHistory(); cm;
+    mde.value(richFixture.markdown ?? 'First'); cm.clearHistory(); cm;
   `) as CodeMirror;
   const bridge = window.eval(`EditorRichBridge.create({ mde, element: document.getElementById('rich'),
     source: document.getElementById('source'), error: document.getElementById('error'),
     visualButton: document.getElementById('visual'), markdownButton: document.getElementById('markdown'),
     galleryToggle: document.getElementById('gallery'), formatButtons: [], locale: 'en',
-    imageOrigin: location.origin, images: () => ({}), copy: ${JSON.stringify(copy)},
+    imageOrigin: location.origin, images: richFixture.images || (() => ({})),
+    galleryLibrary: richFixture.galleryLibrary, thumbnailUrl: richFixture.thumbnailUrl, copy: ${JSON.stringify(copy)},
     galleryCopy: ${JSON.stringify(galleryCopy)} })`) as Bridge;
   bridges.push(bridge);
   // Tiptap attaches its actual Editor to this known rendered contenteditable.
@@ -159,5 +161,113 @@ describe('atomic translation across real CodeMirror and ProseMirror engines', ()
     h.rich.undo();
     expect(h.cm.getValue()).toBe('First');
     expect(title).toBe('Translated');
+  });
+
+  it('refreshes same-body local gallery fallbacks on Apply and Undo, preserving Media ownership and both histories', async () => {
+    const local = 'https://images.example/local';
+    const library = 'https://images.example/library';
+    const body = ['```gallery', '#layout: slider', local,
+      local + ' | caption-override="Only here"', local + ' | caption-override=""', library, '```',
+      '', '```gallery', '#captions: hidden', local, '```'].join('\n');
+    const images: Record<string, EditorImageMetadata> = {
+      [local]: { width: 900, height: 600, alt: 'Old alt', caption: 'Old caption' },
+      [library]: { width: 900, height: 600, alt: 'Old library fallback', caption: 'Old library caption' },
+    };
+    const entries = new Map<string, { missing?: boolean; row?: { alt: { en: string }; caption: { en: string } } }>([
+      [local, { missing: true }],
+      [library, { row: { alt: { en: '' }, caption: { en: '' } } }],
+    ]);
+    const lookup = vi.fn(async () => entries);
+    const h = await mount({
+      images: () => images, galleryLibrary: { peek: (src) => entries.get(src), lookup },
+      thumbnailUrl: ({ heroSrc, heroWidth, heroFormat }) => heroWidth ? `${heroSrc}-${Math.min(640, heroWidth)}.${heroFormat ?? 'webp'}` : null,
+    });
+    h.cm.replaceRange(body, { line: 0, ch: 0 }, h.cm.posFromIndex(h.cm.getValue().length), 'seed-gallery');
+    h.editor.view.dispatch(closeHistory(h.editor.state.tr));
+    h.cm.replaceRange(body + '\n\nTail', { line: 0, ch: 0 }, h.cm.posFromIndex(body.length), 'seed-tail');
+    h.rich.undo();
+    expect(h.cm.getValue()).toBe(body);
+    const visualHistory = [undoDepth(h.editor.state), redoDepth(h.editor.state)];
+    expect(visualHistory.every((depth) => depth > 0)).toBe(true);
+    const sourceHistory = h.cm.historySize();
+    const selection = h.rich.getSelection();
+    const before = structuredClone(images);
+    const translated = {
+      [local]: { width: 320, height: 200, alt: 'A mountain', caption: 'First view', format: 'jpeg' as const },
+      [library]: { width: 900, height: 600, alt: 'Translated library fallback', caption: 'Translated library caption' },
+    };
+    const setMarkdown = vi.spyOn(h.rich, 'setMarkdown');
+    const refresh = vi.spyOn(h.rich, 'refreshImageMetadata');
+    expect([...h.window.document.querySelectorAll('.rich-text-gallery figcaption')].map((caption) => caption.textContent))
+      .toEqual(['Old caption', 'Only here', '', '', 'Old caption']);
+    h.bridge.sourceTransaction(() => { Object.assign(images, translated); }, () => { Object.assign(images, before); });
+    await Promise.resolve();
+    const photos = [...h.window.document.querySelectorAll('.rich-text-gallery img')];
+    expect(photos.map((photo) => photo.getAttribute('alt'))).toEqual(['A mountain', 'A mountain', 'A mountain', '', 'A mountain']);
+    expect(photos[0]?.getAttribute('src')).toBe(local + '-320.jpeg');
+    expect([...h.window.document.querySelectorAll('.rich-text-gallery figcaption')].map((caption) => caption.textContent))
+      .toEqual(['First view', 'Only here', '', '', 'First view']);
+    expect([...h.window.document.querySelectorAll('.rich-text-gallery figcaption')].at(-1)?.hasAttribute('hidden')).toBe(true);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(setMarkdown).not.toHaveBeenCalled();
+    expect(h.cm.getValue()).toBe(body);
+    expect(h.rich.getMarkdown()).toBe(body);
+    expect(h.rich.getSelection()).toEqual(selection);
+    expect(h.cm.historySize()).toEqual(sourceHistory);
+    expect([undoDepth(h.editor.state), redoDepth(h.editor.state)]).toEqual(visualHistory);
+    expect(lookup).not.toHaveBeenCalled();
+
+    // Dedicated Undo restores the complete field map through the same successful
+    // transaction, even though the Markdown remains byte-for-byte identical.
+    h.bridge.sourceTransaction(() => { Object.assign(images, before); }, () => { Object.assign(images, translated); });
+    await Promise.resolve();
+    expect([...h.window.document.querySelectorAll('.rich-text-gallery img')].map((photo) => photo.getAttribute('alt')))
+      .toEqual(['Old alt', 'Old alt', 'Old alt', '', 'Old alt']);
+    expect([...h.window.document.querySelectorAll('.rich-text-gallery figcaption')].map((caption) => caption.textContent))
+      .toEqual(['Old caption', 'Only here', '', '', 'Old caption']);
+    expect(refresh).toHaveBeenCalledTimes(2);
+    expect(h.cm.historySize()).toEqual(sourceHistory);
+    expect([undoDepth(h.editor.state), redoDepth(h.editor.state)]).toEqual(visualHistory);
+
+    expect(() => h.bridge.sourceTransaction(() => {
+      Object.assign(images, translated);
+      throw new Error('metadata field commit failed');
+    }, () => { Object.assign(images, before); })).toThrow('metadata field commit failed');
+    expect(refresh).toHaveBeenCalledTimes(2);
+    expect(h.window.document.querySelector('.rich-text-gallery figcaption')?.textContent).toBe('Old caption');
+    expect(h.cm.historySize()).toEqual(sourceHistory);
+    expect([undoDepth(h.editor.state), redoDepth(h.editor.state)]).toEqual(visualHistory);
+    expect(h.rich.redo()).toBe(true);
+    expect(h.cm.getValue()).toBe(body + '\n\nTail');
+    expect(h.rich.undo()).toBe(true);
+    expect(h.cm.getValue()).toBe(body);
+    expect(h.rich.undo()).toBe(true);
+    expect(h.cm.getValue()).toBe('First');
+  });
+
+  it('refreshes inline rendition metadata without changing inline alt authority, source or history', async () => {
+    const src = 'https://images.example/inline';
+    const body = `![Article-local alt](${src})`;
+    const images: Record<string, EditorImageMetadata> = { [src]: { width: 900, height: 600, alt: 'Stored fallback' } };
+    const h = await mount({
+      markdown: body, images: () => images,
+      thumbnailUrl: ({ heroSrc, heroWidth, heroFormat }) => heroWidth ? `${heroSrc}-${Math.min(640, heroWidth)}.${heroFormat ?? 'webp'}` : null,
+    });
+    const sourceHistory = h.cm.historySize();
+    const visualHistory = [undoDepth(h.editor.state), redoDepth(h.editor.state)];
+    const before = structuredClone(images);
+    h.bridge.sourceTransaction(() => {
+      images[src] = { width: 320, height: 200, format: 'jpeg', alt: 'Translated fallback' };
+    }, () => { Object.assign(images, before); });
+    await Promise.resolve();
+    const image = h.window.document.querySelector('.rich-text-image img');
+    expect(image?.getAttribute('src')).toBe(src + '-320.jpeg');
+    expect(image?.getAttribute('alt')).toBe('Article-local alt');
+    expect(h.cm.getValue()).toBe(body);
+    expect(h.rich.getMarkdown()).toBe(body);
+    expect(h.cm.historySize()).toEqual(sourceHistory);
+    expect([undoDepth(h.editor.state), redoDepth(h.editor.state)]).toEqual(visualHistory);
+    h.bridge.sourceTransaction(() => { Object.assign(images, before); }, () => {});
+    expect(h.window.document.querySelector('.rich-text-image img')?.getAttribute('src')).toBe(src + '-640.webp');
   });
 });

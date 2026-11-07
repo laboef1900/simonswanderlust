@@ -59,6 +59,7 @@ export interface MarkdownSelection { from: number; to: number }
 export interface RichEditor {
   getMarkdown(): string;
   setMarkdown(markdown: string): void;
+  refreshImageMetadata(): void;
   focus(): void;
   destroy(): void;
   command(name: string): boolean;
@@ -116,7 +117,7 @@ function imageElement(src: string | null, alt: string, options: RichEditorOption
   return wrapper;
 }
 
-function galleryView(gallery: Gallery, options: RichEditorOptions, edit: () => void) {
+function galleryView(gallery: Gallery, options: RichEditorOptions, edit: () => void, imageViews: Set<() => void>) {
   const container = document.createElement('section');
   container.className = 'rich-text-gallery';
   const heading = document.createElement('div');
@@ -143,7 +144,7 @@ function galleryView(gallery: Gallery, options: RichEditorOptions, edit: () => v
   container.append(status, retry);
   const items = document.createElement('div');
   items.className = 'rich-text-gallery-items';
-  const fields: { src: string; apply: (entry: MediaEntry | undefined) => void }[] = [];
+  const fields: { src: string; apply: (entry: MediaEntry | undefined) => void; refresh: () => void }[] = [];
   const directive = gallery.lines.map((line) => /^\s*#\s*captions\s*:\s*(\S*)\s*$/i.exec(line)).find(Boolean);
   const showCaptions = directive?.[1]?.toLowerCase() !== 'hidden';
   for (const line of gallery.lines) {
@@ -164,16 +165,18 @@ function galleryView(gallery: Gallery, options: RichEditorOptions, edit: () => v
       items.append(invalid);
       continue;
     }
-    const stored = options.images?.()[photo.src] ?? {};
-    const width = photo.width ?? stored.width;
-    const format = photo.format ?? stored.format;
-    const thumbnail = options.thumbnailUrl?.({ heroSrc: photo.src, heroWidth: width, heroFormat: format }) ?? null;
     const figure = document.createElement('figure');
-    const image = imageElement(thumbnail, '', options);
+    let image = imageElement(null, '', options);
+    let thumbnail: string | null = null;
+    let currentEntry: MediaEntry | undefined;
     const caption = document.createElement('figcaption');
     figure.append(image, caption);
     items.append(figure);
     const apply = (entry: MediaEntry | undefined) => {
+      currentEntry = entry;
+      // Translation replaces map entries without necessarily changing Markdown.
+      // Read current local metadata on every refresh; Media still owns its fields.
+      const stored = options.images?.()[photo.src] ?? {};
       let alt = '';
       let inheritedCaption = '';
       if (entry?.row) {
@@ -185,12 +188,21 @@ function galleryView(gallery: Gallery, options: RichEditorOptions, edit: () => v
         alt = photo.alt ?? stored.alt ?? '';
         inheritedCaption = photo.caption ?? stored.caption ?? '';
       }
+      const nextThumbnail = options.thumbnailUrl?.({
+        heroSrc: photo.src, heroWidth: photo.width ?? stored.width, heroFormat: photo.format ?? stored.format,
+      }) ?? null;
+      if (nextThumbnail !== thumbnail) {
+        const replacement = imageElement(nextThumbnail, alt, options);
+        image.replaceWith(replacement);
+        image = replacement;
+        thumbnail = nextThumbnail;
+      }
       const img = image.querySelector('img');
       if (img) img.alt = alt;
       caption.textContent = photo.captionOverride ?? inheritedCaption;
       caption.hidden = !showCaptions || !caption.textContent;
     };
-    fields.push({ src: photo.src, apply });
+    fields.push({ src: photo.src, apply, refresh: () => apply(currentEntry) });
     apply(options.galleryLibrary?.peek(photo.src));
   }
   container.append(items);
@@ -222,10 +234,12 @@ function galleryView(gallery: Gallery, options: RichEditorOptions, edit: () => v
   };
   retry.addEventListener('click', () => lookup(true));
   lookup(false);
-  return { dom: container, destroy() { alive = false; ticket++; } };
+  const refresh = () => { fields.forEach((field) => field.refresh()); };
+  imageViews.add(refresh);
+  return { dom: container, destroy() { alive = false; ticket++; imageViews.delete(refresh); } };
 }
 
-function sourceNode(name: 'richSource' | 'richGallery', options: RichEditorOptions, sourceOffset: (position: number) => number) {
+function sourceNode(name: 'richSource' | 'richGallery', options: RichEditorOptions, sourceOffset: (position: number) => number, imageViews: Set<() => void>) {
   return TiptapNode.create({
     name,
     group: 'block',
@@ -260,7 +274,7 @@ function sourceNode(name: 'richSource' | 'richGallery', options: RichEditorOptio
           const view = galleryView(gallery, options, () => {
             const position = getPos();
             if (typeof position === 'number') options.onEditGallery?.(sourceOffset(position) + gallery.start);
-          });
+          }, imageViews);
           views.push(view);
           root.append(view.dom);
         }
@@ -335,6 +349,9 @@ const safeMarkdownLink = Link.extend({
 
 /** Each editor instance owns its source provenance, selection and undo history. */
 export function createRichEditor(options: RichEditorOptions): RichEditor {
+  // Presentation-only consumers of the article image map; refreshing them must
+  // not dispatch a document transaction or disturb either engine's history.
+  const imageViews = new Set<() => void>();
   const provenance = Extension.create({
     name: 'sourceProvenance',
     addGlobalAttributes() {
@@ -363,9 +380,18 @@ export function createRichEditor(options: RichEditorOptions): RichEditor {
     addNodeView() {
       return ({ node }) => {
         const src = String(node.attrs.src ?? '');
-        const stored = options.images?.()[src];
-        const preview = stored ? options.thumbnailUrl?.({ heroSrc: src, heroWidth: stored.width, heroFormat: stored.format }) ?? null : src;
-        return { dom: imageElement(preview, String(node.attrs.alt ?? ''), options) };
+        const dom = document.createElement('span');
+        let renderedPreview: string | null | undefined;
+        const refresh = () => {
+          const stored = options.images?.()[src];
+          const preview = stored ? options.thumbnailUrl?.({ heroSrc: src, heroWidth: stored.width, heroFormat: stored.format }) ?? null : src;
+          if (preview === renderedPreview) return;
+          renderedPreview = preview;
+          dom.replaceChildren(imageElement(preview, String(node.attrs.alt ?? ''), options));
+        };
+        refresh();
+        imageViews.add(refresh);
+        return { dom, destroy() { imageViews.delete(refresh); } };
       };
     },
   }).configure({ inline: true, allowBase64: false });
@@ -382,7 +408,7 @@ export function createRichEditor(options: RichEditorOptions): RichEditor {
         codeBlock: false, link: false,
       }),
       safeCodeBlock, safeMarkdownLink, safeImage, Table, TableRow, TableHeader, TableCell, TaskList, TaskItem.configure({ nested: true }),
-      sourceNode('richSource', options, at), sourceNode('richGallery', options, at), provenance,
+      sourceNode('richSource', options, at, imageViews), sourceNode('richGallery', options, at, imageViews), provenance,
       // The extension's tokenizer registry mutates its Marked instance; giving
       // each editor its own avoids accumulating handlers across locale reloads.
       Markdown.configure({ marked: new Marked() as unknown as typeof marked }),
@@ -449,6 +475,7 @@ export function createRichEditor(options: RichEditorOptions): RichEditor {
       try { editor.commands.setContent(document, { emitUpdate: false, errorOnInvalidContent: true }); }
       finally { suppress = false; }
     },
+    refreshImageMetadata() { imageViews.forEach((refresh) => refresh()); },
     focus() { editor.commands.focus(); },
     destroy() { editor.destroy(); },
     getSelection() {

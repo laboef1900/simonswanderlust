@@ -18,6 +18,9 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
   Actual Chromium exercised all four direction/mode combinations through save/reopen/preview,
   failure/cancel/stale/consent/coverage handling, full-draft recovery and real save conflict;
   desktop/phone views and keyboard controls were verified with a free local provider fixture.
+  Independent PR review additionally caught the AI-settings recovery fragment and
+  metadata-only Visual gallery refresh; both were reproduced and corrected, with
+  navigation and real-engine regressions plus actual browser before/after verification.
   No production data, paid inference or publication. Detailed evidence and the single
   acceptance checklist are in the #550 design/plan; final PR review and CI are recorded on
   the PR. Not merged or deployed.

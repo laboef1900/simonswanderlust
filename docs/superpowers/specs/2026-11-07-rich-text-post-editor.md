@@ -55,3 +55,8 @@ Success synchronizes once; a rich-view failure retains the complete canonical Ma
 draft and reports the fallback. Real-engine regressions exercise existing undo/redo content
 in both modes, including failed field callbacks. Translation uses ordinary dirty/recovery/
 save handling and a guarded full-field Undo; locale switching preserves body histories.
+
+Metadata-only translation commits also call the presentation-only
+`refreshImageMetadata()` hook. Gallery and inline-image views reread current local maps
+without changing the ProseMirror document or undo/redo history; failed field commits never
+refresh views. Identical source text does not create a synthetic CodeMirror body edit.
