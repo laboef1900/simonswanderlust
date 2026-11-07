@@ -131,8 +131,15 @@ RSS, region statistics or the global story map. No MDX export, preview or revisi
 ## Content pipeline (keyboard → published page)
 
 1. **Author** writes a post (one row per enabled locale — DE + EN on simonswanderlust.com) in
-   the in-admin editor (`/admin/editor.html`, EasyMDE). Body
-   is Markdown; hero and body photos are uploaded inline and optimized by the app's image pipeline.
+   the in-admin editor (`/admin/editor.html`). Visual Tiptap editing is the default;
+   EasyMDE provides an editable Markdown source mode. Markdown is the canonical draft,
+   synchronously updated by visual transactions and shared with saving, recovery, review
+   and publication. Opening or switching modes preserves unchanged source exactly;
+   unsupported syntax and raw HTML remain inert source blocks editable in Markdown.
+   Galleries retain their directives and use the existing Media picker. Hero and body
+   photos use the app's image pipeline. The owner-approved editor-only build exception
+   uses `copy:vendor` and esbuild to bundle TypeScript locally; the rest of the admin
+   remains vanilla. See the [rich-text spec](docs/superpowers/specs/2026-11-07-rich-text-post-editor.md).
 2. **Store** — drafts and published posts live in the Postgres `posts` table (one row per locale).
    Postgres is the source of truth; git holds no content.
    Pasted `<BodyImage … />` tags in posts remain supported export/import syntax:

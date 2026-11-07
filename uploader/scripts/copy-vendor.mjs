@@ -1,6 +1,7 @@
 import { mkdirSync, copyFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { build } from 'esbuild';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const out = join(here, '..', 'public', 'vendor');
@@ -40,3 +41,17 @@ copyFileSync(join(here, 'vendor-licenses', 'pmtiles-LICENSE.txt'), join(out, 'pm
 // font-awesome@4.7.0 npm package omits the applicable OFL and MIT notices. These are
 // the official v4.7.0 license texts from https://fontawesome.com/v4/license.
 copyFileSync(join(here, 'vendor-licenses', 'font-awesome-LICENSE.txt'), join(out, 'font-awesome-LICENSE.txt'));
+
+// Rich-text editing is self-hosted like the source editor. Bundle once while
+// copying browser dependencies; no compiler or CDN request runs in the browser.
+await build({
+  entryPoints: [join(here, '..', 'src', 'editor-rich-text.ts')],
+  outfile: join(out, 'editor-rich-text.js'),
+  bundle: true,
+  format: 'iife',
+  platform: 'browser',
+  target: ['es2022'],
+  minify: true,
+  legalComments: 'linked',
+});
+console.log('built editor-rich-text.js');

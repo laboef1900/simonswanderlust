@@ -1284,6 +1284,16 @@ tuned so it does **not** break legitimate output: heading `id`s stay un-prefixed
 contents `#anchor` links resolve) and `class` survives everywhere. Verified end-to-end against a
 published post carrying an XSS payload.
 
+**Rich-text authoring boundary (2026-11-07).** Visual editing works from a canonical
+Markdown draft, not trusted HTML. Raw HTML and unsupported syntax are retained as inert
+source blocks, editable in Markdown, and are never inserted into the admin DOM as HTML.
+Visual paste is plain text; unsafe URL schemes do not become active links, and image
+previews use exact same-origin checks rather than fetching arbitrary author-supplied URLs.
+Gallery selection uses the existing Media authority. The self-hosted Tiptap bundle is an
+owner-approved editor-only build exception, with pinned dependencies and local vendor
+build controls described in the [spec](docs/superpowers/specs/2026-11-07-rich-text-post-editor.md).
+The existing public sanitizer and post-sanitize image/gallery guards remain unchanged.
+
 **Public journeys (#310)** have no new public write endpoint. Their loader imports the
 same exported read-only database epoch as stories and language, fails closed on invalid
 or expired epochs/snapshots, and releases checked-out connections on failure. It reads

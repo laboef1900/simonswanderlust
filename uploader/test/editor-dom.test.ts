@@ -57,6 +57,7 @@ interface EditorOptions {
   galleryFetch?: Fetch;
   review?: Review;
   isAdmin?: boolean;
+  richText?: 'missing' | 'throws';
   mobile?: boolean;
   search?: string;
   /** window.open; default: the browser blocks the popup (returns null). */
@@ -120,6 +121,20 @@ interface StashRecord {
   recovery: StashRecovery | null;
 }
 
+interface RichEditorSettings {
+  element: Element;
+  markdown: string;
+  locale: 'de' | 'en';
+  imageOrigin: string;
+  galleryLibrary: object;
+  images(): Record<string, unknown>;
+  thumbnailUrl(photo: object): string | null;
+  copy: Record<string, string>;
+  onChange(markdown: string): void;
+  onSelection(): void;
+  onEditGallery(sourceStart: number): void;
+}
+
 
 const EDITOR_OWNER = '11111111-1111-4111-8111-111111111111';
 async function loadEditor(options: EditorOptions = {}) {
@@ -171,6 +186,7 @@ async function loadEditor(options: EditorOptions = {}) {
   class EasyMDE {
     private text = '';
     private readonly changes: (() => void)[] = [];
+    private readonly cursorChanges: (() => void)[] = [];
     private readonly markers = new Set<{ start: number; end: number; cleared: boolean }>();
     private documentVersion = 0;
     readonly undoHistory: string[] = [];
@@ -178,6 +194,7 @@ async function loadEditor(options: EditorOptions = {}) {
     cursor: { line: number; ch: number } | null = null;
     selection: { from: { line: number; ch: number }; to: { line: number; ch: number } } | null = null;
     focusCalls = 0;
+    readonly cmOptions: Record<string, unknown> = {};
     settings?: { autosave?: { enabled?: boolean } };
     codemirror = {
       getCursor: () => this.cursor ?? { line: 0, ch: 0 },
@@ -188,19 +205,41 @@ async function loadEditor(options: EditorOptions = {}) {
           for (const callback of this.changes) callback();
         }
       },
-      on: (event: string, callback: () => void) => { if (event === 'change' || event === 'changes') this.changes.push(callback); },
+      on: (event: string, callback: () => void) => {
+        if (event === 'change' || event === 'changes') this.changes.push(callback);
+        else if (event === 'cursorActivity') this.cursorChanges.push(callback);
+      },
+      off: (event: string, callback: () => void) => {
+        const listeners = event === 'cursorActivity' ? this.cursorChanges : this.changes;
+        const index = listeners.indexOf(callback);
+        if (index !== -1) listeners.splice(index, 1);
+      },
       refresh() {},
+      setOption: (name: string, value: unknown) => { this.cmOptions[name] = value; },
+      clearHistory: () => { this.undoHistory.length = 0; },
       getValue: () => this.text,
       getLine: (line: number) => this.text.split('\n')[line] ?? '',
       setValue: (value: string) => { this.value(value); },
       getInputField: () => this.input,
-      setCursor: (position: { line: number; ch: number }) => { this.cursor = position; },
-      listSelections: () => [{ anchor: this.codemirror.getCursor(), head: this.codemirror.getCursor() }],
-      replaceSelection: (value: string) => {
-        const at = this.codemirror.getCursor();
-        this.codemirror.replaceRange(value, at, at);
+      setCursor: (position: { line: number; ch: number }) => {
+        this.cursor = position;
+        this.selection = null;
+        for (const callback of this.cursorChanges) callback();
       },
-      setSelection: (from: { line: number; ch: number }, to: { line: number; ch: number }) => { this.selection = { from, to }; },
+      listSelections: () => this.selection
+        ? [{ anchor: this.selection.from, head: this.selection.to }]
+        : [{ anchor: this.codemirror.getCursor(), head: this.codemirror.getCursor() }],
+      replaceSelection: (value: string) => {
+        const range = this.codemirror.listSelections()[0]!;
+        const end = this.codemirror.indexFromPos(range.anchor) + value.length;
+        this.codemirror.replaceRange(value, range.anchor, range.head);
+        this.codemirror.setCursor(this.codemirror.posFromIndex(end));
+      },
+      setSelection: (from: { line: number; ch: number }, to: { line: number; ch: number }) => {
+        this.selection = { from, to };
+        this.cursor = to;
+        for (const callback of this.cursorChanges) callback();
+      },
       scrollIntoView() {},
       focus: () => { this.focusCalls += 1; this.input.focus(); },
       operation: (callback: () => void) => callback(),
@@ -257,6 +296,62 @@ async function loadEditor(options: EditorOptions = {}) {
     toTextArea() {}
   }
   const editors: EasyMDE[] = [];
+  // Contract double only: the engine's parser, safety and commands have their
+  // own suite. These tests run the production bridge and real page consumers.
+  class RichEditor {
+    private text: string;
+    private selection = { from: 0, to: 0 };
+    readonly commands: string[] = [];
+    readonly setCalls: string[] = [];
+    private readonly undoHistory: string[] = [];
+    private readonly redoHistory: string[] = [];
+    readonly input = dom.document.createElement('div');
+    destroyed = false;
+    failSet = false;
+    constructor(readonly settings: RichEditorSettings) {
+      this.text = settings.markdown;
+      this.input.setAttribute('contenteditable', 'true');
+      settings.element.appendChild(this.input);
+    }
+    getMarkdown() { return this.text; }
+    setMarkdown(text: string) {
+      if (this.failSet) throw new Error('visual document could not be updated');
+      this.setCalls.push(text);
+      this.undoHistory.push(this.text);
+      this.text = text;
+    }
+    edit(text: string) {
+      this.undoHistory.push(this.text);
+      this.redoHistory.length = 0;
+      this.text = text;
+      this.settings.onChange(text);
+      this.input.fire('input');
+    }
+    getSelection() { return { ...this.selection }; }
+    setSelection(selection: { from: number; to: number }) {
+      this.selection = { ...selection };
+      this.settings.onSelection();
+    }
+    focus() { this.input.focus(); }
+    destroy() { this.destroyed = true; this.input.remove(); }
+    command(name: string) { this.commands.push(name); }
+    isActive(name: string) { return this.commands.at(-1) === name; }
+    undo() {
+      const previous = this.undoHistory.pop();
+      if (previous === undefined) return;
+      this.redoHistory.push(this.text);
+      this.text = previous;
+      this.settings.onChange(previous);
+    }
+    redo() {
+      const next = this.redoHistory.pop();
+      if (next === undefined) return;
+      this.undoHistory.push(this.text);
+      this.text = next;
+      this.settings.onChange(next);
+    }
+  }
+  const richEditors: RichEditor[] = [];
   const ctx: Record<string, unknown> = {
     ...galleryCodecBindings,
     document: dom.document,
@@ -340,6 +435,14 @@ async function loadEditor(options: EditorOptions = {}) {
         options.onEditor?.(this, editors.length - 1);
       }
     },
+    RichTextEditor: options.richText === 'missing' ? undefined : {
+      create(settings: RichEditorSettings) {
+        if (options.richText === 'throws') throw new Error('visual initialization failed');
+        const editor = new RichEditor(settings);
+        richEditors[settings.locale === 'de' ? 0 : 1] = editor;
+        return editor;
+      },
+    },
     AdminConfirm: {
       ask: async (prompt: ConfirmPrompt) => {
         prompts.push(prompt);
@@ -399,6 +502,7 @@ async function loadEditor(options: EditorOptions = {}) {
   vm.runInContext('SiteLanguage.accept(languageFixture)', ctx);
   vm.runInContext(readFileSync('public/draft-guard.js', 'utf8'), ctx, { filename: 'draft-guard.js' });
   vm.runInContext(readFileSync('public/write-recovery.js', 'utf8'), ctx, { filename: 'write-recovery.js' });
+  vm.runInContext(readFileSync('public/editor-rich-bridge.js', 'utf8'), ctx, { filename: 'editor-rich-bridge.js' });
   const safety = ctx.DraftGuard as {
     createDraftGuard(options: { resource: string; collect: () => unknown; onChange?: (dirty: boolean) => void }): {
       markDirty(): void; redirectToLogin(): void;
@@ -423,7 +527,7 @@ async function loadEditor(options: EditorOptions = {}) {
   await vm.runInContext(script, ctx);
   const api = vm.runInContext('({ populateForm, buildPayload, loadPost, doSaveDraft, renderAltAudit })', ctx) as EditorApi;
   return {
-    api, el, editors, created: dom.created, document: dom.document, requests, galleryRequests, stopRouteRequests, prompts, local, galleryPickers,
+    api, el, editors, richEditors, created: dom.created, document: dom.document, requests, galleryRequests, stopRouteRequests, prompts, local, galleryPickers,
     ctx,
     flushDialogEvents: dom.flushDialogEvents,
     logout: () => {
@@ -3836,7 +3940,8 @@ describe('manuscript-first editor refinements', () => {
     expect(h.api.buildPayload().de.images['https://img/cenote']).toEqual({ width: 1600, height: 1067 });
     expect(h.el('dePhotoPanel').hidden).toBe(true);
     expect(h.el('dePhotoToggle').getAttribute('aria-expanded')).toBe('false');
-    expect(h.document.activeElement).toBe(editor.input);
+    expect(h.richEditors[0]!.getMarkdown()).toBe(editor.value());
+    expect(h.document.activeElement).toBe(h.richEditors[0]!.input);
   });
 });
 
@@ -4723,5 +4828,250 @@ describe('stop routing in the editor (#513)', () => {
     await settleFor(h, () => !h.el('stopRoutePublishNotice').hidden);
     expect(h.el('stopRoutePublishNotice').textContent).toMatch(/Published without the route along stops/);
     expect(h.el('actionStatus').textContent).toMatch(/Published without the route along stops/);
+  });
+});
+
+describe('Visual and Markdown editing share the real draft', () => {
+  const flush = async () => { for (let i = 0; i < 12; i++) await settle(); };
+  const galleryOptions = { layout: 'column', captions: { visible: true, overrides: {} } };
+  const photo = { src: 'https://img/new-photo', width: 900, height: 600, alt: { de: 'Berge', en: 'Mountains' } };
+
+  it('defaults to Visual and preserves exact source, selections and clean state across modes and locales', async () => {
+    const h = await loadEditor();
+    const pair = fullPair();
+    pair.de.bodyMarkdown = '  # Reise\r\n\r\n🧭 <aside>Quelle</aside>\r\n\r\n~~~gallery\r\n#layout: slider\r\n#custom: keep\r\nhttps://img/photo | caption="A &amp; B"\r\n~~~\r\n';
+    pair.en.bodyMarkdown = '## English\n\nAn independent body.\n';
+    h.api.populateForm(pair);
+    const before = h.api.buildPayload();
+    const dirty = h.dirtyCalls();
+    const sets = h.richEditors.map((editor) => editor.setCalls.length);
+    expect(h.richEditors[0]!.input.getAttribute('aria-label')).toBe('Story (visual editor, DE)');
+    expect(h.el('deVisualMode').getAttribute('aria-pressed')).toBe('true');
+    expect(h.el('deMarkdownBody').hidden).toBe(true);
+    expect(h.el('deRichBody').hidden).toBe(false);
+    expect(h.el('deGalleryView').hidden).toBe(true);
+    h.richEditors[0]!.setSelection({ from: 18, to: 25 });
+    h.el('deMarkdownMode').click();
+    expect(h.el('deMarkdownBody').hidden).toBe(false);
+    expect(h.el('deRichBody').hidden).toBe(true);
+    expect(h.el('deGalleryView').hidden).toBe(false);
+    expect(h.editors[0]!.codemirror.getRange(h.editors[0]!.selection!.from, h.editors[0]!.selection!.to))
+      .toBe(pair.de.bodyMarkdown.slice(18, 25));
+    h.el('tabbtn-en').click();
+    h.richEditors[1]!.setSelection({ from: 4, to: 8 });
+    h.el('enMarkdownMode').click();
+    h.el('enVisualMode').click();
+    h.el('tabbtn-de').click();
+    h.el('deVisualMode').click();
+    expect(h.richEditors[0]!.getSelection()).toEqual({ from: 18, to: 25 });
+    expect(h.richEditors[1]!.getSelection()).toEqual({ from: 4, to: 8 });
+    expect(h.richEditors.map((editor) => editor.getMarkdown())).toEqual([pair.de.bodyMarkdown, pair.en.bodyMarkdown]);
+    expect(h.richEditors.map((editor) => editor.setCalls.length)).toEqual(sets);
+    h.richEditors[0]!.undo();
+    expect(h.api.buildPayload().de.bodyMarkdown).toBe(pair.de.bodyMarkdown);
+    expect(h.api.buildPayload()).toEqual(before);
+    expect(h.dirtyCalls()).toBe(dirty);
+  });
+
+  it('synchronizes visual edits immediately once, and source range edits back without feedback loops', async () => {
+    const h = await loadEditor();
+    h.api.populateForm(fullPair());
+    const rich = h.richEditors[0]!;
+    const source = h.editors[0]!;
+    const sets = rich.setCalls.length;
+    const dirty = h.dirtyCalls();
+    rich.edit('## Hi\n\nA visual edit.');
+    expect(source.value()).toBe('## Hi\n\nA visual edit.');
+    expect(h.api.buildPayload().de.bodyMarkdown).toBe(source.value());
+    expect(h.api.buildPayload().en.bodyMarkdown).toBe('## Hi');
+    expect(h.dirtyCalls()).toBe(dirty + 1);
+    expect(rich.setCalls).toHaveLength(sets);
+    expect(source.undoHistory).toEqual(['## Hi']);
+    h.el('deMarkdownMode').click();
+    source.codemirror.replaceRange('Changed', { line: 2, ch: 0 }, { line: 2, ch: 1 });
+    expect(rich.getMarkdown()).toBe(source.value());
+    expect(rich.setCalls).toHaveLength(sets + 1);
+    expect(h.dirtyCalls()).toBe(dirty + 2);
+    h.el('deVisualMode').click();
+    rich.undo();
+    expect(source.value()).toBe('## Hi\n\nA visual edit.');
+    rich.redo();
+    expect(source.value()).toBe('## Hi\n\nChanged visual edit.');
+    h.el('tabbtn-en').click();
+    h.richEditors[1]!.edit('English edit');
+    h.richEditors[1]!.undo();
+    expect(h.api.buildPayload().en.bodyMarkdown).toBe('## Hi');
+    expect(h.api.buildPayload().de.bodyMarkdown).toBe('## Hi\n\nChanged visual edit.');
+  });
+
+  it('keeps both mode controls in the toolbar keyboard navigation', async () => {
+    const h = await loadEditor();
+    h.api.populateForm(fullPair());
+    const bar = h.el('deManuscriptBar');
+    h.el('deVisualMode').focus();
+    h.el('deVisualMode').fire('keydown', { key: 'ArrowRight' });
+    expect(h.document.activeElement).toBe(h.el('deMarkdownMode'));
+    h.el('deMarkdownMode').click();
+    h.el('deMarkdownMode').fire('keydown', { key: 'Home' });
+    expect(h.document.activeElement).toBe(required(bar, '[data-format="bold"]'));
+    expect(bar.querySelectorAll('button').filter((button) => button.tabIndex === 0)).toHaveLength(1);
+  });
+
+  it('includes rich edits in local recovery and the next save without changing the server payload contract', async () => {
+    const h = await loadEditor();
+    h.api.populateForm(fullPair());
+    h.richEditors[0]!.edit('Ungespeicherter **Text**');
+    h.el('tabbtn-en').click();
+    h.richEditors[1]!.edit('Unsaved *English*');
+    vm.runInContext('guard.stashNow()', h.ctx);
+    const stash = latestStash(h.local, 'new')!;
+    expect(stash.payload.de.bodyMarkdown).toBe('Ungespeicherter **Text**');
+    expect(stash.payload.en.bodyMarkdown).toBe('Unsaved *English*');
+    const recovered = await loadEditor({
+      confirm: true, stash: { key: 'swl:draft:new', payload: stash.payload, recovery: stash.recovery },
+      fetch: async (url, init) => init?.method === 'POST'
+        ? response({ ...fullPair(), ...JSON.parse(String(init.body)), updatedAt: '2026-11-07T12:00:00.000Z' })
+        : response(url.startsWith('/posts/') ? { error: 'Not found' } : [], url.startsWith('/posts/') ? 404 : 200),
+    });
+    expect(recovered.richEditors.map((editor) => editor.getMarkdown())).toEqual(['Ungespeicherter **Text**', 'Unsaved *English*']);
+    recovered.richEditors[0]!.edit('Latest visible body');
+    expect(await recovered.api.doSaveDraft()).toBe(true);
+    const saved = recovered.requests.find(({ url, options }) => url === '/posts' && options.method === 'POST')!;
+    const payload = JSON.parse(String(saved.options.body)) as PostPair;
+    expect(payload.de.bodyMarkdown).toBe('Latest visible body');
+    expect(payload.en.bodyMarkdown).toBe('Unsaved *English*');
+    expect(payload).not.toHaveProperty('richText');
+    expect(payload.de).not.toHaveProperty('html');
+  });
+
+  it('reviews the current rich Markdown and invalidates an outstanding review when it changes', async () => {
+    const provider = deferredReviews();
+    const h = await loadEditor({ review: provider.review, fetch: async () => response(reviewConfig) });
+    h.api.populateForm(fullPair());
+    h.richEditors[0]!.edit('New visual **story**');
+    await startAiReview(h);
+    expect(provider.calls[0]!.story.markdown).toBe('New visual **story**');
+    h.richEditors[0]!.edit('Newer visual story');
+    expect(provider.calls[0]!.signal.aborted).toBe(true);
+    provider.calls[0]!.result.resolve(reviewResult());
+    await settle();
+    expect(h.api.buildPayload().de.bodyMarkdown).toBe('Newer visual story');
+  });
+
+  it('replaces both visual bodies on stored-version reload without restoring stale local content', async () => {
+    let pair = fullPair();
+    const h = await loadEditor({ fetch: async (url) => response(url === '/posts/tk1'
+      ? { ...pair, updatedAt: '2026-11-07T12:00:00.000Z' } : []) });
+    await h.api.loadPost('tk1');
+    h.richEditors[0]!.edit('Local DE');
+    h.el('tabbtn-en').click();
+    h.richEditors[1]!.edit('Local EN');
+    pair = { ...pair, de: { ...pair.de, bodyMarkdown: 'Stored DE' }, en: { ...pair.en, bodyMarkdown: 'Stored EN' } };
+    await h.api.loadPost('tk1');
+    expect(h.richEditors.map((editor) => editor.getMarkdown())).toEqual(['Stored DE', 'Stored EN']);
+    expect(h.api.buildPayload().de.bodyMarkdown).toBe('Stored DE');
+    expect(h.api.buildPayload().en.bodyMarkdown).toBe('Stored EN');
+    expect(h.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveSaved']);
+  });
+
+  it('edits a visual gallery at its source offset and mirrors inserted galleries back into Visual', async () => {
+    const h = await loadEditor();
+    const pair = fullPair();
+    pair.de.bodyMarkdown = 'Before\n\n```gallery\n#custom: keep\nhttps://img/old\n```\n\nAfter';
+    pair.de.images = { 'https://img/old': { width: 900, height: 600 } };
+    h.api.populateForm(pair);
+    await flush();
+    h.richEditors[0]!.settings.onEditGallery(pair.de.bodyMarkdown.indexOf('```gallery'));
+    await flush();
+    expect(h.galleryPickers).toHaveLength(1);
+    await h.galleryPickers[0]!.onPick([photo], galleryOptions);
+    const updated = h.api.buildPayload().de.bodyMarkdown;
+    expect(updated).toContain('#custom: keep');
+    expect(updated).toContain(photo.src);
+    expect(updated).not.toContain('https://img/old');
+    expect(h.richEditors[0]!.getMarkdown()).toBe(updated);
+    expect(h.el('deVisualMode').getAttribute('aria-pressed')).toBe('true');
+    h.richEditors[0]!.setSelection({ from: updated.length, to: updated.length });
+    h.el('deGallery').click();
+    await flush();
+    await h.galleryPickers[1]!.onPick([photo], galleryOptions);
+    expect(h.richEditors[0]!.getMarkdown()).toBe(h.api.buildPayload().de.bodyMarkdown);
+    expect(h.api.buildPayload().de.bodyMarkdown.match(/```gallery/g)).toHaveLength(2);
+  });
+
+  it('rejects stale gallery changes after rich text is edited and undone to the original source', async () => {
+    const h = await loadEditor();
+    h.api.populateForm(fullPair());
+    h.el('deGallery').click();
+    await flush();
+    const picker = h.galleryPickers[0]!;
+    h.richEditors[0]!.edit('Changed while picking');
+    h.richEditors[0]!.undo();
+    const before = h.api.buildPayload();
+    await picker.onPick([photo], galleryOptions);
+    expect(h.api.buildPayload()).toEqual(before);
+    expect(h.el('deBodyImgStatus').textContent).toBe(ui.en['editor.gallery.stale']);
+  });
+
+  it('retains the photo selection guard when a visual caret moves during source analysis', async () => {
+    const pending = Promise.withResolvers<Response>();
+    let hold = false;
+    let analyzed = '';
+    const h = await loadEditor({ pickImage: photo, galleryFetch: async (_url, init) => {
+      const body = JSON.parse(String(init?.body)).bodyMarkdown as string;
+      if (hold) { analyzed = body; return pending.promise; }
+      return response(await analyzeGallerySource(body));
+    } });
+    h.api.populateForm(fullPair());
+    await flush();
+    h.richEditors[0]!.setSelection({ from: 1, to: 1 });
+    hold = true;
+    h.el('deBodyImgLibrary').click();
+    await settle();
+    h.richEditors[0]!.setSelection({ from: 4, to: 4 });
+    pending.resolve(response(await analyzeGallerySource(analyzed)));
+    await flush();
+    expect(h.api.buildPayload().de.bodyMarkdown).toBe('## Hi');
+    expect(h.api.buildPayload().de.images).toEqual({});
+    expect(h.el('deBodyImgStatus').textContent).toContain(ui.en['editor.gallery.stale']);
+  });
+
+  it.each(['missing', 'throws'] as const)('keeps source editing and saving available when the engine is %s', async (richText) => {
+    const h = await loadEditor({
+      richText,
+      fetch: async (_url, init) => init?.method === 'POST'
+        ? response({ ...fullPair(), ...JSON.parse(String(init.body)), updatedAt: '2026-11-07T12:00:00.000Z' }) : response([]),
+    });
+    h.api.populateForm(fullPair());
+    expect(h.el('deMarkdownBody').hidden).toBe(false);
+    expect(h.el('deRichBody').hidden).toBe(true);
+    expect(h.el('deRichError').hidden).toBe(false);
+    expect(h.el('deRichError').textContent).toBe(ui.en['editor.chrome.richTextUnavailable']);
+    h.editors[0]!.value('Source remains editable');
+    h.el('deVisualMode').click();
+    expect(h.api.buildPayload().de.bodyMarkdown).toBe('Source remains editable');
+    expect(h.el('deMarkdownMode').getAttribute('aria-pressed')).toBe('true');
+    expect(await h.api.doSaveDraft()).toBe(true);
+    const saved = h.requests.find(({ url, options }) => url === '/posts' && options.method === 'POST')!;
+    expect((JSON.parse(String(saved.options.body)) as PostPair).de.bodyMarkdown).toBe('Source remains editable');
+  });
+
+  it('falls back to the latest source if visual synchronization fails after initialization', async () => {
+    const h = await loadEditor();
+    h.api.populateForm(fullPair());
+    h.richEditors[0]!.failSet = true;
+    h.editors[0]!.value('Keep this complete replacement');
+    expect(h.api.buildPayload().de.bodyMarkdown).toBe('Keep this complete replacement');
+    expect(h.richEditors[0]!.destroyed).toBe(true);
+    expect(h.el('deRichError').hidden).toBe(false);
+    expect(h.el('deMarkdownBody').hidden).toBe(false);
+    expect(h.el('enVisualMode').disabled).toBe(false);
+    h.editors[0]!.value('Corrected source after the failure');
+    h.el('deVisualMode').click();
+    expect(h.el('deVisualMode').getAttribute('aria-pressed')).toBe('true');
+    expect(h.el('deRichError').hidden).toBe(true);
+    expect(h.richEditors[0]!.getMarkdown()).toBe('Corrected source after the failure');
+    h.richEditors[0]!.edit('Resumed visual editing');
+    expect(h.api.buildPayload().de.bodyMarkdown).toBe('Resumed visual editing');
   });
 });

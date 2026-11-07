@@ -138,6 +138,16 @@ for more writing space; the same icon in the rail (**Expand story details**) bri
 back. On phones, the panel icon at the end of the command bar opens a keyboard-managed
 drawer. Switching DE/EN preserves both languages' unsaved edits.
 
+**Visual** is the default editable writing view; select **Markdown** to edit the actual
+EasyMDE source and switch back to Visual when ready. Both views share one Markdown draft:
+visual edits update it synchronously, and opening a story or switching modes does not
+rewrite untouched source. Raw HTML and unsupported syntax remain inert source blocks;
+edit them in Markdown. Pasting into Visual inserts plain text. Gallery edits use the
+existing Media picker and retain the gallery's Markdown directives, order and captions.
+If the visual editor cannot initialize, Markdown remains available for editing.
+On phones, less-used formatting is in the **Format** tray and **Details** opens the
+focus-managed inspector drawer.
+
 **Save draft**, **Publish** and **Review story** stay in the top command bar.
 **More actions** (or **More** on phones) contains Preview and, for published posts,
 Unpublish. The save indicator distinguishes **Not saved yet**, **Unsaved changes**,
@@ -271,7 +281,11 @@ can still be running when the upload returns: wait until the photo is ready befo
    | **Hero image** | Open Story details → **Replace photo**, then **Upload hero** or **Choose from library**; edit alt text beside the preview and use **Adjust framing** for the focal point |
    | **Title image (optional)** | A separate wide photograph for the story header; choose/upload in Story details, add alt text and adjust framing. Leave empty to use the hero |
    | **Coordinates** | `lat`, `lng` decimal |
-   | **Body** | Markdown (EasyMDE editor). Embed photos via the body toolbar's inline upload — it inserts a markdown image (`![alt](URL)`) and records the dimensions automatically. Pasted `<BodyImage …/>` tags (from an MDX backup or the upload page) also work: they're converted on save. |
+   | **Body** | Markdown, edited in Visual or in the EasyMDE Markdown source mode. Embed photos via the body toolbar's inline upload — it inserts a markdown image (`![alt](URL)`) and records the dimensions automatically. Pasted `<BodyImage …/>` tags (from an MDX backup or the upload page) also work: they're converted on save. |
+
+   If a code or gallery fence has no closing delimiter, the editor keeps the complete
+   body in Markdown mode rather than saving new prose inside that block. Close the
+   fence, then select **Visual** to resume rich editing.
 
 4. Switch to the **English** tab and fill in the EN fields (title, country, excerpt, key facts,
    alt text, body) — **country** and **key facts** are per-locale and do NOT carry over from the
