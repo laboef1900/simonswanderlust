@@ -2150,6 +2150,34 @@ describe('Story review in the real editor', () => {
     h.el('closeReview').click();
   });
 
+  it('recognizes OpenAI, refuses a missing key and requires consent after configuration is repaired', async () => {
+    const provider = deferredReviews();
+    let key: string | null = null;
+    const h = await loadEditor({
+      review: provider.review,
+      fetch: async () => response({ ...reviewConfig, aiProvider: 'openai',
+        aiBaseUrl: 'https://api.openai.com/v1', aiApiKey: key }),
+    });
+    h.api.populateForm(fullPair());
+    h.el('reviewStory').click();
+    await settle();
+    expect(h.el('reviewDestination').hidden).toBe(true);
+    expect(provider.calls).toEqual([]);
+    h.el('closeReview').click();
+    key = 'fixture-openai-key';
+    h.el('reviewStory').click();
+    await settle();
+    expect(h.el('reviewDestination').textContent).toContain('OpenAI');
+    expect(h.el('reviewDestination').textContent).toContain('https://api.openai.com/v1');
+    expect(h.el('runReview').disabled).toBe(false);
+    expect(provider.calls).toEqual([]);
+    h.el('runReview').click();
+    await settle();
+    expect(provider.calls).toHaveLength(1);
+    expect(h.el('storyReviewDialog').textContent).not.toContain(key);
+    h.el('closeReview').click();
+  });
+
   it('discloses the destination without contacting a provider or retaining credentials until explicit consent', async () => {
     const provider = deferredReviews();
     const prepared = { ...reviewConfig, aiApiKey: 'fixture-review-secret', captionApiKey: 'fixture-caption-secret' };

@@ -44,6 +44,17 @@ describe('local alt text remains separate from remote review credentials', () =>
     expect(page.statusEl.textContent).toContain('API key');
   });
 
+  it('refuses an unconfigured OpenAI provider before preparing or sending a photo', async () => {
+    const page = setup();
+    page.config.captionProvider = 'openai';
+    page.config.captionBaseUrl = 'https://api.openai.com/v1';
+    await page.click();
+    expect(page.prepImage).not.toHaveBeenCalled();
+    expect(page.caption).not.toHaveBeenCalled();
+    expect(page.altInput.value).toBe('');
+    expect(page.statusEl.textContent).toContain('API key');
+  });
+
   it('preserves the caller session-expiry callback without preparing an image or contacting a model', async () => {
     const page = setup(401);
     await page.click();

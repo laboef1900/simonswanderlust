@@ -4,6 +4,14 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Implemented locally:** OpenAI in Settings → AI models → Add provider → Kind
+  (2026-11-08, owner-requested). Prefills the official `https://api.openai.com/v1`
+  endpoint and uses existing per-provider credentials and browser-direct transport.
+  Reviews, excerpts, photo descriptions and article translation recognize the kind;
+  missing-key checks apply before provider calls. Existing Custom OpenAI providers
+  are unchanged. Regression coverage includes persisted settings, real provider
+  routes, key isolation and editor consent.
+
 - **Implemented locally:** borderless Visual manuscript focus (2026-11-07,
   owner-requested). Removed the enclosing focus outline; the existing steel-blue
   native blinking caret marks the insertion point, and the writing surface uses

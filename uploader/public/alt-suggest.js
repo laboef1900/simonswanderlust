@@ -18,7 +18,7 @@ window.AltSuggest = (function () {
     }
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const config = await res.json();
-    if (['openrouter', 'deepseek', 'anthropic'].includes(config.captionProvider) && !config.captionApiKey) {
+    if (['openrouter', 'deepseek', 'anthropic', 'openai'].includes(config.captionProvider) && !config.captionApiKey) {
       throw new Error('Configure the provider API key in Settings first.');
     }
     return config;
