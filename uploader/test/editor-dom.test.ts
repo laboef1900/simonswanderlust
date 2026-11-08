@@ -5412,8 +5412,9 @@ describe('explicit article translation of the current unsaved pair', () => {
     expect(translate).toHaveBeenCalledTimes(1);
   });
 
-  it('never exposes provider details or partial patches on validation, limit, configuration and inference errors', async () => {
-    for (const failure of ['translation_structure_mismatch', 'translation_input_limit', 'config', 'provider'] as const) {
+  it.each(['translation_structure_mismatch', 'translation_input_limit', 'config', 'provider'] as const)(
+    'never exposes provider details or partial patches on %s error',
+    async (failure) => {
       const translate = vi.fn(async (request: TranslationRequest) => {
         if (failure === 'provider') throw new Error('private provider detail');
         return translated(request);
@@ -5430,8 +5431,8 @@ describe('explicit article translation of the current unsaved pair', () => {
       expect(h.el('translationStatus').textContent).not.toContain('private');
       expect(h.api.buildPayload()).toEqual(before);
       expect(translate).toHaveBeenCalledTimes(failure === 'config' || failure === 'translation_input_limit' ? 0 : 1);
-    }
-  });
+    },
+  );
 
   it('flushes the latest pending gallery description before preparing or sending any slots', async () => {
     const pending = Promise.withResolvers<Response>();
