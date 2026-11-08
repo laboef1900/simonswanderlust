@@ -36,6 +36,8 @@ Existing endpoint validation, omission of cookies/referrers, redirect refusal,
 timeouts/cancellation, sanitized errors and response parsers remain unchanged.
 No extra automatic or paid requests are introduced. Callers and `/ai-config` stay unchanged.
 
+Anthropic's OpenAI-compatible `/chat/completions` endpoint accepts only `json_schema` with `strict: true`, rejecting `json_object` with HTTP 400. Completions to `api.anthropic.com` omit `response_format`; vision captions omit `temperature` (values below 1 return 400 on Claude 4.7+). The `unsupportedResponseFormat` fallback also recognizes Anthropic's exact validation error (`response_format.type: Input should be 'json_schema'`).
+
 References: [Anthropic compatibility API](https://platform.claude.com/docs/en/cli-sdks-libraries/libraries/openai-sdk),
 [model listing](https://platform.claude.com/docs/en/api/http/models/list),
 [versioning](https://platform.claude.com/docs/en/api/versioning).

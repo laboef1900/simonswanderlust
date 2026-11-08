@@ -4,13 +4,15 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
-- **Implemented locally:** OpenAI in Settings → AI models → Add provider → Kind
+- **Implemented locally:** OpenAI kind and Anthropic endpoint compatibility in Settings → AI models
   (2026-11-08, owner-requested). Prefills the official `https://api.openai.com/v1`
   endpoint and uses existing per-provider credentials and browser-direct transport.
   Reviews, excerpts, photo descriptions and article translation recognize the kind;
-  missing-key checks apply before provider calls. Existing Custom OpenAI providers
-  are unchanged. Regression coverage includes persisted settings, real provider
-  routes, key isolation and editor consent.
+  missing-key checks apply before provider calls. For Anthropic endpoints, omits `response_format`
+  (which returns 400 on `api.anthropic.com` for `json_object`) and vision `temperature` (which returns
+  400 below 1 on Claude 4.7+), and updates `unsupportedResponseFormat` to recognize Anthropic's exact
+  validation error string. Regression coverage includes persisted settings, real provider routes, key
+  isolation, response_format omission/fallback, and editor consent. Verified live in Brave on the live site.
 
 - **Implemented locally:** borderless Visual manuscript focus (2026-11-07,
   owner-requested). Removed the enclosing focus outline; the existing steel-blue

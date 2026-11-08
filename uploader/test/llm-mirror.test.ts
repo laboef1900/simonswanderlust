@@ -156,6 +156,23 @@ describe('Anthropic browser access', () => {
     await llm.caption('http://localhost:1234/v1', 'local', '', 'data:image/jpeg;base64,AA==', 5000, 8000);
     await llm.suggestExcerpt('http://localhost:1234/v1', 'local', '',
       { locale: 'en', title: 'Mountains', markdown: 'We walked in the mountains.' }, undefined, 5000);
+    const anthropicBodies = fetcher.mock.calls
+      .filter(([u]) => String(u).startsWith('https://api.anthropic.com/'))
+      .map(([, opts]) => (opts?.body ? JSON.parse(String(opts.body)) : null))
+      .filter(Boolean);
+    const anthropicCaption = anthropicBodies.find((b) => b.max_tokens === 8000);
+    expect(anthropicCaption?.temperature).toBeUndefined();
+    const anthropicExcerpt = anthropicBodies.find((b) => !b.max_tokens);
+    expect(anthropicExcerpt?.response_format).toBeUndefined();
+
+    const localBodies = fetcher.mock.calls
+      .filter(([u]) => String(u).startsWith('http://localhost:1234/'))
+      .map(([, opts]) => (opts?.body ? JSON.parse(String(opts.body)) : null))
+      .filter(Boolean);
+    const localCaption = localBodies.find((b) => b.max_tokens === 8000);
+    expect(localCaption?.temperature).toBe(0.2);
+    const localExcerpt = localBodies.find((b) => !b.max_tokens);
+    expect(localExcerpt?.response_format).toEqual({ type: 'json_object' });
     for (const [, options] of fetcher.mock.calls) {
       expect(options).toMatchObject({ credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer' });
     }
