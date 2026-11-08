@@ -299,6 +299,29 @@ limitations, then check correspondence and delivery in the final rebuilt release
 
 ### Cutting a release
 
+**v0.21.0 — visual manuscript editing, AI translation and editorial desk** (linux/amd64 and linux/arm64,
+`ghcr.io/laboef1900/wanderlust-studio:0.21.0`). Changes since v0.20.0 (PRs #540–#552):
+
+- **Visual post editor with Markdown source toggle** (#548, #552): rich-text manuscript writing powered
+  by Tiptap as the default editor surface with an EasyMDE Markdown source toggle. Retains clean Markdown
+  persistence, safe HTML preservation, gallery directives, and borderless focus.
+- **Protected AI article translation** (#550, #551): in-browser DE↔EN story translation using configured
+  AI providers. Preserves galleries, media references, occurrence overrides, and frontmatter, with full
+  review and draft apply confirmation.
+- **Anthropic provider kind** (#549): dedicated Anthropic option in Settings → AI models with endpoint
+  prefilling (`https://api.anthropic.com/v1`), browser-direct transport, and model discovery.
+- **Editorial desk, media and settings refinements** (#541–#547): prioritized writing desk, pinned
+  manuscript toolbar, folded story details, photo-first media drawer, and task-oriented settings layout.
+- **Interactive map polish** (#540): place names, pin clustering, graticule lines, photo popups, region
+  filters, and expedition log ledger.
+
+Upgrade notes for v0.20.0 → v0.21.0 (the [release recovery checklist](ARCHITECTURE.md#release-recovery-checklist)):
+
+- **Image and deployment:** apply this release's image tag (`0.21.0`).
+- **Compose, `.env`, and schema:** no Compose changes, no `.env` changes, no schema migrations, and no
+  dump-format changes (writer stays v15); no site rebuild required.
+- **Rollback to v0.20.0:** fully supported by reverting the image tag.
+
 **v0.20.0 — street-routing regions follow the stories** (linux/amd64 and linux/arm64,
 `ghcr.io/laboef1900/wanderlust-studio:0.20.0`). Changes since v0.19.1 (PR #523):
 
