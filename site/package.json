@@ -1,7 +1,7 @@
 {
   "name": "site",
   "type": "module",
-  "version": "0.20.0",
+  "version": "0.21.0",
   "license": "AGPL-3.0-only",
   "engines": {
     "node": ">=26.0.0"
@@ -45,7 +45,7 @@
     "@fontsource/ibm-plex-mono": "^5.2.7",
     "@tailwindcss/typography": "^0.5.20",
     "@types/pg": "^8.20.0",
-    "happy-dom": "^20.11.1",
+    "happy-dom": "^21.0.4",
     "typescript": "^6.0.3",
     "vitest": "^4.1.12"
   }

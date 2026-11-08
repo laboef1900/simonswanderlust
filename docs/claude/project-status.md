@@ -4,6 +4,267 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Implemented locally:** borderless Visual manuscript focus (2026-11-07,
+  owner-requested). Removed the enclosing focus outline; the existing steel-blue
+  native blinking caret marks the insertion point, and the writing surface uses
+  the text cursor. Toolbar and other control focus rings remain unchanged.
+  Working-tree CSS was exercised in Chromium at 1440px and 390px: keyboard entry,
+  typing, native undo, visible caret and no horizontal overflow. No server writes.
+  This is styling-only; content, saving and focus order are unchanged.
+  Uploader typecheck and full suite pass (4,297 passed; 647 database-dependent tests
+  skipped). Local Astro check is blocked by missing `DATABASE_URL`. The design
+  detector flags only the existing, explicitly required Inter font. Not deployed.
+
+- **Implemented and locally verified:** protected AI article translation (#550,
+  2026-11-07). Independent provider/model/timeout assignment; browser-direct text-only
+  inference; latest unsaved DE↔EN content within the same pair; explicit consent,
+  complete structural validation, review/replacement confirmation and atomic draft apply.
+  Galleries, image identities, occurrence overrides, Media authority, manual slugs,
+  shared/publication fields and unrelated target fields are preserved. Visual/Markdown,
+  full-field Undo, recovery and optimistic save conflicts use the existing editor pipeline.
+  Independent design/security approval used `openai-codex/gpt-6-astra` (high), under the
+  owner-authorized issue-specific exception. Both full local test suites were executed;
+  corrections and previously skipped database suites were rerun separately against disposable
+  PostgreSQL 18. Uploader typecheck and Astro check passed (155 files, no diagnostics).
+  Actual Chromium exercised all four direction/mode combinations through save/reopen/preview,
+  failure/cancel/stale/consent/coverage handling, full-draft recovery and real save conflict;
+  desktop/phone views and keyboard controls were verified with a free local provider fixture.
+  Independent PR review additionally caught the AI-settings recovery fragment and
+  metadata-only Visual gallery refresh; both were reproduced and corrected, with
+  navigation and real-engine regressions plus actual browser before/after verification.
+  No production data, paid inference or publication. Detailed evidence and the single
+  acceptance checklist are in the #550 design/plan; final PR review and CI are recorded on
+  the PR. Not merged or deployed.
+
+- **Implemented locally:** Anthropic in Settings → AI models → Add provider → Kind
+  (2026-11-07, owner-requested). Prefills the official `/v1` endpoint and uses existing
+  per-provider credentials and browser-direct transport. Reviews, excerpts and photo
+  descriptions recognize the kind; missing-key checks apply before provider calls.
+  Existing Custom Anthropic providers are unchanged. Regression coverage includes
+  persisted settings, real provider routes, key isolation and editor consent.
+  Chromium exercised the actual Add form, missing-key feedback, save, model discovery,
+  assignment and a parsed excerpt against intercepted provider responses on an isolated
+  runtime; no live Anthropic credentials or production writes were used.
+  Uploader typecheck passed; full suite: 4,297 passed, 647 skipped without
+  `TEST_DATABASE_URL`. Astro check: 153 files, zero errors/warnings/hints against the
+  local database through a temporary loopback tunnel. CI and deployment not run.
+  Contract and downgrade precautions: the Anthropic-kind addendum in
+  `docs/superpowers/specs/2026-10-19-ai-provider-registry-design.md`.
+
+- **Implemented locally:** rich-text post editor (2026-11-07), following the owner's
+  reference and explicit Visual-with-Markdown choice. Tiptap Visual is the default;
+  EasyMDE remains an editable source mode over the same synchronous Markdown draft.
+  Untouched source is preserved, unsupported syntax and raw HTML stay inert, and galleries
+  retain their directives through the existing Media picker. The owner approved the
+  editor-only self-hosted esbuild exception; the rest of the admin stays vanilla. See the
+  [spec](../superpowers/specs/2026-11-07-rich-text-post-editor.md).
+  Browser smoke used a real post with writes intercepted (503): mode roundtrip, DE/EN,
+  gallery insertion/edit/cancel, mobile focus and overflow, formatting, typing, undo/redo,
+  safe raw HTML/source preservation and latest save payload were exercised without stored changes.
+  Screenshots: `.impeccable/review/editor-rich-desktop.png` and
+  `.impeccable/review/editor-rich-mobile.png`. Site tests: 872 passed, 7 skipped;
+  Astro check: 153 files clean. Uploader typecheck and full suite pass: 4,293 tests;
+  647 skipped without TEST_DATABASE_URL. Production dependency audit: zero vulnerabilities.
+  Independent review found three Markdown edge cases (link cursor offsets, literal image-alt
+  entities and unterminated fences); regressions reproduced them before the fixes and pass
+  afterward. Browser checks confirm source repair restores Visual editing. The substitute
+  finish reviewer scored all three fixes resolved; its verdict was `ship` for those fixes.
+  Human review of the authoring boundary remains required before release. Not deployed.
+
+- **Implemented locally:** compact article save feedback (2026-11-06). Successful draft
+  saves, including receipt-confirmed recovery, use the existing command-bar status rather
+  than duplicating it in a full-width recovery panel with **Check again**. Uncertain saves,
+  conflicts and account recovery retain their controls; newer edits remain unsaved.
+  Page-editor feedback and persistence/publication behavior are unchanged.
+  Editor regressions cover ordinary acknowledgements, lost responses, newer edits and failures.
+  Uploader typecheck and full suite pass: 4,253 tests; 647 skipped without TEST_DATABASE_URL.
+  Desktop (1440px) and mobile (390px) browser smoke used working-tree assets and intercepted
+  save responses, with no server writes: successful save hides the panel; failed reconciliation
+  exposes Check again; a manual receipt check hides it without replaying a write. No horizontal
+  overflow. Astro check could not load without DATABASE_URL; the saved local validation
+  database connection also refused connections. The detector's existing dynamic-image and
+  typography findings are limited by unresolved absolute stylesheet URLs. Not deployed.
+
+- **Implemented locally:** laptop-first CMS refinement (2026-11-06). Owner chose to retain
+  Editorial desk and permitted regrouping across writing, photography, journeys and navigation.
+  Desktop readiness is a counted Publish checklist with the existing field jumps and keyboard
+  dismissal; title sizing and placeholder contrast are tightened. Media gives unused inspector
+  space back to photos, folds uploads without hiding the queue, folds folders initially on
+  phones, and adds Enter/detail navigation plus a guarded Back to photos. The selected-photo
+  inspector pins on laptops; phone entry starts at the photograph rather than mid-form.
+  Journeys uses compact bilingual rows, truthful publication/dormant state, story counts and
+  enabled-locale title search. The license link is visually secondary but keeps its touch target.
+  Existing Desk, Posts and Settings workflows remain intentionally unchanged beyond shared
+  chrome; no new dashboard, routing, permissions, persistence or publication behavior was added.
+  New copy is in both dictionaries; DESIGN.md records the changed interactions.
+  Uploader typecheck and full suite pass: 4,253 tests, 647 skipped without TEST_DATABASE_URL.
+  The final media navigation suite passes 94 tests. Site: 872 pass, 7 skip.
+  Database-backed Astro check reports zero errors/warnings/hints.
+  Browser smoke used working-tree overrides against localhost at 1366px and 390px; Media,
+  Editor, Journeys and Settings had no horizontal overflow. Tested real photos, actual empty
+  journeys and clearly labelled intercepted journey fixtures; search/clear, checklist jumps,
+  Escape/menu focus, Enter/photo navigation and cancelled/confirmed metadata discard passed.
+  No page errors were observed. Server mutations were blocked; only the read-only gallery
+  analysis POST was allowed. No content was saved, published or sent to an AI provider.
+  The detector ran once: thick advisory borders and the audit heading level were corrected.
+  Inter is intentional; unresolved absolute stylesheet URLs and dynamic image placeholders
+  limit the static detector's typography/image findings. No production deployment or physical-device
+  qualification is claimed. Rollback is frontend/copy-only; persistent data is unchanged.
+  Pushed as PR [#546](https://github.com/laboef1900/simonswanderlust/pull/546) into `dev`.
+  The local app was rebuilt from `2b6a022` and recreated alone; Docker reports healthy,
+  with environment values and persistent mounts preserved. All six changed UI assets served
+  over HTTP match the source SHA-256 checksums. Browser smoke without overrides at 1366px
+  and 390px verified upload disclosure, photo details/return focus, phone folder disclosure,
+  checklist open/Escape and the actual empty journey catalogue; no page errors were observed.
+  No content was saved or published. The previous image remains available under
+  `ghcr.io/laboef1900/wanderlust-studio:local-before-cms-refinement` for local rollback.
+  PR checks are the authoritative CI result; build output also reports two moderate site
+  dependency vulnerabilities and existing license-notice review warnings, outside this UI change.
+
+- **Implemented locally:** writing-first Desk refinement (2026-11-06; distill, layout, clarify,
+  adapt and polish). Persistent New post and contextual Continue editing lead authoring; backup
+  advice moves above writing. Healthy publication sections are compact, nonzero exceptions stay
+  visible, and native Publication details holds full diagnostics and the unchanged confirmed
+  rebuild. Running/failed/unavailable build evidence stays visible outside it. Malformed or
+  unknown observations never become zero-count reassurance, and refresh preserves disclosure
+  state and keyboard focus. New copy lives in both i18n dictionaries. Standalone Desk actions
+  have 44px targets; absent thumbnails no longer reserve empty phone panels.
+  Uploader typecheck and full suite pass: 4,250 tests, 647 skipped without integration DB.
+  Site suite: 872 pass, 7 skip. Database-backed Astro check: zero errors/warnings/hints.
+  Browser smoke used working-tree asset overrides against the local app, actual empty-state
+  observations and intercepted populated/unavailable fixtures at 1440/780/390/320px.
+  DE/EN phone layouts, refresh recovery, retained disclosure, rebuild cancellation and menu
+  focus restoration were exercised; no writes were attempted and no page errors were observed.
+  The detector reports no findings but cannot resolve the absolute stylesheet URLs.
+  The temporary database bridge and browser tabs are closed. No code was deployed, pushed or
+  published; no CI or physical-device qualification is claimed. Rollback is the frontend/copy
+  change only; there is no schema, route, persisted-state or publication-pipeline migration.
+
+- **Implemented, PR #544 open:** Settings critique refinement (2026-11-06, all six requested passes).
+  All seven tabs retain the Editorial desk identity. Unsaved-work tracking names independent
+  save scopes, protects page exit, confirms discard, preserves failed saves and never stores
+  field values/keys/files in browser storage. Identity text and image selections remain
+  independent. Save bars stack below the measured dirty notice; phone testing caught and
+  removed a bottom-bar overlap. Navigation rows summarize effective DE/EN labels and expand
+  for editing without losing focus on reorder. Identity has public/profile/admin groups;
+  Site separates publishing, backup/import settings and routing. Backup history is explicitly
+  unknown when no success is recorded, independently of existing files; empty archives and
+  recovery limitations are visible. AI settings group assignments and advanced controls by
+  author task. Seconds retain exact millisecond API values. Unchanged language mode cannot
+  trigger a redundant rebuild. Save scope, timing and comment saved state are explicit.
+  Uploader: 4,236 tests pass, 647 skip without integration DB; final focused Settings run
+  passes 380 tests and TypeScript passes. Site: 872 tests pass with two workers, 7 skip;
+  an earlier concurrent run timed out in the unrelated gallery partition corpus.
+  Database-backed Astro check reports zero errors/warnings/hints; its temporary proxy closed.
+  Browser smoke used working-tree asset overrides, checked all seven tabs at desktop and
+  390px, native beforeunload cancellation, retained cross-tab edits, navigation reorder/focus,
+  and intercepted failed saves. No saved settings, backups, publication or paid AI requests
+  were triggered. The detector reports the two hidden dynamic comparison images and cannot
+  resolve the absolute CSS URL; these are not rendered broken-image boxes.
+  Pushed on `feature/settings-ux-refinement`, stacked on editor PR #543; retarget to `dev`
+  after #543 merges. The local `app` container now runs code commit `15d4da8`, built as
+  `ghcr.io/laboef1900/wanderlust-studio:local`. Its healthcheck passes, all six served Settings
+  assets match the committed files, and direct browser smoke confirms desktop/390px rendering
+  and retained cross-tab changes without asset overrides. The published release is unchanged.
+  Existing app configuration and persistent data remain in place; only `app` was recreated.
+  Rollback image: `ghcr.io/laboef1900/wanderlust-studio:local-before-settings-15d4da8`.
+  No production deployment or physical-device qualification is claimed.
+
+- **Implemented locally:** article-editor consent and remediation refinement (2026-11-06,
+  28/40 critique follow-up, all five recommended actions). Opening Story review runs local
+  checks only; provider kind/endpoint/model, sent fields and possible charges appear above
+  the checks. **Review with AI** is explicit, credentials are not retained while awaiting
+  that action, and changed configuration requires redisclosure and another click. The
+  alt-text backlog is a four-photo visual queue with language filtering, paging and
+  **Next unresolved**; missing previews remain actionable. Filtering does not mark the
+  draft dirty. Mobile has a visible **Details** label and tighter title/manuscript spacing.
+  Regression coverage includes consent, configuration changes, stale asynchronous work,
+  bounded queues, empty filters, safe thumbnails and keyboard focus. Uploader typecheck and
+  4,232 tests pass (647 skipped; database integration was not enabled). Site: 872 tests pass;
+  database-backed Astro check has zero errors/warnings/hints. Working-tree asset overrides
+  exercised the live article at 1440/900/720/390/320px, with 44px phone tools, no horizontal
+  overflow, queue paging/filtering, both locale tabs and Escape focus restoration.
+  A focused 320px check confirms the full provider/data disclosure is above the visible AI
+  action. No article was saved/published and the one explicit provider attempt was blocked
+  before transmission; no usage was incurred. Temporary browser recovery data and the
+  database-check proxy were removed. This round is not deployed or pushed; no CI result
+  or physical-device qualification is claimed.
+- **Implemented locally:** second article-editor critique refinement (2026-11-06, 29/40
+  snapshot; desktop inspector first). Hero thumbnail and excerpt lead the inspector; key
+  facts fold behind a live count and published permalinks read as quiet references without
+  changing their locks. Phones retain Photo/Gallery/Rendered while less-used tools live in a
+  Format tray; Review story moves into More and returns focus there on dismissal. The action
+  now reads **Save & preview**, preserving save-before-preview, while **Rendered / Write**
+  switches the unsaved body view. Alt-text review stays accessible and advisory, with separate
+  missing-description and improvement counts. No content, routes, persistence or publishing
+  contracts changed. Regression coverage exercises folded facts, responsive keyboard access,
+  review focus restoration and audit classification. Browser verification uses working-tree
+  asset overrides against the local stack, not a deployment. Verified desktop/intermediate
+  and 390/320px touch layouts, both locale tabs, rendered mode and keyboard dismissal;
+  no article content was saved. Uploader typecheck and 4,225 tests pass (647 skipped;
+  `TEST_DATABASE_URL` was unset); final editor DOM run passes all 223 tests.
+  Site: 872 tests pass; database-backed Astro check reports zero errors/warnings/hints.
+  The detector's six dynamic-image warnings and CSS-unresolved hierarchy warning are
+  not rendered defects. No physical-device qualification or CI result is claimed.
+- **Implemented, PR #542 open:** post editor critique
+  actions (2026-11-06; impeccable critique of the editor, 27/40, all five priority issues
+  and the minor list). The manuscript has its own pinned toolbar (EasyMDE's is off): stroke
+  icons for formatting, labelled **Photo** and **Gallery**, the gallery-Markdown toggle and a
+  **Rendered view** toggle; a roving `role="toolbar"` that pins under the command bar and
+  scrolls sideways on phones. **Photo** opens an overlay tray (upload, suggest alt, choose
+  from library) that inserts at the cursor and returns the caret; the old image row below
+  the story is gone. Story details shrank from ~4,100px to ~1,900px: Expedition details is
+  closed with a summary line (date · code · region · stops, or "Missing …") instead of
+  auto-opening; Route along stops and GPX route fold with their status in the summary;
+  key-fact values wrap and grow; the slug prefix sits above the slug. Gallery widgets show
+  only alt text per photo, one Edit in Media link per gallery and the help line once. Review
+  groups a gallery's missing alt text into one finding with Open Media; the banner reads
+  "Alt text to review: N photos". The command bar puts actions before status in tab order,
+  re-checks the live site with a small icon, hides More actions on desktop unless it holds
+  Unpublish, and shows a one-line status on phones (pinned chrome 219px → 186px including the
+  toolbar). Floating menus use one `--menu-shadow` instead of border plus blur; the inspector
+  column no longer animates its width. Save draft names ⌘S/Ctrl+S; on a live story Publish
+  reads "Publish changes" (owner-chosen wording; "changes" folds visually on phones but
+  stays in the accessible name). No routes, schema, slugs
+  or server behaviour changed. Not done: a Media link pre-filtered to the gallery's photos
+  (Media has no URL filters yet). Uploader/site Vitest and `tsc` pass; verified in Chrome at
+  1440 and 390px against the local stack. Files: `uploader/public/{editor.html,admin.css,
+  editor-galleries.js,editor-review.js,editor-linter.js,editor-gpx.js}`,
+  `site/src/i18n/ui.ts`, `DESIGN.md`, `uploader/test/{editor-dom,admin-pages}.test.ts`.
+- **Implemented, PR #541 open:** Wanderlust Studio
+  admin critique follow-up (2026-11-06; impeccable critique 27/40, all five priority issues).
+  Media is photo-first: larger titled tiles with a quiet "No alt text" tag, a detail panel that
+  opens with the photo and camera line, selection-shortcut hints, one AI entry per scope, and
+  Rename/Delete disabled on All photos. The editor's gallery widget shows Media alt text as
+  text (no empty read-only boxes), key facts stack label over value, Preview sits in the
+  command bar, the pre-publish alt review is a neutral notice, and all editor chrome is
+  English in both locale tabs. Posts hero thumbnails are 6×4rem. Import, AI models,
+  Site & backups and waypoint help were cut to one line each with details in disclosures
+  (privacy notes stay visible). The journey editor uses the story editor's command bar and
+  locale tabs; Pages are flat rows; Users lists accounts first; fieldsets never draw a box;
+  Journeys has its own icon. Settings opens on Site identity; backups-off is flagged on
+  Settings and the admin Desk. No routes, schema, slugs or server behaviour changed. Uploader
+  and site Vitest suites and `tsc` pass; verified in Chromium at 1440 and 390px (editor also
+  at 320px) against a throwaway Postgres instance. Files: `uploader/public/{admin.css,media-browser.js,
+  media.html,editor.html,editor-galleries.js,editor-title-image.js,editor-linter.js,
+  editor-review.js,gallery-metadata-warnings.js,posts.html,index.html,import.html,
+  settings.html,users.html,pages.html,journey-editor.html,journey-editor.js,journeys.css,
+  auth.js}`, `site/src/i18n/ui.ts`, `DESIGN.md`.
+- **Implemented, PR #540 open:** travel map page refinement (2026-11-06), driven by two
+  impeccable critiques (21/40, then 26/40). Trips are keyboard-focusable DOM pins showing
+  their travel-log entry number (oldest = N°01, as `entryNumberOf`), explained by a legend.
+  Pins whose badges would touch fold into a count badge that zooms them apart, or lists them
+  when they share one spot. The basemap now shows place names in the page language
+  (`layers(…, { lang })`; protomaps emits no labels without it) and a graticule with IBM Plex
+  Mono degree labels shared with the homepage chart (`graticuleTicks`/`degreeLabel`).
+  Popups show the story's smallest hero variant. Escape closes them and returns focus to the
+  opener. Locating from the region-grouped ledger zooms to ≥5. Region filters ("All" resets)
+  scroll in one row on mobile. The full map has the basemap `error` fallback, a scripted-only
+  loading label, `cooperativeGestures`, no world copies or rotation. Slugs, routes, schema and
+  content are unchanged. Files: `site/src/components/pages/MapPage.astro`,
+  `site/src/scripts/travel-map.ts`, `site/src/scripts/map-overlays.ts`,
+  `site/src/lib/map-data.ts`, `site/src/lib/map-chart.ts`, `site/src/lib/images.ts`,
+  `site/src/styles/global.css`, `site/src/i18n/ui.ts`.
 - **Done:** release build tolerates Debian snapshot throttling (2026-11-05, owner-approved
   build-pipeline change). The v0.20.0 release run failed four times in `native-build` because
   `snapshot.debian.org` answered GitHub runners with `503 No healthy backends`, and

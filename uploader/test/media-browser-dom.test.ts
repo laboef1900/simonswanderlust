@@ -70,6 +70,7 @@ class FakeNode {
   remove(): void {}
   focused = false;
   focus(): void { this.focused = true; if (this.focusState) this.focusState.activeElement = this; }
+  scrollIntoView(): void {}
   click(): void { this.dispatch('click'); }
   showModal(): void { this.open = true; }
   close(): void { this.open = false; this.dispatch('close'); }
@@ -159,7 +160,7 @@ interface Page {
   lifecycle(type: 'pagehide' | 'pageshow', persisted: boolean): void;
 }
 
-function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' | 'en'; folders?: string[]; prompt?: string; xhr?: new () => object;
+function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' | 'en'; folders?: string[]; prompt?: string; xhr?: new () => object; mobile?: boolean;
   request?: (url: string, init?: { method?: string; body?: string }) => Promise<unknown> | undefined } = {}): Page {
   const focusState = { activeElement: null as FakeNode | null };
   const roots = new Map<string, FakeNode>();
@@ -245,6 +246,7 @@ function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' 
     setTimeout: (fn: () => void, ms = 0) => { const id = ++timerSeq; timers.push({ id, fn, ms, cleared: false }); return id; },
     clearTimeout: (id: number) => { const t = timers.find((timer) => timer.id === id); if (t) t.cleared = true; },
     confirm: (msg: string) => { confirms.push(msg); return confirmAnswer.value; },
+    matchMedia: () => ({ matches: !!opts.mobile }),
     AdminConfirm: {
       ask: async (opts: { body: string }) => { confirms.push(opts.body); return confirmAnswer.value; },
     },
@@ -348,6 +350,7 @@ describe('media-browser empty states', () => {
     page.el('emptyChoosePhotos').click();
     expect(choose).toHaveBeenCalledOnce();
     expect(page.el('fileInput').focused).toBe(true);
+    expect(page.el('dropZone').open).toBe(true);
     if (!options.isAdmin) expect(page.el('rescan').hidden).toBe(true);
     expect(page.patches).toHaveLength(0);
   });
@@ -380,6 +383,48 @@ describe('media-browser empty states', () => {
     expect(page.el('grid').hidden).toBe(false);
     expect(page.el('grid').querySelectorAll('.media-cell')).toHaveLength(1);
     expect(page.patches).toHaveLength(0);
+  });
+});
+
+describe('media detail navigation', () => {
+  it('opens phone details from a photo and protects unsaved text when returning to the grid', async () => {
+    // Layout and scroll placement are verified in the actual browser.
+    const page = loadPage({ mobile: true });
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [item('one'), item('two')], total: 2 });
+    await page.flush();
+    expect(page.el('detail').hidden).toBe(true);
+    expect(page.el('mediaFolders').open).toBe(false);
+    page.el('grid').querySelectorAll('.media-cell')[1]!.click();
+    expect(page.el('detail').hidden).toBe(false);
+    expect(page.activeElement()).toBe(page.el('detail'));
+    page.el('dTitle').value = 'Unsaved photo title';
+    page.el('detail').dispatch('input');
+    page.confirmAnswer.value = false;
+    page.el('detailBack').click();
+    expect(page.el('detail').hidden).toBe(false);
+    expect(page.el('dTitle').value).toBe('Unsaved photo title');
+    page.confirmAnswer.value = true;
+    page.el('detailBack').click();
+    expect(page.el('detail').hidden).toBe(true);
+    expect(page.activeElement()?.dataset.key).toBe('two');
+    expect(page.patches).toEqual([]);
+  });
+
+  it('opens the focused photo with Enter without changing a bulk selection', async () => {
+    const page = loadPage();
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [item('one'), item('two')], total: 2 });
+    await page.flush();
+    const cells = page.el('grid').querySelectorAll('.media-cell');
+    cells[0]!.dispatch('keydown', { key: 'a', ctrlKey: true });
+    const selected = page.el('selCount').textContent;
+    page.el('grid').querySelectorAll('.media-cell')[1]!.dispatch('keydown', { key: 'Enter' });
+    expect(page.el('detail').dataset.key).toBe('two');
+    expect(page.activeElement()).toBe(page.el('detail'));
+    expect(page.el('selCount').textContent).toBe(selected);
+    page.el('detailBack').click();
+    expect(page.activeElement()?.dataset.key).toBe('two');
   });
 });
 

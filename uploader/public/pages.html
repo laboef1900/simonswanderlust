@@ -24,15 +24,17 @@ async function loadPages() {
   const list = document.getElementById('pagesList'); list.replaceChildren();
   for (const page of pages) {
     if (prepareLocale && !page.known) continue;
-    const section = document.createElement('section'); section.className = 'card';
-    const title = document.createElement('h2'); title.className = 'card-heading'; title.textContent = PagesUI.kind(page.key);
-    const state = document.createElement('p'); state.className = 'muted';
-    state.textContent = !page.known ? PagesUI.text('Unknown') : !page.exists ? PagesUI.text('Missing') : PagesUI.text(page.status === 'published' ? 'Published' : 'Draft');
-    const titles = document.createElement('p');
+    const section = document.createElement('section'); section.className = 'pages-row';
+    const title = document.createElement('h2'); title.className = 'pages-row__kind'; title.textContent = PagesUI.kind(page.key);
+    const state = document.createElement('p');
+    const published = page.known && page.exists && page.status === 'published';
+    state.className = page.known && page.exists ? 'pages-row__state status-pill ' + (published ? 'published' : 'draft') : 'pages-row__state muted';
+    state.textContent = !page.known ? PagesUI.text('Unknown') : !page.exists ? PagesUI.text('Missing') : PagesUI.text(published ? 'Published' : 'Draft');
+    const titles = document.createElement('p'); titles.className = 'pages-row__titles';
     titles.textContent = (prepareLocale ? [prepareLocale] : language.locales).map((locale) => locale.toUpperCase() + ': ' + (page.locales[locale].title || PagesUI.text('None'))).join(' · ');
-    const actions = document.createElement('div'); actions.className = 'form-actions';
+    const actions = document.createElement('div'); actions.className = 'pages-row__actions';
     if (page.known) {
-      const edit = document.createElement('a'); edit.className = 'btn-secondary';
+      const edit = document.createElement('a'); edit.className = 'action-link';
       edit.href = '/admin/about.html?key=' + encodeURIComponent(page.key) + (prepareLocale ? '&prepareLocale=' + prepareLocale : '');
       edit.textContent = PagesUI.text(page.exists ? 'Edit' : 'Create'); actions.append(edit);
     }
@@ -51,7 +53,7 @@ async function loadPages() {
         finally { remove.disabled = false; if (cancelled) remove.focus(); }
       }); actions.append(remove);
     }
-    if (!page.deletable) { const fixed = document.createElement('p'); fixed.className = 'muted'; fixed.textContent = PagesUI.text('Fixed'); actions.append(fixed); }
+    if (!page.deletable) { const fixed = document.createElement('p'); fixed.className = 'muted pages-row__fixed'; fixed.textContent = PagesUI.text('Fixed'); actions.append(fixed); }
     section.append(title, state, titles, actions); list.append(section);
   }
 }

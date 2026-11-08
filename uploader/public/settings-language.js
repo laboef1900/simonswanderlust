@@ -4,6 +4,10 @@ window.SettingsLanguage = (function () {
     const $ = (id) => document.getElementById(id);
     let loaded = null;
     let busy = false;
+    const draft = SettingsDrafts.watch('language', $('languageMode'), SiteLanguage.text('Tab'));
+    function syncSave() {
+      $('saveLanguage').disabled = !loaded || $('languageMode').value === loaded.primary + ':' + loaded.locales.join(',');
+    }
     const status = (text) => { $('languageStatus').textContent = text; };
     function candidate() {
       const [primary, locales] = $('languageMode').value.split(':');
@@ -41,6 +45,8 @@ window.SettingsLanguage = (function () {
       prepare.textContent = SiteLanguage.text('Prepare', { locale: secondary.toUpperCase() });
       $('languageScope').textContent = scope();
       $('languageFields').disabled = false;
+      draft.clean();
+      syncSave();
     }
     async function load() {
       if (busy) return;
@@ -52,11 +58,19 @@ window.SettingsLanguage = (function () {
       catch (error) { status(error.message); }
       finally { busy = false; $('languageReload').disabled = false; }
     }
-    $('languageMode').addEventListener('change', () => { $('languageScope').textContent = scope(); });
-    $('languageReload').addEventListener('click', load);
+    $('languageMode').addEventListener('change', () => {
+      $('languageScope').textContent = scope();
+      syncSave();
+      if ($('saveLanguage').disabled) draft.clean();
+    });
+    $('languageReload').addEventListener('click', async () => {
+      if (draft.isDirty() && !await AdminConfirm.ask({ title: SiteLanguage.text('Reload'),
+        body: EditorCopy.en.identityReloadConfirm, confirmLabel: SiteLanguage.text('Reload') })) return;
+      await load();
+    });
     $('languageForm').addEventListener('submit', async (event) => {
       event.preventDefault();
-      if (busy || !loaded) return;
+      if (busy || !loaded || $('languageMode').value === loaded.primary + ':' + loaded.locales.join(',')) return;
       const next = candidate();
       let mutating = false;
       busy = true;
@@ -89,6 +103,7 @@ window.SettingsLanguage = (function () {
         busy = false;
         $('languageFields').disabled = false;
         $('languageReload').disabled = false;
+        syncSave();
         if (mutating) publication.endAction();
       }
     });

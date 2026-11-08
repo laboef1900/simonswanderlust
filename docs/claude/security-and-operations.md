@@ -81,17 +81,21 @@ Full security model: `SECURITY.md`. These patterns MUST be preserved when changi
 
 ### 4. AI/LLM Security
 
-- AI captions and editorial review are browser-direct. The server never contacts a model:
-  do not proxy providers through the server or `safeFetch`, which would add an SSRF surface.
+- AI captions, editorial review, excerpts and article translation are browser-direct.
+  The server never contacts a model: do not proxy providers through the server or
+  `safeFetch`, which would add an SSRF surface.
 - Model output is untrusted; it MUST NOT reach commands, queries, or authorization decisions.
 - AI destinations live in the **provider registry** (`settings.json` `aiProviders`, one
-  assignment per use case: Story review & excerpts, Photo descriptions). Each remote provider
-  owns one encrypted key (`app_secrets` `ai_provider_key:<id>`); slot names come only from
-  validated registry ids (`slotFor`). `GET /ai-config[?purpose=caption]` returns a key only
-  together with the base URL of the provider that owns it, to authenticated authors in
-  request-local browser memory; local providers never hold or read one, and local captions
-  never touch the secrets store. Never persist keys in browser storage, logs, or draft
-  backups. Config and credential responses are `no-store`.
+  assignment per use case: Story review & excerpts, Photo descriptions, Article translation).
+  Each remote provider owns one encrypted key (`app_secrets` `ai_provider_key:<id>`); slot
+  names come only from validated registry ids (`slotFor`). `GET /ai-config` and its
+  `?purpose=caption` / `?purpose=translation` variants return a key only together with its
+  owning provider's base URL, to authenticated authors in request-local browser memory.
+  Local providers never hold or read a key. Never persist keys in browser storage, logs,
+  or draft backups. Config and credential responses are `no-store`.
+  Translation's authenticated prepare/validate routes are bounded, read-only source analysis,
+  not inference or persistence. Translation requires explicit consent, complete structural
+  validation and reviewed application; it never automatically retries, saves or publishes.
 - Provider/key management (`/ai-providers*`, incl. the admin-only `/credential` read for
   Settings Test) and settings writes remain admin-only. Settings responses expose only key
   presence; `ENCRYPTION_KEY` is separately escrowed. Missing master key allows local

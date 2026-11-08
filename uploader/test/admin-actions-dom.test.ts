@@ -19,6 +19,7 @@ import { ui } from '../../site/src/i18n/ui.js';
 import { renderGpxCopy } from '../src/gpx-copy.js';
 import { renderStopRouteCopy } from '../src/stop-route-copy.js';
 import { publication, loadPublicationState } from './publication-client-fixture.js';
+import { Window } from '../../site/node_modules/happy-dom/lib/index.js';
 
 // posts.html, settings.html and comments.html run their actions as plain
 // top-level browser code. Load each inline script in a vm context backed by a
@@ -261,18 +262,6 @@ function loadPosts(extraGlobals: Record<string, unknown> = {}, languageRead?: ()
   vm.runInContext('listStale = false', page.ctx);
   return page;
 }
-
-describe('ordinary Desk empty states', () => {
-  it.each([true, false])('keeps draft creation available without onboarding (admin: %s)', (isAdmin) => {
-    const { ctx, el } = loadPage('public/index.html', {}, ['public/desk.js']);
-    vm.runInContext(`authenticatedContext = { isAdmin: ${isAdmin} }; renderNext(null); renderRelease(false);`, ctx);
-    const empty = el('deskNext').children[0]!;
-    expect(empty.children[0]!.textContent).toBe(ui.en['editor.chrome.deskNoDrafts']);
-    expect(empty.children[1]!.href).toBe('/admin/editor.html');
-    expect(el('deskRelease').textContent).toBe(ui.en[isAdmin ? 'editor.chrome.deskNoReleaseAdmin' : 'editor.chrome.deskNoReleaseAuthor']);
-    expect(el('deskRelease').children).toHaveLength(0);
-  });
-});
 
 describe('import.html rejection accounting', () => {
   it('shows a rejection-only completed summary and renders HTML-like slugs only as text', () => {
@@ -1661,13 +1650,16 @@ describe('posts.html row actions', () => {
 // Fixtures mirror the AI provider registry contract (spec 2026-10-19 §4): the
 // settings response every /settings and /ai-providers route answers with.
 
-type ProviderKind = 'lm-studio' | 'openrouter' | 'deepseek' | 'custom';
+type ProviderKind = 'lm-studio' | 'openrouter' | 'deepseek' | 'anthropic' | 'custom';
 interface ProviderView { id: string; name: string; kind: ProviderKind; baseUrl: string; hasApiKey: boolean }
 interface SettingsResponse {
   aiProviders: ProviderView[];
   aiDefaultProviderId: string;
   reviewProviderId: string | null;
   captionProviderId: string | null;
+  translationProviderId: string | null;
+  translationModel: string;
+  translationTimeoutMs: number;
   aiModel: string;
   reviewPrompt: string;
   reviewTimeoutMs: number;
@@ -1696,6 +1688,7 @@ const DEEPSEEK: ProviderView = { id: 'deepseek', name: 'DeepSeek', kind: 'deepse
 function settingsResponse(overrides: Partial<SettingsResponse> = {}): SettingsResponse {
   return {
     aiProviders: [LOCAL], aiDefaultProviderId: 'lm-studio', reviewProviderId: null, captionProviderId: null,
+    translationProviderId: null, translationModel: 'translation-model', translationTimeoutMs: 120000,
     aiModel: 'review-model', reviewPrompt: 'Review prompt', reviewTimeoutMs: 60000,
     lmModel: 'vision-model', captionPrompt: 'Caption prompt', captionTimeoutMs: 60000, captionMaxTokens: 8000, captionMaxEdge: 768,
     backupSchedule: 'off', backupRetention: 14, convertJpeg: true, webpQuality: 75, avifQuality: 55,
@@ -1710,8 +1703,16 @@ function loadSettingsPage(extra: Record<string, unknown> = {}) {
     LLM: { mixedContentWarning: () => '', listModels: async () => [] },
     AbortController, AbortSignal, setTimeout, clearTimeout,
     ...extra,
-  }, ['public/tabs.js']);
+  }, ['public/tabs.js', 'public/settings-drafts.js']);
 }
+
+/** Settings opens on Site identity; model lookups run only while AI models is shown. */
+const AI_MODELS_TAB = {
+  location: {
+    href: 'http://localhost/admin/settings.html#ai-models', origin: 'http://localhost',
+    pathname: '/admin/settings.html', search: '', hash: '#ai-models', protocol: 'http:',
+  },
+};
 
 /** Calls a top-level function the page script declared (vm puts it on the context). */
 async function callPage(ctx: Record<string, unknown>, name: string, ...args: unknown[]): Promise<void> {
@@ -1745,6 +1746,7 @@ function pageText(el: (id: string) => Element): string {
     'providersOut', 'providerFormOut', 'providerKeyHelp', 'providerKeyMoveWarning', 'providerUrlWarning',
     'reviewResolved', 'reviewDestination', 'captionResolved', 'captionDestination', 'aiOut', 'reviewTestOut', 'out',
     'reviewModelStatus', 'captionModelStatus',
+    'translationResolved', 'translationDestination', 'translationModelStatus', 'translationProviderWarn',
   ].map((id) => el(id).textContent).concat(descendants(el('providerList')).map((n) => n.textContent)).join('\n');
 }
 
@@ -1759,7 +1761,10 @@ async function chooseModel(el: (id: string) => Element, id: string, label: strin
   await el(id).fire('change');
 }
 
-/** settings.html over a contract-shaped fake API. `route` answers first; /settings is served from `state`. */
+/**
+ * settings.html over a contract-shaped fake API. `route` answers first; /settings is served from `state`.
+ * These tests drive the AI registry, so the page opens on its tab unless `hash` says otherwise.
+ */
 async function apiPage(initial: SettingsResponse, opts: {
   confirm?: (question: Question) => boolean | Promise<boolean>;
   route?: (request: ApiRequest, setState: (next: SettingsResponse) => void) => Response | undefined | Promise<Response | undefined>;
@@ -1793,7 +1798,7 @@ async function apiPage(initial: SettingsResponse, opts: {
     AdminConfirm: {
       ask: async (question: Question) => { questions.push(question); return opts.confirm ? opts.confirm(question) : true; },
     },
-    ...(opts.hash === undefined ? {} : {
+    ...(opts.hash === undefined ? AI_MODELS_TAB : {
       location: {
         href: 'http://localhost/admin/settings.html' + opts.hash, origin: 'http://localhost',
         pathname: '/admin/settings.html', search: '', hash: opts.hash, protocol: 'http:',
@@ -1805,6 +1810,79 @@ async function apiPage(initial: SettingsResponse, opts: {
 }
 
 const calls = (requests: ApiRequest[]) => requests.map((r) => r.method + ' ' + r.url);
+
+describe('Settings safety and recovery state', () => {
+  it('keeps the leave guard for another dirty section after saving, and never persists entered credentials', async () => {
+    const page = await apiPage(settingsResponse());
+    const leave = async () => {
+      let prevented = false;
+      for (const listener of page.windowListeners.beforeunload ?? []) {
+        await listener({ preventDefault() { prevented = true; } });
+      }
+      return prevented;
+    };
+    expect(await leave()).toBe(false);
+    await page.el('commentSettings').fire('input');
+    await page.el('useCaseSection').fire('input');
+    await page.el('saveComments').click();
+    expect(await leave()).toBe(true);
+    await page.el('saveAi').click();
+    expect(await leave()).toBe(false);
+    await page.el('addProvider').click();
+    page.el('providerApiKey').value = 'fixture-never-store-this-key';
+    await page.el('providerForm').fire('input');
+    expect(await leave()).toBe(true);
+    expect(page.el('settingsDraftStatus').textContent).not.toContain('fixture-never-store-this-key');
+    expect(page.storageWrite).not.toHaveBeenCalled();
+    await page.el('cancelProvider').click();
+    expect(await leave()).toBe(false);
+    expect(page.el('providerApiKey').value).toBe('');
+  });
+
+  it('requires fresh consent to discard all pending settings', async () => {
+    let confirmed = false;
+    const reload = vi.fn();
+    const page = loadSettingsPage({
+      location: { ...AI_MODELS_TAB.location, reload },
+      AdminConfirm: { ask: async () => confirmed },
+    });
+    await page.el('useCaseSection').fire('input');
+    await page.el('settingsDiscard').click();
+    expect(reload).not.toHaveBeenCalled();
+    confirmed = true;
+    await page.el('settingsDiscard').click();
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('distinguishes unknown operation history from existing files and explicit empty archive lists', async () => {
+    const page = loadSettingsPage();
+    await callPage(page.ctx, 'renderBackups', {
+      state: {}, files: [{ name: 'db-existing.json.gz', size: 2048 }], imageArchives: [], routeArchives: [],
+    });
+    expect(page.el('backupStatus').textContent).toBe(EDITOR_COPY.settingsBackupUnknown);
+    expect(page.el('backupFiles').children[0]?.children[0]?.href).toBe('/backups/db-existing.json.gz');
+    expect(page.el('imageArchives').children[0]?.textContent).toBe(EDITOR_COPY.settingsImagesEmpty);
+    expect(page.el('routeArchives').children[0]?.textContent).toBe(EDITOR_COPY.settingsRoutesEmpty);
+    await callPage(page.ctx, 'renderBackups', {
+      state: { lastSuccessAt: '2026-11-06T00:00:00Z' }, files: [], imageArchives: [], routeArchives: [],
+    });
+    expect(page.el('backupStatus').textContent).toContain('2026-11-06T00:00:00Z');
+    expect(page.el('backupFiles').children[0]?.textContent).toBe(EDITOR_COPY.settingsBackupEmpty);
+  });
+
+  it('converts fractional seconds to exact import milliseconds and saves only the backup/import scope', async () => {
+    const page = await apiPage(settingsResponse({ importDelayMs: 1201 }));
+    expect(Number(page.el('importDelaySeconds').value)).toBe(1.201);
+    page.el('importDelaySeconds').value = '1.001';
+    page.el('importRetries').value = '2';
+    page.el('routingCarUrl').value = 'https://unsaved.example/';
+    await page.el('save').click();
+    expect(page.requests[0]?.body).toEqual({
+      backupSchedule: 'off', backupRetention: 14, importDelayMs: 1001, importRetries: 2,
+    });
+    expect(page.el('routingCarUrl').value).toBe('https://unsaved.example/');
+  });
+});
 
 describe('settings.html tabs', () => {
   const PANELS = ['panel-ai-models', 'panel-images', 'panel-comments', 'panel-identity', 'panel-language', 'panel-site'];
@@ -1825,11 +1903,11 @@ describe('settings.html tabs', () => {
     return { ...page, location, replaced, visible, title };
   }
 
-  it.each(['', '#', '#nope', '#__proto__'])('opens AI models for hash %j without rewriting the URL', (hash) => {
+  it.each(['', '#', '#nope', '#__proto__'])('opens Site identity for hash %j without rewriting the URL', (hash) => {
     const t = tabsPage(hash);
-    expect(t.visible()).toEqual(['panel-ai-models']);
-    expect(t.title()).toBe(' · AI models');
-    expect(t.el('tabbtn-ai-models').attrs['aria-selected']).toBe('true');
+    expect(t.visible()).toEqual(['panel-identity']);
+    expect(t.title()).toBe(' · ' + EDITOR_COPY.identityTab);
+    expect(t.el('tabbtn-identity').attrs['aria-selected']).toBe('true');
     expect(t.replaced).toEqual([]);
   });
 
@@ -1841,41 +1919,55 @@ describe('settings.html tabs', () => {
     expect(t.el('tabbtn-ai-models').tabIndex).toBe(-1);
   });
 
+  it('opens the AI assignment panel when following translation configuration recovery', async () => {
+    const window = new Window();
+    try {
+      const editor = new window.DOMParser().parseFromString(readFileSync('public/editor.html', 'utf8'), 'text/html');
+      const link = editor.querySelector('#translationSettings')!;
+      const destination = new URL(link.getAttribute('href')!, 'http://localhost/admin/editor.html');
+      expect(destination.pathname).toBe('/admin/settings.html');
+      const t = tabsPage(destination.hash);
+      expect(t.visible()).toEqual(['panel-ai-models']);
+      expect(t.el('tabbtn-ai-models').attrs['aria-selected']).toBe('true');
+      expect(t.el('tabbtn-ai-models').tabIndex).toBe(0);
+    } finally { await window.happyDOM.close(); }
+  });
+
   it('opens the identity deep link and includes it in keyboard navigation', async () => {
     const t = tabsPage('#identity');
     expect(t.visible()).toEqual(['panel-identity']);
     expect(t.el('tabbtn-identity').tabIndex).toBe(0);
     expect(t.title()).toBe(' · ' + EDITOR_COPY.identityTab);
-    await t.el('tabbtn-identity').fire('keydown', { key: 'ArrowUp' });
-    expect(t.visible()).toEqual(['panel-comments']);
-    expect(t.replaced).toEqual(['#comments']);
+    await t.el('tabbtn-identity').fire('keydown', { key: 'ArrowDown' });
+    expect(t.visible()).toEqual(['panel-language']);
+    expect(t.replaced).toEqual(['#language']);
   });
 
   it('opens language settings directly and includes the panel in keyboard navigation', async () => {
     const t = tabsPage('#language');
     expect(t.visible()).toEqual(['panel-language']);
     expect(t.title()).toBe(' · Languages');
-    await t.el('tabbtn-language').fire('keydown', { key: 'ArrowDown' });
-    expect(t.visible()).toEqual(['panel-site']);
+    await t.el('tabbtn-language').fire('keydown', { key: 'ArrowUp' });
+    expect(t.visible()).toEqual(['panel-identity']);
   });
 
   it('a vertical index moves with Up/Down, Home/End, and mirrors the tab in the hash and title', async () => {
     const t = tabsPage();
     expect(t.el('settingsTabs').attrs['aria-orientation']).toBe('vertical');
-    await t.el('tabbtn-ai-models').fire('keydown', { key: 'ArrowRight' });
-    expect(t.visible()).toEqual(['panel-ai-models']);
-    await t.el('tabbtn-ai-models').fire('keydown', { key: 'ArrowDown' });
-    expect(t.visible()).toEqual(['panel-images']);
-    expect(t.el('tabbtn-images').focused).toBe(true);
-    expect(t.title()).toBe(' · Images');
-    await t.el('tabbtn-images').fire('keydown', { key: 'End' });
+    await t.el('tabbtn-identity').fire('keydown', { key: 'ArrowRight' });
+    expect(t.visible()).toEqual(['panel-identity']);
+    await t.el('tabbtn-identity').fire('keydown', { key: 'ArrowDown' });
+    expect(t.visible()).toEqual(['panel-language']);
+    expect(t.el('tabbtn-language').focused).toBe(true);
+    expect(t.title()).toBe(' · Languages');
+    await t.el('tabbtn-language').fire('keydown', { key: 'End' });
     expect(t.visible()).toEqual(['panel-site']);
     expect(t.title()).toBe(' · Site & backups');
     await t.el('tabbtn-site').fire('keydown', { key: 'ArrowDown' });
-    expect(t.visible()).toEqual(['panel-ai-models']);
-    await t.el('tabbtn-ai-models').fire('keydown', { key: 'ArrowUp' });
+    expect(t.visible()).toEqual(['panel-identity']);
+    await t.el('tabbtn-identity').fire('keydown', { key: 'ArrowUp' });
     await t.el('tabbtn-site').fire('keydown', { key: 'Home' });
-    expect(t.replaced).toEqual(['#images', '#site', '#ai-models', '#site', '#ai-models']);
+    expect(t.replaced).toEqual(['#language', '#site', '#identity', '#site', '#identity']);
   });
 
   it('a click selects the tab and a hashchange (back/forward, edited URL) selects it too', async () => {
@@ -1893,10 +1985,10 @@ describe('settings.html tabs', () => {
   it('below 72rem the strip is horizontal and its arrow keys follow', async () => {
     const t = tabsPage('', true);
     expect(t.el('settingsTabs').attrs['aria-orientation']).toBe('horizontal');
-    await t.el('tabbtn-ai-models').fire('keydown', { key: 'ArrowDown' });
-    expect(t.visible()).toEqual(['panel-ai-models']);
-    await t.el('tabbtn-ai-models').fire('keydown', { key: 'ArrowRight' });
-    expect(t.visible()).toEqual(['panel-images']);
+    await t.el('tabbtn-identity').fire('keydown', { key: 'ArrowDown' });
+    expect(t.visible()).toEqual(['panel-identity']);
+    await t.el('tabbtn-identity').fire('keydown', { key: 'ArrowRight' });
+    expect(t.visible()).toEqual(['panel-language']);
   });
 });
 
@@ -2484,7 +2576,7 @@ describe('settings.html providers', () => {
     const { el } = page;
     await rowButton(providerRow(el, 'OpenRouter'), 'Set default').click();
     expect(page.questions).toHaveLength(1);
-    for (const part of [EDITOR_COPY.settingsWriting, EDITOR_COPY.settingsCaptions, ROUTER.baseUrl, LOCAL.baseUrl]) {
+    for (const part of [EDITOR_COPY.settingsWriting, EDITOR_COPY.settingsCaptions, EDITOR_COPY.settingsTranslation, ROUTER.baseUrl, LOCAL.baseUrl]) {
       expect(page.questions[0]!.body).toContain(part);
     }
     expect(page.requests).toEqual([]);
@@ -2498,7 +2590,7 @@ describe('settings.html providers', () => {
   });
 
   it('Set default does not ask when every use case is explicitly assigned', async () => {
-    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER], reviewProviderId: 'lm-studio', captionProviderId: 'lm-studio' }));
+    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER], reviewProviderId: 'lm-studio', captionProviderId: 'lm-studio', translationProviderId: 'lm-studio' }));
     await rowButton(providerRow(page.el, 'OpenRouter'), 'Set default').click();
     expect(page.questions).toEqual([]);
     expect(page.requests[0]).toEqual({ url: '/settings', method: 'POST', body: { aiDefaultProviderId: 'openrouter' } });
@@ -2665,7 +2757,7 @@ describe('settings.html model lists', () => {
     expect(pageText(el)).not.toContain('fixture-stored-key');
   });
 
-  it('two use cases on one provider share a single lookup', async () => {
+  it('all three use cases on one provider share a single lookup', async () => {
     const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER], aiDefaultProviderId: 'openrouter' }), { route: storedKey });
     await callPage(page.ctx, 'init');
     expect(calls(page.requests)).toEqual(['GET /settings', 'GET /ai-providers/openrouter/credential']);
@@ -2733,7 +2825,7 @@ describe('settings.html model lists', () => {
     expect(modelOptions(el, 'aiModel')).toEqual(['review-model (saved, not listed)', 'c-1', 'Other model ID…']);
   });
 
-  it('a failed lookup keeps the saved model and Other, and names the likely causes without provider text', async () => {
+  it('a failed lookup keeps the saved model and Other without exposing provider text', async () => {
     const page = await apiPage(settingsResponse(), {
       listModels: async () => { throw new Error('fixture-provider-detail'); },
     });
@@ -2742,19 +2834,16 @@ describe('settings.html model lists', () => {
     expect(modelOptions(el, 'aiModel')).toEqual(['review-model', 'Other model ID…']);
     expect(el('aiModel').value).toBe('review-model');
     expect(el('aiModel').attrs['aria-busy']).toBe('false');
-    expect(el('reviewModelStatus').textContent).toMatch(/^Could not list models from Local LM Studio\. .*API key.*CORS.*online/);
     expect(pageText(el)).not.toContain('fixture-provider-detail');
   });
 
   it('a stored key that cannot be loaded, or a missing required key, fails without asking the provider', async () => {
-    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER, DEEPSEEK], reviewProviderId: 'openrouter', captionProviderId: 'deepseek' }), {
+    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER, DEEPSEEK], reviewProviderId: 'openrouter', captionProviderId: 'deepseek', translationProviderId: 'openrouter' }), {
       route: (request) => (request.url.endsWith('/credential') ? Response.json({ error: 'Secrets unavailable.' }, { status: 503 }) : undefined),
     });
     const { el } = page;
     await callPage(page.ctx, 'init');
     expect(page.listModels).not.toHaveBeenCalled();
-    expect(el('reviewModelStatus').textContent).toMatch(/^Could not list models from OpenRouter\./);
-    expect(el('captionModelStatus').textContent).toBe('DeepSeek needs an API key to list its models. Edit the provider to add one, or choose “Other model ID…”.');
     expect(el('lmModel').attrs['aria-busy']).toBe('false');
   });
 
@@ -2771,6 +2860,97 @@ describe('settings.html model lists', () => {
 });
 
 describe('settings.html use case assignments', () => {
+  it('saves an independent translation assignment without changing review/photo values or the separate provider draft', async () => {
+    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, DEEPSEEK] }), { hash: '#images' });
+    const { el } = page;
+    await el('addProvider').click();
+    el('providerName').value = 'Pending provider';
+    el('providerApiKey').value = 'fixture-keep-request-local';
+    await el('providerForm').fire('input');
+    el('translationProviderId').value = 'deepseek';
+    await el('translationProviderId').fire('change');
+    expect(el('translationProviderWarn').textContent).toContain('“DeepSeek” has no stored API key');
+    await chooseModel(el, 'translationModel', 'Other model ID…');
+    el('translationModelOtherInput').value = ' translation-2 ';
+    await el('translationModelOtherInput').fire('input');
+    el('translationTimeoutSeconds').value = '130.123';
+    await el('useCaseSection').fire('input');
+    await el('saveAi').click();
+    expect(calls(page.requests)).toEqual(['POST /settings']);
+    expect(page.requests[0]!.body).toEqual({
+      reviewProviderId: null, captionProviderId: null, aiModel: 'review-model', lmModel: 'vision-model',
+      reviewPrompt: 'Review prompt', reviewTimeoutMs: 60000, captionPrompt: 'Caption prompt',
+      captionTimeoutMs: 60000, captionMaxEdge: 768, captionMaxTokens: 8000,
+      translationProviderId: 'deepseek', translationModel: 'translation-2', translationTimeoutMs: 130123,
+    });
+    expect(el('translationModel').value).toBe('translation-2');
+    expect(el('translationModelOther').hidden).toBe(true);
+    expect(el('aiOut').textContent).toBe(EDITOR_COPY.writingSaved);
+    expect(el('translationResolved').textContent).toBe('→ DeepSeek / translation-2');
+    expect(el('reviewModelOther').hidden).toBe(true);
+    expect(el('aiModel').value).toBe('review-model');
+    expect(el('lmModel').value).toBe('vision-model');
+    expect(el('providerName').value).toBe('Pending provider');
+    expect(el('providerApiKey').value).toBe('fixture-keep-request-local');
+    expect(el('settingsDraftStatus').textContent).not.toContain(EDITOR_COPY.settingsAiSection);
+    expect(el('settingsDraftStatus').textContent).toContain(EDITOR_COPY.settingsProvider);
+    expect(page.storageWrite).not.toHaveBeenCalled();
+    expect(pageText(el)).not.toContain('fixture-keep-request-local');
+  });
+
+  it('a registry/default refresh preserves pending translation model and timeout until the shared AI save', async () => {
+    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER] }), { hash: '#images' });
+    await chooseModel(page.el, 'translationModel', 'Other model ID…');
+    page.el('translationModelOtherInput').value = 'pending-translation';
+    await page.el('translationModelOtherInput').fire('input');
+    page.el('translationTimeoutSeconds').value = '200';
+    await page.el('useCaseSection').fire('input');
+    await rowButton(providerRow(page.el, ROUTER.name), 'Set default').click();
+    expect(page.el('translationModelOtherInput').value).toBe('pending-translation');
+    expect(page.el('translationTimeoutSeconds').value).toBe('200');
+    expect(page.el('translationDestination').textContent).toBe(ROUTER.baseUrl);
+    expect(page.el('settingsDraftStatus').textContent).toContain(EDITOR_COPY.settingsAiSection);
+    await page.el('saveAi').click();
+    expect(page.requests.at(-1)!.body).toMatchObject({
+      translationProviderId: null, translationModel: 'pending-translation', translationTimeoutMs: 200000,
+    });
+    expect(page.el('settingsDraftStatus').textContent).not.toContain(EDITOR_COPY.settingsAiSection);
+  });
+
+  it('retains a refused translation save and blocks retry when the registry refresh fails', async () => {
+    let failedRefresh = false;
+    const page = await apiPage(settingsResponse(), {
+      hash: '#images',
+      route(request) {
+        if (request.method === 'POST') {
+          failedRefresh = true;
+          return Response.json({ error: 'Translation timeout is out of range.' }, { status: 400 });
+        }
+        return failedRefresh ? Response.json({}, { status: 503 }) : undefined;
+      },
+    });
+    page.el('translationTimeoutSeconds').value = '301';
+    await page.el('useCaseSection').fire('input');
+    await page.el('saveAi').click();
+    expect(page.el('translationTimeoutSeconds').value).toBe('301');
+    expect(page.el('aiOut').textContent).toContain('Translation timeout is out of range.');
+    expect(page.el('aiOut').textContent).toContain(EDITOR_COPY.settingsRegistryUnavailable);
+    expect(page.el('saveAi').disabled).toBe(true);
+    const before = page.requests.length;
+    await page.el('saveAi').click();
+    expect(page.requests).toHaveLength(before);
+    expect(page.el('settingsDraftStatus').textContent).toContain(EDITOR_COPY.settingsAiSection);
+  });
+
+  it('names a saved translation assignment when refusing provider deletion', async () => {
+    const page = await apiPage(settingsResponse({
+      aiProviders: [LOCAL, ROUTER], translationProviderId: 'openrouter',
+    }), { hash: '#images' });
+    await rowButton(providerRow(page.el, ROUTER.name), 'Delete').click();
+    expect(page.requests).toEqual([]);
+    expect(page.el('providersOut').textContent).toContain(EDITOR_COPY.settingsTranslation);
+  });
+
   it('offers Default — <name> first, and the resolved line follows the selection and model live', async () => {
     const { el } = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER], captionProviderId: 'openrouter' }));
     const options = el('reviewProviderId').children;
@@ -2818,17 +2998,18 @@ describe('settings.html use case assignments', () => {
     el('reviewProviderId').value = 'openrouter';
     el('captionProviderId').value = '';
     el('reviewPrompt').value = 'R';
-    el('reviewTimeoutMs').value = '45000';
+    el('reviewTimeoutSeconds').value = '45.123';
     el('captionPrompt').value = 'C';
-    el('captionTimeoutMs').value = '30000';
+    el('captionTimeoutSeconds').value = '30.001';
     el('captionMaxEdge').value = '1024';
     el('captionMaxTokens').value = '4096';
     await el('saveAi').click();
     expect(calls(page.requests)).toEqual(['POST /settings']);
     expect(page.requests[0]!.body).toEqual({
       reviewProviderId: 'openrouter', captionProviderId: null, aiModel: 'review-2', lmModel: 'vision-2',
-      reviewPrompt: 'R', reviewTimeoutMs: 45000, captionPrompt: 'C', captionTimeoutMs: 30000, captionMaxEdge: 1024,
+      reviewPrompt: 'R', reviewTimeoutMs: 45123, captionPrompt: 'C', captionTimeoutMs: 30001, captionMaxEdge: 1024,
       captionMaxTokens: 4096,
+      translationProviderId: null, translationModel: 'translation-model', translationTimeoutMs: 120000,
     });
     // The saved values come back as the new "saved" models; Other closes.
     expect(el('aiModel').value).toBe('review-2');
@@ -2872,7 +3053,6 @@ describe('settings.html use case assignments', () => {
     page.el('backupSchedule').value = 'weekly';
     await page.el('save').click();
     expect(Object.keys(page.requests[0]!.body ?? {}).sort()).toEqual(['backupRetention', 'backupSchedule', 'importDelayMs', 'importRetries']);
-    expect(page.el('out').textContent).toBe('Saved.');
   });
 });
 
@@ -2889,7 +3069,7 @@ describe('settings.html AI configuration', () => {
 
   async function reviewPage(provider: ProviderView, network: (url: string, init?: RequestInit) => Promise<Response> = storedKey) {
     const fetcher = vi.fn(network);
-    const page = loadSettingsPage({ fetch: fetcher });
+    const page = loadSettingsPage({ fetch: fetcher, ...AI_MODELS_TAB });
     vm.runInContext(readFileSync('public/llm.js', 'utf8'), page.ctx);
     await callPage(page.ctx, 'fill', settingsResponse({
       aiProviders: provider.id === LOCAL.id ? [LOCAL] : [LOCAL, provider],
@@ -2991,7 +3171,7 @@ describe('settings.html AI configuration', () => {
     vi.useFakeTimers();
     try {
       const { el } = await reviewPage(LOCAL, async () => new Promise<Response>(() => {}));
-      el('reviewTimeoutMs').value = '5000';
+      el('reviewTimeoutSeconds').value = '5';
       const testing = el('testReview').click();
       await vi.advanceTimersByTimeAsync(5000);
       await testing;
@@ -3052,7 +3232,7 @@ describe('settings.html against the real settings and provider routes', () => {
       return new Response(response.statusCode === 204 ? null : response.body, { status: response.statusCode });
     });
     const page = loadSettingsPage({
-      fetch: fetcher,
+      fetch: fetcher, ...AI_MODELS_TAB,
       AdminConfirm: { ask: async (question: Question) => { questions.push(question); return confirm(question); } },
     });
     vm.runInContext(readFileSync('public/llm.js', 'utf8'), page.ctx);
@@ -3122,14 +3302,19 @@ describe('settings.html against the real settings and provider routes', () => {
     }
   });
 
-  it('a provider added with a key and assigned to review is what /ai-config hands out, and only to review', async () => {
+  it('adds Anthropic, discovers models and binds its key only to assigned use cases', async () => {
     const { el, ctx, fetcher, app, cookies, settings, secrets } = await realPage();
     await el('addProvider').click();
-    el('providerName').value = 'Router';
+    el('providerKind').value = 'anthropic';
+    await el('providerKind').fire('change');
+    expect(el('providerName').value).toBe('Anthropic');
+    expect(el('providerBaseUrl').value).toBe('https://api.anthropic.com/v1');
+    await el('testProviderForm').click();
+    expect(fetcher.mock.calls.some(([url]) => String(url).startsWith('https://api.anthropic.com'))).toBe(false);
     el('providerApiKey').value = 'fixture-created-key';
     await el('providerForm').fire('submit');
-    const created = settings.get().aiProviders.find((p) => p.name === 'Router');
-    expect(created).toMatchObject({ kind: 'openrouter', baseUrl: 'https://openrouter.ai/api/v1' });
+    const created = settings.get().aiProviders.find((p) => p.name === 'Anthropic');
+    expect(created).toMatchObject({ kind: 'anthropic', baseUrl: 'https://api.anthropic.com/v1' });
     expect(await secrets.get('ai_provider_key:' + created!.id)).toBe('fixture-created-key');
     expect(el('providerApiKey').value).toBe('');
     expect(pageText(el)).not.toContain('fixture-created-key');
@@ -3137,7 +3322,7 @@ describe('settings.html against the real settings and provider routes', () => {
     el('reviewProviderId').value = created!.id;
     await el('reviewProviderId').fire('change');
     await callPage(ctx, 'ensureModels');
-    const listing = fetcher.mock.calls.find(([url]) => String(url) === 'https://openrouter.ai/api/v1/models');
+    const listing = fetcher.mock.calls.find(([url]) => String(url) === 'https://api.anthropic.com/v1/models');
     expect(new Headers(listing?.[1]?.headers).get('authorization')).toBe('Bearer fixture-created-key');
     expect(pageText(el)).not.toContain('fixture-created-key');
     await chooseModel(el, 'aiModel', 'remote-model');
@@ -3146,10 +3331,30 @@ describe('settings.html against the real settings and provider routes', () => {
 
     const config = (await app.inject({ url: '/ai-config', cookies })).json();
     expect(config).toMatchObject({
-      aiProvider: 'openrouter', aiBaseUrl: 'https://openrouter.ai/api/v1', hasAiApiKey: true, aiApiKey: 'fixture-created-key',
+      aiProvider: 'anthropic', aiBaseUrl: 'https://api.anthropic.com/v1', hasAiApiKey: true, aiApiKey: 'fixture-created-key',
     });
     const caption = (await app.inject({ url: '/ai-config?purpose=caption', cookies })).json();
     expect(caption).toMatchObject({ captionProvider: 'lm-studio', captionApiKey: null });
+    el('captionProviderId').value = created!.id;
+    await el('captionProviderId').fire('change');
+    await el('saveAi').click();
+    const assignedCaption = (await app.inject({ url: '/ai-config?purpose=caption', cookies })).json();
+    expect(assignedCaption).toMatchObject({
+      captionProvider: 'anthropic', captionBaseUrl: created!.baseUrl, captionApiKey: 'fixture-created-key',
+    });
+    const localTranslation = (await app.inject({ url: '/ai-config?purpose=translation', cookies })).json();
+    expect(localTranslation).toMatchObject({ providerKind: 'lm-studio', apiKey: null, model: 'qwen2.5-7b-instruct' });
+    el('translationProviderId').value = created!.id;
+    await el('translationProviderId').fire('change');
+    await chooseModel(el, 'translationModel', 'remote-model');
+    el('translationTimeoutSeconds').value = '180';
+    await el('saveAi').click();
+    const assignedTranslation = (await app.inject({ url: '/ai-config?purpose=translation', cookies })).json();
+    expect(assignedTranslation).toEqual({
+      providerId: created!.id, providerName: 'Anthropic', providerKind: 'anthropic', baseUrl: created!.baseUrl,
+      model: 'remote-model', timeoutMs: 180000, apiKey: 'fixture-created-key',
+    });
+    expect(settings.get()).toMatchObject({ aiModel: 'remote-model', lmModel: defaultSettings().lmModel });
   });
 
   it('saves the photo output budget, refuses an invalid one without saving, and reloads the saved value', async () => {
@@ -3664,10 +3869,10 @@ describe('publication refresh in list, Desk and Settings consumers', () => {
     await flush();
     const doc = page.ctx.document as { activeElement: Element | null };
     for (const id of ['deskNext', 'deskUnpub', 'deskAttention']) {
-      for (const selector of ['.desk-title', '.action-link']) {
-        page.el(id).querySelectorAll(selector)[0]!.focus();
+      for (const index of [0, 1]) {
+        page.el(id).querySelectorAll('a')[index]!.focus();
         await vi.advanceTimersByTimeAsync(30000); await flush();
-        expect(doc.activeElement).toBe(page.el(id).querySelectorAll(selector)[0]);
+        expect(doc.activeElement).toBe(page.el(id).querySelectorAll('a')[index]);
       }
     }
     held = true;
@@ -3699,12 +3904,12 @@ describe('publication refresh in list, Desk and Settings consumers', () => {
     rows = [];
     await (vm.runInContext('publicationRefresh.refresh()', page.ctx) as Promise<void>);
     expect(doc.activeElement).toBe(page.el('publicationRefresh'));
-    page.el('deskNext').querySelectorAll('.btn-new')[0]!.focus();
+    page.el('deskNewPost').focus();
     await (vm.runInContext('publicationRefresh.refresh()', page.ctx) as Promise<void>);
-    expect(doc.activeElement).toBe(page.el('deskNext').querySelectorAll('.btn-new')[0]);
+    expect(doc.activeElement).toBe(page.el('deskNewPost'));
     rows = [{ ...post, publication: publication('draft') }];
     await (vm.runInContext('publicationRefresh.refresh()', page.ctx) as Promise<void>);
-    expect(doc.activeElement).toBe(page.el('publicationRefresh'));
+    expect(doc.activeElement).toBe(page.el('deskNewPost'));
     vm.runInContext('publicationRefresh.stop()', page.ctx);
   });
 

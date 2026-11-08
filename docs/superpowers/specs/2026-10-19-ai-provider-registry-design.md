@@ -12,6 +12,53 @@ semantics, §7 UI contract, and §13 "share the editorial API key". Everything e
 crypto primitives, `ENCRYPTION_KEY` handling, backup v6, restore, author disclosure, browser-direct
 inference, no server egress — stays authoritative.
 
+### Editor review consent refinement — 2026-11-06
+
+The owner approved implementation by selecting AI review clarity and all four editor
+critique findings, then requesting “Run the 5 recommended actions”. This authorizes
+the editor interaction changes, not a provider-registry/API change or deployment.
+
+- Opening Story review runs local quick checks and loads configuration for disclosure;
+  it never invokes a model. The author explicitly chooses **Review with AI**.
+- Disclose provider kind, exact configured endpoint and model, the active locale's
+  title/excerpt/Markdown/hero description and image URL, and possible usage charges.
+  No key is rendered, logged, persisted, or retained while awaiting consent.
+- On explicit invocation, fetch a fresh bound config/key pair. If provider, endpoint,
+  model, prompt or timeout differs from the disclosed configuration, show the new
+  configuration and require another explicit invocation; do not silently send elsewhere.
+- Closing, changing locale/post or replacing the draft invalidates preparation and
+  inference. Late config/provider responses must not render or invoke a model.
+  Failed preparation leaves local checks available and offers configuration retry.
+- Existing browser-direct inference, server authorization, response shape, endpoint/key
+  binding, cancellation, explicit suggestion application and publication behavior remain
+  unchanged. No new credential lifetime beyond an active request is introduced.
+- Regression coverage must prove no automatic provider call, refreshed-destination
+  consent, cancellation during preparation/inference, secret-free disclosure and recovery.
+  Rollback is the frontend change only; no data/schema migration or credential rewrite.
+
+### Anthropic provider kind — 2026-11-07
+
+The owner requested Anthropic as a kind in the backend's Add provider form.
+This authorizes the additive `anthropic` registry kind and matching browser consumers;
+it does not authorize deployment or changes to credential storage or transport.
+
+- Add prefills **Anthropic** and `https://api.anthropic.com/v1`; the URL remains editable
+  under the existing validation, disclosure and stored-key destination confirmation.
+- Anthropic is a remote, API-key-required client preset. Saving an unconfigured provider
+  remains allowed, but discovery/inference must report a missing key before calling it.
+- Story review, excerpts and photo descriptions recognize the new kind. Existing
+  `custom` Anthropic entries and their keys remain untouched; no migration is needed.
+- Reuse the existing browser-direct OpenAI-compatible transport and exact-origin
+  Anthropic headers. No server egress, new secret slots, schema or response fields.
+- Trust boundaries remain admin-only registry mutation, authenticated request-local
+  bound endpoint/key disclosure, and untrusted model output. A misleading preset name
+  must not bypass URL warnings or opt another origin into Anthropic browser access.
+- Verify persisted settings, provider creation/key isolation, kind recognition and
+  missing-key handling in consumers, plus the actual Add form in a browser.
+- Rollback: first reassign use cases away from new Anthropic entries and remove those
+  entries through Settings (or recreate as Custom with explicit key entry), then revert.
+  Older binaries do not recognize the new kind; do not downgrade with it still stored.
+
 ## 1. Why
 
 The owner asked for the Settings page to manage AI like the CompendiQ reference (screenshot
@@ -44,7 +91,7 @@ routes or slugs; any server-side model call.
 ### 3.1 Provider (non-sensitive, in `settings.json`)
 
 ```ts
-type AiProviderKind = 'lm-studio' | 'openrouter' | 'deepseek' | 'custom';
+type AiProviderKind = 'lm-studio' | 'openrouter' | 'deepseek' | 'anthropic' | 'custom';
 interface AiProvider {
   id: string;         // ^[a-z0-9][a-z0-9-]{0,39}$ — server-assigned, immutable
   name: string;       // 1–60 chars after trim, no \p{C}; unique case-insensitively
@@ -54,8 +101,9 @@ interface AiProvider {
 ```
 
 - `kind` keeps the existing client semantics: `lm-studio` is local and **never** holds or receives
-  a key; `openrouter` / `deepseek` require one; `custom` may have one. Add pre-fills
-  `https://openrouter.ai/api/v1` / `https://api.deepseek.com/v1` / `http://localhost:1234/v1`;
+  a key; `openrouter` / `deepseek` / `anthropic` require one; `custom` may have one. Add pre-fills
+  `https://openrouter.ai/api/v1` / `https://api.deepseek.com/v1` /
+  `https://api.anthropic.com/v1` / `http://localhost:1234/v1`;
   the URL stays editable (an "OpenRouter – Embeddings" style endpoint is legitimate).
 - At most **20** providers; at least **1**.
 - New ids: `p-` + 8 hex chars from `crypto.randomBytes`, regenerated on collision.
@@ -312,3 +360,18 @@ assigned providers' keys, non-atomic secret/settings writes, no AAD binding betw
 Decision: the owner selected **"Approve implementation"** (ask prompt in the implementing session,
 2026-10-19), over the alternatives "Approve, but keep legacy key" and "Not yet". Conditions: none
 beyond this spec; approval covers implementation only — the final-HEAD merge decision is separate.
+
+## 12. Article translation assignment (#550, 2026-11-07)
+
+The [issue-specific approved design](2026-11-07-issue-550-ai-article-translation.md) adds
+`translationProviderId` (null follows default), `translationModel` (default
+`qwen2.5-7b-instruct`) and `translationTimeoutMs` (default 120000). It extends validation,
+load recovery, default resolution, provider deletion constraints and the shared AI Settings
+save scope. Review/excerpt and caption assignments remain independent.
+
+Authenticated `GET /ai-config?purpose=translation` discloses only its resolved provider's
+identity, endpoint, model, timeout and request-local key. Local providers never access
+secrets; remote reads preserve the existing serialized endpoint/key binding. No new
+credentials, server inference or model-side persistence are introduced. Translation
+consent/review, structural validation, no-retry behavior and the scoped approval exception
+are defined in the issue-specific design, not retroactively waived by this registry spec.

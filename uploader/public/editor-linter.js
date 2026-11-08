@@ -180,7 +180,9 @@ window.EditorLinter = (function () {
         var alt = own(fromLibrary, photo.src) ? fromLibrary[photo.src]
           : photo.alt !== undefined ? photo.alt
             : own(stored, photo.src) ? stored[photo.src] : '';
-        if (!text(alt).trim()) findings.push({ code: 'missing-alt', message: 'Add alt text to this gallery image.', line: lineAt(doc.starts, line.start), target: 'gallery' });
+        // `gallery` names the block (its fence line) so Review can say one
+        // thing per gallery instead of one line per photo.
+        if (!text(alt).trim()) findings.push({ code: 'missing-alt', message: 'Add alt text to this gallery image.', line: lineAt(doc.starts, line.start), target: 'gallery', gallery: lineAt(doc.starts, block.start) });
       }
     });
     findings.sort(function (a, b) { return (a.line || 0) - (b.line || 0); });
@@ -199,7 +201,7 @@ window.EditorLinter = (function () {
 
   function metadataIn(input, doc) {
     var locale = input.locale === 'en' ? 'en' : 'de';
-    var copy = window.EditorGalleryCopy[locale];
+    var copy = window.EditorGalleryCopy.en;
     return result(window.GalleryFence.galleryWarnings(doc.analysis, locale).map(function (warning) {
       return Object.assign({}, warning, {
         target: 'gallery',

@@ -43,6 +43,7 @@ import { loadGalleryMetadata } from './gallery-metadata.js';
 import { type PageStore, type PagePair, type PageUpdate, type ImageDims, type StoredPagePair, PageError, isSafePageKey, pagePaths } from './pages.js';
 import { PAGE_KINDS, isPageKind } from '../../site/src/lib/page-kinds.js';
 import { analyzeGallerySource } from '../../site/src/lib/gallery-source.js';
+import { prepareTranslation, validateTranslation, TranslationError } from '../../site/src/lib/article-translation.js';
 import { exportPost, exportAll } from './export.js';
 import type { SiteBuilder } from './build.js';
 import { projectBuildReport } from './build-state.js';
@@ -285,7 +286,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     reply.header('X-Content-Type-Options', 'nosniff');
     const url = req.raw.url ?? '';
     const route = req.routeOptions.url;
-    if (route === '/language' || route === '/auth/me' || route === '/onboarding' || route === '/settings' || route === '/settings/navigation' || route?.startsWith('/settings/identity') || route === '/ai-config' || route?.startsWith('/ai-providers')
+    if (route === '/language' || route === '/auth/me' || route === '/onboarding' || route === '/settings' || route === '/settings/navigation' || route?.startsWith('/settings/identity') || route === '/ai-config' || route?.startsWith('/ai-providers') || route?.startsWith('/translation/')
       || route === '/posts/:tk/publish' || route === '/posts/bulk' || route === '/posts' || route === '/posts/:tk'
       || route === '/pages/:key' || route === '/upload' || route === '/upload/receipts/:uploadId' || route === '/media/lookup'
       || route === '/media/folders') reply.header('Cache-Control', 'no-store');
@@ -806,7 +807,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
   });
 
   // Serialize config reads and writes: JSON settings and Postgres cannot commit
-  // together. Local captions deliberately bypass this optional secret path.
+  // together. Local captions and translation bypass this optional secret path.
   let settingsTail = Promise.resolve();
   function settingsOperation<T>(operation: () => Promise<T>): Promise<T> {
     const result = settingsTail.then(operation);
@@ -819,6 +820,12 @@ export function buildServer(cfg: ServerConfig): AppServer {
       captionTimeoutMs: s.captionTimeoutMs, captionMaxEdge: s.captionMaxEdge,
       captionMaxTokens: s.captionMaxTokens,
       captionProvider: provider.kind, captionBaseUrl: provider.baseUrl,
+    };
+  }
+  function translationConfig(s: Settings, provider: AiProvider) {
+    return {
+      providerId: provider.id, providerName: provider.name, providerKind: provider.kind,
+      baseUrl: provider.baseUrl, model: s.translationModel, timeoutMs: s.translationTimeoutMs,
     };
   }
   type ProviderView = AiProvider & { hasApiKey: boolean };
@@ -842,6 +849,8 @@ export function buildServer(cfg: ServerConfig): AppServer {
       aiProviders, aiDefaultProviderId: s.aiDefaultProviderId,
       reviewProviderId: s.reviewProviderId, captionProviderId: s.captionProviderId,
       aiModel: s.aiModel, reviewPrompt: s.reviewPrompt, reviewTimeoutMs: s.reviewTimeoutMs,
+      translationProviderId: s.translationProviderId, translationModel: s.translationModel,
+      translationTimeoutMs: s.translationTimeoutMs,
       lmModel: s.lmModel, captionPrompt: s.captionPrompt,
       captionTimeoutMs: s.captionTimeoutMs, captionMaxTokens: s.captionMaxTokens, captionMaxEdge: s.captionMaxEdge,
       backupSchedule: s.backupSchedule, backupRetention: s.backupRetention,
@@ -1039,6 +1048,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     if (b.avifQuality !== undefined) partial.avifQuality = Number(b.avifQuality);
     for (const field of [
       'aiDefaultProviderId', 'reviewProviderId', 'captionProviderId', 'aiModel', 'reviewPrompt', 'reviewTimeoutMs',
+      'translationProviderId', 'translationModel', 'translationTimeoutMs',
     ] as const) {
       if (Object.hasOwn(b, field)) partial[field] = b[field];
     }
@@ -1070,7 +1080,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     }
     const b = req.body as Record<string, unknown>;
     if (!isProviderKind(b.kind)) {
-      return reply.code(400).send({ error: 'AI provider kind must be lm-studio, openrouter, deepseek, or custom.' });
+      return reply.code(400).send({ error: 'AI provider kind must be lm-studio, openrouter, deepseek, anthropic, or custom.' });
     }
     const name = typeof b.name === 'string' ? b.name.trim() : '';
     const baseUrl = typeof b.baseUrl === 'string' ? b.baseUrl.trim() : '';
@@ -1128,9 +1138,10 @@ export function buildServer(cfg: ServerConfig): AppServer {
     if (existing.id === current.aiDefaultProviderId) {
       return reply.code(409).send({ code: 'provider_is_default', error: 'The default AI provider cannot be deleted. Choose another default first.' });
     }
-    const useCases: ('review' | 'caption')[] = [];
+    const useCases: ('review' | 'caption' | 'translation')[] = [];
     if (current.reviewProviderId === existing.id) useCases.push('review');
     if (current.captionProviderId === existing.id) useCases.push('caption');
+    if (current.translationProviderId === existing.id) useCases.push('translation');
     if (useCases.length) {
       return reply.code(409).send({ code: 'provider_in_use', error: 'This AI provider is assigned to a use case. Assign another provider first.', useCases });
     }
@@ -1170,6 +1181,23 @@ export function buildServer(cfg: ServerConfig): AppServer {
   // provider that owns it (spec §4.2); the consumer response shape is pinned.
   app.get('/ai-config', { preHandler: requireAuth }, async (req, reply) => {
     const purpose = (req.query as Record<string, unknown>).purpose;
+    if (purpose === 'translation') {
+      const current = cfg.settings.get();
+      const local = resolveProvider(current, current.translationProviderId);
+      if (!isRemoteKind(local.kind)) return reply.send({ ...translationConfig(current, local), apiKey: null });
+      return settingsOperation(async () => {
+        // Re-resolve inside the mutation queue to bind the key and destination
+        // to the same committed provider; unrelated keys are never read.
+        const s = cfg.settings.get();
+        const provider = resolveProvider(s, s.translationProviderId);
+        try {
+          const apiKey = isRemoteKind(provider.kind) ? await cfg.secrets.get(slotFor(provider.id)) : null;
+          return reply.send({ ...translationConfig(s, provider), apiKey });
+        } catch (e) {
+          return reply.code(503).send(secretFailure(e));
+        }
+      });
+    }
     if (purpose === 'caption') {
       const current = cfg.settings.get();
       const local = resolveProvider(current, current.captionProviderId);
@@ -1548,6 +1576,42 @@ export function buildServer(cfg: ServerConfig): AppServer {
       throw new Error('Gallery source analysis failed');
     }
   });
+
+  // Pure analysis of the unsaved snapshot; neither endpoint reads Media,
+  // contacts a provider, nor writes drafts. Never log parser/source diagnostics.
+  function translationFailure(error: unknown, reply: FastifyReply) {
+    if (error instanceof TranslationError) {
+      const code = error.code;
+      const status = code === 'translation_input_limit' ? 413
+        : code === 'translation_unsupported_source' || code === 'translation_structure_mismatch' ? 422 : 400;
+      return reply.code(status).send({ code, error: code });
+    }
+    return reply.code(500).send({ code: 'translation_failed', error: 'Article translation analysis failed.' });
+  }
+  for (const action of ['prepare', 'validate'] as const) {
+    app.post('/translation/' + action, {
+      bodyLimit: 2 * 1024 * 1024,
+      onRequest: async (_req, reply) => { reply.header('Cache-Control', 'no-store'); },
+      preHandler: requireAuth,
+      errorHandler(error, _req, reply) {
+        const status = (error as FastifyError).statusCode;
+        const code = status === 413 ? 'translation_input_limit' : 'translation_invalid_input';
+        if (status === 400 || status === 413 || status === 415) return reply.code(status).send({ code, error: code });
+        return translationFailure(error, reply);
+      },
+    }, async (req, reply) => {
+      try {
+        if (action === 'prepare') return reply.send(await prepareTranslation(req.body));
+        if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+          return reply.code(400).send({ code: 'translation_invalid_input', error: 'translation_invalid_input' });
+        }
+        const { output, ...input } = req.body as Record<string, unknown>;
+        return reply.send(await validateTranslation(input, output));
+      } catch (error) {
+        return translationFailure(error, reply);
+      }
+    });
+  }
 
   app.get('/admin/waypoint-copy.js', async (_req, reply) => {
     const copy = Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [

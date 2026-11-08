@@ -33,6 +33,17 @@ describe('local alt text remains separate from remote review credentials', () =>
     expect(page.altInput.dispatchEvent.mock.calls[0]![0].type).toBe('input');
   });
 
+  it('refuses an unconfigured Anthropic provider before preparing or sending a photo', async () => {
+    const page = setup();
+    page.config.captionProvider = 'anthropic';
+    page.config.captionBaseUrl = 'https://api.anthropic.com/v1';
+    await page.click();
+    expect(page.prepImage).not.toHaveBeenCalled();
+    expect(page.caption).not.toHaveBeenCalled();
+    expect(page.altInput.value).toBe('');
+    expect(page.statusEl.textContent).toContain('API key');
+  });
+
   it('preserves the caller session-expiry callback without preparing an image or contacting a model', async () => {
     const page = setup(401);
     await page.click();

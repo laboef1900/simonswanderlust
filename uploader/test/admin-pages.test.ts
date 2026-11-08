@@ -553,45 +553,14 @@ describe('admin page wiring', () => {
   });
 
 
-  it('EasyMDE built-in autosave stays disabled (DraftGuard owns persistence)', () => {
+  it('EasyMDE built-in autosave stays disabled on About (DraftGuard owns persistence)', () => {
     // @ai-warning do not re-enable EasyMDE autosave: it is body-only and would
     // fight the full-form DraftGuard stash (duplicate writes, partial restores).
-    expect(editor.match(/autosave: \{ enabled: false \}/g)).toHaveLength(2);
+    // The post editor's instances are checked where they are built (editor-dom.test.ts).
     expect(about.match(/autosave: \{ enabled: false \}/g)).toHaveLength(2);
   });
 });
 
-/**
- * Issue #85's two settings fields, and the copy that explains the new recovery
- * behaviour. A settings field needs markup AND `fill()` AND the POST body —
- * miss one and it either never displays or never persists, and nothing else
- * catches it: the server tests exercise the API, not the page.
- */
-describe('settings.html import pacing fields', () => {
-  const html = readFileSync('public/settings.html', 'utf8');
-
-  it('renders an input for each field, bounded to match the server', () => {
-    // Bounds are duplicated in the server's validate() by necessity; keeping the
-    // numbers here identical is what makes the client-side rejection agree.
-    expect(html).toMatch(/<input id="importDelayMs"[^>]*min="0"[^>]*max="10000"/);
-    expect(html).toMatch(/<input id="importRetries"[^>]*min="0"[^>]*max="5"/);
-  });
-
-  it('labels both inputs for screen readers', () => {
-    expect(html).toMatch(/<label for="importDelayMs">/);
-    expect(html).toMatch(/<label for="importRetries">/);
-  });
-
-  it('populates both from the loaded settings', () => {
-    expect(html).toMatch(/\$\('importDelayMs'\)\.value = s\.importDelayMs/);
-    expect(html).toMatch(/\$\('importRetries'\)\.value = s\.importRetries/);
-  });
-
-  it('sends both in the save payload', () => {
-    expect(html).toMatch(/importDelayMs: Number\(\$\('importDelayMs'\)\.value\)/);
-    expect(html).toMatch(/importRetries: Number\(\$\('importRetries'\)\.value\)/);
-  });
-});
 
 /**
  * The AI provider registry (spec 2026-10-19 §6) replaced the single shared key.
@@ -618,13 +587,15 @@ describe('settings.html AI provider registry', () => {
   });
 
   it('pairs each use case with a provider select, a model select, a bounded Other ID field and an announced model-list status', () => {
-    for (const [provider, model, status] of [
-      ['reviewProviderId', 'aiModel', 'reviewModelStatus'], ['captionProviderId', 'lmModel', 'captionModelStatus'],
+    for (const [provider, model, status, other] of [
+      ['reviewProviderId', 'aiModel', 'reviewModelStatus', 'aiModelOther'],
+      ['captionProviderId', 'lmModel', 'captionModelStatus', 'lmModelOther'],
+      ['translationProviderId', 'translationModel', 'translationModelStatus', 'translationModelOtherInput'],
     ] as const) {
       expect(markup).toMatch(new RegExp(`<select id="${provider}"`));
       expect(markup).toMatch(new RegExp(`<select id="${model}"[^>]*aria-describedby="${status}"`));
       // A typed model ID keeps the 100-character cap of the text field it replaced.
-      expect(markup).toMatch(new RegExp(`<input id="${model}Other" type="text" maxlength="100"`));
+      expect(markup).toMatch(new RegExp(`<input id="${other}" type="text" maxlength="100"`));
       expect(markup).toMatch(new RegExp(`<p id="${status}"[^>]*role="status"`));
     }
     expect(markup).not.toMatch(/<datalist|list="/);

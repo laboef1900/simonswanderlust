@@ -16,7 +16,11 @@ const track: PublicTrack = {
 
 // Minimal Trip stub — only the fields the helpers read.
 function trip(id: string, data: Partial<Trip['data']>): Trip {
-  return { id, data: { title: 'T', country: 'C', region: 'europe', coordinates: { lat: 1, lng: 2 }, date: new Date('2024-01-01'), ...data } } as unknown as Trip;
+  return { id, data: {
+    title: 'T', country: 'C', region: 'europe', coordinates: { lat: 1, lng: 2 }, date: new Date('2024-01-01'), translationKey: id.split('/')[1],
+    heroImage: { src: 'https://img.example/trips/x/hero', width: 1920, height: 1280, alt: 'Harbour at dusk' },
+    ...data,
+  } } as unknown as Trip;
 }
 
 describe('tripPins', () => {
@@ -44,6 +48,28 @@ describe('tripPins', () => {
     const routed = trip('de/x', { track, stops: [{ name: 'Stop', lat: 3, lng: 4 }] });
     expect(tripPins([routed], 'de')).toEqual(tripPins([plain], 'de'));
     expect(Object.keys(tripPins([routed], 'de').features[0]!.geometry)).toEqual(['type', 'coordinates']);
+  });
+  it('numbers pins as travel-log entries, oldest first, whatever the display order', () => {
+    const all = [
+      trip('en/newest', { date: new Date('2024-06-01') }),
+      trip('en/oldest', { date: new Date('2020-01-01') }),
+      trip('en/middle', { date: new Date('2022-01-01') }),
+      trip('de/other-locale', { date: new Date('2019-01-01') }),
+    ];
+    expect(tripPins(all, 'en').features.map((f) => [f.properties.href, f.properties.number])).toEqual([
+      ['/en/newest/', 3], ['/en/middle/', 2], ['/en/oldest/', 1],
+    ]);
+  });
+  it('gives each pin its smallest photo variant, a decorative alt when it only repeats the title, and a clamped focus', () => {
+    const [described, titled, small] = tripPins([
+      trip('en/a', { date: new Date('2024-03-01'), heroImage: { src: 'https://img.example/a/hero', width: 1920, height: 1280, alt: 'Canoe on a black river', focus: { x: 140, y: 30.4 } } }),
+      trip('en/b', { date: new Date('2024-02-01'), title: 'Rhodes', heroImage: { src: 'https://img.example/b/hero', width: 1920, height: 1280, alt: 'RHODES' } }),
+      trip('en/c', { date: new Date('2024-01-01'), heroImage: { src: 'https://img.example/c/hero', width: 480, height: 320, alt: 'Dunes', format: 'jpeg' } }),
+    ], 'en').features.map((f) => f.properties.photo);
+    expect(described).toEqual({ src: 'https://img.example/a/hero-640.webp', width: 1920, height: 1280, alt: 'Canoe on a black river', position: '100% 30%' });
+    expect(titled).toEqual({ src: 'https://img.example/b/hero-640.webp', width: 1920, height: 1280, alt: '' });
+    // Never upscaled: a frame narrower than 640 uses its own width.
+    expect(small!.src).toBe('https://img.example/c/hero-480.jpeg');
   });
 });
 

@@ -88,6 +88,10 @@
       target.textContent = [msg(key), detail].filter(Boolean).join(' '); target.hidden = false;
       target.className = 'err'; target.setAttribute('role', 'alert');
       status.textContent = '';
+      // The feedback line sits in the collapsible GPX section; a closed
+      // section would leave focus on nothing.
+      const section = target.closest('details');
+      if (section && !section.open) section.open = true;
       if (moveFocus) target.focus();
     }
     function unknownOutcome() { return Object.assign(new Error('gpx_outcome_unknown'), { code: 'gpx_outcome_unknown' }); }

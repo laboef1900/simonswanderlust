@@ -1,6 +1,7 @@
 import type { Locale } from '../i18n/ui';
 import type { Region } from './paths';
-import { byLocale, pathOf, type Trip } from './trips';
+import { byLocale, entryNumberOf, heroAltOf, pathOf, type Trip } from './trips';
+import { focusPercent, smallestVariant } from './images';
 import type { PublicTrack } from './public-track';
 import type { PublicStopRoute } from './public-stop-route';
 
@@ -9,7 +10,13 @@ export interface PinFeature {
   geometry: { type: 'Point'; coordinates: [number, number] };
   properties: { title: string; href: string; country: string; region: Region };
 }
-export interface PinCollection { type: 'FeatureCollection'; features: PinFeature[] }
+/** Thumbnail for the overview map's popup: smallest variant, decorative alt when it only repeats the title. */
+export interface PinPhoto { src: string; width: number; height: number; alt: string; position?: string }
+/** An overview-map pin: travel-log entry number (oldest = 1, as `entryNumberOf`) plus its photo. */
+export interface OverviewPinFeature extends PinFeature {
+  properties: PinFeature['properties'] & { number: number; photo: PinPhoto };
+}
+export interface PinCollection { type: 'FeatureCollection'; features: OverviewPinFeature[] }
 export interface StopFeature {
   type: 'Feature';
   geometry: { type: 'Point'; coordinates: [number, number] };
@@ -27,8 +34,29 @@ function pinOf(trip: Trip): PinFeature {
   };
 }
 
+function overviewPinOf(trip: Trip, all: Trip[]): OverviewPinFeature {
+  const pin = pinOf(trip);
+  const hero = trip.data.heroImage;
+  const position = focusPercent(hero);
+  return {
+    ...pin,
+    properties: {
+      ...pin.properties,
+      number: entryNumberOf(trip, all),
+      photo: {
+        src: smallestVariant(hero),
+        width: hero.width,
+        height: hero.height,
+        // The popup sets the title right beside the photo (same rule as story cards).
+        alt: heroAltOf(trip) ?? hero.alt,
+        ...(position ? { position } : {}),
+      },
+    },
+  };
+}
+
 export function tripPins(trips: Trip[], locale: Locale): PinCollection {
-  return { type: 'FeatureCollection', features: byLocale(trips, locale).map(pinOf) };
+  return { type: 'FeatureCollection', features: byLocale(trips, locale).map((trip) => overviewPinOf(trip, trips)) };
 }
 
 export function tripGeometry(trip: Trip): TripGeometry {

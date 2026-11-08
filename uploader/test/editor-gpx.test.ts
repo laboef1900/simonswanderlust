@@ -248,6 +248,8 @@ function fullEditor(candidate: typeof preview, fetchOverride?: SetupOptions['fet
       getInputField: () => this.input,
       getValue: () => this.text,
       refresh() {},
+      setOption() {},
+      clearHistory() {},
       operation: (callback: () => void) => callback(),
       focus: () => this.input.focus(),
     };
@@ -336,7 +338,7 @@ function fullEditor(candidate: typeof preview, fetchOverride?: SetupOptions['fet
   for (const file of ['build-reporting.js', 'publication-state.js', 'publication-refresh.js', 'language.js', 'draft-guard.js', 'write-recovery.js', 'journeys-ui.js', 'waypoint-lookup.js', 'editor-stop-route.js', 'posts-filter.js', 'editor-title-image.js',
     'gallery-fence.js', 'gallery-metadata-warnings.js', 'media-api.js', 'gallery-library.js', 'editor-galleries.js', 'editor-linter.js',
     'llm.js', 'editor-excerpt.js', 'country-centers.js', 'country-coordinates.js', 'tabs.js',
-    'editor-review.js', 'editor-inspector.js', 'editor-gpx.js']) {
+    'editor-review.js', 'editor-translation.js', 'editor-alt-audit.js', 'editor-inspector.js', 'editor-rich-bridge.js', 'editor-gpx.js']) {
     vm.runInContext(browserScript(file), context, { filename: file });
   }
   vm.runInContext(`SiteLanguage.accept({primary:'de',locales:['de','en'],lockedAt:null,updatedAt:'2026-10-27T00:00:00.000Z'})`, context);

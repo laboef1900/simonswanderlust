@@ -9,7 +9,7 @@
   <body>
     <header class="cms-page-meta">
       <h1>WordPress Import</h1>
-      <p class="lede">Upload a WordPress export (.xml) file to import posts as drafts. Published posts are never touched; drafts you already have keep your edits and only pick up photos that are still missing. The import runs on the server — you can close this page and come back to it.</p>
+      <p class="lede">Import posts from a WordPress export (.xml) as drafts. Published posts are never changed.</p>
     </header>
 
     <main>
@@ -21,23 +21,25 @@
           Replace existing drafts with the export
         </label>
         <p class="muted" id="overwriteHint">
-          Off (default): drafts from an earlier import are kept as you left them — only photos that
-          are still missing are downloaded and swapped in. On: those drafts are rebuilt from the
-          export and <strong>your edits to them are discarded</strong> (country, region,
-          coordinates, key facts, alt text, body changes). Use it after changing a post in
-          WordPress and exporting again. Published posts are never touched either way.
+          Rebuilds drafts from an earlier import and <strong>discards your edits to them</strong>.
+          Leave off to keep your edits and fetch only missing photos.
         </p>
         <div class="form-actions">
           <button id="importBtn">Import</button>
         </div>
         <p class="muted">
-          A large export takes a while — photos are downloaded one at a time, deliberately
-          paced so the old site does not cut us off. The import <strong>runs on the server</strong>:
-          closing this page does not stop it, and reopening it shows where it is. Running it again
-          later is safe: it resumes where it left off, re-downloading only the photos that are still
-          missing, and keeps the edits you made to the drafts in between. Only one import can run at
-          a time.
+          The import <strong>runs on the server</strong>: you can close this page and come back.
+          Running it again later resumes where it left off.
         </p>
+        <details class="help-details">
+          <summary>How importing works</summary>
+          <ul>
+            <li>Photos download one at a time, paced so the old site does not block the import; a large export takes a while.</li>
+            <li>Replacing drafts discards edits to country, region, coordinates, key facts, alt text and body. Use it after changing a post in WordPress and exporting again.</li>
+            <li>A resumed import re-downloads only the photos that are still missing and keeps the edits you made in between.</li>
+            <li>Only one import can run at a time.</li>
+          </ul>
+        </details>
       </section>
       <p id="out" class="page-status" role="status"></p>
 

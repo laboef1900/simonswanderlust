@@ -19,6 +19,9 @@ its generic discovery failure with a deliberately invalid diagnostic key.
 Keep the existing Custom provider, stored key, base URL, use-case assignments and
 OpenAI-compatible `/chat/completions` request/response contract. No registry migration,
 new provider kind, native Messages adapter, server proxy or dependencies.
+The 2026-11-07 Anthropic-kind addendum in
+`2026-10-19-ai-provider-registry-design.md` subsequently adds an explicit registry preset;
+it preserves this transport contract and existing Custom providers.
 
 All three browser transport paths (model listing, review/excerpt JSON completions,
 and caption/photo-detail vision completions) construct fresh request-local headers.

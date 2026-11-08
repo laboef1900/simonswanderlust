@@ -91,7 +91,7 @@ async function editor(options: { admin?: boolean; published?: boolean; single?: 
     },
   };
   context.window = context; vm.createContext(context);
-  for (const file of ['language.js', 'draft-guard.js', 'build-reporting.js', 'journeys-ui.js', 'journey-editor.js']) vm.runInContext(readFileSync('public/' + file, 'utf8'), context);
+  for (const file of ['language.js', 'tabs.js', 'draft-guard.js', 'build-reporting.js', 'journeys-ui.js', 'journey-editor.js']) vm.runInContext(readFileSync('public/' + file, 'utf8'), context);
   await settle();
   if (options.fetch) await vi.waitFor(() => expect(el('journeyFields').disabled).toBe(false));
   const submit = async () => {
@@ -316,6 +316,16 @@ describe('journey catalogue DOM', () => {
       expect(list.textContent).toContain('<img src=x>'); expect(list.textContent).toContain('Unpublished changes'); expect(list.textContent).toContain('Not live in EN');
       expect(list.textContent).not.toContain('Retained German'); expect(list.textContent).not.toContain('Not live in DE');
       expect(list.querySelector('a')?.href).toBe('/admin/journey-editor.html?id=' + id);
+      const search = dom.document.getElementById('journeySearch')!;
+      search.value = 'Retained German';
+      search.fire('input');
+      expect(list.querySelector('section')?.hidden).toBe(true);
+      expect(dom.document.getElementById('journeyNotice')?.textContent).toBe(ui.en['editor.chrome.journeyNoResults']);
+      search.value = '  <IMG SRC=X>  ';
+      search.fire('input');
+      expect(list.querySelector('section')?.hidden).toBe(false);
+      expect(dom.document.getElementById('journeyNotice')?.textContent).toBe('');
+      expect(list.textContent).toContain(ui.en['editor.chrome.journeyStoryCount'].replace('{count}', '3'));
     } else expect(dom.document.getElementById('journeyNotice')?.textContent).toBe(ui.en['editor.chrome.journeyEmpty']);
   });
 });

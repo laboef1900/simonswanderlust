@@ -10,6 +10,41 @@ stack: [`../ARCHITECTURE.md`](../ARCHITECTURE.md). Security model: [`../SECURITY
 > XMP, no IPTC. The untouched `-orig` retains everything but is never served. Widening that list
 > is a privacy change; see [`../SECURITY.md`](../SECURITY.md).
 
+## Story editor
+
+The post editor opens in Visual mode using self-hosted Tiptap; **Markdown** switches to
+the editable EasyMDE source. Markdown is the canonical draft, updated synchronously from
+visual edits and shared by save, recovery, review and publishing. Opening or switching
+modes preserves unchanged source exactly. Unsupported syntax and raw HTML stay inert
+and editable in Markdown; Visual paste is plain text. Galleries retain their directives,
+order, captions and URLs and use the existing Media picker and metadata authority.
+If Visual initialization fails, the Markdown editor remains available.
+
+**Translate with AI** uses the latest unsaved active language to prepare the other enabled,
+non-omitted language of the same story. Configure its independent provider/model/timeout
+under Settings → AI models → Article translation. Opening the dialog is free of inference;
+the explicit run action discloses destination, content and possible provider charges.
+Review the full result and confirm replacement of existing target content before applying.
+Only title, excerpt, manuscript text and permitted article-local image text change:
+manual slugs, shared fields, publication state and unrelated target fields remain intact.
+Media descriptions stay authoritative, while repeated-photo caption overrides, empty
+overrides, hidden captions and gallery structure retain their occurrence-specific meaning.
+Unsupported syntax and headings targeted by local fragments are preserved with a warning.
+
+Translation never retries automatically, saves, publishes or uploads images. Cancellation,
+draft/locale/configuration changes and invalid or truncated results apply nothing. After
+application, **Undo translation** restores the complete target patch until another edit
+invalidates that recovery point; ordinary body undo and draft recovery also remain available.
+Use the existing **Save draft** / **Save & preview** flow and normal save-conflict handling.
+Source limits are 100,000 manuscript characters and 2,000 text slots; the reviewed output is
+bounded and must preserve the original document structure. See the
+[#550 design](../docs/superpowers/specs/2026-11-07-issue-550-ai-article-translation.md).
+
+The owner approved a build-only bundler exception for this editor on 2026-11-07:
+`npm run copy:vendor` uses esbuild to bundle its TypeScript into a self-hosted asset.
+Other admin code remains vanilla; there is no editor CDN. Dependency controls and the
+review point are in the [rich-text spec](../docs/superpowers/specs/2026-11-07-rich-text-post-editor.md).
+
 ## Contract
 
 Filenames: `{key}-{width}.{format}` at widths 640/1280/1920 (plus the source's
@@ -83,6 +118,15 @@ Compose commands. This tag exists locally only; do not try to pull it from GHCR.
 On first run, when no users exist, `/login` shows a "Create the first admin"
 form. Fill in a username and password; the form closes once any user exists. Setup/login
 take you to the existing publishing **Desk**, not a snippet/frontmatter workflow.
+
+The Desk keeps **New post** in its header and offers **Continue editing** for the latest draft.
+Backup-off advice appears near the top for admins. **Publication** shows known differences and
+nonzero story/media counts; unknown or unavailable observations are not treated as all-clear.
+Use its **Refresh** action to reread publication observations. **Publication details** retains
+the full counts and build history, explains rebuild scope, and contains **Rebuild site now**
+with its existing confirmation. Failed/running/unavailable build status remains visible even
+when details are closed. Photo processing and the live-site link remain independent below.
+Opening details or refreshing never publishes anything; saved drafts stay private.
 
 On a genuinely fresh installation the admin Desk offers this checklist:
 
@@ -552,7 +596,7 @@ Author-facing detail is in [`../docs/authoring-workflow.md`](../docs/authoring-w
 ## AI alt-text (browser-direct providers)
 
 Settings → **AI models** keeps a **Providers** list (Local LM Studio by default; add
-OpenRouter, DeepSeek, or any custom HTTP(S) OpenAI-compatible endpoint, each with its own
+OpenRouter, DeepSeek, Anthropic, or any custom HTTP(S) OpenAI-compatible endpoint, each with its own
 name, base URL and, for remote providers, its own encrypted API key) and a **Use case
 assignments** grid. **Photo descriptions** (alt text and media details) picks a provider —
 or follows the default — and a model; its prompt/timeout/output budget/max edge are independent
@@ -575,10 +619,10 @@ with the typed key if one is entered. Listing sends no photo and does not verify
 support. Custom providers must allow browser CORS. Local LM Studio providers never hold or
 receive a key.
 
-**Direct Anthropic:** add a **Custom** provider with base URL
-`https://api.anthropic.com/v1` and an Anthropic API key, then use **Test** and assign
-the desired Claude model to each use case. Keep an existing Anthropic Custom provider;
-there is no migration or need to re-enter its stored key for this fix. For this exact
+**Direct Anthropic:** choose **Anthropic** in **Add provider → Kind**. This prefills
+`https://api.anthropic.com/v1`; enter an Anthropic API key, then use **Test** and assign
+the desired Claude model to each use case. Existing Anthropic Custom providers continue
+to work without migration or key re-entry. For this exact
 HTTPS origin, the client adds Anthropic's browser-access opt-in and API-version headers
 to model discovery and all AI requests. Completions use Anthropic's documented
 OpenAI-compatible endpoint. A successful model listing does not verify model access,
@@ -794,7 +838,7 @@ automatic slug still derives from the title. Body prose is never replaced. Save 
 or Publish remains an explicit, separate action; warnings and provider failures do not
 gate either action or bypass their existing validation.
 
-Quick-check links jump to the actual Markdown line in EasyMDE, or the hero alt field.
+Quick-check links jump to the relevant body editing target or the hero alt field.
 Escape/Close returns focus to Review Story; a jump instead focuses its editing target.
 The drawer traps keyboard focus, scrolls on narrow screens and respects reduced motion.
 

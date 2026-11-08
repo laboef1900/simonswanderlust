@@ -29,6 +29,10 @@ export interface Settings {
   reviewProviderId: string | null;
   /** Photo descriptions (alt text, media details); `null` follows the default provider. */
   captionProviderId: string | null;
+  /** Article translation; `null` follows the default independently of other assignments. */
+  translationProviderId: string | null;
+  translationModel: string;
+  translationTimeoutMs: number;
   lmModel: string;
   captionTimeoutMs: number;
   /** Shared output ceiling for alt text and media details, including model reasoning. */
@@ -89,6 +93,9 @@ export function defaultSettings(): Settings {
     aiDefaultProviderId: 'lm-studio',
     reviewProviderId: null,
     captionProviderId: null,
+    translationProviderId: null,
+    translationModel: 'qwen2.5-7b-instruct',
+    translationTimeoutMs: 120000,
     lmModel: 'qwen/qwen3-vl-4b',
     captionTimeoutMs: 60000,
     captionMaxTokens: 8000,
@@ -128,6 +135,12 @@ const FIELD_CHECKS: { [K in keyof Settings]: (v: unknown) => string | null } = {
     ? null : 'Story review provider must be a provider id, or empty to follow the default.'),
   captionProviderId: (v) => (v === null || isProviderId(v)
     ? null : 'Photo description provider must be a provider id, or empty to follow the default.'),
+  translationProviderId: (v) => (v === null || isProviderId(v)
+    ? null : 'Article translation provider must be a provider id, or empty to follow the default.'),
+  translationModel: (v) => typeof v === 'string' && v.length <= 100
+    ? null : 'Translation model must be a string of at most 100 characters.',
+  translationTimeoutMs: (v) =>
+    intInRange(v, 5000, 300000) ? null : 'Translation timeout must be a whole number of milliseconds between 5000 and 300000.',
   lmModel: (v) => (typeof v === 'string' && v.trim() !== '' ? null : 'Model is required.'),
   captionTimeoutMs: (v) =>
     intInRange(v, 1000, 600000) ? null : 'Timeout must be a whole number of milliseconds between 1000 and 600000.',
@@ -198,6 +211,9 @@ export function validate(s: Settings): Settings {
   }
   if (s.captionProviderId !== null && !ids.has(s.captionProviderId)) {
     throw new SettingsError('Photo description provider must be one of the configured providers.');
+  }
+  if (s.translationProviderId !== null && !ids.has(s.translationProviderId)) {
+    throw new SettingsError('Article translation provider must be one of the configured providers.');
   }
   return s;
 }
@@ -274,7 +290,7 @@ function loadSettings(path: string, defaults: Settings, log: (msg: string) => vo
     log(`settings: "aiDefaultProviderId" in ${path} names no configured provider; using the first provider`);
     loaded.aiDefaultProviderId = loaded.aiProviders[0]!.id;
   }
-  for (const key of ['reviewProviderId', 'captionProviderId'] as const) {
+  for (const key of ['reviewProviderId', 'captionProviderId', 'translationProviderId'] as const) {
     const id = loaded[key];
     if (id !== null && !ids.has(id)) {
       log(`settings: "${key}" in ${path} names no configured provider; following the default provider`);

@@ -20,7 +20,7 @@ window.GalleryMetadataWarnings = (function () {
     async function focus(warning, snapshot, status) {
       const ticket = ++navigation;
       const cm = editors[warning.locale];
-      const copy = window.EditorGalleryCopy[warning.locale];
+      const copy = window.EditorGalleryCopy.en;
       const source = cm.getValue();
       let current = warning;
       if (source !== snapshot) {
@@ -49,11 +49,11 @@ window.GalleryMetadataWarnings = (function () {
     function render() {
       root.textContent = '';
       root.hidden = !Array.from(states.values()).some((state) => state.warnings.length);
-      for (const [locale, state] of states) {
+      for (const state of states.values()) {
         if (!state.warnings.length) continue;
-        const copy = window.EditorGalleryCopy[locale];
+        // Admin chrome is English; each label names its locale.
+        const copy = window.EditorGalleryCopy.en;
         const section = document.createElement('section');
-        section.lang = locale;
         const summary = document.createElement('p');
         summary.textContent = state.saved ? copy.metadataSaved : copy.metadataAdvisory;
         section.appendChild(summary);

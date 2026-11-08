@@ -11,7 +11,7 @@
       <h1>Posts</h1>
       <p class="lede" data-language-copy="PostIntro"></p>
       <div class="cms-page-actions">
-        <button id="exportAll" type="button" class="btn-secondary">Export MDX to server backup</button>
+        <button id="exportAll" type="button" class="btn-secondary" title="Writes every post as an MDX file to the server's backup directory">Export MDX backup</button>
         <a id="newPost" href="/admin/editor.html" class="btn-new">New post</a>
       </div>
     </header>
@@ -469,8 +469,8 @@
         img.src = url;
         img.alt = '';
         img.loading = 'lazy';
-        img.width = 72;
-        img.height = 54;
+        img.width = 96;
+        img.height = 64;
         // heroWidth is unverified jsonb: a plausible-but-wrong width still 404s,
         // so degrade to the placeholder instead of a broken-image icon.
         img.addEventListener('error', () => img.replaceWith(placeholderThumb()));

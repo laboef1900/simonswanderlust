@@ -13,6 +13,12 @@
     <main>
       <!-- Real <form>s (not bare inputs plus a click handler) so that Enter in a
            field submits — keyboard-only account management must work. -->
+      <section class="card form-narrow">
+        <h2 class="card-heading">Existing users</h2>
+        <ul id="list" class="user-list"></ul>
+        <p id="listout" class="page-status" role="status"></p>
+        <button id="reloadUsers" type="button" class="btn-secondary" aria-describedby="listout"></button>
+      </section>
       <form class="card form-narrow" id="addForm">
         <h2 class="card-heading">Add a user</h2>
         <label for="username">Username</label>
@@ -26,12 +32,6 @@
         </div>
         <p id="out" class="page-status" role="status"></p>
       </form>
-      <section class="card form-narrow">
-        <h2 class="card-heading">Existing users</h2>
-        <button id="reloadUsers" type="button" aria-describedby="listout"></button>
-        <p id="listout" class="page-status" role="status"></p>
-        <ul id="list" class="user-list"></ul>
-      </section>
       <form class="card form-narrow" id="pwForm">
         <h2 class="card-heading">Change my password</h2>
         <label for="curpw">Current password</label>

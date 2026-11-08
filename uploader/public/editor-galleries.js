@@ -207,7 +207,6 @@ window.EditorGalleries = (function () {
     function create(block, text, number) {
       const parsed = GalleryFence.parse(block.content);
       const root = el('section', 'editor-gallery');
-      root.setAttribute('lang', locale);
       root.setAttribute('aria-label', copy.gallery + ' ' + number);
       const controller = { text, root, alive: true, fields: [], marker: null, widget: null, observer: null, lookups: 0,
         cancel() { this.fields.forEach((field) => field.cancel()); } };
@@ -224,9 +223,18 @@ window.EditorGalleries = (function () {
         const range = controller.marker.find();
         if (range) onEdit(cm.indexFromPos(range.from));
       });
+      // One way to Media per gallery, not per photo: every photo's link went to
+      // the same library page. A new tab, so it cannot discard this draft.
+      const mediaLink = el('a', 'editor-gallery__media-link', copy.editInMedia);
+      mediaLink.href = '/admin/media.html';
+      mediaLink.target = '_blank';
+      mediaLink.rel = 'noopener';
+      mediaLink.appendChild(el('span', 'visually-hidden', ' ' + copy.newTab));
+      head.appendChild(mediaLink);
       head.appendChild(edit);
       root.appendChild(head);
-      root.appendChild(el('p', 'muted editor-gallery__help', copy.help));
+      // The explanation is the same for every gallery; say it once per story.
+      if (number === 1) root.appendChild(el('p', 'muted editor-gallery__help', copy.help));
       // One live region per gallery, not per photo: a 30-photo gallery must not
       // announce "loading" thirty times.
       const lookupStatus = el('p', 'muted editor-gallery__status editor-gallery__lookup');
@@ -265,33 +273,39 @@ window.EditorGalleries = (function () {
         card.appendChild(image);
         card.appendChild(unavailable);
         const label = el('label');
-        const labelText = el('span', null, copy.photo + ' ' + (index + 1) + ' · ' + copy.alt);
+        const labelText = el('span', 'editor-gallery__alt-label', copy.photo + ' ' + (index + 1) + ' · ' + copy.alt);
         const input = el('textarea', 'editor-gallery__alt');
         input.rows = 3;
         input.maxLength = 1000;
         input.value = postAlt;
         input.readOnly = true;
+        // Text the author cannot edit here is shown as text, not as an inert field:
+        // a blank read-only box reads as "type here". The textarea stays the value
+        // of record for the editable (not-in-Media) state.
+        input.hidden = true;
+        const altText = el('span', 'editor-gallery__alt-text');
+        altText.tabIndex = -1; // a jump target for Review story, not a tab stop
+        // Chrome is English like the rest of the admin; the descriptions are locale content.
+        input.setAttribute('lang', locale);
+        const showAlt = (value) => {
+          altText.textContent = value || copy.noAlt;
+          altText.setAttribute('lang', value ? locale : 'en');
+          altText.classList.toggle('is-missing', !value);
+        };
+        showAlt(postAlt);
         card.appendChild(label);
         // CodeMirror clones widgets while measuring them. Implicit labels avoid
         // duplicate IDs targeting an invisible measurement copy.
         label.appendChild(labelText);
         label.appendChild(input);
+        label.appendChild(altText);
         const caption = el('p', 'editor-gallery__caption', postCaption);
+        caption.setAttribute('lang', locale);
         caption.hidden = !showCaptions || postCaption === '';
         card.appendChild(caption);
-        // Library-backed photos: where the text comes from, and where to change it.
-        // A new tab, so following the link cannot discard this unsaved draft.
-        const source = el('p', 'muted editor-gallery__source');
-        const sourceText = el('span');
-        const mediaLink = el('a', 'editor-gallery__media-link', copy.editInMedia);
-        mediaLink.href = '/admin/media.html';
-        mediaLink.target = '_blank';
-        mediaLink.rel = 'noopener';
-        source.appendChild(sourceText);
-        source.appendChild(document.createTextNode(' '));
-        source.appendChild(mediaLink);
-        source.hidden = true;
-        card.appendChild(source);
+        // Library-backed photos show only the description: the photo's Media
+        // title rides on the image's tooltip and in the label for assistive
+        // technology, and the gallery head links to Media once.
         const localNote = el('p', 'muted editor-gallery__local', copy.notInMedia);
         localNote.hidden = true;
         card.appendChild(localNote);
@@ -316,7 +330,7 @@ window.EditorGalleries = (function () {
         list.appendChild(card);
         let request;
         let version = 0;
-        const field = { src: line.src, input, image, state: 'pending',
+        const field = { src: line.src, input, altText, image, state: 'pending',
           cancel() {
             version += 1;
             request?.abort();
@@ -334,19 +348,26 @@ window.EditorGalleries = (function () {
             if (state !== 'missing') field.cancel();
             field.state = state;
             input.readOnly = state !== 'missing';
+            input.hidden = state !== 'missing';
+            altText.hidden = state === 'missing';
             suggest.hidden = state !== 'missing';
             localNote.hidden = state !== 'missing';
-            source.hidden = state !== 'library';
+            // An editable field keeps a visible label; shown text needs none.
+            labelText.classList.toggle('visually-hidden', state !== 'missing');
+            image.title = '';
             if (state === 'library') {
               const current = GalleryLibrary.describe(entry.row, locale);
-              labelText.textContent = copy.photo + ' ' + (index + 1) + ' · ' + copy.altFromMedia;
+              const name = current.title || fileName(current.key);
+              labelText.textContent = copy.photo + ' ' + (index + 1) + ' · ' + copy.altFromMedia + ' · ' + name;
+              image.title = copy.fromMedia + ' ' + name;
               input.value = current.alt;
               image.alt = current.alt;
+              showAlt(current.alt);
               caption.textContent = localCaption ?? current.caption;
               caption.hidden = !showCaptions || caption.textContent === '';
-              sourceText.textContent = copy.fromMedia + ' ' + (current.title || fileName(current.key));
             } else {
               labelText.textContent = copy.photo + ' ' + (index + 1) + ' · ' + copy.alt;
+              showAlt(input.value);
             }
             controller.widget?.changed();
           } };
@@ -535,8 +556,10 @@ window.EditorGalleries = (function () {
           // focusing its real control, never a measurement clone.
           cm.scrollIntoView(range.from);
           cm.refresh();
-          field.input.focus({ preventScroll: true });
-          field.input.scrollIntoView({ block: 'center' });
+          // The editable field when there is one; otherwise the shown description.
+          const target = field.input.hidden ? field.altText : field.input;
+          target.focus({ preventScroll: true });
+          target.scrollIntoView({ block: 'center' });
           return true;
         }
         return false;

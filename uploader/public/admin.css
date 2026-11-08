@@ -69,6 +69,10 @@
   --control-radius: 0.375rem;
   --control-font: 0.875rem;
   --focus-ring: 2px solid var(--studio-accent);
+  /* Floating menus (row More actions, editor More actions, account menu):
+     elevation is declared once, as a shadow — a tight contact layer for the
+     edge and a soft offset layer for lift — never a border plus a blur. */
+  --menu-shadow: 0 1px 3px rgb(20 42 66 / 16%), 0 12px 28px -8px rgb(20 42 66 / 24%);
 }
 /* Touch: 44px targets, and 16px field text — iOS Safari zooms the whole page
    into any focused field below 16px, which then pans sideways (#302, H5). */
@@ -82,6 +86,20 @@
    toggles `.hidden` (Unpublish, Retry, panels, status lines) would leave the
    element on screen. Keep it global and !important. */
 [hidden] { display: none !important; }
+
+/* Named for assistive technology, not drawn: the gallery photo labels and
+   "(opens a new tab)" suffixes. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
 
 body {
   margin: 0;
@@ -162,6 +180,11 @@ label {
 }
 .card > label:first-child,
 .card-heading + label { margin-top: 0; }
+
+/* Fieldsets group controls for disabling and naming, never to draw a box:
+   sections inside the workspace are flat (DESIGN.md). */
+fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+legend { padding: 0; }
 
 input, textarea, select {
   width: 100%;
@@ -369,16 +392,26 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   font-size: 0.8125rem;
 }
 
-/* The editor's alt-text audit is one of those: a result that will publish, or
-   already did, with photos no reader can see. It reuses .notice-warn rather
-   than inventing a second callout, and lists each photo as a real button so it
-   is keyboard reachable and jumps to the field that fixes it. */
+/* An advisory that never blocks anything (the editor's optional alt-text
+   review) reads as information, not as a warning: same shape, neutral ink. */
+.notice-info {
+  margin: 0.75rem 0 0;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--control-radius);
+  background: var(--canvas);
+  color: var(--ink);
+  font-size: 0.8125rem;
+}
+
+/* The editor's alt-text audit lists each photo as a real button so it is
+   keyboard reachable and jumps to the field that fixes it. */
 .alt-audit { margin: 0 0 1.25rem; }
-/* Inline disclosures (alt-text review, bulk selection, picker folders): a
-   drawn chevron in place of the UA triangle, matching the menus. */
-:is(.alt-audit, .selection-review, .media-picker__folders) > summary { display: flex; flex-wrap: wrap; align-items: center; gap: 0 0.5rem; list-style: none; }
-:is(.alt-audit, .selection-review, .media-picker__folders) > summary::-webkit-details-marker { display: none; }
-:is(.alt-audit, .selection-review, .media-picker__folders) > summary::before {
+/* Inline disclosures (alt-text review, bulk selection, picker folders, help
+   details): a drawn chevron in place of the UA triangle, matching the menus. */
+:is(.alt-audit, .selection-review, .media-picker__folders, .help-details) > summary { display: flex; flex-wrap: wrap; align-items: center; gap: 0 0.5rem; list-style: none; }
+:is(.alt-audit, .selection-review, .media-picker__folders, .help-details) > summary::-webkit-details-marker { display: none; }
+:is(.alt-audit, .selection-review, .media-picker__folders, .help-details) > summary::before {
   content: '';
   flex: none;
   width: 0.375rem;
@@ -387,14 +420,51 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   border-bottom: 1.5px solid currentColor;
   transform: rotate(-45deg);
 }
-:is(.alt-audit, .selection-review, .media-picker__folders)[open] > summary::before { transform: rotate(45deg); }
+:is(.alt-audit, .selection-review, .media-picker__folders, .help-details)[open] > summary::before { transform: rotate(45deg); }
+/* Background and caveats one click away, so the controls lead the page. */
+.help-details { margin: 0.75rem 0 0; color: var(--muted); font-size: 0.8125rem; }
+.help-details > summary {
+  width: fit-content;
+  min-height: var(--control-h-sm);
+  color: var(--studio-accent);
+  font-weight: 600;
+  cursor: pointer;
+}
+.help-details > summary:hover { color: var(--navy); }
+.help-details > :not(summary) { max-width: 65ch; margin: 0.25rem 0 0; }
+.help-details ul { padding-left: 1.1rem; }
+.help-details li + li { margin-top: 0.25rem; }
 .alt-audit p { margin: 0; }
 .alt-audit-list { list-style: none; margin: 0.5rem 0 0; padding: 0; }
-.alt-audit-list li { padding: 0.15rem 0; }
-/* The callout's own ink — the wording carries the meaning, the underline the
-   affordance. */
-.alt-audit-list .btn-link { color: var(--warn-ink); }
-.alt-audit-list .btn-link:where(:not(:disabled)):hover { color: var(--red-hover); }
+.alt-audit__item + .alt-audit__item { border-top: 1px solid var(--line); }
+.alt-audit__controls { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; margin-block: 0.75rem; }
+.alt-audit__controls label { margin: 0; }
+.alt-audit__controls select { width: auto; max-width: 100%; }
+.alt-audit__controls p { flex-basis: 100%; color: var(--muted); font-size: 0.8125rem; font-variant-numeric: tabular-nums; }
+.alt-audit__photo {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.75rem 0.25rem;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  white-space: normal;
+  font-size: 0.8125rem;
+  font-weight: 400;
+}
+.alt-audit__photo:where(:not(:disabled)):hover { background: var(--canvas); color: var(--ink); }
+.alt-audit__preview { display: grid; place-items: center; flex: 0 0 5rem; min-height: 3.75rem; background: var(--canvas); color: var(--muted); font-size: 0.75rem; text-align: center; }
+.alt-audit__preview img { display: block; width: 5rem; height: 3.75rem; object-fit: cover; }
+.alt-audit__description { display: grid; gap: 0.125rem; min-width: 0; overflow-wrap: anywhere; }
+.alt-audit__filename { color: var(--muted); font-size: 0.75rem; }
+.alt-audit__edit { color: var(--studio-accent); text-decoration: underline; text-underline-offset: 0.2em; }
+.alt-audit__navigation { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.75rem; }
+.alt-audit__navigation button { font-size: 0.8125rem; }
 
 /* ---- import progress (issue #92) ---- */
 .progress { margin-top: 0.75rem; }
@@ -453,6 +523,30 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   text-decoration: none;
 }
 .action-link:hover { color: var(--studio-accent-hover); text-decoration: underline; }
+
+/* Pages catalogue: flat compact rows like Posts, not a stack of cards. */
+#pagesList { border-top: 1px solid var(--line); }
+.pages-row {
+  display: grid;
+  grid-template-columns: minmax(8rem, 12rem) 8.5rem minmax(0, 1fr) minmax(0, max-content);
+  align-items: center;
+  gap: 0.5rem 1rem;
+  padding-block: 0.75rem;
+  border-bottom: 1px solid var(--line);
+}
+.pages-row > p { margin: 0; }
+.pages-row__state { justify-self: start; font-size: 0.8125rem; }
+.pages-row__kind { margin: 0; font-size: 0.9375rem; font-weight: 650; }
+.pages-row__titles { min-width: 0; color: var(--muted); font-size: 0.8125rem; overflow-wrap: anywhere; }
+.pages-row__actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 0.5rem 1rem; }
+.pages-row__actions .btn-remove { min-height: var(--control-h-sm); padding-block: 0.25rem; }
+.pages-row__fixed { max-width: 15rem; margin: 0; font-size: 0.75rem; text-align: right; }
+@media (max-width: 40rem) {
+  .pages-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .pages-row__titles { grid-column: 1 / -1; }
+  .pages-row__actions { grid-column: 1 / -1; justify-content: flex-start; }
+  .pages-row__fixed { max-width: none; text-align: left; }
+}
 
 /* Search / filter / sort toolbar (Posts, Media): fields share one wrapping
    row, captions use the label voice, and the disclosure links sit on the
@@ -590,7 +684,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .posts-page .posts-table th,
 .posts-page .posts-table td { min-width: 0; }
 .posts-page .posts-table .col-select { width: 2.75rem; }
-.posts-page .posts-table .col-thumb { width: 4rem; }
+.posts-page .posts-table .col-thumb { width: 7rem; }
 .posts-page .posts-table .col-title { width: auto; }
 .posts-page .posts-table .col-status { width: 10.5rem; }
 .posts-page .posts-table .col-languages { width: 6.5rem; }
@@ -598,7 +692,9 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .posts-page .posts-table .col-actions { width: 11rem; }
 .posts-page .posts-table .status-pill { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 .posts-page .posts-table .status-pill::before { flex-shrink: 0; }
-.posts-page .media-thumb { width: 3rem; height: 2.25rem; object-fit: cover; border-radius: 0.25rem; }
+/* Photography leads: a hero is the fastest way to recognise a story, so it is
+   large enough to read as a photograph, not an icon. */
+.posts-page .media-thumb { width: 6rem; height: 4rem; object-fit: cover; border-radius: 0.3rem; }
 .posts-page .posts-table tbody tr:hover { background: #fafbfc; }
 .posts-page .post-trip-meta { display: block; margin-top: 0.125rem; color: var(--muted); font-size: 0.75rem; line-height: 1.5; }
 .posts-page .post-language {
@@ -712,10 +808,9 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   gap: 0.125rem;
   min-width: 11rem;
   padding: 0.375rem;
-  border: 1px solid var(--line-strong);
   border-radius: 0.5rem;
   background: var(--surface);
-  box-shadow: 0 12px 28px -8px rgb(20 42 66 / 22%);
+  box-shadow: var(--menu-shadow);
 }
 .posts-page .post-more-actions button {
   justify-content: flex-start;
@@ -778,7 +873,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   /* Title row, then status + languages on one line, then date, then actions. */
   .posts-page .posts-table tbody tr {
     display: grid;
-    grid-template-columns: var(--control-h-sm) 3.25rem minmax(0, 1fr) auto;
+    grid-template-columns: var(--control-h-sm) 4.5rem minmax(0, 1fr) auto;
     gap: 0.375rem 0.5rem;
     padding-block: 0.75rem;
     border-bottom: 1px solid var(--line);
@@ -791,7 +886,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
     border: 0;
   }
   .posts-page .posts-table tbody td.col-select { grid-column: 1; grid-row: 1; }
-  .posts-page .posts-table tbody td.col-thumb { grid-column: 2; grid-row: 1; padding-top: 0.25rem; }
+  .posts-page .posts-table tbody td.col-thumb { grid-column: 2; grid-row: 1 / span 2; padding-top: 0.25rem; }
+  .posts-page .posts-table tbody .media-thumb { width: 4.5rem; height: 3rem; }
   .posts-page .posts-table tbody td.col-title { grid-row: 1; }
   .posts-page .posts-table tbody td.col-status { grid-column: 3; grid-row: 2; }
   .posts-page .posts-table tbody td.col-languages { grid-column: 4; grid-row: 2; }
@@ -853,7 +949,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   align-self: stretch;
   margin: 0.25rem 0;
   padding: 0.5rem 0.75rem;
-  border-left: 3px solid var(--warn-line);
+  border: 1px solid var(--warn-line);
   background: var(--warn-bg);
   color: var(--warn-ink);
   font-size: 0.8125rem;
@@ -861,17 +957,77 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .media-layout {
   display: grid;
-  grid-template-columns: 11rem minmax(0, 1fr) 16rem;
+  grid-template-columns: 11rem minmax(0, 1fr) 20rem;
   gap: 1.5rem;
   align-items: start;
 }
+.media-layout:has(.media-detail[hidden]) { grid-template-columns: 11rem minmax(0, 1fr); }
+.media-page .cms-content main > .media-upload + .media-layout { margin-top: 1rem; padding-top: 1rem; }
+.media-upload__disclosure { margin: 0; }
+.media-upload__disclosure > summary { min-height: var(--control-h); display: flex; align-items: center; }
+.media-upload__disclosure[open] > summary { margin-bottom: 0.5rem; }
+.media-upload__disclosure.is-over { background: var(--studio-accent-soft); }
+.media-selection-help { margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--line); }
+.media-selection-help .media-detail__empty { color: var(--muted); font-size: 0.8125rem; }
+.media-folders { margin: 0; }
+.media-folders > summary { min-height: var(--control-h); display: flex; align-items: center; overflow-wrap: anywhere; }
+.media-folders[open] > summary { margin-bottom: 0.5rem; }
+.media-detail {
+  position: sticky;
+  top: 1rem;
+  max-height: calc(var(--cms-workspace-h) - 2rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 0.75rem 1rem 1rem;
+  border-left: 1px solid var(--line);
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+  scroll-margin-top: 1rem;
+}
+.media-detail__header {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.25rem 0.5rem;
+  padding-bottom: 0.75rem;
+  background: var(--surface);
+  z-index: 1;
+}
+.media-detail__header .section-label { margin: 0; }
+.media-detail__header button { min-height: var(--control-h-sm); font-size: 0.75rem; }
 .media-sidebar,
 .media-main,
 .media-detail { min-width: 0; }
-.media-detail .media-key { margin: 0; color: var(--muted); }
+.media-detail .media-key { margin: 0.5rem 0 0; color: var(--muted); }
 .media-detail > label:first-of-type { margin-top: 1rem; }
 .media-detail > button { margin-top: 1rem; }
 .media-detail > button + button { margin-left: 0.25rem; }
+/* The photo being described, large enough to judge what the alt text must say. */
+.media-detail__preview { margin: 0; }
+.media-detail__preview img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 22rem;
+  object-fit: contain;
+  border-radius: 0.5rem;
+  background: var(--canvas);
+}
+.media-detail__preview .thumb-placeholder {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 4 / 3;
+  border-radius: 0.5rem;
+  background: var(--canvas);
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+.media-detail__shot { margin-top: 0.5rem; color: var(--ink); font-size: 0.8125rem; }
+.media-detail__empty { margin: 0; color: var(--ink); font-size: 0.875rem; }
+.media-detail__hints { margin: 0.75rem 0 0; padding-left: 1.1rem; font-size: 0.8125rem; line-height: 1.6; }
 
 .folder-tree { list-style: none; margin: 0 0 0.75rem; padding: 0; }
 .folder-btn {
@@ -898,6 +1054,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr));
   gap: 0.75rem;
 }
+/* The library itself: fewer, larger photos than the picker dialog. */
+.media-layout .media-grid { grid-template-columns: repeat(auto-fill, minmax(min(10.5rem, 40%), 1fr)); gap: 1rem; }
 .media-cell {
   position: relative; /* anchors .media-cell__order, the picker's position badge */
   display: flex;
@@ -941,8 +1099,19 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   line-clamp: 2;
   overflow-wrap: anywhere;
 }
-.media-cell__title { font-size: 0.75rem; font-weight: 500; line-height: 1.35; }
-.media-cell__used { color: var(--muted); font-size: 0.6875rem; line-height: 1.35; }
+.media-cell__title { font-size: 0.8125rem; font-weight: 600; line-height: 1.35; }
+/* A bare file name is a fallback, not a name: set back and one line. */
+.media-cell__title.is-filename { color: var(--muted); font-weight: 400; font-size: 0.75rem; -webkit-line-clamp: 1; line-clamp: 1; }
+.media-cell__used { color: var(--muted); font-size: 0.6875rem; line-height: 1.35; -webkit-line-clamp: 1; line-clamp: 1; }
+.media-cell__flag {
+  align-self: flex-start;
+  padding: 0.0625rem 0.375rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 0.25rem;
+  color: var(--muted);
+  font-size: 0.6875rem;
+  font-weight: 500;
+}
 
 .media-pager { display: flex; align-items: center; gap: 0.75rem; margin-top: 1rem; }
 .media-pager .muted { margin: 0; }
@@ -1024,7 +1193,12 @@ dialog.media-picker {
 }
 
 @media (max-width: 900px) {
-  .media-layout { grid-template-columns: 1fr; }
+  .media-layout,
+  .media-layout:has(.media-detail[hidden]) { grid-template-columns: minmax(0, 1fr); }
+  .media-detail { position: static; max-height: none; overflow: visible; padding: 1rem 0; border-left: 0; border-top: 1px solid var(--line); }
+  .media-detail__header { padding-block: 0.5rem; }
+  .media-selection-help { display: none; }
+  .media-sidebar .folder-tree { max-height: 10rem; overflow-y: auto; }
 }
 
 .media-thumb {
@@ -1077,9 +1251,19 @@ dialog.media-picker {
 }
 
 /* ---- key facts ---- */
-.keyfact-row { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; }
-.keyfact-label { flex: 1; }
-.keyfact-value { flex: 1.3; }
+/* Label above value: the inspector column is too narrow for two inputs side by
+   side, and a cut-off "39'6122 (Yuca" cannot be proofread. */
+.keyfact-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--control-h);
+  gap: 0.375rem 0.5rem;
+  align-items: center;
+  padding-block: 0.625rem;
+  border-bottom: 1px solid var(--line);
+}
+.keyfact-label { grid-column: 1; font-weight: 600; }
+.keyfact-value { grid-column: 1 / -1; grid-row: 2; }
+.keyfact-row .btn-remove { grid-column: 2; grid-row: 1; }
 
 /* ---- stops ---- */
 .stop-row {
@@ -1099,14 +1283,27 @@ dialog.media-picker {
 .stop-search-status:empty { display: none; }
 .stop-search-results { display: grid; gap: 0.5rem; margin-top: 0.5rem; }
 .stop-search-result { justify-content: flex-start; width: 100%; text-align: left; white-space: normal; overflow-wrap: anywhere; }
-/* The × remove beside a key fact or stop: a square the height of its row. */
+.stops-notes { margin-top: 0.75rem; font-size: 0.75rem; line-height: 1.45; }
+.stops-notes p { margin: 0 0 0.375rem; }
+/* The × remove beside a key fact or stop: a square the height of its row,
+   drawn in the editor's stroke icon style. */
 :is(.keyfact-row, .stop-row) .btn-remove {
   flex: none;
   width: var(--control-h);
   padding: 0;
-  font-size: 1.125rem;
   line-height: 1;
 }
+.editor-icon-remove svg {
+  width: 1rem;
+  height: 1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+/* A value wraps and grows (fitTextarea) rather than clipping; one row high
+   until the text needs more. */
+.keyfact-value { min-height: var(--control-h); }
 
 /* ---- locale tabs (editor, About) ----
    A segmented control; tabs.js toggles the panels with `hidden`. */
@@ -1198,6 +1395,7 @@ dialog.story-review {
   padding: 1.25rem 1.5rem 1.5rem;
 }
 .story-review__advisory { margin: 0; color: var(--muted); font-size: 0.8125rem; }
+.review-destination { overflow-wrap: anywhere; font-weight: 600; line-height: 1.5; }
 .story-review__section { margin-top: 1.75rem; }
 .story-review__section h3 { margin: 0 0 0.75rem; color: var(--ink); font-size: 0.9375rem; font-weight: 650; }
 .story-review__footer { border-top: 1px solid var(--line); background: var(--canvas); }
@@ -1213,6 +1411,7 @@ dialog.story-review {
 .review-findings li + li { margin-top: 0.65rem; }
 .review-findings p { margin-top: 0; }
 .review-findings .review-jump { padding: 0.25rem 0; font-size: 0.8125rem; }
+.review-findings .review-media-link { margin-left: 1rem; font-size: 0.8125rem; font-weight: 600; }
 .review-suggestion { margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--line); }
 .review-suggestion .review-suggestion__text { margin: 0 0 0.6rem; white-space: pre-wrap; }
 .review-status { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin: 0 0 0.75rem; font-size: 0.875rem; }
@@ -1442,6 +1641,32 @@ body.login-page #submit { width: 100%; margin-top: 1.5rem; }
   padding: 0.5rem 0;
   border-bottom: 1px solid var(--line);
 }
+
+/* Journeys share the catalogue rhythm of Posts and Pages, not stacked cards. */
+.journey-list { border-top: 1px solid var(--line); }
+.journey-list:empty { border: 0; }
+.journey-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 10rem 6rem auto;
+  align-items: center;
+  gap: 1rem;
+  padding: 1.25rem 0;
+  border-bottom: 1px solid var(--line);
+}
+.journey-row__description { min-width: 0; overflow-wrap: anywhere; }
+.journey-row__title { margin: 0; font-size: 0.9375rem; line-height: 1.4; font-weight: 600; }
+.journey-row__title a { color: var(--ink); text-decoration: none; }
+.journey-row__title a:hover { color: var(--studio-accent); text-decoration: underline; }
+.journey-row__state { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem; }
+.journey-row__state .muted { margin: 0; }
+.journey-row__count { margin: 0; font-size: 0.8125rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.journey-row > .action-link { display: inline-flex; align-items: center; min-height: var(--control-h); }
+@media (max-width: 68rem) {
+  .journey-row { grid-template-columns: minmax(0, 1fr) auto; gap: 0.625rem 1rem; }
+  .journey-row__description { grid-column: 1 / -1; }
+  .journey-row__count { grid-column: 1; }
+  .journey-row > .action-link { grid-column: 2; grid-row: 2 / 4; }
+}
 .user-list li:first-child { padding-top: 0; }
 .user-list li:last-child { border-bottom: 0; }
 .user-list__name { font-weight: 600; overflow-wrap: anywhere; }
@@ -1582,6 +1807,18 @@ body.login-page #submit { width: 100%; margin-top: 1.5rem; }
   padding: 1rem 0 0;
   border-top: 1px solid var(--line);
 }
+.cms-legal-link {
+  display: flex;
+  align-items: center;
+  min-height: 2.75rem;
+  padding: 0.375rem 0;
+  margin-bottom: 0.5rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.5;
+  text-decoration: underline;
+}
+.cms-legal-link:hover { color: var(--ink); }
 /* The account menu is the admin's floating-panel menu, triggered by the
    avatar alone so a long username never wraps in the sidebar. The panel opens
    upward (the trigger sits at the foot of the sidebar), spans the footer so it
@@ -1621,10 +1858,9 @@ body.login-page #submit { width: 100%; margin-top: 1.5rem; }
   display: grid;
   gap: 0.125rem;
   padding: 0.375rem;
-  border: 1px solid var(--line-strong);
   border-radius: 0.5rem;
   background: var(--surface);
-  box-shadow: 0 12px 28px -8px rgb(20 42 66 / 22%);
+  box-shadow: var(--menu-shadow);
 }
 .cms-user-info {
   display: flex;
@@ -1794,13 +2030,33 @@ body.login-page #submit { width: 100%; margin-top: 1.5rem; }
   .cms-content { padding-inline: 0.85rem; }
 }
 
-/* Publishing desk (index.html): three sections of one document, divided like
-   stacked cards elsewhere. */
+/* Desk: writing first, compact publication observations, then independent site status. */
+.desk-page .cms-content { max-width: 64rem; }
 .desk-heading { margin: 0 0 0.75rem; color: var(--ink); font-size: 1rem; font-weight: 650; line-height: 1.35; }
-.desk-list-block,
-.desk-meta { margin-top: 1.75rem; padding-top: 1.75rem; border-top: 1px solid var(--line); }
-#deskStatus:empty { display: none; }
+.desk-publication,
+.desk-meta { margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--line); }
+.desk-section-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 0.75rem; }
+.desk-section-header .desk-heading { margin: 0; }
+.desk-subheading { margin: 0 0 0.5rem; font-size: 0.875rem; font-weight: 650; }
+.desk-list-block { margin-top: 1rem; }
+.desk-list-block p { margin-block: 0.375rem; }
+.desk-backup-warning { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 0.75rem; margin: 0 0 1.5rem; }
+.desk-page main p { max-width: 72ch; }
+#deskStatus:empty,
+#publicationNotice:empty,
+#deskRebuildOutcome:empty { display: none; }
 #deskError button { display: flex; margin-top: 0.5rem; }
+#deskOverview { margin: 0; }
+#deskOverview[data-state="attention"],
+#deskOverview[data-state="unavailable"] { font-weight: 600; }
+.desk-exceptions { margin: 0.75rem 0; padding-left: 1.25rem; }
+.desk-exceptions li + li { margin-top: 0.375rem; }
+.desk-details { margin-top: 1rem; }
+.desk-details > summary { width: fit-content; max-width: 100%; padding-block: 0.625rem; color: var(--studio-accent); font-weight: 600; cursor: pointer; }
+.desk-details-body { padding-top: 0.5rem; }
+.desk-details-body > p { margin: 0 0 0.75rem; }
+#deskRebuildLink { border-top: 1px solid var(--line); margin-top: 1rem; padding-top: 1rem; }
+#deskRebuildHelp { margin: 0 0 0.75rem; }
 .desk-next-card {
   display: grid;
   grid-template-columns: minmax(0, 12rem) minmax(0, 1fr);
@@ -1814,7 +2070,8 @@ body.login-page #submit { width: 100%; margin-top: 1.5rem; }
   border-radius: 0.5rem;
   background: var(--canvas);
 }
-.desk-hero.thumb-placeholder { min-height: 8rem; }
+.desk-next-card:has(.thumb-placeholder) { grid-template-columns: 1fr; }
+.desk-next-card .thumb-placeholder { display: none; }
 .desk-next-body { display: flex; flex-direction: column; gap: 0.375rem; align-items: flex-start; min-width: 0; }
 .desk-next-body .muted { margin: 0; }
 .desk-title {
@@ -1842,8 +2099,15 @@ body.login-page #submit { width: 100%; margin-top: 1.5rem; }
 .desk-unpub .desk-title { flex: 1 1 16rem; min-width: 0; font-size: 0.875rem; font-weight: 600; }
 .desk-unpub .action-link { flex: 0 0 auto; }
 .desk-meta-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.375rem; }
+.desk-meta-list .action-link { display: inline-flex; align-items: center; min-height: 2.75rem; padding-inline: 0.5rem; margin-inline: -0.5rem; }
+.desk-page :is(#deskNewPost, .btn-new, .btn-primary, .btn-secondary, .desk-details > summary) { min-height: 2.75rem; }
 @media (max-width: 900px) {
   .desk-next-card { grid-template-columns: 1fr; }
+  .desk-hero { max-height: 9rem; }
+  .desk-page .desk-unpub .action-link { display: inline-flex; align-items: center; min-height: 2.75rem; padding-inline: 0.5rem; }
+  .desk-page .desk-backup-warning { align-items: stretch; }
+  .desk-backup-warning a { display: flex; align-items: center; min-height: 2.75rem; }
+  .desk-section-header { flex-wrap: wrap; }
 }
 
 /* Settings are one flat document per tab beside a quiet vertical index, not
@@ -1870,7 +2134,7 @@ body.settings-page .settings-layout {
   border: 0;
   background: none;
   color: var(--muted);
-  font-weight: 500;
+  font-weight: 600;
   text-align: left;
 }
 .settings-tabs [role='tab']:where(:not(:disabled)):hover { background: var(--canvas); color: var(--ink); }
@@ -1881,13 +2145,70 @@ body.settings-page .settings-layout {
   font-weight: 600;
 }
 .settings-sections { min-width: 0; }
+.settings-savebar {
+  position: sticky;
+  top: var(--settings-draft-height, 0px);
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  padding: 0.75rem 0;
+  margin: 0 0 1rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+.settings-savebar > .muted { flex: 1 1 16rem; margin: 0; }
+.settings-savebar > .page-status { flex-basis: 100%; margin: 0; }
+.settings-savebar > .page-status:empty { display: none; }
+.settings-draft-bar {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  padding: 0.75rem 1rem;
+  border-top: 1px solid var(--line-strong);
+  background: var(--studio-accent-soft);
+}
+.settings-draft-bar p { flex: 1 1 15rem; margin: 0; font-size: 0.8125rem; font-weight: 600; }
+.settings-draft-bar button { flex: 0 1 auto; }
+.settings-feature + .settings-feature { margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid var(--line); }
+.settings-advanced { margin-top: 1rem; }
+.settings-advanced > summary { min-height: var(--control-h); }
+.settings-jumps { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1.5rem; }
+.settings-jumps button { min-height: var(--control-h-sm); }
+.settings-empty { list-style: none; color: var(--muted); margin-inline-start: -1.5rem; }
+body.settings-page :is(h2, details, input, select, textarea) { scroll-margin-top: 7rem; }
+body.settings-page .cms-workspace { scroll-padding-bottom: 7rem; }
+.navigation-links { list-style: decimal; margin: 0.5rem 0 1rem; padding-left: 1.5rem; }
+.navigation-links > li { padding: 0.75rem 0; border-bottom: 1px solid var(--line); }
+.navigation-links .form-actions { margin-top: 0.5rem; }
+.navigation-links .muted:empty { display: none; }
+.navigation-link > summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.25rem 1rem;
+  padding: 0.25rem 0;
+  cursor: pointer;
+  min-height: var(--control-h);
+}
+.navigation-link-title { font-weight: 600; overflow-wrap: anywhere; }
+.navigation-link-labels { grid-column: 1; color: var(--muted); font-size: 0.8125rem; overflow-wrap: anywhere; }
+.navigation-link-edit { grid-column: 2; grid-row: 1 / 3; align-self: center; color: var(--studio-accent); font-size: 0.8125rem; text-decoration: underline; text-underline-offset: 0.18em; }
+.navigation-link > summary:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
+.navigation-link[open] > summary { margin-bottom: 0.75rem; }
+.navigation-fields { padding: 0 0 0.5rem; }
+#navigationFields > section { margin-top: 1.5rem; }
 body.settings-page .muted { max-width: 70ch; overflow-wrap: anywhere; }
 .settings-field-pair {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 0 1rem;
 }
-#identityFields, .identity-asset-fields { min-width: 0; margin: 0; padding: 0; border: 0; }
 .identity-assets { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--line); }
 .identity-asset-fields { margin-bottom: 1rem; }
 .identity-asset-fields legend { font-weight: 600; }
@@ -1970,31 +2291,18 @@ body.settings-page .muted { max-width: 70ch; overflow-wrap: anywhere; }
 .provider-form .section-label { margin-top: 0; }
 #providerFormSlot > .provider-form { margin-top: 1rem; }
 
-/* Use case assignments: one lightly bordered panel, a row per feature —
-   name | provider | model, then the model-list status, the resolved
-   provider / model and URL. Fields align at the top because the model cell
-   grows when "Other model ID…" reveals its input. */
-.use-case-panel { margin-top: 1rem; border: 1px solid var(--line); border-radius: 0.5rem; }
+/* Each AI task owns its assignment and advanced settings. */
 .use-case-row {
   display: grid;
-  grid-template-columns: 10rem minmax(0, 14rem) minmax(0, 1fr);
-  gap: 0.375rem 1rem;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0.5rem 1rem;
   align-items: start;
-  padding: 1rem 1.25rem;
+  margin-top: 1rem;
 }
-.use-case-row + .use-case-row { border-top: 1px solid var(--line); }
-.use-case-name {
-  /* Centred on the first control row: label (0.75rem × 1.4 + 0.25rem) plus
-     half the control's free height. */
-  margin: calc(1.3rem + (var(--control-h) - 1.225rem) / 2) 0 0;
-  color: var(--ink);
-  font-size: 0.875rem;
-  font-weight: 600;
-}
-.use-case-field label { margin: 0 0 0.25rem; color: var(--muted); font-size: 0.75rem; font-weight: 500; }
+.use-case-field label { margin: 0 0 0.25rem; }
 .use-case-models,
 .use-case-resolved,
-.use-case-row > .notice-warn { grid-column: 2 / -1; margin: 0; }
+.use-case-row > .notice-warn { grid-column: 1 / -1; margin: 0; }
 .use-case-models,
 .use-case-resolved { color: var(--muted); font-size: 0.8125rem; overflow-wrap: anywhere; }
 .use-case-models:empty { display: none; }
@@ -2059,13 +2367,13 @@ body.settings-page .muted { max-width: 70ch; overflow-wrap: anywhere; }
 }
 
 @media (max-width: 72rem) {
-  body.settings-page .settings-layout { grid-template-columns: minmax(0, 1fr); gap: 1.5rem; }
+  body.settings-page .settings-layout { grid-template-columns: minmax(0, 1fr); gap: 1rem; }
   .settings-tabs {
     position: static;
     display: flex;
     flex-wrap: wrap;
     gap: 0.25rem;
-    padding-bottom: 1rem;
+    padding-bottom: 0.75rem;
     border-bottom: 1px solid var(--line);
   }
 }
@@ -2073,15 +2381,19 @@ body.settings-page .muted { max-width: 70ch; overflow-wrap: anywhere; }
   .provider-row { grid-template-columns: minmax(0, 1fr); }
   .provider-actions { justify-content: flex-start; }
   .use-case-row { grid-template-columns: minmax(0, 1fr); }
-  .use-case-name { margin-top: 0; }
   .use-case-models,
   .use-case-resolved,
   .use-case-row > .notice-warn { grid-column: auto; }
   .quality-compare-panes { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 36rem) {
+  body.settings-page .cms-topbar { padding-bottom: 0.5rem; }
+  body.settings-page .cms-content { padding-top: 0.5rem; }
   .settings-field-pair { grid-template-columns: minmax(0, 1fr); }
   body.settings-page .form-actions button { flex: 1 1 auto; }
+  .settings-savebar { gap: 0.5rem; }
+  .settings-savebar > button { flex: 1 1 auto; }
+  .settings-savebar > .muted { font-size: 0.8125rem; }
 }
 
 /* ---- editor writing workspace ----
@@ -2097,10 +2409,7 @@ body.editor-page {
   --editor-rail-width: calc(var(--control-h) + 1rem);
   --editor-commandbar-height: 0px;
   --editor-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-  /* One ruled frame holds the manuscript and Story details. The inspector is
-     the tinted column inside it: --muted is 5.2:1 and --line-control 3.2:1 on
-     --canvas (see :root), and white fields stand out against it. */
-  --editor-frame-radius: 0.75rem;
+  /* The shell is the document frame; only the inspector needs a divider. */
   --editor-inspector-surface: var(--canvas);
   overflow-x: clip;
 }
@@ -2183,6 +2492,24 @@ body.editor-page .editor-commandbar__status {
   gap: 0.25rem 1rem;
 }
 
+body.editor-page .editor-readiness { position: relative; margin: 0; }
+body.editor-page .editor-readiness > summary { min-height: 2rem; display: flex; align-items: center; flex-wrap: wrap; gap: 0.375rem; font-size: 0.8125rem; }
+body.editor-page .editor-readiness__count { color: var(--muted); font-weight: 400; }
+body.editor-page .editor-readiness > .locale-chip {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  left: 0;
+  width: min(32rem, calc(100vw - 4rem));
+  padding: 1rem;
+  border-radius: 0.5rem;
+  background: var(--surface);
+  box-shadow: var(--menu-shadow);
+  white-space: normal;
+  overflow: visible;
+  line-height: 1.8;
+}
+body.editor-page .editor-readiness .locale-chip-link { min-height: var(--control-h-sm); text-align: left; }
+
 body.editor-page .editor-save-state {
   flex-shrink: 0;
   margin: 0;
@@ -2211,7 +2538,41 @@ body.editor-page .editor-commandbar__nav > .action-link {
   white-space: nowrap;
 }
 
+/* Re-checks the live site: an icon beside the state it reads, sized like the
+   small controls, quiet until hovered. Its name is "Check the live site again". */
+body.editor-page .editor-status-refresh {
+  width: var(--control-h-sm);
+  min-height: var(--control-h-sm);
+  margin-left: -0.625rem;
+  padding: 0;
+  border-color: transparent;
+  background-color: transparent;
+  color: var(--muted);
+}
+
+body.editor-page .editor-status-refresh:where(:not(:disabled)):hover {
+  background-color: var(--studio-accent-soft);
+  color: var(--ink);
+}
+
+body.editor-page .editor-status-refresh svg {
+  width: 0.9375rem;
+  height: 0.9375rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 body.editor-page .editor-actions-menu { position: relative; }
+
+/* Desktop shows readiness in the status row, so the menu would repeat it;
+   with nothing else to offer (no Unpublish) the menu is not drawn at all. */
+@media not all and (max-width: 74rem) {
+  body.editor-page .editor-actions-menu__readiness { display: none; }
+  body.editor-page .editor-actions-menu:not(:has(#unpublishBtn:not([hidden]))) { display: none; }
+}
 
 /* <summary> carries .btn-secondary for its colours; the button box (height,
    padding, type) is the same as every other control's. */
@@ -2263,10 +2624,9 @@ body.editor-page .editor-actions-menu__panel {
   min-width: 13rem;
   gap: 0.125rem;
   padding: 0.375rem;
-  border: 1px solid var(--line-strong);
   border-radius: 0.5rem;
   background: var(--surface);
-  box-shadow: 0 12px 28px -8px rgb(20 42 66 / 22%);
+  box-shadow: var(--menu-shadow);
 }
 
 body.editor-page .editor-actions-menu__panel button {
@@ -2286,6 +2646,7 @@ body.editor-page .editor-actions-menu__readiness {
   padding: 0.375rem 0.5rem 0.625rem;
   border-bottom: 1px solid var(--line);
 }
+body.editor-page #previewHelp { max-width: 16rem; margin-top: 0.5rem; white-space: normal; }
 
 body.editor-page .editor-actions-menu__readiness .section-label {
   margin-bottom: 0.25rem;
@@ -2305,13 +2666,32 @@ body.editor-page .editor-actions-menu__readiness .locale-chip {
 
 body.editor-page .alt-audit {
   margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
   overflow-wrap: anywhere;
 }
 
 body.editor-page .alt-audit summary {
+  min-height: var(--control-h);
   padding-block: 0.25rem;
+  color: var(--muted);
+  font-size: 0.8125rem;
   font-weight: 600;
 }
+
+body.editor-page .alt-audit__advisory {
+  flex-basis: 100%;
+  padding-left: 0.875rem;
+  font-size: 0.75rem;
+  font-weight: 400;
+}
+body.editor-page .alt-audit.notice-warn summary { color: #855f25; }
+body.editor-page .alt-audit[open] { padding-bottom: 0.75rem; border-bottom: 1px solid var(--line); }
+body.editor-page #altAuditCounts { margin-block: 0.5rem; font-size: 0.8125rem; }
+
+/* Help prose keeps a reading measure even in the wide manuscript column. */
+body.editor-page .alt-audit #altAuditHelp { max-width: 70ch; }
 
 body.editor-page .alt-audit h3 {
   margin: 1.25rem 0 0;
@@ -2323,23 +2703,20 @@ body.editor-page .alt-audit #altAuditFeedback:not([hidden]) {
   font-weight: 600;
 }
 
-/* The frame: manuscript and inspector share one rule. The inspector's tinted
-   column is painted by ::before so it spans the frame's full height while the
-   inspector itself stays a sticky, independently scrolling column; the
-   column narrows with the grid track when the panel collapses. No stacking
-   context here: the phone drawer and its scrim must still cover the command
-   bar. The pseudo-element paints before the (positioned) inspector. */
+/* A continuous document canvas beside an independently scrolling inspector.
+   No stacking context: the mobile drawer still covers the command bar. */
 body.editor-page .editor-workspace {
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--editor-inspector-width);
   align-items: start;
-  width: min(100% - 2 * var(--editor-gutter), 90rem);
-  margin: var(--editor-gutter) auto;
-  border: 1px solid var(--line);
-  border-radius: var(--editor-frame-radius);
+  width: 100%;
+  min-height: calc(var(--cms-workspace-h) - var(--editor-commandbar-height));
+  margin: 0;
   background: var(--surface);
-  transition: grid-template-columns 280ms var(--editor-ease-out);
+  /* The column switch is not animated: transitioning the track would reflow
+     the whole manuscript (and every gallery widget) on each frame. The
+     inspector content fades and slides with transform/opacity instead. */
 }
 
 body.editor-page .editor-workspace::before {
@@ -2349,10 +2726,8 @@ body.editor-page .editor-workspace::before {
   right: 0;
   bottom: 0;
   width: var(--editor-inspector-width);
-  border-left: 1px solid var(--line-strong);
-  border-radius: 0 calc(var(--editor-frame-radius) - 1px) calc(var(--editor-frame-radius) - 1px) 0;
+  border-left: 1px solid var(--line);
   background: var(--editor-inspector-surface);
-  transition: width 280ms var(--editor-ease-out);
 }
 
 body.editor-page .editor-canvas {
@@ -2363,17 +2738,24 @@ body.editor-page .editor-canvas {
 }
 
 body.editor-page .editor-writing-surface {
-  width: min(100%, 58rem);
+  width: min(100%, 56rem);
   min-width: 0;
   margin: 0 auto;
-  padding: clamp(1rem, 2.4vw, 2rem);
+  padding: 2rem clamp(1.25rem, 3vw, 3rem) 4rem;
 }
 
-/* Proximity, not nested cards, separates parts of the manuscript; the title's
-   own rule already divides it from the story. */
-body.editor-page .editor-writing-surface .editor-card + .editor-card { margin-top: 1.75rem; }
-body.editor-page .editor-writing-surface__title > label:first-child {
-  margin-top: 0;
+/* The document itself supplies the hierarchy; labels remain accessible. */
+body.editor-page .editor-writing-surface .editor-card + .editor-card { margin-top: 1rem; }
+body.editor-page .editor-writing-surface__title > label:first-child,
+body.editor-page .editor-writing-surface__body > .editor-card-title {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 body.editor-page .editor-card-header {
@@ -2404,26 +2786,26 @@ body.editor-page .editor-title-input {
   margin: 0;
   padding: 0.25rem 0;
   border: 0;
-  border-bottom: 2px solid var(--line-strong);
+  border-bottom: 2px solid transparent;
   border-radius: 0;
   background: transparent;
   color: var(--ink);
-  font-size: clamp(1.75rem, 3.2vw, 2.5rem);
+  font-size: 2rem;
   font-weight: 750;
   letter-spacing: -0.03em;
   line-height: 1.1;
 }
 
 body.editor-page .editor-title-input::placeholder {
-  color: #8a9099;
+  color: var(--muted);
   font-weight: 700;
 }
 
-/* The title keeps its ruled-line look; focus thickens and colours the rule. */
+/* Focus reveals the title's editing boundary without boxing the document. */
 body.editor-page .editor-title-input:focus {
   border-bottom-color: var(--studio-accent);
   outline: none;
-  box-shadow: 0 1px 0 var(--studio-accent);
+  box-shadow: none;
 }
 
 /* Hero is a compact manuscript preview; optional replacement and crop
@@ -2581,6 +2963,306 @@ body.editor-page .hero-focus output { color: var(--muted); }
 /* The manuscript body gets more height than About's. */
 body.editor-page .EasyMDEContainer .CodeMirror { min-height: clamp(22rem, 52vh, 38rem); }
 
+/* The quiet formatting strip remains at hand throughout a long document. */
+body.editor-page .manuscript-tools {
+  position: sticky;
+  top: var(--editor-commandbar-height);
+  z-index: 30;
+  background: var(--surface);
+}
+
+body.editor-page .manuscript-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.375rem 0;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--surface);
+}
+
+body.editor-page .manuscript-format {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+body.editor-page .manuscript-bar__group {
+  display: flex;
+  align-items: center;
+  gap: 0.125rem;
+}
+
+body.editor-page .manuscript-bar__group + .manuscript-bar__group {
+  padding-left: 0.25rem;
+  border-left: 1px solid var(--line);
+}
+
+body.editor-page .manuscript-bar__group--view {
+  margin-left: auto;
+}
+
+body.editor-page .manuscript-bar__group + .manuscript-bar__group--view { border-left: 0; }
+
+body.editor-page .manuscript-bar__btn {
+  min-width: var(--control-h-sm);
+  min-height: var(--control-h-sm);
+  padding: 0 0.375rem;
+  border-color: transparent;
+  border-radius: 0.375rem;
+  background-color: transparent;
+  color: var(--ink);
+}
+
+body.editor-page .manuscript-bar__btn--text { padding-inline: 0.5rem 0.625rem; }
+body.editor-page .manuscript-bar__group--view .manuscript-bar__btn--text { padding-inline: 0.625rem; color: var(--muted); }
+
+body.editor-page .manuscript-bar__btn svg {
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+body.editor-page .manuscript-bar__btn:where(:not(:disabled)):hover {
+  background-color: var(--studio-accent-soft);
+  color: var(--ink);
+}
+
+/* Pressed (rendered view) and expanded (photo panel) read as one state. */
+body.editor-page .manuscript-bar__btn:is([aria-pressed='true'], [aria-expanded='true']) {
+  border-color: var(--studio-accent);
+  background-color: var(--studio-accent-soft);
+  color: var(--ink);
+}
+
+body.editor-page .manuscript-bar__btn:focus-visible { outline-offset: -2px; }
+
+/* Source mode shares the same document surface, not a nested form frame. */
+body.editor-page .markdown-editor .EasyMDEContainer {
+  border: 0;
+  border-radius: 0;
+}
+
+body.editor-page .markdown-editor .EasyMDEContainer:focus-within {
+  outline: none;
+}
+
+body.editor-page .markdown-editor .EasyMDEContainer .CodeMirror {
+  padding: 1.25rem 0;
+  font-family: var(--mono);
+  font-size: 0.875rem;
+  line-height: 1.8;
+}
+
+/* Visual writing and source mode share the same measure and toolbar. */
+body.editor-page .rich-text-editor {
+  min-width: 0;
+  padding-block: 1.25rem 3rem;
+}
+
+body.editor-page .rich-text-editor .tiptap {
+  min-height: 28rem;
+  max-width: 72ch;
+  margin-inline: auto;
+  /* The native blinking caret marks focus on this unboxed writing surface. */
+  outline: none;
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 1rem;
+  line-height: 1.85;
+  overflow-wrap: anywhere;
+  caret-color: var(--studio-accent);
+  cursor: text;
+}
+
+body.editor-page .rich-text-editor ::selection {
+  background: var(--studio-accent-soft);
+  color: var(--ink);
+}
+
+body.editor-page .rich-text-editor :is(p, ul, ol, pre, blockquote, table) {
+  margin-block: 0 1.25rem;
+}
+
+body.editor-page .rich-text-editor :is(h1, h2, h3, h4, h5, h6) {
+  margin-block: 2rem 0.75rem;
+  font-weight: 700;
+  line-height: 1.4;
+  letter-spacing: -0.02em;
+}
+
+body.editor-page .rich-text-editor h1 { font-size: 1.75rem; }
+body.editor-page .rich-text-editor h2 { font-size: 1.5rem; }
+body.editor-page .rich-text-editor h3 { font-size: 1.25rem; }
+body.editor-page .rich-text-editor :is(h4, h5, h6) { font-size: 1.0625rem; }
+body.editor-page .rich-text-editor .tiptap > :first-child { margin-top: 0; }
+body.editor-page .rich-text-editor :is(ul, ol) { padding-left: 1.5rem; }
+body.editor-page .rich-text-editor li { margin-block: 0.25rem; }
+body.editor-page .rich-text-editor li > p { margin-block: 0.25rem; }
+body.editor-page .rich-text-editor li > :is(ul, ol) { margin-block: 0.25rem 0.5rem; }
+
+body.editor-page .rich-text-editor blockquote {
+  margin-inline: 0;
+  padding-left: 1.25rem;
+  border-left: 1px solid var(--studio-accent);
+  color: var(--muted);
+}
+
+body.editor-page .rich-text-editor code {
+  padding: 0.125rem 0.25rem;
+  border-radius: 0.25rem;
+  background: var(--canvas);
+  font-family: var(--mono);
+  font-size: 0.875em;
+}
+
+body.editor-page .rich-text-editor pre {
+  max-width: 100%;
+  padding: 1rem;
+  overflow-x: auto;
+  border-radius: 0.375rem;
+  background: var(--canvas);
+  font-size: 0.875rem;
+  line-height: 1.7;
+  tab-size: 2;
+}
+
+body.editor-page .rich-text-editor pre code { padding: 0; background: none; }
+body.editor-page .rich-text-editor a { color: var(--studio-accent-hover); text-underline-offset: 0.2em; }
+body.editor-page .rich-text-editor img { display: block; max-width: 100%; height: auto; border-radius: 0.25rem; }
+body.editor-page .rich-text-editor hr { margin-block: 2rem; border: 0; border-top: 1px solid var(--line-strong); }
+
+body.editor-page .rich-text-editor table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+body.editor-page .rich-text-editor :is(th, td) {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--line-strong);
+  text-align: left;
+  vertical-align: top;
+}
+
+body.editor-page .rich-text-editor th { background: var(--canvas); }
+body.editor-page .rich-text-editor :is(th, td) p { margin: 0; }
+body.editor-page .rich-text-editor .selectedCell { background: var(--studio-accent-soft); }
+
+body.editor-page .rich-text-editor ul[data-type='taskList'] { padding: 0; list-style: none; }
+body.editor-page .rich-text-editor li[data-type='taskItem'] { display: flex; gap: 0.625rem; align-items: baseline; }
+body.editor-page .rich-text-editor li[data-type='taskItem'] > label { flex: none; margin: 0; }
+body.editor-page .rich-text-editor li[data-type='taskItem'] > div { flex: 1; min-width: 0; }
+
+body.editor-page .rich-text-source {
+  margin-block: 1.5rem;
+  padding: 0.875rem 1rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 0.375rem;
+  background: var(--canvas);
+}
+
+body.editor-page .rich-text-source pre {
+  margin: 0.5rem 0 0;
+  padding: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+body.editor-page .rich-text-gallery {
+  margin-block: 1.5rem;
+  padding-block: 1rem;
+  border-block: 1px solid var(--line);
+}
+
+body.editor-page .rich-text-gallery-items {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
+  gap: 0.625rem;
+  margin-block: 0.75rem;
+}
+
+body.editor-page .rich-text-gallery-items img {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+}
+
+body.editor-page .rich-text-gallery-edit {
+  min-height: var(--control-h);
+  background: var(--surface);
+  color: var(--ink);
+  border-color: var(--line-control);
+}
+
+body.editor-page .rich-text-editor .ProseMirror-selectednode {
+  outline: var(--focus-ring);
+  outline-offset: 0.25rem;
+}
+
+/* The photo tray drops out of the bar and lies over the text, like a menu,
+   so opening it never shifts the story under the caret; Escape, the Photo
+   toggle or a finished insert closes it. Elevation is the menu shadow. */
+body.editor-page .manuscript-photo {
+  position: absolute;
+  z-index: 1;
+  top: 100%;
+  right: 0;
+  left: 0;
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.875rem;
+  border-radius: 0 0 0.5rem 0.5rem;
+  background: var(--canvas);
+  box-shadow: var(--menu-shadow);
+}
+
+body.editor-page .manuscript-photo__fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
+  gap: 0.75rem;
+}
+
+body.editor-page .manuscript-photo__fields label { margin-top: 0; }
+
+body.editor-page .manuscript-photo__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+body.editor-page .manuscript-photo__actions .muted {
+  margin: 0 0 0 auto;
+  font-size: 0.75rem;
+}
+
+body.editor-page .manuscript-tools__status {
+  margin: 0;
+  padding: 0.375rem 0.75rem;
+  border-inline: 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+
+body.editor-page .manuscript-tools__status:empty { display: none; }
+
+body.editor-page .manuscript-tools__status button { margin-left: 0.5rem; }
+
+@media (max-width: 40rem) {
+  body.editor-page .manuscript-photo__fields { grid-template-columns: minmax(0, 1fr); }
+  body.editor-page .manuscript-photo__actions .muted { margin-left: 0; flex-basis: 100%; }
+}
+
 /* The inspector is a sticky column inside the editor frame that collapses to
    a slim rail on desktop, and a focus-managed drawer at narrow widths. Its
    groups are divided by rules rather than nested cards. It pins flush under
@@ -2590,7 +3272,7 @@ body.editor-page .editor-inspector {
   position: sticky;
   top: var(--editor-commandbar-height);
   min-width: 0;
-  max-height: calc(var(--cms-workspace-h) - var(--editor-commandbar-height) - 2 * var(--editor-gutter));
+  max-height: calc(var(--cms-workspace-h) - var(--editor-commandbar-height));
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -2612,8 +3294,8 @@ body.editor-page .editor-inspector__header {
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  padding: 0.75rem 0 0.75rem 0.25rem;
-  border-bottom: 1px solid var(--line-strong);
+  padding: 0.375rem 0 0.375rem 0.25rem;
+  border-bottom: 1px solid var(--line);
   background: var(--editor-inspector-surface);
 }
 
@@ -2638,6 +3320,8 @@ body.editor-page .editor-icon-btn svg {
   width: 1.125rem;
   height: 1.125rem;
 }
+
+body.editor-page #inspectorToggle { width: auto; padding-inline: 0.625rem; }
 
 /* Right-aligned in every state, so the rail's control never moves while the
    panel slides. */
@@ -2666,6 +3350,13 @@ body.editor-page .editor-inspector-group {
 
 body.editor-page .editor-inspector-group:last-child { border-bottom: 0; }
 
+body.editor-page .editor-inspector-locale > .editor-card-title { margin: 1rem 0.25rem 0; }
+body.editor-page .keyfacts-editor {
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--line-strong);
+}
+
 /* Collapsed image sections keep a small thumbnail of their photo in the
    summary, so the state reads without opening them. */
 body.editor-page .editor-image-section > summary {
@@ -2678,8 +3369,8 @@ body.editor-page .editor-image-section__title { flex: 1; min-width: 0; }
 body.editor-page .editor-image-section__thumb {
   flex: none;
   overflow: hidden;
-  width: 3rem;
-  height: 2rem;
+  width: 4.5rem;
+  height: 3rem;
   border: 1px solid var(--line-strong);
   border-radius: 0.25rem;
   background: var(--surface);
@@ -2715,6 +3406,61 @@ body.editor-page .editor-inspector details:not(.editor-disclosure) > summary::af
 }
 
 body.editor-page .editor-inspector details:not(.editor-disclosure)[open] > summary::after { content: 'Hide'; }
+
+/* A folded section names itself and its state: "Expedition details" over
+   "12 Feb 2021 · MX · North America · 6 stops", "GPX route" over
+   "No route attached". */
+body.editor-page .editor-section-title {
+  display: grid;
+  flex: 1;
+  gap: 0.125rem;
+  min-width: 0;
+  padding-block: 0.25rem;
+}
+
+body.editor-page .editor-section-summary {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+body.editor-page .editor-section-summary:empty { display: none; }
+body.editor-page .editor-section-summary.is-incomplete { color: #855f25; }
+
+/* Nested in a ruled group (Route, GPX): the group draws the rule. */
+body.editor-page .editor-inspector-group > details > summary { margin: 0; }
+body.editor-page .editor-inspector-group > details[open] > summary { margin-bottom: 0.5rem; }
+
+/* The inspector column is too narrow for prefix and slug side by side; both
+   halves used to truncate. The prefix sits above the editable slug. */
+body.editor-page .editor-inspector .slug-preview { display: grid; }
+
+body.editor-page .editor-inspector .slug-base {
+  max-width: none;
+  padding-block: 0.375rem;
+  border-right: 0;
+  border-bottom: 1px solid var(--line);
+  line-height: 1.4;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* Published URLs remain disabled, but read as a reference rather than a
+   form asking for an edit. Editable, never-public slugs keep their boundary. */
+body.editor-page .slug-preview:has(input:disabled) {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+body.editor-page .slug-preview:has(input:disabled) .slug-base,
+body.editor-page .slug-preview input:disabled {
+  padding-inline: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+}
 
 body.editor-page .editor-inspector .muted { overflow-wrap: anywhere; }
 
@@ -2829,6 +3575,7 @@ body.editor-page .locale-chip-link {
 body.editor-page .locale-chip-link:where(:not(:disabled)):hover { background: none; color: var(--studio-accent-hover); }
 
 @media (max-width: 74rem) {
+  body.editor-page .editor-readiness { display: none; }
   body.editor-page .editor-workspace {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -2901,13 +3648,16 @@ body.editor-page .locale-chip-link:where(:not(:disabled)):hover { background: no
     display: none;
   }
 
+  /* One wrapping line — "Saved to server · Live ↻" — not a stack of rows:
+     the whole bar stays pinned, so every line here costs writing space. */
   body.editor-page .editor-commandbar__status {
     grid-column: 1 / -1;
     grid-row: 2;
-    display: grid;
-    gap: 0.15rem;
+    gap: 0 0.75rem;
     overflow: visible;
   }
+
+  body.editor-page .editor-commandbar__status > p { font-size: 0.75rem; }
 
   body.editor-page .editor-commandbar__status .locale-chip {
     display: none;
@@ -2931,6 +3681,16 @@ body.editor-page .locale-chip-link:where(:not(:disabled)):hover { background: no
 }
 
 @media (max-width: 52rem) {
+  /* "Publish changes" would wrap the action row; the word stays in the name. */
+  body.editor-page .publish-scope {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
   body.editor-page .editor-commandbar {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -2946,12 +3706,20 @@ body.editor-page .locale-chip-link:where(:not(:disabled)):hover { background: no
   }
 
   body.editor-page .editor-commandbar__actions > button {
-    padding-inline: 0.5rem;
+    padding-inline: 0.375rem;
     font-size: 0.75rem;
   }
 
+  /* The story-details opener stays beside the locale switch, leaving the
+     action row for Save, Publish, Save & preview and More. */
+  body.editor-page #inspectorToggle {
+    position: absolute;
+    top: 0.4rem;
+    right: max(0.4rem, env(safe-area-inset-right));
+  }
+
   body.editor-page .editor-actions-menu__trigger {
-    width: 3.5rem;
+    width: 3rem;
     padding-inline: 0.25rem;
     overflow: hidden;
     color: transparent;
@@ -2982,56 +3750,52 @@ body.editor-page .locale-chip-link:where(:not(:disabled)):hover { background: no
   body.editor-page .editor-workspace {
     display: block;
     width: 100%;
-    margin: 0.75rem 0;
-    border-inline: 0;
-    border-radius: 0;
+    margin: 0;
   }
 
   body.editor-page .editor-canvas {
-    gap: 0.75rem;
+    gap: 0.25rem;
   }
 
   body.editor-page .editor-writing-surface {
     width: 100%;
-    padding: 1rem max(0.9rem, env(safe-area-inset-right)) 1.5rem max(0.9rem, env(safe-area-inset-left));
+    padding: 0.5rem max(0.9rem, env(safe-area-inset-right)) 1.5rem max(0.9rem, env(safe-area-inset-left));
   }
 
   body.editor-page .editor-title-input {
-    min-height: 3.25rem;
-    font-size: clamp(1.65rem, 8vw, 2.15rem);
+    min-height: 2.75rem;
+    font-size: 1.75rem;
   }
 
-  body.editor-page .slug-preview {
-    display: grid;
-  }
+  body.editor-page .editor-writing-surface .editor-card + .editor-card { margin-top: 0.5rem; }
+  body.editor-page .editor-writing-surface__title { padding-top: 0; }
+  body.editor-page .editor-title-input { margin-block: 0.25rem 0; }
+  body.editor-page .editor-card-title { margin-bottom: 0.375rem; }
+  body.editor-page .alt-audit summary { padding-block: 0; }
 
-  body.editor-page .slug-base {
-    max-width: none;
-    padding-block: 0.375rem;
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
-    line-height: 1.4;
-    white-space: normal;
-    overflow-wrap: anywhere;
+  /* One persistent row exposes photography and the read/write switch.
+     Less frequent formatting opens above the manuscript without moving it. */
+  body.editor-page .manuscript-bar { flex-wrap: nowrap; gap: 0.125rem; }
+  body.editor-page .manuscript-bar__group { gap: 0; }
+  body.editor-page .manuscript-bar__group--view { margin-left: auto; }
+  body.editor-page .manuscript-bar__group + .manuscript-bar__group { padding-left: 0; border-left: 0; }
+  body.editor-page .manuscript-bar__btn--text { padding-inline: 0.375rem; font-size: 0.75rem; }
+  body.editor-page .manuscript-bar__group--view .manuscript-bar__btn--text { padding-inline: 0.375rem; }
+  body.editor-page .manuscript-bar > .manuscript-bar__group > button > svg { display: none; }
+  body.editor-page .manuscript-format {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    z-index: 1;
+    padding: 0.5rem;
+    border-radius: 0 0 0.5rem 0.5rem;
+    background: var(--canvas);
+    box-shadow: var(--menu-shadow);
   }
 
   body.editor-page .hero-actions-row > * {
     flex: 1 1 9rem;
-  }
-
-  body.editor-page .keyfact-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) var(--control-h);
-  }
-
-  body.editor-page .keyfact-row .keyfact-value {
-    grid-column: 1;
-  }
-
-  body.editor-page .keyfact-row .btn-remove {
-    grid-column: 2;
-    grid-row: 1 / span 3;
-    align-self: stretch;
   }
 
   body.editor-page .form-row-2 {
@@ -3075,53 +3839,77 @@ body.editor-page .locale-chip-link:where(:not(:disabled)):hover { background: no
   gap: 0.5rem 0.75rem;
 }
 .editor-gallery__head h3 { margin: 0; font-size: 0.9375rem; font-weight: 650; }
-.editor-gallery__head button { margin-left: auto; }
-.editor-gallery__help { margin: 0.5rem 0 1rem; max-width: 65ch; }
+.editor-gallery__head .editor-gallery__media-link { margin-left: auto; font-size: 0.8125rem; font-weight: 600; }
+.editor-gallery__help { margin: 0.375rem 0 0.875rem; max-width: 65ch; font-size: 0.8125rem; }
+/* A visual index of the gallery, not a form: small tiles so a 30-photo gallery
+   stays a few rows of the manuscript instead of several screens. */
 .editor-gallery__photos {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
-  gap: 1.5rem 1rem;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 9.5rem), 1fr));
+  gap: 1rem 0.75rem;
   padding: 0;
   margin: 0;
   list-style: none;
 }
-.editor-gallery__photo { min-width: 0; }
+.editor-gallery__photo { min-width: 0; font-size: 0.8125rem; line-height: 1.4; }
 .editor-gallery__image {
   display: block;
   width: 100%;
-  height: 12rem;
-  object-fit: contain;
-  margin-bottom: 0.75rem;
+  aspect-ratio: 4 / 3;
+  height: auto;
+  object-fit: cover;
+  margin-bottom: 0.5rem;
   border-radius: 0.375rem;
   background: var(--canvas);
 }
-.editor-gallery__photo label { margin-top: 0.5rem; }
-.editor-gallery__photo textarea { min-height: 4rem; margin-bottom: 0.5rem; }
+.editor-gallery__photo label { margin-top: 0; font-size: 0.75rem; font-weight: 600; color: var(--muted); }
+.editor-gallery__alt-label { display: block; }
+.editor-gallery__alt-text {
+  display: -webkit-box;
+  margin-top: 0.125rem;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  color: var(--ink);
+  font-weight: 400;
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+.editor-gallery__alt-text[hidden] { display: none; }
+.editor-gallery__alt-text.is-missing {
+  display: inline-block;
+  padding: 0.0625rem 0.375rem;
+  border-radius: 0.25rem;
+  background: #faf3e7;
+  color: #855f25;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+.editor-gallery__photo textarea { min-height: 4rem; margin: 0.25rem 0 0.5rem; font-weight: 400; color: var(--ink); }
 .editor-gallery__photo button { white-space: normal; }
-.editor-gallery__caption, .editor-gallery__suggested-text { overflow-wrap: anywhere; }
+.editor-gallery__caption, .editor-gallery__suggested-text { margin-block: 0.25rem; overflow-wrap: anywhere; }
 .editor-gallery__status { margin-block: 0.5rem; }
 .editor-gallery__status:empty { display: none; }
 .editor-gallery__suggestion { padding-block: 0.5rem; border-top: 1px solid var(--line-strong); }
 .editor-gallery__suggestion button { margin-right: 0.5rem; }
-/* Media-backed descriptions are shown, not edited, here: a visibly inert field
-   plus the line naming where they are edited. */
-.editor-gallery__photo textarea[readonly] { background-color: var(--canvas); }
-.editor-gallery__source, .editor-gallery__local { margin-block: 0 0.5rem; overflow-wrap: anywhere; }
+/* Photos not in Media keep their alt with the article; this line says so. */
+.editor-gallery__local { margin-block: 0.25rem 0.5rem; font-size: 0.75rem; overflow-wrap: anywhere; }
 .editor-gallery__retry { margin-bottom: 0.75rem; }
 
 
 /* ---- media library: AI photo details (media-ai.js, media-ai-dialog.js) ----
    A suggestion offered beside text the author already wrote reads as a note,
    never as a saved value: tinted, ruled, with its own explicit Use. */
-.posts-filters > .media-ai-open { margin-left: auto; }
+.posts-filters > .media-ai-open { flex: none; margin-left: auto; }
 .media-ai-suggest { margin-top: 0.75rem; }
 .media-ai-suggest > button { width: 100%; }
 .media-ai-suggest > .muted:empty { display: none; }
 .media-ai-hint {
   margin: 0.375rem 0 0;
   padding: 0.375rem 0.5rem;
-  border-left: 2px solid var(--studio-accent);
-  border-radius: 0 0.25rem 0.25rem 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 0.25rem;
   background: var(--studio-accent-soft);
   font-size: 0.8125rem;
   overflow-wrap: anywhere;
@@ -3130,8 +3918,6 @@ body.editor-page .locale-chip-link:where(:not(:disabled)):hover { background: no
 .media-ai-hint .btn-link { margin-left: 0.375rem; }
 
 dialog.media-ai { max-width: min(38rem, calc(100vw - 2rem)); }
-.media-ai__options,
-.media-ai__group { min-width: 0; margin: 0; padding: 0; border: 0; }
 .media-ai__group { margin-bottom: 1rem; }
 .media-ai__group > legend { margin-bottom: 0.25rem; padding: 0; font-size: 0.875rem; font-weight: 650; }
 .media-ai__group > .check-field { margin-top: 0.375rem; }
@@ -3148,3 +3934,49 @@ dialog.media-ai { max-width: min(38rem, calc(100vw - 2rem)); }
 .write-recovery summary { cursor: pointer; font-weight: 600; }
 .write-recovery pre { white-space: pre-wrap; overflow-wrap: anywhere; max-inline-size: 100%; font-size: 0.875rem; }
 .write-recovery h3 { margin-block: 1.25rem 0.5rem; }
+
+/* Translation protects consent and full-draft review without leaving the desk. */
+body.editor-page .editor-commandbar__nav { flex-wrap: wrap; }
+body.editor-page #translateArticle { white-space: normal; }
+body.editor-page #translationUndo { margin: 0; min-height: 2.75rem; }
+dialog.article-translation {
+  width: min(54rem, calc(100vw - 2rem));
+  max-width: none;
+  max-height: calc(100dvh - 2rem);
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 0.75rem;
+  color: var(--ink);
+  background: var(--canvas);
+}
+.article-translation[open] { display: flex; flex-direction: column; }
+.article-translation::backdrop { background: rgb(20 42 66 / 45%); }
+.article-translation__header, .article-translation__footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex: none;
+  padding: 1rem 1.5rem;
+}
+.article-translation__header { border-bottom: 1px solid var(--line); }
+.article-translation__header h2 { margin: 0; font-size: 1.25rem; }
+.article-translation__body { min-height: 0; padding: 0.75rem 1.5rem 1.5rem; overflow-y: auto; overscroll-behavior: contain; }
+.article-translation__body > p { max-width: 72ch; font-size: 0.875rem; }
+.article-translation__destination { overflow-wrap: anywhere; font-weight: 600; }
+.article-translation__body p:empty { display: none; }
+.article-translation__body textarea { width: 100%; resize: vertical; color: var(--ink); }
+.article-translation__source { white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono); font-size: 0.8125rem; }
+.article-translation__body #translationResult { margin-top: 1.5rem; }
+.article-translation__body #translationReplaceRow { align-items: flex-start; gap: 0.75rem; margin-top: 1.25rem; }
+.article-translation__body #translationReplaceRow input { flex: none; margin-top: 0.25rem; }
+.article-translation__footer { border-top: 1px solid var(--line); justify-content: flex-end; }
+.article-translation button { min-height: 2.75rem; white-space: normal; }
+@media (max-width: 32rem) {
+  dialog.article-translation { width: calc(100vw - 1rem); max-height: calc(100dvh - 1rem); }
+  .article-translation__header, .article-translation__footer { padding: 0.75rem 1rem; }
+  .article-translation__body { padding-inline: 1rem; }
+  .article-translation__footer button { width: 100%; }
+  body.editor-page #translateArticle { font-size: 0.75rem; padding-inline: 0.5rem; }
+}

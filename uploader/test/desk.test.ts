@@ -19,6 +19,7 @@ interface SectionView<T> {
 interface Api {
   nextDraft(posts: Post[]): Post | null;
   unpublished(posts: Post[]): Post[];
+  publicationOverview(value: unknown): { state: 'clear' | 'attention' | 'unavailable'; message: string; items: string[] };
   encodeCount(stats: { pending?: number; running?: number } | null): number | null;
   releaseState(health: unknown): boolean | null;
   releaseFromResponse(response: { status: number; ok: boolean; json(): Promise<unknown> }): Promise<boolean>;
@@ -27,10 +28,10 @@ interface Api {
   resilientLoader<T>(load: () => Promise<T>, view: SectionView<T>): () => Promise<void>;
 }
 
-function load(): Api {
+function load(locale: 'de' | 'en' = 'en'): Api {
   const ctx: Record<string, unknown> = {
     EditorCopy: { en: Object.fromEntries(Object.entries(ui.en).filter(([key]) => key.startsWith('editor.chrome.')).map(([key, value]) => [key.slice('editor.chrome.'.length), value])) },
-    PublicationState: loadPublicationState(),
+    PublicationState: loadPublicationState({ document: { documentElement: { lang: locale } } }),
   };
   ctx.window = ctx;
   vm.createContext(ctx);
@@ -70,6 +71,56 @@ describe('Desk.unpublished', () => {
     const b = post({ translationKey: 'b', status: 'published', publication: publication('published', true), updatedAt: '2025-01-01T00:00:00.000Z' });
     const clean = post({ translationKey: 'c', status: 'published' });
     expect(api.unpublished([a, clean, b]).map((p) => p.translationKey)).toEqual(['b', 'a']);
+  });
+});
+
+describe('Desk publication overview', () => {
+  const known = () => ({
+    availability: 'available', release: 'known',
+    posts: { notLive: 0, olderVersionLive: 0, unexpectedLocaleLive: 0, unpublishedStillLive: 0, deletedStillLive: 0 },
+    galleryDescriptions: { photos: 0, stories: 0 },
+  });
+
+  it('only reports no differences for a complete, known zero-count observation', () => {
+    expect(load().publicationOverview(known())).toMatchObject({ state: 'clear', items: [] });
+    for (const value of [null, {}, { ...known(), availability: 'unavailable' },
+      { ...known(), release: 'none' }, { ...known(), release: 'unknown' },
+      { ...known(), posts: null }, { ...known(), galleryDescriptions: { photos: 0 } }]) {
+      expect(load().publicationOverview(value)).toMatchObject({ state: 'unavailable', items: [] });
+    }
+  });
+
+  it.each(['notLive', 'olderVersionLive', 'unexpectedLocaleLive', 'unpublishedStillLive', 'deletedStillLive'] as const)(
+    'keeps the nonzero %s category visible without reporting unrelated zero counts', (key) => {
+      const value = known();
+      value.posts[key] = 3;
+      const result = load().publicationOverview(value);
+      expect(result.state).toBe('attention');
+      expect(result.items).toHaveLength(1);
+      expect(result.items[0]).toContain('3');
+      expect(result.items[0]).not.toContain(': 0');
+    },
+  );
+
+  it('does not add overlapping story categories and retains media-only differences', () => {
+    const value = known();
+    value.posts.notLive = 2;
+    value.posts.deletedStillLive = 2;
+    value.galleryDescriptions = { photos: 5, stories: 1 };
+    const result = load().publicationOverview(value);
+    expect(result.state).toBe('attention');
+    expect(result.items).toHaveLength(3);
+    expect(result.items[0]).toMatch(/not yet live: 2/);
+    expect(result.items[1]).toMatch(/Deleted.*: 2/);
+    expect(result.items[2]).toMatch(/photos: 5; stories: 1/);
+    value.posts.notLive = value.posts.deletedStillLive = 0;
+    expect(load().publicationOverview(value)).toMatchObject({ state: 'attention', items: [result.items[2]] });
+  });
+
+  it.each([undefined, -1, 0.5, NaN, Infinity, '0'])('never turns an invalid count (%s) into an all-clear', (count) => {
+    const value = known();
+    expect(load().publicationOverview({ ...value, posts: { ...value.posts, notLive: count } }).state).toBe('unavailable');
+    expect(load().publicationOverview({ ...value, galleryDescriptions: { photos: count, stories: 0 } }).state).toBe('unavailable');
   });
 });
 

@@ -28,10 +28,10 @@ interface SourceNode {
   children?: SourceNode[]; value?: string; position?: Position;
 }
 interface PhysicalLine { start: number; end: number; next: number; text: string; newline: string }
-interface Unit { start: number; end: number; value: string }
+export interface Unit { start: number; end: number; value: string }
 interface RawRegion { start: number; end: number; units?: Unit[]; resolve: () => Unit[] }
 interface CodeRegion { start: number; end: number; node: SourceNode }
-type SourceContainer = { kind: 'quote' } | { kind: 'list'; indent: number };
+export type SourceContainer = { kind: 'quote' } | { kind: 'list'; indent: number };
 const stringify = unified().use(rehypeStringify, { allowDangerousHtml: true });
 const fail = (): never => { throw new GallerySourceError(); };
 
@@ -85,7 +85,7 @@ function appendSpan(spans: GallerySpan[], span: GallerySpan) {
 }
 
 /** Source provenance for raw HTML, including prefixes stripped by Markdown. */
-function rawUnits(value: string, source: string, start: number, end: number): Unit[] {
+export function rawUnits(value: string, source: string, start: number, end: number): Unit[] {
   const physical = physicalLines(source, start, end);
   const logical = value.split(/\r\n|\r|\n/);
   const units: Unit[] = [];
@@ -115,7 +115,7 @@ function rawUnits(value: string, source: string, start: number, end: number): Un
  * transformed punctuation to its parser-owned source span, never search another
  * occurrence of the text. Entity/escape spelling stays attached to that span.
  */
-function positionedText(value: string, source: string, start: number, end: number, containers: SourceContainer[]): Unit[] {
+export function positionedText(value: string, source: string, start: number, end: number, containers: SourceContainer[]): Unit[] {
   const original = source.slice(start, end);
   const direct = (text: string, at: number): Unit[] => {
     const units: Unit[] = [];

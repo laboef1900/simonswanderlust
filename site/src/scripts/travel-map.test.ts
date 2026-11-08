@@ -6,7 +6,7 @@ import { resolve } from 'node:path';
 import { experimental_AstroContainer as AstroContainer } from 'astro/container';
 import StoryMiniMap from '../components/StoryMiniMap.astro';
 import type { Trip } from '../lib/trips';
-import type { TripGeometry } from '../lib/map-data';
+import type { OverviewPinFeature, PinFeature, PinPhoto, TripGeometry } from '../lib/map-data';
 import { initFullMap, initMiniMap } from './travel-map';
 
 // Astro components require Vitest's server transform; supply the browser DOM
@@ -18,6 +18,7 @@ vi.stubGlobal('HTMLElement', browserWindow.HTMLElement);
 vi.stubGlobal('HTMLCanvasElement', browserWindow.HTMLCanvasElement);
 vi.stubGlobal('Event', browserWindow.Event);
 vi.stubGlobal('CustomEvent', browserWindow.CustomEvent);
+vi.stubGlobal('KeyboardEvent', browserWindow.KeyboardEvent);
 afterAll(() => vi.unstubAllGlobals());
 
 const state = vi.hoisted(() => ({
@@ -39,7 +40,46 @@ vi.mock('maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url', () => ({ default: 
 vi.mock('pmtiles', () => ({ Protocol: class { tile = vi.fn(); } }));
 vi.mock('protomaps-themes-base', () => ({ layers: () => [], namedTheme: () => ({}) }));
 vi.mock('maplibre-gl', () => ({
-  setWorkerUrl: vi.fn(), addProtocol: vi.fn(), NavigationControl: class {}, Popup: class {},
+  setWorkerUrl: vi.fn(), addProtocol: vi.fn(), NavigationControl: class {},
+  Marker: class {
+    element: HTMLElement;
+    coordinates?: [number, number];
+    constructor({ element }: { element: HTMLElement }) { this.element = element; }
+    setLngLat(coordinates: [number, number]) { this.coordinates = coordinates; return this; }
+    addTo(map: { canvas: HTMLCanvasElement }) { map.canvas.parentElement?.append(this.element); return this; }
+    getElement() { return this.element; }
+    remove() { this.element.remove(); }
+  },
+  Popup: class {
+    lngLat?: [number, number];
+    content?: HTMLElement;
+    wrapper?: HTMLElement;
+    handlers = new Map<string, () => void>();
+    setLngLat(lngLat: [number, number]) { this.lngLat = lngLat; return this; }
+    setDOMContent(content: HTMLElement) { this.content = content; return this; }
+    addTo(map: { canvas: HTMLCanvasElement }) {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'maplibregl-popup';
+      const close = document.createElement('button');
+      close.className = 'maplibregl-popup-close-button';
+      close.setAttribute('aria-label', 'Close popup');
+      // Like MapLibre: the close button removes the popup, which emits `close`.
+      close.addEventListener('click', () => this.remove());
+      if (this.content) wrapper.append(this.content);
+      wrapper.append(close);
+      map.canvas.parentElement?.append(wrapper);
+      this.wrapper = wrapper;
+      return this;
+    }
+    on(event: string, handler: () => void) { this.handlers.set(event, handler); return this; }
+    remove() {
+      if (!this.wrapper) return this;
+      this.wrapper.remove();
+      this.wrapper = undefined;
+      this.handlers.get('close')?.();
+      return this;
+    }
+  },
   LngLatBounds: class {
     points: [number, number][] = [];
     extend(point: [number, number]) { this.points.push(point); }
@@ -77,6 +117,15 @@ vi.mock('maplibre-gl', () => ({
     setCenter(center: unknown) { this.center = center; }
     setZoom(zoom: unknown) { this.zoom = zoom; }
     fitBounds(bounds: unknown, options: unknown) { this.bounds = bounds; this.fitOptions = options; }
+    // Camera and projection for the overview map: a flat plane, 10px per degree at zoom 0.
+    getZoom() { return typeof this.zoom === 'number' ? this.zoom : 1; }
+    project([lng, lat]: [number, number]) { const scale = 10 * 2 ** this.getZoom(); return { x: lng * scale, y: -lat * scale }; }
+    getCenter() { return { lng: 0, lat: 0 }; }
+    getBounds() { return { getWest: () => -30, getEast: () => 30, getSouth: () => -20, getNorth: () => 60 }; }
+    getSource(id: string) { return this.sources.get(id); }
+    getStyle() { return { layers: this.layers }; }
+    easeTo({ center, zoom }: { center: unknown; zoom: unknown }) { this.center = center; this.zoom = zoom; }
+    jumpTo({ center, zoom }: { center: unknown; zoom: unknown }) { this.center = center; this.zoom = zoom; }
   },
 }));
 
@@ -84,6 +133,14 @@ const plain: TripGeometry = {
   pin: { type: 'Feature', geometry: { type: 'Point', coordinates: [1, 2] }, properties: { title: 'Story', href: '/story/', country: 'Country', region: 'europe' } },
   stops: [],
 };
+/** An overview-map pin as `tripPins` emits it: entry number plus popup photo. */
+const overview = (pin: PinFeature, number: number, photo: Partial<PinPhoto> = {}): OverviewPinFeature => ({
+  ...pin,
+  properties: { ...pin.properties, number, photo: { src: 'https://img.example/trips/x/hero-640.webp', width: 1280, height: 800, alt: 'Harbour at dusk', ...photo } },
+});
+const pinAt = (coordinates: [number, number], title: string, region: PinFeature['properties']['region'] = 'europe'): PinFeature => ({
+  type: 'Feature', geometry: { type: 'Point', coordinates }, properties: { title, href: `/${title.toLowerCase().replace(/\W+/g, '-')}/`, country: 'Country', region },
+});
 const routed: TripGeometry = {
   ...plain,
   stops: [{ type: 'Feature', geometry: { type: 'Point', coordinates: [3, 4] }, properties: { name: 'Stop' } }],
@@ -153,7 +210,7 @@ describe('WebGL2 progressive enhancement', () => {
     const el = container();
     const initialize = () => kind === 'mini'
       ? initMiniMap(el, plain)
-      : initFullMap(el, { type: 'FeatureCollection', features: [plain.pin] }, { readStory: 'Read' });
+      : initFullMap(el, { type: 'FeatureCollection', features: [overview(plain.pin, 1)] }, { readStory: 'Read' });
     expect(initialize).toThrow('map_webgl_unavailable');
     expect(state.maps).toHaveLength(0);
     expect(el.querySelector('canvas')).toBeNull();
@@ -218,7 +275,7 @@ describe('WebGL2 progressive enhancement', () => {
     state.removeThrows = true;
     document.body.innerHTML = '<div><div id="map"></div></div><nav><a href="/story/">Story</a></nav>';
     const el = document.getElementById('map')!;
-    el.dataset.geojson = JSON.stringify({ type: 'FeatureCollection', features: [plain.pin] });
+    el.dataset.geojson = JSON.stringify({ type: 'FeatureCollection', features: [overview(plain.pin, 1)] });
     el.dataset.readstory = 'Read story';
     mount('pages/MapPage.astro');
     expect(document.querySelector('nav a')?.getAttribute('href')).toBe('/story/');
@@ -320,11 +377,130 @@ describe('story track map', () => {
     expect(stopMap.bounds).toEqual([[1, 2], [3, 4]]);
   });
 
-  it('keeps the full map pin-only', () => {
-    initFullMap(container(), { type: 'FeatureCollection', features: [plain.pin] }, { readStory: 'Read' });
+  it('draws numbered DOM pins with photo popups, Escape focus return, region filters and error recovery', () => {
+    document.body.innerHTML = `
+      <button type="button" data-map-region="all" aria-pressed="true">All</button>
+      <button type="button" data-map-region="europe" aria-pressed="false">Europe</button>
+      <button type="button" data-map-region="south-america" aria-pressed="false">South America</button>
+      <div id="map"></div>
+      <section data-region-group="europe">
+        <li data-map-entry data-pin-index="0" data-region="europe"><button type="button" data-map-focus="0">N°02</button></li>
+      </section>
+      <section data-region-group="south-america">
+        <li data-map-entry data-pin-index="1" data-region="south-america"><button type="button" data-map-focus="1">N°01</button></li>
+      </section>
+    `;
+    const el = document.getElementById('map')!;
+    const south = overview({ ...pinAt([-78.5, -0.2], 'Ecuador <script>', 'south-america'), properties: { title: 'Ecuador <script>', href: '/ecuador/', country: 'Ecuador', region: 'south-america' } },
+      1, { src: 'https://img.example/trips/ecuador/hero-640.webp', alt: 'Canoe on a black river', position: '20% 30%' });
+    initFullMap(
+      el,
+      { type: 'FeatureCollection', features: [overview(plain.pin, 2), south] },
+      { readStory: 'Read story', pinLabel: 'Trip {number}: {title} ({country})', closePopup: 'Hinweis schließen' },
+    );
     const map = state.maps[0]!;
     map.events.get('load')!();
-    expect([...map.sources.keys()]).toEqual(['pins']);
-    expect(map.layers.map((layer) => layer.type)).toEqual(['circle']);
+    // The only WebGL layer is the graticule; pins are DOM markers (a circle layer
+    // would sit under every badge and repeat, unnumbered, in world copies).
+    expect([...map.sources.keys()]).toEqual(['graticule']);
+    expect(map.layers.map((layer) => [layer.id, layer.type])).toEqual([['graticule', 'line']]);
+    expect(el.querySelector('.travel-map-graticule')?.textContent).toContain('45°N');
+
+    const pins = el.querySelectorAll<HTMLButtonElement>('.travel-map-pin');
+    expect([...pins].map((pin) => [pin.getAttribute('aria-label'), pin.textContent])).toEqual([
+      ['Trip 2: Story (Country)', '02'],
+      ['Trip 1: Ecuador <script> (Ecuador)', '01'],
+    ]);
+
+    // Locating from the list zooms in, opens an XSS-safe photo popup and syncs both active states.
+    const locate = document.querySelector<HTMLButtonElement>('[data-map-focus="1"]')!;
+    locate.focus();
+    locate.click();
+    expect(map.center).toEqual([-78.5, -0.2]);
+    expect(map.zoom).toBe(5);
+    expect(pins[1]!.dataset.active).toBe('true');
+    expect(document.querySelectorAll<HTMLElement>('[data-map-entry]')[1]!.dataset.active).toBe('true');
+    const popup = el.querySelector('.travel-map-popup')!;
+    const photo = popup.querySelector('img')!;
+    expect([photo.getAttribute('src'), photo.alt, photo.style.objectPosition]).toEqual(['https://img.example/trips/ecuador/hero-640.webp', 'Canoe on a black river', '20% 30%']);
+    expect(popup.querySelector('.travel-map-popup__meta')?.textContent).toBe('N°01 · Ecuador');
+    expect(popup.querySelector('.travel-map-popup__title')?.textContent).toBe('Ecuador <script>');
+    expect(popup.querySelector('script')).toBeNull();
+    expect(popup.querySelector<HTMLAnchorElement>('.travel-map-popup__cta')?.getAttribute('href')).toBe('/ecuador/');
+    expect(el.querySelector('.maplibregl-popup-close-button')?.getAttribute('aria-label')).toBe('Hinweis schließen');
+
+    // Escape closes it and hands focus back to the button that opened it.
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(el.querySelector('.travel-map-popup')).toBeNull();
+    expect(document.activeElement).toBe(locate);
+    expect(pins[1]!.dataset.active).toBe('false');
+
+    // The popup's own close button also returns focus to the pin that opened it
+    // (a real click focuses each button first; the close button then leaves the DOM).
+    pins[0]!.focus();
+    pins[0]!.click();
+    const close = el.querySelector<HTMLButtonElement>('.maplibregl-popup-close-button')!;
+    close.focus();
+    close.click();
+    expect(el.querySelector('.travel-map-popup')).toBeNull();
+    expect(document.activeElement).toBe(pins[0]);
+
+    // A region hides other pins and list groups and reframes; "All" is the reset.
+    document.querySelector<HTMLButtonElement>('[data-map-region="europe"]')!.click();
+    expect([pins[0]!.hidden, pins[1]!.hidden]).toEqual([false, true]);
+    expect(document.querySelector<HTMLElement>('[data-region-group="south-america"]')!.hidden).toBe(true);
+    expect(map.bounds).toMatchObject({ points: [[1, 2]] });
+    document.querySelector<HTMLButtonElement>('[data-map-region="all"]')!.click();
+    expect(pins[1]!.hidden).toBe(false);
+    expect(document.querySelector<HTMLElement>('[data-region-group="south-america"]')!.hidden).toBe(false);
+    expect(map.bounds).toMatchObject({ points: [[1, 2], [-78.5, -0.2]] });
+
+    // Basemap failure swaps to the fallback style: the graticule comes back, pins are not duplicated.
+    map.events.get('error')!();
+    expect(map.sources.size).toBe(0);
+    map.events.get('style.load')!();
+    expect([...map.sources.keys()]).toEqual(['graticule']);
+    expect(el.querySelectorAll('.travel-map-pin')).toHaveLength(2);
+    expect(el.dataset.ready).toBe('true');
+  });
+
+  it('folds touching pins into a count badge that zooms them apart and keeps keyboard focus', () => {
+    document.body.innerHTML = '<div id="map"></div>';
+    const el = document.getElementById('map')!;
+    // At zoom 1 the mock projects 20px per degree: these two are ~11px apart, the third far away.
+    const features = [overview(pinAt([10, 50], 'Alpha'), 1), overview(pinAt([10.5, 50.2], 'Beta'), 2), overview(pinAt([100, 0], 'Gamma'), 3)];
+    initFullMap(el, { type: 'FeatureCollection', features }, { readStory: 'Read', clusterLabel: '{count} trips close together' });
+    const map = state.maps[0]!;
+    map.events.get('load')!();
+    const pins = el.querySelectorAll<HTMLButtonElement>('.travel-map-pin:not(.travel-map-pin--cluster)');
+    const cluster = el.querySelector<HTMLButtonElement>('.travel-map-pin--cluster')!;
+    expect([cluster.getAttribute('aria-label'), cluster.textContent]).toEqual(['2 trips close together', '2']);
+    expect([...pins].map((pin) => pin.hidden)).toEqual([true, true, false]);
+
+    cluster.focus();
+    cluster.click();
+    expect(map.bounds).toMatchObject({ points: [[10, 50], [10.5, 50.2]] });
+    expect(map.fitOptions).toMatchObject({ maxZoom: 12 });
+    // The camera arrives (zoom 6: ~320px apart) and the next moveend splits the badge.
+    map.zoom = 6;
+    map.events.get('moveend')!();
+    expect(el.querySelector('.travel-map-pin--cluster')).toBeNull();
+    expect([...pins].map((pin) => pin.hidden)).toEqual([false, false, false]);
+    expect(document.activeElement).toBe(pins[0]);
+  });
+
+  it('lists trips at one spot instead of zooming forever', () => {
+    document.body.innerHTML = '<div id="map"></div>';
+    const el = document.getElementById('map')!;
+    const features = [overview(pinAt([10, 50], 'Alpha'), 1), overview(pinAt([10, 50], 'Beta'), 2)];
+    initFullMap(el, { type: 'FeatureCollection', features }, { readStory: 'Read' });
+    const map = state.maps[0]!;
+    map.events.get('load')!();
+    const boundsBefore = map.bounds;
+    el.querySelector<HTMLButtonElement>('.travel-map-pin--cluster')!.click();
+    expect(map.bounds).toBe(boundsBefore);
+    expect([...el.querySelectorAll('.travel-map-popup--list a')].map((a) => [a.textContent, a.getAttribute('href')])).toEqual([
+      ['N°01 Alpha', '/alpha/'], ['N°02 Beta', '/beta/'],
+    ]);
   });
 });

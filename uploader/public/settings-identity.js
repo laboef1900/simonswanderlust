@@ -16,13 +16,17 @@ window.SettingsIdentity = (function () {
     let locales = [];
     let links = [];
     let dirty = false;
+    const draft = SettingsDrafts.watch('identity', $('identityForm'), copy.identityTab);
+    const assetDrafts = Object.fromEntries(['logo', 'favicon'].map((role) => [
+      role, SettingsDrafts.watch(role, $('identity-' + role + '-fields'), role === 'logo' ? copy.identityLogo : copy.identityFavicon),
+    ]));
     let busy = false;
     let conflicted = false;
     let canonicalOrigin = null;
     let assets = { logo: false, favicon: false };
     const roles = ['logo', 'favicon'];
     for (const [id, key] of Object.entries({
-      identityHeading: 'identityTab', identityIntro: 'identityIntro', identityTiming: 'identityTiming',
+      identityHeading: 'identityTab', identityTiming: 'identityTiming',
       identityOptional: 'identityOptional', identitySiteNameLabel: 'identitySiteName',
       identityAuthorNameLabel: 'identityAuthorName', identitySocialHeading: 'identitySocialHeading',
       identitySocialHelp: 'identitySocialHelp', identitySocialEmpty: 'identitySocialEmpty',
@@ -43,7 +47,7 @@ window.SettingsIdentity = (function () {
       $('identityFields').disabled = value || revision === null;
       $('identityReload').disabled = value;
       $('identityRebuild').disabled = value;
-      $('identitySave').disabled = conflicted;
+      $('identitySave').disabled = value || revision === null || conflicted;
       for (const role of roles) {
         $('identity-' + role + '-fields').disabled = value || revision === null;
         $('identity-' + role + '-upload').disabled = value || conflicted || revision === null || !$('identity-' + role + '-file').files?.length;
@@ -110,6 +114,7 @@ window.SettingsIdentity = (function () {
           // No reload: local text, link order and the other chosen file stay intact.
           if (!remove) control.value = '';
           paintAssets();
+          assetDrafts[role].clean();
           status(remove ? copy.identityAssetRemoved : copy.identityAssetSaved);
         }
       } catch { status(copy.identityAssetFailed, true); }
@@ -146,6 +151,12 @@ window.SettingsIdentity = (function () {
     function paintLocalized(identity) {
       $('identityLocalized').replaceChildren();
       for (const field of fields) {
+        if (field === 'aboutRole' || field === 'studioDescriptor') {
+          const heading = document.createElement('h3');
+          heading.className = 'section-label';
+          heading.textContent = field === 'aboutRole' ? copy.settingsIdentityProfile : copy.settingsIdentityAdmin;
+          $('identityLocalized').append(heading);
+        }
         const pair = document.createElement('div');
         pair.className = 'settings-field-pair';
         for (const language of locales) {
@@ -192,6 +203,7 @@ window.SettingsIdentity = (function () {
               paintLinks(next, action === 'up' && next === 0 ? 'down' : action === 'down' && next === links.length - 1 ? 'up' : action);
             }
             dirty = true;
+            draft.mark();
           });
           actions.append(button);
         }
@@ -228,6 +240,8 @@ window.SettingsIdentity = (function () {
         paintAssets();
         for (const role of roles) $('identity-' + role + '-file').value = '';
         dirty = conflicted = false;
+        draft.clean();
+        for (const role of roles) assetDrafts[role].clean();
         status('');
       } catch {
         status(copy.identityLoadFailed, true);
@@ -238,12 +252,14 @@ window.SettingsIdentity = (function () {
       if (busy) return;
       $('identityCanonicalOrigin').value = location.origin;
       dirty = true;
+      draft.mark();
       $('identityCanonicalOrigin').focus();
     });
     $('identityAddLink').addEventListener('click', () => {
       if (busy || links.length >= 6) return;
       links.push({ label: '', url: '' });
       dirty = true;
+      draft.mark();
       paintLinks(links.length - 1);
     });
     $('identityReload').addEventListener('click', async () => {
@@ -313,6 +329,7 @@ window.SettingsIdentity = (function () {
           // The server accepted the full input; display its WHATWG origin serialization.
           paintCanonical(serializedOrigin);
           dirty = false;
+          draft.clean();
           status(copy.identitySaved);
         }
       } catch { status(BuildReporting.text('unknown'), true); }

@@ -1030,6 +1030,27 @@ New post accents. The public blog's expedition identity is unchanged. Self-hoste
 Inter/IBM Plex Mono remain; the shell and login identify the workspace as **Wanderlust
 Studio**, with **Simon's travel journal** as the descriptor.
 
+**Writing-first Desk (2026-11-06).** Keep New post in the header after authenticated language
+context resolves, even with a recent draft or unavailable publication observations. Continue
+editing leads the populated writing section; the header's New post becomes an outlined command.
+The empty section says Start writing. Backup-off advice sits above writing with its Settings
+link; it remains admin-only and does not infer a backup state from a failed read.
+
+Publication has its own heading and read-only Refresh. Empty newer-draft lists remain compact;
+the attention subsection appears only for actual attention rows or unavailable observations.
+An admin overview lists nonzero story/media categories without adding overlapping counts.
+Only a complete, known, nonnegative-count observation can report no known differences; missing,
+malformed, unknown and no-release observations retain explicit uncertainty. Native Publication
+details discloses exact build/release history, all counts, rebuild scope, the confirmed action
+and its outcome without resetting open state on refresh. Running, failed, interrupted or
+unavailable build evidence remains outside the disclosure. Photo processing and live-site access
+stay independent below it. No refresh or disclosure triggers a write.
+
+Desk commands and standalone live-site links have 44px minimum targets. A missing/broken draft
+thumbnail does not reserve a blank panel; phone thumbnails are bounded so writing remains
+reachable. The Editorial desk palette, shell, role boundaries, publication observations and
+rebuild semantics are unchanged.
+
 **First-run checklist (#279).** Preserve the incumbent Desk and its independent draft,
 photo-queue and live-site sections. Only an eligible admin sees the compact checklist above
 them; the shared protected-page context resolves first, and authors retain ordinary
@@ -1112,16 +1133,28 @@ and the `<dialog>`s appended to `<body>` share one set:
   result-less `close()` never reuse an earlier acceptance; a typed confirmation also
   requires the current prompt's exact token.
 - **Sections** inside the white workspace are flat: stacked `.card`s divide by a hairline
-  (`--line`), never as cards inside the workspace card. Simple form pages (Users, Import)
-  keep fields at a `34rem` measure.
+  (`--line`), never as cards inside the workspace card. A `fieldset` only groups controls
+  for disabling and naming and never draws a box. Simple form pages (Users, Import)
+  keep fields at a `34rem` measure; a list page leads with its list (Users shows existing
+  accounts before Add a user, with Reload as a secondary button).
+- **Help** is one short line beside the control it explains. Background and caveats sit
+  in a `.help-details` disclosure ("How importing works", "What a full recovery needs");
+  a consequence the author must see before acting ("discards your edits to them") and a
+  privacy disclosure stay visible, after the controls rather than above them.
 - **Menus and disclosures** share one shape: outlined trigger with a drawn chevron and a
   floating panel (the editor's More actions, the Posts row's admin-only More actions); inline
-  disclosures (alt-text review, bulk selection, picker folders) use the same chevron in
-  place of the UA triangle. A floating panel closes like a menu: Escape returns focus to
-  its trigger, and a click outside it dismisses it.
-- **Locale tabs** are one segmented control in the story and generalized page editor.
+  disclosures (alt-text review, bulk selection, picker folders, help details) use the same
+  chevron in place of the UA triangle. A floating panel closes like a menu: Escape returns
+  focus to its trigger, and a click outside it dismisses it.
+- **Advisories** that never block anything (the editor's alt-text review before a publish)
+  use the neutral `.notice-info`; `.notice-warn` is for results with a consequence (a live
+  story missing alt text, backups off, an incomplete import).
+- **Locale tabs** are one segmented control in the story, journey and generalized page
+  editor, labelled in each language's own name (Deutsch, English).
   The **Pages** catalogue replaces About in the admin sidebar, using flat compact
-  rows and explicit Draft/Published text, not new card chrome. The incumbent About
+  rows like Posts — kind, a Draft/Published status pill (or "Not created yet"), the
+  enabled-locale titles and right-aligned **Edit**/**Create** action links — not new
+  card chrome. The incumbent About
   editor hosts each page kind: title/status above, lifecycle controls in the title
   row, and title/slug/body within the existing locale panel. About hides inapplicable
   slug/delete/unpublish controls. A never-public locale's slug stays editable.
@@ -1133,9 +1166,21 @@ and the `<dialog>`s appended to `<body>` share one set:
   entry shows one inactive locale with a notice and return to Language settings.
   Deletion uses the existing scoped confirmation dialog, never a second modal
   convention. Legal/Privacy explain author responsibility without seeded legal prose.
+- The **journey editor** follows the story editor rather than inventing a layout: a
+  command bar with **Back to Journeys** and the locale tabs on the left, Save draft /
+  Publish / Unpublish / Delete on the right and the status beneath; one locale panel at a
+  time with title, slug and intro beside the hero photo. Alt text and framing appear only
+  once a hero is chosen. The heading reads **New journey** until the first save.
+- The **journey catalogue** uses flat, compact rows: primary-locale title, enabled secondary
+  titles, publication state, unpublished changes, story count and **Edit journey**. Dormant
+  published locales stay explicit. Title search searches enabled locales only, ignores case
+  and surrounding whitespace, and distinguishes no matches from an empty catalogue.
+  Below 68rem the description spans the row, with state/count beside the edit action.
 - **Navigation settings** uses the existing vertical tab and flat field-row pattern.
-  Header/footer/legal sections show bounded item counts; each row exposes type,
-  target and enabled-locale label/URL fields, with move up/down and confirmed removal.
+  Header/footer/legal sections show bounded item counts. Collapsed rows summarize the
+  destination and effective labels in each enabled locale, including default labels.
+  **Edit link** opens type, target and label/URL fields; move up/down and confirmed removal
+  remain visible. Reordering retains the expanded editor and keyboard focus.
   Unpublished/missing targets are explicit notices, not hidden authoring failures.
   Social links are read-only here with a Site identity link. Saving rebuilds once;
   a failed rebuild acknowledges the committed draft and offers explicit retry.
@@ -1155,6 +1200,8 @@ and the `<dialog>`s appended to `<body>` share one set:
   outside click); the trigger's accessible name stays “Account menu for …”. Admin-only pages appear
   in the sidebar for admins only. Roles and server authorization are unchanged. Publish and
   destructive actions retain their existing red treatment.
+  **Software license and source** remains a 44px-high, underlined secondary link above the
+  account control, not an outlined command button.
 - The shell is exactly the viewport and the workspace is its only scroll container:
   masthead, sidebar and the canvas gutter around the workspace never scroll away. The
   workspace carries a minimal shadow that surrounds it on every side — an ambient blur plus a
@@ -1180,8 +1227,45 @@ and the `<dialog>`s appended to `<body>` share one set:
 
 - The editor has no visible page title: the shell's h1 (New post / Edit post) is
   visually hidden, so the command bar opens the workspace. The command bar separates
-  primary actions from the full-width save/readiness status row. Error/status text
-  wraps instead of disappearing behind ellipses.
+  primary actions (Save draft, Publish, Review story, **Save & preview**, More actions) from the
+  full-width save/readiness status row; the actions come first in the DOM, so Tab reaches
+  Save before the status. Confirmed draft saves use this status row alone, including saves confirmed by a recovery
+  check. They never open a second success banner or offer **Check again** after success.
+  The recovery panel remains available for uncertain outcomes, conflicts and account changes;
+  edits made during a save remain visibly unsaved.
+  On a live story Publish reads **Publish changes** (it replaces
+  what readers see); below 52rem the word "changes" folds out of sight but stays in the
+  accessible name, so the phone action row does not wrap. Save draft names its shortcut (⌘S / Ctrl+S) in its tooltip and
+  `aria-keyshortcuts`. **Save & preview** names its existing save-before-preview operation;
+  its accessible name keeps "Draft preview — not the live site", and its description explains
+  that it does not publish. Below 52rem the same Review story button moves into More (no
+  duplicate handler); closing Review returns focus to More when its button is hidden. Re-reading the live state is
+  a small icon beside it (**Check the live site again**), not a full-height button. Above
+  74rem readiness lives in a native **Publish checklist** disclosure in the status row:
+  a live missing-field count, then the existing locale/trip links in its floating panel.
+  A gap link closes it before revealing its field; Escape closes it and restores summary
+  focus. It never changes the draft or implies a successful publication. More actions
+  appears only when it holds Unpublish; below 74rem that menu carries readiness instead.
+  The desktop manuscript title is a fixed 2rem; its placeholder uses `--muted`.
+  On phones the status is one
+  wrapping line ("Saved to server · Live ↻"), the story-details opener rides at the right
+  end of the locale row so the actions fit one line, and error/status text wraps instead
+  of disappearing behind ellipses.
+- The unboxed title and editable prose share a quiet white document canvas. A compact,
+  sticky toolbar pins beneath the command bar: a roving `role="toolbar"` with one Tab stop
+  and arrow keys, formatting controls, **Photo**, **Gallery**, and an editable
+  **Visual / Markdown** mode switch. Visual is the default; Markdown exposes the actual
+  EasyMDE source editor, not a read-only rendered view. Below 52rem less-used formatting
+  folds into an overlay **Format** tray, while the primary writing controls remain reachable.
+  Escape returns focus to Format; resizing retains a visible toolbar focus target.
+  **Photo** opens a tray for upload, alt text, suggestions and the library picker, inserting
+  at the caret and returning focus to the story. Upload/gallery outcomes use one status line.
+  This extends the existing Editorial desk palette and type rather than introducing a new
+  visual system; the existing tokens and design sidecar remain unchanged.
+- All editor chrome is English like the rest of the admin, whichever locale tab is open:
+  gallery widgets, title-image controls, gallery metadata advisories and their retry
+  copy come from the English dictionary; only the author's own text (alt, captions) is
+  marked with the manuscript's `lang`.
 - On a phone the editor stays the same editor (#302). Preview opens its tab inside the tap
   and fills it once the draft is saved — a tab opened after the save would be a blocked
   popup — and if the browser still blocks it, the status line says so with an **Open
@@ -1200,33 +1284,76 @@ and the `<dialog>`s appended to `<body>` share one set:
   lightbox captions. Edits apply only to this gallery in the active locale, commit with
   Insert/Update gallery, and Cancel discards them. The manuscript widget marks hidden
   captions explicitly. On phones, each reset button sits below its textarea.
-- With gallery previews enabled, typing or pasting at either collapsed fence edge
-  inserts prose on separate lines outside the gallery, including at the start or
-  end of the manuscript. Arrow-key navigation and clicking the visually empty
-  boundary must not prefix the opener or suffix the closer. Undo/redo, local alt
-  edits, picker replacements, and the raw-Markdown toggle retain their existing
-  behavior; the saved Markdown remains the source of truth. Undo/redo restores
-  the caret with the inserted text, not at the fence or trailing padding, so
-  continued typing stays in the same paragraph. Consecutive typing remains one
-  undo group.
-- Story details sits beside the manuscript on desktop, inside the same ruled frame: one
-  `--line` border and 12px radius hold both columns, and the inspector is the frame's
-  tinted column (`--canvas`, divided by `--line-strong`) so white fields read against it.
+- The manuscript's gallery widget is a visual index, not a form: compact 4:3 tiles in
+  photo order, each showing only its alt text from Media (or a **No alt text yet** tag).
+  The photo's Media title is the image tooltip and part of its label for assistive
+  technology; the visible label appears only on an editable field. The gallery head links
+  to Media once (new tab, announced), and the explanatory help line appears once per
+  story, on the first gallery. Only a photo that is not in Media keeps an editable alt
+  field there; a Review story jump to a non-editable photo lands on its shown text.
+- Gallery blocks remain part of the canonical Markdown draft. Visual gallery editing uses
+  the existing Media picker and preserves directives, ordering, captions and source URLs;
+  Markdown mode exposes the underlying fence.
+- **Translate with AI** stays beside the locale tabs. Its native dialog
+  names the direction and provider/endpoint/model before an explicit inference action, then
+  shows readonly title, excerpt, complete Markdown and article-local image text for review.
+  Existing target content requires a separate unchecked replacement confirmation. Apply and
+  Discard remain distinct; cancellation never applies partial output. The dialog traps focus,
+  returns it to the trigger, and scrolls within a narrow phone viewport without horizontal
+  overflow. A nearby **Undo translation** restores the complete applied patch until intervening
+  edits invalidate it. Save, Preview and Publish retain their existing meanings.
+- Story details sits beside the manuscript on desktop as a tinted column (`--canvas`,
+  divided by `--line-strong`) so white fields read against it.
   It pins flush under the command bar and scrolls on its own. Its header carries one
   icon-only panel toggle (`panel-right-close` / `panel-right-open`, named Collapse /
-  Expand story details); collapsing slides the panel right into a slim tinted rail that
-  keeps only that toggle, and the writing column widens into the freed space. The
+  Expand story details); collapsing turns the column into a slim tinted rail that keeps
+  only that toggle, and the writing column widens into the freed space. The column switch
+  itself is not animated (it would reflow the whole manuscript each frame); the content
+  fades and slides out with opacity/transform. The
   collapsed content is inert and hidden from assistive technology; the slide honours
-  reduced motion. At 74rem and below it is a modal drawer opened by an icon button
-  after More actions; the same header toggle closes it, and it traps Tab, closes on
-  Escape or the scrim, and restores focus to its opener. The frame then holds the
-  manuscript alone.
+  reduced motion. At 74rem and below it is a modal drawer opened by the visibly labelled
+  **Details** button; the same header toggle closes it, and it traps Tab, closes on
+  Escape or the scrim, and restores focus to its opener. The manuscript retains its
+  unboxed document surface.
+- Within each locale, Story details leads with the hero thumbnail and excerpt, followed by
+  country and permalink. Key facts fold behind a live row count without removing their values
+  from the draft. The optional title image and expedition/route sections remain available.
+  The phone title uses a smaller display scale and tighter spacing to expose the manuscript sooner.
+  Below 52rem the audit-to-title gap, title-field margin and title-to-body gap are reduced
+  without shrinking the touch targets or changing the manuscript's reading size.
 - Hero image and title image are collapsible inspector sections (closed by default) with
   one box: a white panel with preview, alt text, status, then **Replace photo** (native
   file input with a dashed drop edge, upload, library) and **Adjust framing**. A closed
   section shows a small thumbnail of its photo beside Show. A loaded story opens Replace
   photo only when that image is missing; author actions never fold it under focus.
 - Excerpts grow with their text; no inner scrollbar or resize grip.
+- The slug's site prefix sits above the slug in the inspector, so neither half truncates.
+  A published, disabled permalink is styled as a quiet reference; editable slugs retain a field boundary.
+- Key facts stack label above value, each fact divided by a hairline. The value field
+  wraps and grows with its text (one logical line: Enter and pasted breaks become spaces),
+  so nothing is cut off in the inspector's narrow column. Row removal is a drawn ×.
+- Alt-text review is a compact disclosure rather than a full notice box. Its accessible
+  summary includes the count and advisory status. Expanded content distinguishes empty
+  descriptions from filename/title descriptions needing improvement, based on the existing
+  audit reasons. A four-photo queue shows safe-origin thumbnails, locale, reason and an
+  **Edit description** action. Language filtering, Previous/More photos and **Next unresolved**
+  keep large saved-draft backlogs navigable without changing the draft or its saved state.
+  Missing previews keep their text/action; filtering to no findings shows an empty state.
+  Live-publication warnings retain warning colour; the audit never gates Publish.
+- Opening **Review story** runs local quick checks and prepares a provider disclosure, not
+  inference. Provider kind, endpoint, model, fields sent and possible usage charges appear
+  above the checks. Only **Review with AI** sends the active unsaved language. The action
+  fetches fresh configuration; a changed destination/model/prompt/timeout requires another
+  explicit click after redisclosure. Retry preparation never silently starts inference.
+  Suggestions remain advisory, and applying a suggestion never saves or publishes.
+- **Expedition details** is closed by default; its summary line names what it holds
+  ("3 Oct 2024 · RO · Europe · 1 stop") or what is missing ("Missing date"), and never
+  forces itself open — the readiness chip's Trip link is the way in to a gap.
+- Waypoints show their stops and **Add stop** first; the via-point note, the geocoding
+  privacy note and the routing privacy note follow together below them.
+- **Route along stops** and **GPX route** fold like the sections around them; each
+  summary carries its live status line, so the state reads without opening them. A GPX
+  error opens its section before taking focus.
 - GPX editing is a flat section in Story details, not another dashboard. Its scoped native
   dialog closes the phone inspector first, then restores that drawer and the exact opener
   on dismissal. A fixed header/footer frame one scrollable body; touch actions are at least
@@ -1259,6 +1386,25 @@ and the `<dialog>`s appended to `<body>` share one set:
   details. Coordinate approximation is explicit. Excerpt suggestions have a plain-text
   preview, character count, and separate accept/dismiss actions; generation never looks
   like a saved edit.
+- **Media leads with the photograph.** The library grid uses larger tiles (≥10.5rem, two
+  columns on a phone) captioned with the photo's title; a photo without one shows its file
+  name set back in muted, one-line type, and a ready photo with no alt text in any locale
+  carries a quiet **No alt text** tag. With no detail selected the grid takes the inspector's
+  space; selection guidance and keyboard shortcuts live under Folders. The detail panel
+  (20rem) has a quiet **Photo details / Back to photos** header, then the photo itself,
+  camera · date · pixel size and the key in mono, then fields; lens and file sizes
+  stay under **File**. The laptop inspector pins within the workspace and scrolls independently.
+  Enter opens the focused photo without changing bulk selection; **Photo details** also moves
+  focus into the panel. On phones an unmodified photo tap reveals the panel from its top.
+  Back to photos asks before discarding unsaved metadata and restores the photo's grid focus.
+  Folders uses a native disclosure, initially open on laptops and folded on phones, naming
+  the current folder even when closed. **Upload photos** is a separate native disclosure:
+  its closed summary still accepts drops, its open body holds the native file input,
+  and the upload queue stays outside it. An empty-library upload opens it before focusing
+  the chooser. One AI entry per scope: the
+  toolbar's whole-view **Generate details with AI…** steps aside while a selection exists,
+  because the bulk bar's button acts on it. Rename and Delete are disabled on **All
+  photos**, which is a view, not a folder.
 - Media photo details follow the same rule in the detail panel: AI fills only empty
   fields (marked unsaved) and offers the rest as a tinted note with **Use**. The bulk
   dialog is the exception that saves, so it states scope, fields, destination and photo
@@ -1271,24 +1417,51 @@ and the `<dialog>`s appended to `<body>` share one set:
   still be running" (never "done"): the grid badge reports processing → ready/failed. While any
   transfer is unsettled, a warn-toned note asks to keep the tab open; it disappears once every
   file has a result, because encoding continues on the server without the tab.
-- Settings is one flat document per tab beside a quiet vertical tab index (**AI models**,
-  Images, Comments, Site identity, Site & backups), not a stack of competing cards. The active tab sits
-  on the accent-soft surface, is mirrored in the URL hash (unknown → AI models) and in
-  the title (**Settings · AI models**, the tab in muted weight). AI models holds the
+- Settings is one flat document per tab beside a quiet vertical tab index (**Site
+  identity**, Languages, Navigation, Images, Comments, AI models, Site & backups), not a
+  stack of competing cards. It opens on Site identity. The active tab sits on the
+  accent-soft surface, is mirrored in the URL hash (unknown → Site identity) and in the
+  title (**Settings · Site identity**, the tab in muted weight). AI models holds the
   **Providers** list — name with a small `default` badge, kind and key state as text,
   the base URL in mono, and right-aligned text actions Edit · Set default · Test ·
   Delete (Delete red, disabled actions dimmed with a stated reason) under an **Add
-  provider** primary; add/edit is an inline tinted form, never a card — then a lightly
-  bordered **Use case assignments** panel (use case | provider | model dropdown with a
-  small reload icon, then a muted `→ Provider / model` line with the URL), each feature's
-  prompt and timeout below it, and one **Save AI settings**. Model dropdowns fill from the
+  provider** primary; add/edit is an inline tinted form, never a card. Three flat task sections,
+  **Story review & excerpts**, **Photo descriptions** and **Article translation**, each own
+  their provider/model pair, resolved destination and privacy note. Prompts, timeouts and photo
+  limits sit behind each task's **Advanced settings** disclosure. **Test story review** names
+  its sample-data/possible-charge scope. One pinned **Save AI settings** saves all assignments
+  without contacting a provider. A shared model-list failure notice avoids duplicated diagnosis.
+  Model dropdowns fill from the
   provider's own list; a saved model it does not list stays as "(saved, not listed)", and
   **Other model ID…** reveals a text field. Images ends with **Compare quality**: a photo
-  picker, a WebP/AVIF segmented choice and **Preview**, then the original and the result in
+  picker, a WebP/AVIF segmented choice and **Generate preview**, then the original and the result in
   two equal panes (stacked below 48rem) captioned with format, pixels, file size and saving,
   with a synchronized **1:1 pixels** view. Tabs still save independently.
-- Site identity uses the same paired fields for enabled-locale taglines, profile details and
-  admin descriptors, with shared site/author names above. Social links are an ordered list
+- Settings tracks unsaved intent per save scope, including identity text and its two asset
+  selections separately. A pinned notice names pending sections; save controls stack below it
+  using its measured height, never cover one another. Native leave/reload protection remains
+  until that scope is saved or explicitly discarded. **Discard all changes** confirms a reload;
+  it does not undo saved settings. No field values, API keys or files are copied into browser
+  storage. Failed saves retain pending inputs. Form fields lock during their save.
+  Identity, Navigation, AI and backup/import saves state their scope and publication timing
+  next to the action. Languages disables its save/rebuild action for the unchanged mode.
+  Timeouts and import pacing use seconds, preserving millisecond precision and API units.
+  Comments names the saved on/off state separately from the current checkbox.
+- While the saved database backup schedule is **Off**, Site & backups shows a
+  `.notice-warn` under the schedule and the admin's Desk repeats it in the Site list with
+  a link to `settings.html#site`; the Desk reads it from `GET /settings` and stays silent if
+  that read fails. Recovery details sit in a **What a full recovery needs** disclosure.
+  Site & backups has jump links for Publishing, Backups & recovery, WordPress import tuning
+  and Street routing. Publishing and routing have independent actions/status. Import tuning
+  folds below backup scheduling; the action explicitly saves backup and import settings only.
+  **Last recorded backup operation** is not inferred from a file listing: missing success
+  history says it is unknown even when local files exist. Every empty archive list names
+  what is absent. Local files are not proof of offsite copies or recoverability. A failed
+  status read has an explicit reload action and does not prevent other Settings from loading.
+- Site identity groups **Public identity**, **Author profile** and **Admin appearance**, using
+  paired enabled-locale fields. Its pinned save action distinguishes saving from publishing;
+  detailed timing and domain-format guidance fold while the blank-domain indexing consequence
+  remains visible. Social links are an ordered list
   with labelled Move up, Move down and Remove actions; a seventh link cannot be added.
   Saving checks the loaded revision: conflicts retain the author's inputs until an explicit,
   confirmed reload. Save never rebuilds. The timing note distinguishes the next public

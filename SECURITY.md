@@ -1026,16 +1026,16 @@ Design and misuse cases: `docs/superpowers/specs/2026-09-05-safe-fetch-redirects
 `docs/superpowers/specs/2026-09-06-safe-fetch-literals-and-body-cancel-design.md`.
 
 AI inference is **browser-direct**, not a server remote-fetch path. Alt-text suggestions
-(local LM Studio or an admin-selected remote vision provider), editorial review, and excerpt
-generation never call `safeFetch` or a server inference proxy. `src/editorial-review.ts`
-contains only the review contract, schema, prompt and parser.
+(local LM Studio or an admin-selected remote vision provider), editorial review, excerpts,
+and article translation never call `safeFetch` or a server inference proxy.
+`src/editorial-review.ts` contains only the review contract, schema, prompt and parser.
 
-Review, excerpt, caption and model-discovery clients scope optional Bearer keys to individual
-requests; local LM Studio receives none. Excerpts reuse the review provider/model/timeout and
-the existing `/ai-config` authorization contract. The only other secret read is the admin-only
-`GET /ai-providers/:id/credential` behind the Settings page's model lookup and Test. Since the provider
-registry (2026-10-19) each provider has its own encrypted key, so Story review and Photo
-descriptions on different providers send different keys, each only to its own provider's URL
+Review, excerpt, caption, translation and model-discovery clients scope optional Bearer keys
+to individual requests; local LM Studio receives none. Excerpts reuse the review
+provider/model/timeout; article translation has an independent assignment. The only other
+secret read is the admin-only `GET /ai-providers/:id/credential` behind Settings model lookup
+and Test. Since the provider registry (2026-10-19), each provider has its own encrypted key,
+so independently assigned tasks send different keys, each only to its own provider's URL
 (this replaces the 2026-10-17 shared-key approval, §13 of the #214 spec). Requests omit cookies/referrers and refuse redirects,
 preventing credentials from being forwarded to a different endpoint. OpenRouter attribution uses
 exact URL hostname equality, not a string/prefix match. Provider errors and abort reasons
@@ -1049,6 +1049,21 @@ also receives request-local `anthropic-dangerous-direct-browser-access: true` an
 the existing browser-held key into Anthropic's browser API access, not a new server fetch or
 storage path. HTTP, non-default ports and lookalike origins do not receive these headers.
 See `docs/superpowers/specs/2026-11-04-anthropic-browser-access.md`.
+The `anthropic` registry kind (2026-11-07) is a remote, API-key-required client preset,
+not a new transport or trust boundary. Existing Custom entries are preserved.
+Admin authorization, encrypted per-provider slots, endpoint/key binding, destination-change
+confirmation, local-caption isolation and no-store responses remain unchanged. Preset URLs
+remain editable; the kind alone never enables Anthropic headers on another origin.
+
+Opening Story review runs deterministic checks and reads `/ai-config` for disclosure, but
+does not contact the model provider. Provider kind, endpoint, model, fields sent and possible
+usage charges appear above the checks; only **Review with AI** authorizes inference.
+Preparation retains non-secret configuration metadata, not either returned credential.
+The explicit action re-reads the configuration and obtains its request-local key. If provider,
+endpoint, model, prompt or timeout changed, it displays the new disclosure and requires
+another click instead of sending to the changed configuration. Configuration retries do not
+implicitly authorize inference. This is a browser consent boundary, not a new server
+authorization rule; the existing `/ai-config` roles and browser-direct trust model remain.
 
 Model output is untrusted: both review parsers validate required fields, types and statuses,
 reject extra properties, strip Unicode controls, and cap text/list lengths. This is not
@@ -1067,6 +1082,31 @@ properties/markup, and strips control characters. Results are plain text, requir
 acceptance, and never save/publish automatically. A draft/locale/post change invalidates pending
 and presented results; acceptance checks the snapshot again. `/ai-config` has a separate
 15-second abortable read deadline. Suggestions and keys are not persisted.
+
+Article translation (#550) sends only bounded, opaque article-local text slots and locale
+codes. Image URLs, binaries, EXIF/GPS, shared fields, routes and unrelated metadata never
+enter its inference payload. Authenticated, no-store `POST /translation/prepare` and
+`/translation/validate` perform source analysis only: no model calls or writes. The compiler
+reconstructs from the source, validates the complete response and structural fingerprint,
+and preserves image identities, dimensions, gallery order/layout, reference destinations,
+empty overrides, hidden-caption state and unsupported source. Media remains authoritative;
+only article-local fallback text and occurrence-specific overrides are translatable.
+When local fragment links exist, all headings remain unchanged to preserve generated IDs.
+Provider-created autolinks are rejected rather than weakening structural preservation.
+
+Opening translation performs no inference. The author must explicitly consent after seeing
+the provider, exact endpoint, model, content scope and cost disclosure; configuration changes
+require renewed consent. Translation has exactly one bounded, abortable attempt—**no paid
+retry**, including the review client's unsupported-format fallback. Malformed, incomplete,
+truncated, oversized or structurally different output never mutates the draft. Source,
+target, locale or configuration changes invalidate pending/reviewed results. Closing aborts;
+already-disclosed data cannot be recalled. Explicit review/application and existing-target
+replacement confirmation precede one synchronous target-field transaction; failed commits
+restore fields, selections and histories before Visual synchronization. Successful application
+uses existing dirty/recovery/save-conflict handling and offers guarded whole-field Undo.
+There is no autosave, publishing, global Media mutation, duplicate upload or alternate
+persistence path. See the issue-specific design and scoped approval exception in
+`docs/superpowers/specs/2026-11-07-issue-550-ai-article-translation.md`.
 
 Media-library photo details (title, DE/EN alt and caption, tags) use the caption
 provider, config and request-local key; there is no additional secret or route. Only a
@@ -1273,6 +1313,16 @@ public site it is run through **`rehype-sanitize`** (`site/src/lib/body-images.t
 tuned so it does **not** break legitimate output: heading `id`s stay un-prefixed (so the table of
 contents `#anchor` links resolve) and `class` survives everywhere. Verified end-to-end against a
 published post carrying an XSS payload.
+
+**Rich-text authoring boundary (2026-11-07).** Visual editing works from a canonical
+Markdown draft, not trusted HTML. Raw HTML and unsupported syntax are retained as inert
+source blocks, editable in Markdown, and are never inserted into the admin DOM as HTML.
+Visual paste is plain text; unsafe URL schemes do not become active links, and image
+previews use exact same-origin checks rather than fetching arbitrary author-supplied URLs.
+Gallery selection uses the existing Media authority. The self-hosted Tiptap bundle is an
+owner-approved editor-only build exception, with pinned dependencies and local vendor
+build controls described in the [spec](docs/superpowers/specs/2026-11-07-rich-text-post-editor.md).
+The existing public sanitizer and post-sanitize image/gallery guards remain unchanged.
 
 **Public journeys (#310)** have no new public write endpoint. Their loader imports the
 same exported read-only database epoch as stories and language, fails closed on invalid
@@ -1508,10 +1558,10 @@ preview even though the live site would load it.
   Studio providers cannot hold a key (400). The provider is deletable only when it is neither
   the default nor assigned; deleting it removes its key first.
 - **Author disclosure is deliberate:** admin-only routes (`POST/PUT/DELETE /ai-providers*`,
-  `POST /settings`) manage providers and keys, while authenticated `GET /ai-config` and
-  `?purpose=caption` return plaintext in browser memory for the provider assigned to Story
-  review or Photo descriptions when it is remote — up to two different keys, never the key of
-  an unassigned provider. Admin-only `GET /ai-providers/:id/credential` returns one remote
+  `POST /settings`) manage providers and keys, while authenticated `GET /ai-config`,
+  `?purpose=caption` and `?purpose=translation` return plaintext in browser memory only for
+  the selected task's remote provider—never another assignment's key. Admin-only
+  `GET /ai-providers/:id/credential` returns one remote
   provider's key to the admin's browser for Settings' model dropdowns and **Test**; opening the AI
   models tab looks up models automatically for each assigned provider (owner decision 2026-10-19),
   calling only that provider's `/models`, never a completion. `GET/POST /settings`
@@ -1521,11 +1571,11 @@ preview even though the live site would load it.
   TLS at the proxy remains required.
   Every author can copy a returned key; session revocation cannot retract it. Revoke at
   the provider after suspected exposure and use provider-side access/spend limits.
-- **No server AI egress:** the server never fetches provider URLs. The caption-only query
-  `GET /ai-config?purpose=caption` resolves the photo provider. For a local provider it
-  performs no secret lookup or wait, so remote crypto failures do not disable local alt
-  text. Remote captions send a resized JPEG and prompt from the browser with that provider's
-  key; remote config fails closed on secret errors. Presets and custom HTTP(S) destinations
+- **No server AI egress:** the server never fetches provider URLs. The caption and translation
+  purposes resolve independent assignments. Local providers perform no secret lookup or wait,
+  so remote crypto failures do not disable local tasks. Remote captions send a resized JPEG
+  and prompt; translation sends text slots only, from the browser with the assigned provider's
+  key. Remote config fails closed on secret errors. Presets and custom HTTP(S) destinations
   are admin authority. Custom HTTP can expose key/content on the network; prefer HTTPS and
   never add a proxy to work around CORS/mixed-content failures.
 - **Settings failure residual:** settings.json and Postgres cannot commit together. Every

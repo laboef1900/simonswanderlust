@@ -8,32 +8,35 @@
   </head>
   <body class="settings-page">
     <header class="cms-page-meta">
-      <h1>Settings<span id="settingsTabTitle" class="settings-title-tab"> · AI models</span></h1>
+      <h1>Settings<span id="settingsTabTitle" class="settings-title-tab"></span></h1>
       <p class="lede" id="settingsIntro"></p>
     </header>
 
     <main class="settings-layout">
       <div class="settings-tabs" id="settingsTabs" role="tablist" aria-orientation="vertical">
-        <button type="button" role="tab" id="tabbtn-ai-models" aria-controls="panel-ai-models" aria-selected="true" data-tab="ai-models">AI models</button>
+        <button type="button" role="tab" id="tabbtn-identity" aria-controls="panel-identity" aria-selected="true" data-tab="identity"></button>
+        <button type="button" role="tab" id="tabbtn-language" aria-controls="panel-language" aria-selected="false" tabindex="-1" data-tab="language" data-language-copy="Tab"></button>
+        <button type="button" role="tab" id="tabbtn-navigation" aria-controls="panel-navigation" aria-selected="false" tabindex="-1" data-tab="navigation"></button>
         <button type="button" role="tab" id="tabbtn-images" aria-controls="panel-images" aria-selected="false" tabindex="-1" data-tab="images">Images</button>
         <button type="button" role="tab" id="tabbtn-comments" aria-controls="panel-comments" aria-selected="false" tabindex="-1" data-tab="comments">Comments</button>
-        <button type="button" role="tab" id="tabbtn-identity" aria-controls="panel-identity" aria-selected="false" tabindex="-1" data-tab="identity"></button>
-        <button type="button" role="tab" id="tabbtn-navigation" aria-controls="panel-navigation" aria-selected="false" tabindex="-1" data-tab="navigation"></button>
-        <button type="button" role="tab" id="tabbtn-language" aria-controls="panel-language" aria-selected="false" tabindex="-1" data-tab="language" data-language-copy="Tab"></button>
+        <button type="button" role="tab" id="tabbtn-ai-models" aria-controls="panel-ai-models" aria-selected="false" tabindex="-1" data-tab="ai-models">AI models</button>
         <button type="button" role="tab" id="tabbtn-site" aria-controls="panel-site" aria-selected="false" tabindex="-1" data-tab="site">Site &amp; backups</button>
       </div>
       <div class="settings-sections">
-      <section class="settings-panel" id="panel-ai-models" role="tabpanel" aria-labelledby="tabbtn-ai-models">
+      <div id="settingsDraftBar" class="settings-draft-bar" hidden>
+        <p id="settingsDraftStatus" role="status"></p>
+        <button id="settingsDiscard" type="button" class="btn-secondary" data-settings-copy="settingsDiscard"></button>
+      </div>
+      <p id="settingsLoadStatus" class="page-status" role="status"></p>
+      <section class="settings-panel" id="panel-ai-models" role="tabpanel" aria-labelledby="tabbtn-ai-models" hidden>
         <section class="card" id="providersSection" aria-labelledby="providersHeading">
           <div class="settings-section-head">
             <h2 id="providersHeading" class="card-heading">Providers</h2>
             <button id="addProvider" type="button" aria-describedby="providerLimit">Add provider</button>
           </div>
           <p id="providersHelp" class="muted">
-            API keys are stored encrypted on this server, one per provider. When a signed-in author
-            uses an AI feature, their browser receives the key of the provider assigned to that
-            feature, in memory only, and calls the provider directly — the server never calls a
-            model. Remote providers may charge for usage.
+            Keys are stored encrypted on this server. When an author uses an AI feature, their
+            browser calls the assigned provider directly. Remote providers may charge for usage.
           </p>
           <p id="providerLimit" class="muted" hidden>This is the limit of 20 providers. Delete one to add another.</p>
           <ul id="providerList" class="provider-list"></ul>
@@ -50,6 +53,7 @@
                   <select id="providerKind" aria-describedby="providerKindHelp">
                     <option value="openrouter">OpenRouter</option>
                     <option value="deepseek">DeepSeek</option>
+                    <option value="anthropic">Anthropic</option>
                     <option value="custom">Custom (OpenAI-compatible)</option>
                     <option value="lm-studio">Local LM Studio</option>
                   </select>
@@ -77,16 +81,18 @@
           <p id="providersOut" class="page-status" role="status"></p>
         </section>
 
-        <section class="card" id="useCaseSection" aria-labelledby="useCasesHeading">
-          <h2 id="useCasesHeading" class="card-heading">Use case assignments</h2>
-          <p id="useCasesHelp" class="muted">
-            Each feature uses the provider assigned here, or the default provider. Story review and
-            excerpts send the active language’s unsaved draft text; photo descriptions send a
-            resized photo and need a model that can read images.
-          </p>
-          <div class="use-case-panel">
+        <section class="card" id="useCaseSection" aria-labelledby="reviewUseCaseLabel captionUseCaseLabel translationUseCaseLabel">
+          <div class="settings-savebar">
+            <button id="saveAi" type="button" data-settings-copy="settingsAiSave"></button>
+            <p class="muted" data-settings-copy="settingsAiTiming"></p>
+            <p id="aiOut" class="page-status" role="status"></p>
+          </div>
+          <p id="modelProviderStatus" class="notice-info" role="status" hidden></p>
+          <fieldset id="aiFields">
+          <section class="settings-feature" aria-labelledby="reviewUseCaseLabel">
+            <h2 class="card-heading" id="reviewUseCaseLabel"></h2>
+            <p id="reviewPrivacy" class="muted"></p>
             <div class="use-case-row">
-              <p class="use-case-name" id="reviewUseCaseLabel"></p>
               <div class="use-case-field">
                 <label for="reviewProviderId" id="reviewProviderLabel">Provider</label>
                 <select id="reviewProviderId" aria-labelledby="reviewUseCaseLabel reviewProviderLabel"></select>
@@ -106,8 +112,27 @@
               <p class="use-case-resolved"><span id="reviewResolved"></span> <span id="reviewDestination" class="use-case-url"></span></p>
               <p id="reviewProviderWarn" class="notice-warn" role="status" hidden></p>
             </div>
+            <details class="help-details settings-advanced">
+              <summary data-settings-copy="settingsAdvanced"></summary>
+              <label for="reviewTimeoutSeconds" id="reviewTimeoutLabel"></label>
+              <input id="reviewTimeoutSeconds" type="number" min="5" max="300" step="0.001" />
+              <label for="reviewPrompt" id="reviewPromptLabel"></label>
+              <textarea id="reviewPrompt" rows="8" aria-describedby="reviewPromptHelp"></textarea>
+              <p id="reviewPromptHelp" class="muted"></p>
+            </details>
+            <div class="form-actions">
+              <button id="testReview" type="button" class="btn-secondary" aria-describedby="reviewTestHelp"></button>
+            </div>
+            <p id="reviewTestHelp" class="muted">
+              Runs a built-in sample text, never a draft, with the review settings above.
+              Nothing is saved; usage charges may apply.
+            </p>
+            <p id="reviewTestOut" class="page-status" role="status"></p>
+          </section>
+          <section class="settings-feature" aria-labelledby="captionUseCaseLabel">
+            <h2 class="card-heading" id="captionUseCaseLabel"></h2>
+            <p class="muted" data-settings-copy="settingsPhotoPrivacy"></p>
             <div class="use-case-row">
-              <p class="use-case-name" id="captionUseCaseLabel"></p>
               <div class="use-case-field">
                 <label for="captionProviderId" id="captionProviderLabel">Provider</label>
                 <select id="captionProviderId" aria-labelledby="captionUseCaseLabel captionProviderLabel"></select>
@@ -127,48 +152,55 @@
               <p class="use-case-resolved"><span id="captionResolved"></span> <span id="captionDestination" class="use-case-url"></span></p>
               <p id="captionProviderWarn" class="notice-warn" role="status" hidden></p>
             </div>
-          </div>
-
-          <p class="section-label" id="reviewDetailsHeading"></p>
-          <p id="reviewPrivacy" class="muted"></p>
-          <div class="settings-field-pair">
-            <div>
-              <label for="reviewTimeoutMs" id="reviewTimeoutLabel"></label>
-              <input id="reviewTimeoutMs" type="number" min="5000" max="300000" step="1" />
-            </div>
-          </div>
-          <label for="reviewPrompt" id="reviewPromptLabel"></label>
-          <textarea id="reviewPrompt" rows="8" aria-describedby="reviewPromptHelp"></textarea>
-          <p id="reviewPromptHelp" class="muted"></p>
-
-          <p class="section-label" id="captionDetailsHeading"></p>
-          <div class="settings-field-pair">
-            <div>
-              <label for="captionTimeoutMs">Timeout for photo descriptions (ms)</label>
-              <input id="captionTimeoutMs" type="number" min="1000" max="600000" />
-            </div>
-            <div>
-              <label for="captionMaxEdge">Longest photo edge sent (px)</label>
-              <input id="captionMaxEdge" type="number" min="256" max="4096" />
-            </div>
-          </div>
-          <label for="captionMaxTokens" id="captionMaxTokensLabel"></label>
-          <input id="captionMaxTokens" type="number" min="256" max="32768" step="1" required aria-describedby="captionMaxTokensHelp" />
-          <p id="captionMaxTokensHelp" class="muted"></p>
-          <label for="captionPrompt">Photo description prompt</label>
-          <textarea id="captionPrompt" rows="8"></textarea>
-
-          <div class="form-actions">
-            <button id="saveAi" type="button">Save AI settings</button>
-            <button id="testReview" type="button" class="btn-secondary" aria-describedby="reviewTestHelp"></button>
-          </div>
-          <p id="aiOut" class="page-status" role="status"></p>
-          <p id="reviewTestHelp" class="muted">
-            Test review runs a built-in sample text — never a draft — through the selected story
-            review provider, model, instructions and timeout, using that provider’s stored key.
-            Nothing is saved. Provider usage charges may apply.
-          </p>
-          <p id="reviewTestOut" class="page-status" role="status"></p>
+            <details class="help-details settings-advanced">
+              <summary data-settings-copy="settingsAdvanced"></summary>
+              <div class="settings-field-pair">
+                <div>
+                  <label for="captionTimeoutSeconds" data-settings-copy="settingsCaptionTimeout"></label>
+                  <input id="captionTimeoutSeconds" type="number" min="1" max="600" step="0.001" />
+                </div>
+                <div>
+                  <label for="captionMaxEdge">Longest photo edge sent (px)</label>
+                  <input id="captionMaxEdge" type="number" min="256" max="4096" />
+                </div>
+              </div>
+              <label for="captionMaxTokens" id="captionMaxTokensLabel"></label>
+              <input id="captionMaxTokens" type="number" min="256" max="32768" step="1" required aria-describedby="captionMaxTokensHelp" />
+              <p id="captionMaxTokensHelp" class="muted"></p>
+              <label for="captionPrompt">Photo description prompt</label>
+              <textarea id="captionPrompt" rows="8"></textarea>
+            </details>
+          </section>
+            <section class="settings-feature" aria-labelledby="translationUseCaseLabel">
+              <h2 class="card-heading" id="translationUseCaseLabel" data-settings-copy="settingsTranslation"></h2>
+              <p class="muted" data-settings-copy="settingsTranslationPrivacy"></p>
+              <div class="use-case-row">
+                <div class="use-case-field">
+                  <label for="translationProviderId" id="translationProviderLabel" data-settings-copy="settingsTranslationProvider"></label>
+                  <select id="translationProviderId" aria-labelledby="translationUseCaseLabel translationProviderLabel"></select>
+                </div>
+                <div class="use-case-field">
+                  <label for="translationModel" id="translationModelLabel" data-settings-copy="settingsTranslationModel"></label>
+                  <div class="model-picker">
+                    <select id="translationModel" aria-labelledby="translationUseCaseLabel translationModelLabel" aria-describedby="translationModelStatus"></select>
+                    <button id="translationModelsReload" type="button" class="btn-secondary model-reload" aria-labelledby="translationReloadLabel"><span id="translationReloadLabel" class="visually-hidden" data-settings-copy="settingsTranslationReload"></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg></button>
+                  </div>
+                  <div id="translationModelOther" class="model-other" hidden>
+                    <label for="translationModelOtherInput" id="translationModelOtherLabel" data-settings-copy="settingsTranslationModelId"></label>
+                    <input id="translationModelOtherInput" type="text" maxlength="100" autocomplete="off" spellcheck="false" aria-labelledby="translationUseCaseLabel translationModelOtherLabel" />
+                  </div>
+                </div>
+                <p id="translationModelStatus" class="use-case-models" role="status"></p>
+                <p class="use-case-resolved"><span id="translationResolved"></span> <span id="translationDestination" class="use-case-url"></span></p>
+                <p id="translationProviderWarn" class="notice-warn" role="status" hidden></p>
+              </div>
+              <details class="help-details settings-advanced">
+                <summary data-settings-copy="settingsAdvanced"></summary>
+                <label for="translationTimeoutSeconds" data-settings-copy="settingsTranslationTimeout"></label>
+                <input id="translationTimeoutSeconds" type="number" min="5" max="300" step="0.001" />
+              </details>
+            </section>
+          </fieldset>
         </section>
       </section>
 
@@ -176,6 +208,7 @@
       <section class="card" id="imageSettingsSection" aria-labelledby="imageHeading">
         <h2 id="imageHeading" class="card-heading"></h2>
         <form id="imageSettings">
+          <fieldset id="imageFields">
           <label class="check-field" for="convertJpeg">
             <input id="convertJpeg" type="checkbox" aria-describedby="conversionHelp" />
             Convert JPG images to WebP and AVIF
@@ -203,6 +236,7 @@
             Applies to new uploads and newly processed import images. Existing photos and queued
             uploads keep their settings. Original files stay private.
           </p>
+          </fieldset>
           <div class="form-actions">
             <button id="saveImages" type="submit" disabled>Save image settings</button>
           </div>
@@ -228,7 +262,7 @@
                 <button id="previewFormatAvif" type="button" class="tab-btn" aria-pressed="false" data-format="avif">AVIF</button>
               </div>
             </div>
-            <button id="previewRun" type="button" class="btn-secondary">Preview</button>
+            <button id="previewRun" type="button" class="btn-secondary" data-settings-copy="settingsPreview"></button>
           </div>
           <p id="previewOut" class="page-status" role="status"></p>
           <div id="previewResult" class="quality-compare" hidden>
@@ -262,15 +296,12 @@
           <input id="commentsEnabled" type="checkbox" aria-describedby="commentsHelp" />
           Enable comments on the site
         </label>
-        <p id="commentsHelp" class="muted">
-          Off (default): the comment form is hidden on every story and <code>POST /comments</code>
-          returns 409. Approved comments already visible stay visible. Per-post "Allow comments"
-          has no effect while this is off. Turning it off does not delete any comments — it is the
-          reversible rollback for the whole comments feature. Every new comment is held for
-          moderation. Saving this does not rebuild the site.
-        </p>
+        <p id="commentsSavedState" class="muted" role="status"></p>
+        <p id="commentsHelp" class="muted" data-settings-copy="settingsCommentsHelp"></p>
+        <p class="muted" data-settings-copy="settingsCommentsTiming"></p>
         <div class="form-actions">
-          <button id="saveComments" type="button">Save comment setting</button>
+          <button id="saveComments" type="button" data-settings-copy="settingsCommentsSave"></button>
+          <a href="/admin/comments.html" data-settings-copy="settingsCommentsManage"></a>
         </div>
         <p id="commentsOut" class="page-status" role="status"></p>
       </section>
@@ -290,22 +321,31 @@
                 <option value="en:en" data-language-copy="ModeEnOnly"></option>
               </select>
               <p id="languageScope" class="muted" data-language-copy="Intro"></p>
-              <div class="form-actions"><button type="submit" data-language-copy="Save"></button></div>
+              <div class="form-actions"><button id="saveLanguage" type="submit" class="btn-primary" data-language-copy="Save"></button></div>
             </fieldset>
           </form>
           <p><a id="prepareLanguage" hidden></a></p>
           <ul id="languageBlockers"></ul>
           <p id="languageStatus" class="page-status" role="status" tabindex="-1"></p>
-          <button type="button" id="languageReload" class="btn-secondary" data-language-copy="Reload"></button>
-          <a href="#site" data-language-copy="RebuildLink"></a>
+          <div class="form-actions">
+            <button type="button" id="languageReload" class="btn-secondary" data-language-copy="Reload"></button>
+            <a href="#site" data-language-copy="RebuildLink"></a>
+          </div>
         </section>
       </section>
 
-      <section class="settings-panel" id="panel-identity" role="tabpanel" aria-labelledby="tabbtn-identity" hidden>
+      <section class="settings-panel" id="panel-identity" role="tabpanel" aria-labelledby="tabbtn-identity">
         <section class="card">
           <h2 id="identityHeading" class="card-heading"></h2>
-          <p id="identityIntro" class="muted"></p>
-          <p id="identityTiming" class="muted"></p>
+          <div class="settings-savebar">
+            <button id="identitySave" type="submit" form="identityForm"></button>
+            <p class="muted" data-settings-copy="settingsIdentityTiming"></p>
+            <p id="identityStatus" class="page-status" role="status" tabindex="-1"></p>
+          </div>
+          <details class="help-details">
+            <summary data-settings-copy="settingsIdentityDetails"></summary>
+            <p id="identityTiming" class="muted"></p>
+          </details>
           <p id="identityDomainNotice" class="muted" role="status" hidden>
             <span id="identityDomainNoticeText"></span>
             <a id="identityDomainNoticeLink" href="/admin/settings.html#identity"></a>
@@ -313,6 +353,7 @@
           <form id="identityForm" aria-describedby="identityTiming identityOptional">
             <fieldset id="identityFields" disabled>
               <p id="identityOptional" class="muted"></p>
+              <h3 class="section-label" data-settings-copy="settingsIdentityPublic"></h3>
               <div class="settings-field-pair">
                 <div>
                   <label id="identitySiteNameLabel" for="identitySiteName"></label>
@@ -326,7 +367,11 @@
               <div>
                 <label id="identityCanonicalOriginLabel" for="identityCanonicalOrigin"></label>
                 <input id="identityCanonicalOrigin" type="url" autocomplete="off" spellcheck="false" aria-describedby="identityCanonicalHelp identityCanonicalAscii" />
-                <p id="identityCanonicalHelp" class="muted"></p>
+                <p class="muted" data-settings-copy="settingsDomainHelp"></p>
+                <details class="help-details">
+                  <summary data-settings-copy="settingsDomainDetails"></summary>
+                  <p id="identityCanonicalHelp" class="muted"></p>
+                </details>
                 <p id="identityCanonicalAscii" class="muted" role="status" hidden></p>
                 <div class="form-actions">
                   <button id="identityUseBrowserOrigin" type="button" class="btn-secondary"></button>
@@ -338,9 +383,6 @@
               <p id="identitySocialEmpty" class="muted"></p>
               <ol id="identitySocialLinks" class="identity-social-links"></ol>
               <button id="identityAddLink" type="button" class="btn-secondary"></button>
-              <div class="form-actions">
-                <button id="identitySave" type="submit"></button>
-              </div>
             </fieldset>
           </form>
           <section class="identity-assets" aria-labelledby="identityAssetsHeading">
@@ -375,26 +417,27 @@
             <button id="identityReload" type="button" class="btn-secondary"></button>
             <button id="identityRebuild" type="button" class="btn-primary"></button>
           </div>
-          <p id="identityStatus" class="page-status" role="status" tabindex="-1"></p>
         </section>
       </section>
 
       <section class="settings-panel" id="panel-navigation" role="tabpanel" aria-labelledby="tabbtn-navigation" hidden>
         <section class="card">
           <h2 id="navigationHeading" class="card-heading"></h2>
-          <p id="navigationIntro" class="muted"></p>
+          <div class="settings-savebar">
+            <button id="navigationSave" type="submit" form="navigationForm" class="btn-primary"></button>
+            <p id="navigationIntro" class="muted"></p>
+            <p id="navigationStatus" class="page-status" role="status" tabindex="-1"></p>
+          </div>
           <p id="navigationHelp" class="muted"></p>
           <form id="navigationForm" aria-describedby="navigationIntro navigationHelp">
             <fieldset id="navigationFields" disabled>
               <div id="navigationSlots"></div>
-              <div class="form-actions"><button id="navigationSave" type="submit"></button></div>
             </fieldset>
           </form>
           <div class="form-actions">
             <button id="navigationReload" type="button" class="btn-secondary"></button>
             <button id="navigationRebuild" type="button" class="btn-primary"></button>
           </div>
-          <p id="navigationStatus" class="page-status" role="status" tabindex="-1"></p>
           <p id="navigationSocialHelp" class="muted"></p>
           <ul id="navigationSocial"></ul>
           <a id="navigationSocialLink" href="#identity"></a>
@@ -402,9 +445,32 @@
       </section>
 
       <section class="settings-panel" id="panel-site" role="tabpanel" aria-labelledby="tabbtn-site" hidden>
+      <div class="settings-jumps">
+        <button type="button" class="btn-secondary" data-settings-section="publishingHeading" data-settings-copy="settingsPublishing"></button>
+        <button type="button" class="btn-secondary" data-settings-section="siteSettingsHeading" data-settings-copy="settingsBackups"></button>
+        <button type="button" class="btn-secondary" data-settings-section="importTuning" data-settings-copy="settingsImportTuning"></button>
+        <button id="routingJump" type="button" class="btn-secondary" data-settings-section="routingHeading"></button>
+      </div>
+      <section class="card" aria-labelledby="publishingHeading">
+        <h2 id="publishingHeading" class="card-heading" tabindex="-1" data-settings-copy="settingsPublishing"></h2>
+        <p class="muted" data-settings-copy="settingsPublishingHelp"></p>
+        <div class="form-actions">
+          <button id="rebuild" type="button" class="btn-primary">Rebuild site now</button>
+          <button id="publicationRefresh" class="btn-secondary" type="button"></button>
+        </div>
+        <p id="out" class="page-status" role="status"></p>
+        <p id="buildStatusLabel" class="section-label"></p>
+        <p id="buildStatus" class="page-status" role="status"></p>
+        <p id="publicationSummary" class="page-status" role="status"></p>
+      </section>
       <section class="card" id="siteSettings" aria-labelledby="siteSettingsHeading">
-        <h2 class="card-heading" id="siteSettingsHeading"></h2>
-
+        <h2 class="card-heading" id="siteSettingsHeading" tabindex="-1"></h2>
+        <div class="settings-savebar">
+          <button id="save" type="button" data-settings-copy="settingsBackupSave"></button>
+          <p class="muted" data-settings-copy="settingsBackupTiming"></p>
+          <p id="siteOut" class="page-status" role="status"></p>
+        </div>
+        <fieldset id="siteFields">
         <div class="settings-field-pair">
           <div>
             <label for="backupSchedule">Database backup schedule</label>
@@ -415,52 +481,52 @@
             </select>
           </div>
           <div>
-            <label for="backupRetention">Backups to keep</label>
+            <label for="backupRetention" data-settings-copy="settingsBackupRetention"></label>
             <input id="backupRetention" type="number" min="1" max="100" />
           </div>
         </div>
+        <p id="backupOffWarning" class="notice-warn" role="status" hidden>
+          Automatic database backups are off. Choose Daily or Weekly and save, or use Back up now before risky changes.
+        </p>
 
-        <p class="section-label">WordPress import</p>
+        <details id="importTuning" class="help-details settings-advanced" tabindex="-1">
+        <summary data-settings-copy="settingsImportTuning"></summary>
         <div class="settings-field-pair">
           <div>
-            <label for="importDelayMs">Delay between image downloads (ms)</label>
-            <input id="importDelayMs" type="number" min="0" max="10000" />
-            <p class="muted">
-              How long to wait between fetching photos from the old site. 0 is as fast as
-              possible, which is what got the importer cut off after 37 images; 1200 completed
-              all 665.
-            </p>
+            <label for="importDelaySeconds" data-settings-copy="settingsImportDelay"></label>
+            <input id="importDelaySeconds" type="number" min="0" max="10" step="0.001" />
+            <p class="muted" data-settings-copy="settingsImportDelayHelp"></p>
           </div>
           <div>
             <label for="importRetries">Retries per image</label>
             <input id="importRetries" type="number" min="0" max="5" />
             <p class="muted">
-              Extra attempts after a download fails, spaced 5s / 15s / 45s. Only transient
-              failures are retried — a blocked address or a missing file is not.
+              Extra attempts after a temporary download failure (5s, 15s, 45s apart).
             </p>
           </div>
         </div>
+        </details>
+        </fieldset>
 
         <div class="form-actions">
-          <button id="save" type="button">Save settings</button>
+          <button id="reloadBackups" type="button" class="btn-secondary" data-settings-copy="settingsRefreshBackups"></button>
           <button id="backupNow" type="button" class="btn-secondary">Back up now</button>
-          <button id="rebuild" type="button" class="btn-primary">Rebuild site now</button>
         </div>
-        <p id="buildStatusLabel" class="section-label"></p>
-        <p id="buildStatus" class="page-status" role="status"></p>
-        <p id="publicationSummary" class="page-status" role="status"></p>
-        <button id="publicationRefresh" class="btn-secondary" type="button"></button>
-        <section aria-labelledby="recoveryHeading">
-          <h3 id="recoveryHeading"></h3>
-          <p id="recoveryLocal" class="muted"></p>
-          <h4 id="recoveryAppHeading"></h4>
-          <p id="recoveryApp"></p>
-          <h4 id="recoveryOperatorHeading"></h4>
-          <p id="recoveryOperator"></p>
-          <p id="recoveryRebuild" class="muted"></p>
-          <p id="recoveryRetention" class="muted"></p>
-        </section>
-        <p class="section-label">Last backup</p>
+        <p class="muted" data-settings-copy="settingsRecoveryNotice"></p>
+        <details class="help-details recovery-details">
+          <summary>What a full recovery needs</summary>
+          <section aria-labelledby="recoveryHeading">
+            <h3 id="recoveryHeading"></h3>
+            <p id="recoveryLocal" class="muted"></p>
+            <h4 id="recoveryAppHeading"></h4>
+            <p id="recoveryApp"></p>
+            <h4 id="recoveryOperatorHeading"></h4>
+            <p id="recoveryOperator"></p>
+            <p id="recoveryRebuild" class="muted"></p>
+            <p id="recoveryRetention" class="muted"></p>
+          </section>
+        </details>
+        <h3 class="section-label" data-settings-copy="settingsBackupLast"></h3>
         <p id="backupStatus" class="page-status" role="status"></p>
         <p class="section-label">Backup files</p>
         <ul id="backupFiles"></ul>
@@ -475,7 +541,12 @@
         <ul id="routeArchives"></ul>
       </section>
       <section class="card" id="routingSettings" aria-labelledby="routingHeading">
-        <h2 id="routingHeading" class="card-heading"></h2>
+        <h2 id="routingHeading" class="card-heading" tabindex="-1"></h2>
+        <div class="settings-savebar">
+          <button id="saveRouting" type="button"></button>
+          <p id="routingOut" class="page-status" role="status"></p>
+        </div>
+        <fieldset id="routingFields">
         <p id="routingHelp" class="muted"></p>
         <p id="routingPrivacy" class="muted"></p>
         <div>
@@ -490,14 +561,10 @@
           <label for="routingFootUrl" id="routingFootLabel"></label>
           <input id="routingFootUrl" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://" aria-describedby="routingHelp routingPrivacy" />
         </div>
-        <div class="form-actions">
-          <button id="saveRouting" type="button"></button>
-        </div>
-        <p id="routingOut" class="page-status" role="status"></p>
+        </fieldset>
       </section>
       </section>
 
-      <p id="out" class="page-status" role="status"></p>
       </div>
     </main>
 
@@ -511,6 +578,7 @@
     <script src="/admin/admin-confirm.js"></script>
     <script src="/admin/llm.js"></script>
     <script src="/admin/tabs.js"></script>
+    <script src="/admin/settings-drafts.js"></script>
     <script src="/admin/settings-identity.js"></script>
     <script src="/admin/settings-navigation.js"></script>
     <script src="/admin/language.js"></script>
@@ -518,6 +586,23 @@
     <script>
       const $ = (id) => document.getElementById(id);
       const copy = EditorCopy.en;
+      for (const element of document.querySelectorAll('[data-settings-copy]')) {
+        element.textContent = copy[element.dataset.settingsCopy];
+      }
+      for (const button of document.querySelectorAll('[data-settings-section]')) {
+        button.addEventListener('click', () => {
+          const target = $(button.dataset.settingsSection);
+          if (target.tagName === 'DETAILS') target.open = true;
+          target.scrollIntoView({ block: 'start' });
+          target.focus();
+        });
+      }
+      const aiDraft = SettingsDrafts.watch('ai', $('useCaseSection'), copy.settingsAiSection);
+      const providerDraft = SettingsDrafts.watch('provider', $('providerForm'), copy.settingsProvider);
+      const imageDraft = SettingsDrafts.watch('images', $('imageSettings'), copy.settingsImages);
+      const commentDraft = SettingsDrafts.watch('comments', $('commentSettings'), copy.settingsComments);
+      const siteDraft = SettingsDrafts.watch('site', $('siteFields'), copy.settingsBackups);
+      const routingDraft = SettingsDrafts.watch('routing', $('routingFields'), StopRouteCopy.en.settingsHeading);
       $('buildStatusLabel').textContent = BuildReporting.text('label');
       const gpxCopy = GpxCopy.en;
       $('routeBackupHeading').textContent = gpxCopy.backupHeading;
@@ -525,13 +610,12 @@
       $('routeArchivesHeading').textContent = gpxCopy.archiveHeading;
       for (const [id, key] of Object.entries({
         settingsIntro: 'settingsIntro', imageHeading: 'settingsImages', commentsHeading: 'settingsComments',
-        siteSettingsHeading: 'settingsSite', reviewUseCaseLabel: 'settingsWriting', captionUseCaseLabel: 'settingsCaptions',
+        siteSettingsHeading: 'settingsBackups', reviewUseCaseLabel: 'settingsWriting', captionUseCaseLabel: 'settingsCaptions',
         imageArchivePrivacy: 'imageArchivePrivacy',
         recoveryHeading: 'recoveryHeading', recoveryLocal: 'recoveryLocal',
         recoveryAppHeading: 'recoveryAppHeading', recoveryApp: 'recoveryApp',
         recoveryOperatorHeading: 'recoveryOperatorHeading', recoveryOperator: 'recoveryOperator',
         recoveryRebuild: 'recoveryRebuild', recoveryRetention: 'recoveryRetention',
-        reviewDetailsHeading: 'settingsWriting', captionDetailsHeading: 'settingsCaptions',
         reviewPrivacy: 'writingPrivacy', reviewTimeoutLabel: 'writingTimeout', reviewPromptLabel: 'writingInstructions',
         reviewPromptHelp: 'writingInstructionsHelp', testReview: 'reviewTestLabel',
         captionMaxTokensLabel: 'captionMaxTokensLabel', captionMaxTokensHelp: 'captionMaxTokensHelp',
@@ -560,7 +644,7 @@
 
       function selectTabFromHash() {
         const hashed = String(location.hash).replace(/^#/, '');
-        const name = Object.hasOwn(TABS, hashed) ? hashed : 'ai-models';
+        const name = Object.hasOwn(TABS, hashed) ? hashed : 'identity';
         settingsTabs.select(name);
         showTabTitle(name);
         return name;
@@ -588,6 +672,7 @@
         'lm-studio': { label: 'Local LM Studio', baseUrl: 'http://localhost:1234/v1', remote: false, needsKey: false },
         openrouter: { label: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', remote: true, needsKey: true },
         deepseek: { label: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', remote: true, needsKey: true },
+        anthropic: { label: 'Anthropic', baseUrl: 'https://api.anthropic.com/v1', remote: true, needsKey: true },
         custom: { label: 'Custom', baseUrl: '', remote: true, needsKey: false },
       };
       // `saved` is the model of the last settings response, `current` the row's
@@ -603,6 +688,12 @@
           label: copy.settingsCaptions, field: 'captionProviderId', model: 'lmModel', otherField: 'captionModelOther',
           otherInput: 'lmModelOther', status: 'captionModelStatus', reload: 'captionModelsReload',
           resolved: 'captionResolved', destination: 'captionDestination', warn: 'captionProviderWarn',
+          saved: '', current: '', other: false,
+        },
+        translation: {
+          label: copy.settingsTranslation, field: 'translationProviderId', model: 'translationModel', otherField: 'translationModelOther',
+          otherInput: 'translationModelOtherInput', status: 'translationModelStatus', reload: 'translationModelsReload',
+          resolved: 'translationResolved', destination: 'translationDestination', warn: 'translationProviderWarn',
           saved: '', current: '', other: false,
         },
       };
@@ -751,9 +842,13 @@
         return p ? p.kind : $('providerKind').value;
       }
 
-      function openForm(id) {
+      async function openForm(id) {
         const p = id ? providerById(id) : null;
         if (!saved || (id && !p)) return;
+        if (providerDraft.isDirty() && !await AdminConfirm.ask({
+          title: copy.settingsProviderDiscardAction, body: copy.settingsProviderDiscard, confirmLabel: copy.settingsProviderDiscardAction,
+        })) return;
+        providerDraft.clean();
         form = { id: p ? p.id : null };
         $('providerFormHeading').textContent = p ? 'Edit ' + p.name : 'Add a provider';
         $('providerKind').value = p ? p.kind : 'openrouter';
@@ -773,6 +868,7 @@
         form = null;
         $('providerApiKey').value = '';
         $('providerForm').hidden = true;
+        providerDraft.clean();
         $('providerFormSlot').appendChild($('providerForm'));
       }
 
@@ -1113,13 +1209,7 @@
       function modelStatus(p, loading, listed, failure) {
         if (!p) return '';
         if (loading) return 'Loading models…';
-        if (failure && failure.reason === 'key') {
-          return p.name + ' needs an API key to list its models. Edit the provider to add one, or choose “Other model ID…”.';
-        }
-        if (failure) {
-          return 'Could not list models from ' + p.name + '. Check its API key, that it allows requests from this ' +
-            'browser (CORS), and that it is online — or choose “Other model ID…” to enter one.';
-        }
+        if (failure) return copy.settingsModelUnavailable;
         if (!listed) return '';
         return listed.length
           ? listed.length + (listed.length === 1 ? ' model' : ' models') + ' listed by ' + p.name + '.'
@@ -1171,8 +1261,10 @@
       }
 
       function updateUseCases() {
+        const unavailable = new Set();
         for (const u of Object.values(USE_CASES)) {
           const p = selectedProvider(u);
+          if (p && modelFailures.get(p.id)?.baseUrl === p.baseUrl) unavailable.add(p.name);
           renderModelSelect(u, p);
           showResolved(u, p);
           const notes = [];
@@ -1182,6 +1274,9 @@
           $(u.warn).textContent = notes.join(' ');
           $(u.warn).hidden = notes.length === 0;
         }
+        $('modelProviderStatus').hidden = unavailable.size === 0;
+        $('modelProviderStatus').textContent = unavailable.size
+          ? copy.settingsModelTrouble.replace('{providers}', [...unavailable].join(', ')) : '';
       }
 
       /** Replaces a row's model with a settings value (load or save). */
@@ -1222,19 +1317,23 @@
         saved = {
           aiProviders: s.aiProviders, aiDefaultProviderId: s.aiDefaultProviderId,
           reviewProviderId: s.reviewProviderId, captionProviderId: s.captionProviderId,
+          translationProviderId: s.translationProviderId,
         };
         if (fillFields) {
           setModel(USE_CASES.review, s.aiModel);
           $('reviewPrompt').value = s.reviewPrompt;
-          $('reviewTimeoutMs').value = s.reviewTimeoutMs;
+          $('reviewTimeoutSeconds').value = s.reviewTimeoutMs / 1000;
           setModel(USE_CASES.caption, s.lmModel);
           $('captionPrompt').value = s.captionPrompt;
-          $('captionTimeoutMs').value = s.captionTimeoutMs;
+          $('captionTimeoutSeconds').value = s.captionTimeoutMs / 1000;
           $('captionMaxEdge').value = s.captionMaxEdge;
           $('captionMaxTokens').value = s.captionMaxTokens ?? '';
+          setModel(USE_CASES.translation, s.translationModel);
+          $('translationTimeoutSeconds').value = s.translationTimeoutMs / 1000;
+          aiDraft.clean();
         }
         renderProviders();
-        renderUseCaseSelects(fillFields ? { review: s.reviewProviderId, caption: s.captionProviderId } : null);
+        renderUseCaseSelects(fillFields ? { review: s.reviewProviderId, caption: s.captionProviderId, translation: s.translationProviderId } : null);
         syncForm();
         if ($('providersOut').textContent === copy.settingsRegistryUnavailable) $('providersOut').textContent = '';
         $('saveAi').disabled = false;
@@ -1262,7 +1361,7 @@
       }
 
       $('saveAi').addEventListener('click', async () => {
-        if (!saved) return;
+        if (!saved || $('aiFields').disabled) return;
         clearReviewTest();
         const body = {
           reviewProviderId: $('reviewProviderId').value || null,
@@ -1270,16 +1369,21 @@
           aiModel: USE_CASES.review.current,
           lmModel: USE_CASES.caption.current,
           reviewPrompt: $('reviewPrompt').value,
-          reviewTimeoutMs: Number($('reviewTimeoutMs').value),
+          reviewTimeoutMs: Math.round(Number($('reviewTimeoutSeconds').value) * 1000),
           captionPrompt: $('captionPrompt').value,
-          captionTimeoutMs: Number($('captionTimeoutMs').value),
+          captionTimeoutMs: Math.round(Number($('captionTimeoutSeconds').value) * 1000),
           captionMaxEdge: Number($('captionMaxEdge').value),
           captionMaxTokens: Number($('captionMaxTokens').value),
+          translationProviderId: $('translationProviderId').value || null,
+          translationModel: USE_CASES.translation.current,
+          translationTimeoutMs: Math.round(Number($('translationTimeoutSeconds').value) * 1000),
         };
         $('saveAi').disabled = true;
+        $('aiFields').disabled = true;
         $('aiOut').textContent = 'Saving…';
         const r = await send('POST', '/settings', body);
         $('saveAi').disabled = false;
+        $('aiFields').disabled = false;
         if (!r) return;
         // Success applies the server's values; a failure keeps the pending edits for a retry.
         if (r.ok) applyAi(r.result, true);
@@ -1297,7 +1401,7 @@
         $('testReview').disabled = !saved;
         $('reviewTestOut').textContent = '';
       }
-      for (const id of ['reviewProviderId', 'aiModel', 'aiModelOther', 'reviewPrompt', 'reviewTimeoutMs']) {
+      for (const id of ['reviewProviderId', 'aiModel', 'aiModelOther', 'reviewPrompt', 'reviewTimeoutSeconds']) {
         $(id).addEventListener('input', clearReviewTest);
         $(id).addEventListener('change', clearReviewTest);
       }
@@ -1308,7 +1412,7 @@
         if (!p) return;
         const model = USE_CASES.review.current;
         const prompt = $('reviewPrompt').value;
-        const timeout = Number($('reviewTimeoutMs').value);
+        const timeout = Math.round(Number($('reviewTimeoutSeconds').value) * 1000);
         if (!model) { $('reviewTestOut').textContent = copy.reviewTestModel; return; }
         if (!Number.isInteger(timeout) || timeout < 5000 || timeout > 300000) {
           $('reviewTestOut').textContent = copy.reviewTestTimeoutRange; return;
@@ -1365,22 +1469,29 @@
         $('webpQuality').value = s.webpQuality;
         $('avifQuality').value = s.avifQuality;
         $('saveImages').disabled = false;
+        imageDraft.clean();
       }
 
       function fillComments(s) {
         $('commentsEnabled').checked = s.commentsEnabled === true;
+        $('commentsSavedState').textContent = s.commentsEnabled ? copy.settingsCommentsOn : copy.settingsCommentsOff;
+        commentDraft.clean();
       }
 
       function fillSite(s) {
         $('backupSchedule').value = s.backupSchedule || 'off';
         $('backupRetention').value = s.backupRetention ?? 14;
-        $('importDelayMs').value = s.importDelayMs ?? 1200;
+        $('importDelaySeconds').value = (s.importDelayMs ?? 1200) / 1000;
         $('importRetries').value = s.importRetries ?? 3;
+        // Reflects the saved schedule, not an unsaved choice in the select.
+        $('backupOffWarning').hidden = (s.backupSchedule || 'off') !== 'off';
+        siteDraft.clean();
       }
 
       // #513 street routing: one OSRM base URL per travel mode; empty disables it.
       const routingCopy = StopRouteCopy.en;
       $('routingHeading').textContent = routingCopy.settingsHeading;
+      $('routingJump').textContent = routingCopy.settingsHeading;
       $('routingHelp').textContent = routingCopy.settingsHelp;
       $('routingPrivacy').textContent = routingCopy.settingsPrivacy;
       $('routingCarLabel').textContent = routingCopy.settingsCar;
@@ -1390,9 +1501,12 @@
       const ROUTING_FIELDS = ['routingCarUrl', 'routingBikeUrl', 'routingFootUrl'];
       function fillRouting(s) {
         for (const field of ROUTING_FIELDS) $(field).value = typeof s[field] === 'string' ? s[field] : '';
+        routingDraft.clean();
       }
       $('saveRouting').addEventListener('click', async () => {
         const btn = $('saveRouting');
+        if ($('routingFields').disabled) return;
+        $('routingFields').disabled = true;
         btn.disabled = true;
         $('routingOut').textContent = routingCopy.settingsSaving;
         try {
@@ -1409,6 +1523,7 @@
           $('routingOut').textContent = routingCopy.settingsFailed;
         } finally {
           btn.disabled = false;
+          $('routingFields').disabled = false;
         }
       });
 
@@ -1423,6 +1538,7 @@
       $('saveComments').addEventListener('click', async () => {
         const btn = $('saveComments');
         btn.disabled = true;
+        $('commentsEnabled').disabled = true;
         $('commentsOut').textContent = 'Saving…';
         try {
           const res = await fetch('/settings', {
@@ -1438,6 +1554,7 @@
           $('commentsOut').textContent = 'Could not save. Check your connection and try again.';
         } finally {
           btn.disabled = false;
+          $('commentsEnabled').disabled = false;
         }
       });
 
@@ -1445,43 +1562,45 @@
         try {
           const res = await fetch('/settings');
           if (res.status === 401) { location.href = '/login'; return; }
-          if (!res.ok) { $('out').textContent = 'Could not load settings: ' + res.status; return; }
+          if (!res.ok) { $('settingsLoadStatus').textContent = 'Could not load settings: ' + res.status; return; }
           fill(await res.json());
           await ensureModels();
-        } catch (e) { $('out').textContent = 'Error: ' + e; }
+        } catch (e) { $('settingsLoadStatus').textContent = 'Error: ' + e; }
       }
 
       // Site settings only: AI, image and comment settings save from their own tabs.
       $('save').addEventListener('click', async () => {
-        $('out').textContent = 'Saving…';
-        let res;
+        if ($('siteFields').disabled) return;
+        $('siteFields').disabled = true;
+        $('save').disabled = true;
+        $('siteOut').textContent = copy.settingsSaving;
         try {
-          res = await fetch('/settings', {
+          const res = await fetch('/settings', {
             method: 'POST', headers: { 'content-type': 'application/json' },
             body: JSON.stringify({
-
               backupSchedule: $('backupSchedule').value,
               backupRetention: Number($('backupRetention').value),
-              importDelayMs: Number($('importDelayMs').value),
+              importDelayMs: Math.round(Number($('importDelaySeconds').value) * 1000),
               importRetries: Number($('importRetries').value),
             }),
           });
-        } catch (e) {
-          $('out').textContent = 'Could not send the save request (' + e + ').';
-          return;
+          if (res.status === 401) { location.href = '/login'; return; }
+          const result = await res.json().catch(() => ({}));
+          if (!res.ok) { $('siteOut').textContent = copy.settingsSaveFailed; return; }
+          fillSite(result);
+          $('siteOut').textContent = copy.settingsSaved;
+        } catch {
+          $('siteOut').textContent = copy.settingsSaveFailed;
+        } finally {
+          $('siteFields').disabled = false;
+          $('save').disabled = false;
         }
-        if (res.status === 401) { location.href = '/login'; return; }
-        const r = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          $('out').textContent = 'Not saved: ' + (r.error || res.status);
-          return;
-        }
-        fillSite(r);
-        $('out').textContent = 'Saved.';
       });
 
       $('imageSettings').addEventListener('submit', async (event) => {
         event.preventDefault();
+        if ($('imageFields').disabled) return;
+        $('imageFields').disabled = true;
         $('saveImages').disabled = true;
         $('imageOut').textContent = 'Saving image settings…';
         try {
@@ -1505,6 +1624,7 @@
           $('imageOut').textContent = 'Could not save image settings. Check your connection and try again.';
         } finally {
           $('saveImages').disabled = false;
+          $('imageFields').disabled = false;
         }
       });
 
@@ -1622,10 +1742,10 @@
           ? 'Running… (started ' + st.lastAttemptAt + ')'
           : st.lastError
             ? 'FAILED at ' + st.lastAttemptAt + ': ' + st.lastError
-            : st.lastSuccessAt ? 'OK at ' + st.lastSuccessAt : 'No backup yet.';
-        renderFileList($('backupFiles'), data.files || []);
-        renderFileList($('imageArchives'), data.imageArchives || []);
-        renderFileList($('routeArchives'), data.routeArchives || []);
+            : st.lastSuccessAt ? 'OK at ' + st.lastSuccessAt : copy.settingsBackupUnknown;
+        renderFileList($('backupFiles'), data.files || [], copy.settingsBackupEmpty);
+        renderFileList($('imageArchives'), data.imageArchives || [], copy.settingsImagesEmpty);
+        renderFileList($('routeArchives'), data.routeArchives || [], copy.settingsRoutesEmpty);
         const recovery = st.routeRecovery;
         $('routeBackupStatus').textContent = recovery
           ? (recovery.status === 'degraded' ? gpxCopy.backupDegraded : gpxCopy.backupComplete) + ' ' +
@@ -1634,8 +1754,14 @@
         $('routeCleanupStatus').textContent = data.routeCleanup && data.routeCleanup.status === 'blocked' ? gpxCopy.cleanupBlocked : '';
       }
 
-      function renderFileList(ul, files) {
-        ul.innerHTML = '';
+      function renderFileList(ul, files, emptyText) {
+        ul.replaceChildren();
+        if (!files.length) {
+          const empty = document.createElement('li');
+          empty.className = 'settings-empty';
+          empty.textContent = emptyText;
+          ul.appendChild(empty);
+        }
         for (const f of files) {
           const li = document.createElement('li');
           const a = document.createElement('a');
@@ -1647,9 +1773,16 @@
       }
 
       async function loadBackups() {
-        const res = await fetch('/backups');
-        if (res.ok) renderBackups(await res.json());
+        $('reloadBackups').disabled = true;
+        try {
+          const res = await fetch('/backups');
+          if (!res.ok) throw new Error('backup_status');
+          renderBackups(await res.json());
+        } catch {
+          $('backupStatus').textContent = copy.settingsBackupLoadFailed;
+        } finally { $('reloadBackups').disabled = false; }
       }
+      $('reloadBackups').addEventListener('click', loadBackups);
 
       // Both long-running actions disable their button while the request is in
       // flight and re-enable it in `finally`: a dropped connection used to reject

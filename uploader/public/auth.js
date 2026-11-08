@@ -43,6 +43,7 @@ window.Auth = (function () {
   const ICON = {
     desk: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>',
     posts: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>',
+    journeys: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>',
     media: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>',
     about: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>',
     comments: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
@@ -57,7 +58,7 @@ window.Auth = (function () {
   const NAV = [
     { group: 'Journal', label: 'Desk', href: '/admin/', icon: ICON.desk },
     { group: 'Journal', label: 'Posts', href: '/admin/posts.html', icon: ICON.posts },
-    { group: 'Journal', get label() { return EditorCopy.en.journeyTitle; }, href: '/admin/journeys.html', icon: ICON.posts },
+    { group: 'Journal', get label() { return EditorCopy.en.journeyTitle; }, href: '/admin/journeys.html', icon: ICON.journeys },
     { group: 'Journal', label: 'Media', href: '/admin/media.html', icon: ICON.media },
     { group: 'Journal', get label() { return EditorCopy.en.pagesTitle; }, href: '/admin/pages.html', admin: true, icon: ICON.about },
     { group: 'Journal', label: 'Comments', href: '/admin/comments.html', admin: true, icon: ICON.comments },
@@ -214,7 +215,7 @@ window.Auth = (function () {
     shell.querySelector('.cms-masthead-right > .cms-brand-sub').textContent = identityDescriptor();
     const legal = document.createElement('a');
     legal.href = '/admin/legal/en.html';
-    legal.className = 'cms-btn-ghost';
+    legal.className = 'cms-legal-link';
     legal.textContent = copy.softwareNotices;
     shell.querySelector('.cms-sidebar-footer').prepend(legal);
 

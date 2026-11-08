@@ -3,7 +3,7 @@
   const { text, el, request } = JourneysUI;
   const $ = id => document.getElementById(id);
   let id = new URLSearchParams(location.search).get('id');
-  let saved = null, language, session, stories = [], draft, busy = false;
+  let saved = null, language, session, stories = [], draft, busy = false, activeLocale = null;
   const automatic = { de: false, en: false };
   const controls = {};
   const guard = DraftGuard.createDraftGuard({ resource: id ? 'journey:' + id : 'journey:new',
@@ -33,40 +33,65 @@
   function heroPreview(locale) {
     const hero = draft[locale].heroImage, c = controls[locale];
     c.preview.hidden = !hero; c.alt.disabled = c.x.disabled = c.y.disabled = c.remove.disabled = !hero;
+    // Alt text and framing describe a photo; without one they are not shown as dead fields.
+    c.heroFields.hidden = !hero; c.remove.hidden = !hero;
     if (!hero) { c.preview.removeAttribute('src'); return; }
     const width = [640, 1280, 1920, 2560].filter(width => width <= hero.width)[0] || hero.width;
     c.preview.src = hero.src + '-' + width + '.' + (hero.format || 'webp'); c.preview.alt = hero.alt;
     c.preview.style.objectPosition = c.x.value + '% ' + c.y.value + '%';
   }
+  // One DE/EN segmented control above one panel at a time, like the story editor:
+  // the two languages never sit side by side at different heights.
+  function renderTabs() {
+    const list = $('journeyTabs'); list.replaceChildren();
+    if (!language.locales.includes(activeLocale)) activeLocale = language.locales[0];
+    for (const locale of language.locales) {
+      const tab = el('button', undefined, 'tab-btn' + (locale === activeLocale ? ' active' : ''));
+      tab.type = 'button'; tab.id = 'journey-tab-' + locale; tab.dataset.tab = locale;
+      tab.setAttribute('role', 'tab'); tab.setAttribute('aria-controls', 'journey-panel-' + locale);
+      tab.setAttribute('aria-selected', locale === activeLocale ? 'true' : 'false'); tab.tabIndex = locale === activeLocale ? 0 : -1;
+      // The story editor's labels: each language in its own name.
+      tab.append(document.createTextNode({ de: 'Deutsch', en: 'English' }[locale] + ' '), el('span', locale.toUpperCase(), 'lang-code'));
+      list.append(tab);
+    }
+    list.hidden = language.locales.length === 1;
+    Tabs.wire(list, { onChange(name) { activeLocale = name; } });
+  }
   function renderLocales() {
     $('journeyLocales').replaceChildren();
+    renderTabs();
     for (const locale of language.locales) {
-      const value = draft[locale]; const section = el('section', undefined, 'card journey-locale');
-      section.append(el('h2', SiteLanguage.names[locale], 'card-heading'));
+      const value = draft[locale]; const section = el('section', undefined, 'journey-locale');
+      section.id = 'journey-panel-' + locale; section.setAttribute('role', 'tabpanel');
+      section.setAttribute('aria-labelledby', 'journey-tab-' + locale); section.hidden = locale !== activeLocale;
+      const words = el('div', undefined, 'journey-locale__text'), picture = el('div', undefined, 'journey-locale__hero');
+      section.append(words, picture);
       const c = controls[locale] = {};
       c.omitted = el('input'); c.omitted.type = 'checkbox'; c.omitted.id = 'journey-' + locale + '-omitted'; c.omitted.checked = value.omitted;
       c.omitted.disabled = locale === language.primary || !!saved?.[locale].publishedAt;
-      const omit = el('label', undefined, 'check-field'); omit.append(c.omitted, document.createTextNode(text('Omit'))); section.append(omit);
-      c.title = field(section, locale, 'title', 'Name'); c.title.maxLength = 200; c.title.value = value.title;
-      c.slug = field(section, locale, 'slug', 'Slug'); c.slug.maxLength = 100; c.slug.value = value.slug; c.slug.readOnly = !!saved?.[locale].publishedAt;
-      section.append(el('p', text('Locked'), 'help'));
+      const omit = el('label', undefined, 'check-field'); omit.append(c.omitted, document.createTextNode(text('Omit'))); words.append(omit);
+      c.title = field(words, locale, 'title', 'Name'); c.title.maxLength = 200; c.title.value = value.title;
+      c.slug = field(words, locale, 'slug', 'Slug'); c.slug.maxLength = 100; c.slug.value = value.slug; c.slug.readOnly = !!saved?.[locale].publishedAt;
+      words.append(el('p', text('Locked'), 'muted'));
       c.title.addEventListener('input', () => { if (automatic[locale] && !c.slug.readOnly) c.slug.value = c.title.value.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 100); });
       c.slug.addEventListener('input', () => { automatic[locale] = c.slug.value === ''; });
-      c.intro = field(section, locale, 'intro', 'Intro', 'textarea'); c.intro.maxLength = 2000; c.intro.value = value.intro;
-      section.append(el('h3', text('Hero'))); c.preview = el('img', undefined, 'journey-hero'); section.append(c.preview);
+      c.intro = field(words, locale, 'intro', 'Intro', 'textarea'); c.intro.maxLength = 2000; c.intro.value = value.intro;
+      picture.append(el('h3', text('Hero'), 'section-label')); c.preview = el('img', undefined, 'journey-hero'); picture.append(c.preview);
       const actions = el('div', undefined, 'form-actions'); const choose = el('button', text('Choose'), 'btn-secondary'); choose.type = 'button';
-      c.remove = el('button', text('Remove'), 'btn-remove'); c.remove.type = 'button'; actions.append(choose, c.remove); section.append(actions);
-      c.alt = field(section, locale, 'alt', 'Alt'); c.alt.value = value.heroImage?.alt || '';
-      const focus = el('div', undefined, 'journey-focus'); section.append(focus);
+      c.remove = el('button', text('Remove'), 'btn-remove'); c.remove.type = 'button'; actions.append(choose, c.remove); picture.append(actions);
+      c.heroFields = el('div', undefined, 'journey-hero-fields'); picture.append(c.heroFields);
+      c.alt = field(c.heroFields, locale, 'alt', 'Alt'); c.alt.value = value.heroImage?.alt || '';
+      const focus = el('div', undefined, 'journey-focus'); c.heroFields.append(focus);
       for (const axis of ['x', 'y']) { const box = el('div'); focus.append(box); c[axis] = field(box, locale, axis, axis === 'x' ? 'FocusX' : 'FocusY'); c[axis].type = 'number'; c[axis].min = '0'; c[axis].max = '100'; c[axis].step = 'any'; c[axis].value = value.heroImage?.focus?.[axis] ?? 50; c[axis].addEventListener('input', () => { c.focusEdited = true; heroPreview(locale); }); }
       choose.addEventListener('click', () => MediaPicker.open({ onUnauthed: () => guard.redirectToLogin(), onPick(item) {
         draft = collect(); draft[locale].heroImage = { src: item.src, width: item.width, height: item.height, alt: item.alt?.[locale] || '', ...(item.format ? { format: item.format } : {}) };
         c.alt.value = draft[locale].heroImage.alt; c.x.value = c.y.value = 50; c.focusEdited = false; heroPreview(locale); dirty();
       } }));
-      c.remove.addEventListener('click', () => { draft = collect(); draft[locale].heroImage = null; heroPreview(locale); dirty(); });
+      c.remove.addEventListener('click', () => { draft = collect(); draft[locale].heroImage = null; heroPreview(locale); dirty(); choose.focus(); });
       $('journeyLocales').append(section); heroPreview(locale);
     }
   }
+  function showHeading() { $('journeyHeading').textContent = text(id ? 'Edit' : 'New'); Auth.setPageTitle(text(id ? 'Edit' : 'New')); }
   function storyTitle(key) { return stories.find(story => story.translationKey === key)?.title || key; }
   function renderMembers(focusKey, action) {
     $('journeyMembers').replaceChildren(); $('journeyMembersEmpty').hidden = draft.members.length > 0;
@@ -112,7 +137,7 @@
     }
     const generation = guard.snapshot();
     const result = await request(id ? '/' + id : '', { method: id ? 'PUT' : 'POST', body: JSON.stringify({ ...payload, ...(id ? { baseUpdatedAt: saved.updatedAt, confirmSlugChange } : {}) }) }, guard);
-    saved = result; draft = payload; id = result.id; history.replaceState(null, '', '/admin/journey-editor.html?id=' + encodeURIComponent(id)); guard.setResource('journey:' + id); guard.markClean(generation); syncActions(); $('journeyStatus').textContent = text('Saved');
+    saved = result; draft = payload; id = result.id; history.replaceState(null, '', '/admin/journey-editor.html?id=' + encodeURIComponent(id)); guard.setResource('journey:' + id); guard.markClean(generation); syncActions(); showHeading(); $('journeyStatus').textContent = text('Saved');
     for (const locale of ['de', 'en']) automatic[locale] = !saved[locale].slug;
   }
   async function lifecycle(action) {
@@ -157,7 +182,7 @@
   for (const action of ['Publish', 'Unpublish', 'Delete']) $('journey' + action).addEventListener('click', () => operate(() => lifecycle(action)));
   $('journeyAdd').addEventListener('click', () => { const key = $('journeyStory').value; if (!key || draft.members.includes(key) || draft.members.length >= 50) return; draft.members.push(key); renderMembers(key, 'Remove'); dirty(); });
   (async () => {
-    JourneysUI.localize(document); Auth.setPageTitle(text(id ? 'Edit' : 'New'));
+    JourneysUI.localize(document); showHeading();
     try {
       session = await Auth.ensureAuthed(); if (!session) return; guard.initialize(session.userId); Auth.renderHeader(session); language = await SiteLanguage.get();
       const response = await fetch('/posts', { cache: 'no-store' }); if (!response.ok) throw new Error(text('Failed')); stories = await response.json();

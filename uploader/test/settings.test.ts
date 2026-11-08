@@ -21,6 +21,7 @@ describe('defaultSettings', () => {
     expect(d.captionTimeoutMs).toBe(60000);
     expect(d.captionMaxEdge).toBe(768);
     expect(d.captionPrompt.length).toBeGreaterThan(0);
+    expect(d).toMatchObject({ translationProviderId: null, translationModel: 'qwen2.5-7b-instruct', translationTimeoutMs: 120000 });
     expect(d.backupSchedule).toBe('off');
     expect(d.backupRetention).toBe(14);
   });
@@ -296,6 +297,19 @@ describe('AI provider registry validation', () => {
   const withProviders = (aiProviders: unknown, extra: Record<string, unknown> = {}) =>
     ({ ...DEFAULTS, aiProviders, ...extra }) as unknown as Settings;
 
+  it('preserves Anthropic assignments and existing Custom entries across a settings reload', () => {
+    const path = join(dir, 'settings.json');
+    const anthropic = provider('claude', { kind: 'anthropic', baseUrl: 'https://api.anthropic.com/v1' });
+    const custom = provider('existing', { baseUrl: anthropic.baseUrl });
+    const store = createSettingsStore({ path, defaults: DEFAULTS });
+    store.update({ aiProviders: [LOCAL, custom, anthropic], reviewProviderId: anthropic.id, captionProviderId: anthropic.id });
+    const reloaded = createSettingsStore({ path, defaults: DEFAULTS });
+    expect(reloaded.get().aiProviders).toEqual([LOCAL, custom, anthropic]);
+    expect(resolveProvider(reloaded.get(), reloaded.get().reviewProviderId)).toEqual(anthropic);
+    expect(resolveProvider(reloaded.get(), reloaded.get().captionProviderId)).toEqual(anthropic);
+    expect(reloaded.pendingAiMigration()).toBeNull();
+  });
+
   it('accepts 1 to 20 providers and refuses 0 or 21', () => {
     const many = (n: number) => [LOCAL, ...Array.from({ length: n - 1 }, (_, i) => provider(`p-${i}`))];
     expect(() => validate(withProviders(many(1)))).not.toThrow();
@@ -337,13 +351,14 @@ describe('AI provider registry validation', () => {
     expect(() => validate(withProviders([LOCAL, provider('a', { kind: 'ollama' as AiProvider['kind'] })]))).toThrow(SettingsError);
   });
 
-  it('requires the default and both assignments to name configured providers', () => {
+  it('requires the default and every assignment to name configured providers', () => {
     const aiProviders = [LOCAL, provider('remote', { kind: 'openrouter' })];
     const ok = validate(withProviders(aiProviders, { aiDefaultProviderId: 'remote', reviewProviderId: 'lm-studio', captionProviderId: null }));
     expect(ok).toMatchObject({ aiDefaultProviderId: 'remote', reviewProviderId: 'lm-studio', captionProviderId: null });
     for (const extra of [
       { aiDefaultProviderId: 'gone' }, { reviewProviderId: 'gone' }, { captionProviderId: 'gone' },
       { aiDefaultProviderId: null }, { reviewProviderId: '' }, { captionProviderId: 'Bad Id' },
+      { translationProviderId: 'gone' }, { translationProviderId: '' }, { translationProviderId: 'Bad Id' },
     ]) {
       expect(() => validate(withProviders(aiProviders, extra)), JSON.stringify(extra)).toThrow(SettingsError);
     }
@@ -429,6 +444,77 @@ describe('AI registry load repair', () => {
     expect(store.get().aiProviders).toEqual([LOCAL]);
     store.update({ backupRetention: 5 });
     expect(await readFile(path, 'utf8')).not.toContain('must-not-persist');
+  });
+});
+
+describe('article translation assignment lifecycle', () => {
+  it('defaults older registries and persists all three independent assignments across reload', async () => {
+    const path = join(dir, 'settings.json');
+    const review = provider('review');
+    const caption = provider('caption');
+    const translation = provider('translation');
+    await writeFile(path, JSON.stringify({
+      aiProviders: [LOCAL, review, caption, translation], aiDefaultProviderId: 'review',
+      reviewProviderId: null, captionProviderId: 'caption', aiModel: 'review-only', lmModel: 'vision-only',
+    }));
+    const store = createSettingsStore({ path, defaults: DEFAULTS });
+    expect(store.get()).toMatchObject({ translationProviderId: null, translationModel: 'qwen2.5-7b-instruct', translationTimeoutMs: 120000 });
+    expect(resolveProvider(store.get(), store.get().translationProviderId)).toEqual(review);
+    store.update({ translationProviderId: 'translation', translationModel: 'translate-only', translationTimeoutMs: 300000 });
+    store.update({ aiDefaultProviderId: 'lm-studio' });
+    const persisted = createSettingsStore({ path, defaults: DEFAULTS }).get();
+    expect(persisted).toMatchObject({
+      reviewProviderId: null, captionProviderId: 'caption', translationProviderId: 'translation',
+      aiModel: 'review-only', lmModel: 'vision-only', translationModel: 'translate-only', translationTimeoutMs: 300000,
+    });
+    expect(resolveProvider(persisted, persisted.reviewProviderId)).toEqual(LOCAL);
+    expect(resolveProvider(persisted, persisted.captionProviderId)).toEqual(caption);
+    expect(resolveProvider(persisted, persisted.translationProviderId)).toEqual(translation);
+    store.update({ translationProviderId: null });
+    expect(resolveProvider(store.get(), store.get().translationProviderId)).toEqual(LOCAL);
+    expect(store.get().translationModel).toBe('translate-only');
+  });
+
+  it('repairs each invalid translation field without changing valid assignments or logging values', async () => {
+    const path = join(dir, 'settings.json');
+    await writeFile(path, JSON.stringify({
+      aiProviders: [LOCAL, provider('remote')], aiDefaultProviderId: 'remote',
+      reviewProviderId: 'remote', captionProviderId: 'lm-studio',
+      translationProviderId: 'removed-secret-value', translationModel: { secret: 'do-not-log' }, translationTimeoutMs: 4999,
+      aiModel: 'keep-review', lmModel: 'keep-caption', backupSchedule: 'daily',
+    }));
+    const log = vi.fn();
+    const repaired = createSettingsStore({ path, defaults: DEFAULTS, log }).get();
+    expect(repaired).toMatchObject({
+      aiDefaultProviderId: 'remote', reviewProviderId: 'remote', captionProviderId: 'lm-studio',
+      translationProviderId: null, translationModel: DEFAULTS.translationModel, translationTimeoutMs: 120000,
+      aiModel: 'keep-review', lmModel: 'keep-caption', backupSchedule: 'daily',
+    });
+    expect(log.mock.calls.flat().join(' ')).not.toMatch(/removed-secret-value|do-not-log/);
+    expect(log.mock.calls).toHaveLength(3);
+    expect(() => validate(repaired)).not.toThrow();
+  });
+
+  it('rejects invalid types and timeout bounds atomically and accepts the review-range endpoints', async () => {
+    const path = join(dir, 'settings.json');
+    const store = createSettingsStore({ path, defaults: DEFAULTS });
+    store.update({ translationModel: 'chosen-model' });
+    const before = await readFile(path, 'utf8');
+    for (const partial of [
+      { translationProviderId: 'gone' }, { translationProviderId: 7 }, { translationProviderId: '' },
+      { translationModel: null }, { translationModel: 7 }, { translationModel: 'x'.repeat(101) },
+      ...[4999, 300001, 5000.5, NaN, Infinity, null, '120000'].map(translationTimeoutMs => ({ translationTimeoutMs })),
+    ]) {
+      expect(() => store.update(partial as Partial<Settings>)).toThrow(SettingsError);
+      expect(await readFile(path, 'utf8')).toBe(before);
+      expect(store.get().translationModel).toBe('chosen-model');
+    }
+    for (const translationTimeoutMs of [5000, 300000]) {
+      expect(store.update({ translationTimeoutMs }).translationTimeoutMs).toBe(translationTimeoutMs);
+    }
+    expect(store.update({ translationModel: 'x'.repeat(100) }).translationModel).toHaveLength(100);
+    // Same convention as review: an empty model is stored but prevents inference.
+    expect(store.update({ translationModel: '' }).translationModel).toBe('');
   });
 });
 

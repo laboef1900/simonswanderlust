@@ -42,7 +42,9 @@ async function page(options: {
   const requests: Request[] = [];
   const confirms: unknown[] = [];
   const lifecycle: string[] = [];
+  const events = new EventTarget();
   const context: Record<string, unknown> = {
+    addEventListener: events.addEventListener.bind(events),
     document, FormData, EditorCopy: {
       en: copy,
       de: Object.fromEntries(Object.entries(ui.de).filter(([key]) => key.startsWith('editor.chrome.'))
@@ -69,6 +71,7 @@ async function page(options: {
   context.window = context;
   vm.createContext(context);
   vm.runInContext(readFileSync('public/build-reporting.js', 'utf8'), context);
+  vm.runInContext(readFileSync('public/settings-drafts.js', 'utf8'), context);
   vm.runInContext(source, context);
   // The production script's public entry point, invoked after the auth gate.
   const controller = context.SettingsIdentity as { init(publication: { beginAction(): void; endAction(): void }): Promise<void> };
@@ -82,10 +85,47 @@ async function page(options: {
     return files;
   };
   const click = async (id: string) => { el(id).click(); await settle(); };
-  return { el, edit, submit, choose, click, requests, confirms, document, lifecycle };
+  const leave = () => {
+    const event = new Event('beforeunload', { cancelable: true });
+    events.dispatchEvent(event);
+    return event.defaultPrevented;
+  };
+  return { el, edit, submit, choose, click, requests, confirms, document, lifecycle, leave };
 }
 
 describe('Site identity settings form', () => {
+  it('warns before leaving a changed identity, retains protection after failure, and clears it only after save', async () => {
+    let fail = true;
+    const h = await page({ route: () => fail
+      ? Response.json({ code: 'unavailable' }, { status: 503 })
+      : Response.json({ revision: 8 }) });
+    expect(h.leave()).toBe(false);
+    h.edit('identitySiteName', 'A pending name');
+    expect(h.leave()).toBe(true);
+    expect(h.el('settingsDraftBar').hidden).toBe(false);
+    await h.submit();
+    expect(h.leave()).toBe(true);
+    expect(h.el('identitySiteName').value).toBe('A pending name');
+    fail = false;
+    await h.submit();
+    expect(h.leave()).toBe(false);
+    expect(h.el('settingsDraftBar').hidden).toBe(true);
+  });
+
+  it('saving text does not clear an independently selected asset, and asset upload does not clear text edits', async () => {
+    const h = await page();
+    h.edit('identitySiteName', 'Text pending');
+    h.choose('logo');
+    await h.submit();
+    expect(h.leave()).toBe(true);
+    h.edit('identityAuthorName', 'Another pending edit');
+    await h.click('identity-logo-upload');
+    expect(h.leave()).toBe(true);
+    expect(h.el('identityAuthorName').value).toBe('Another pending edit');
+    await h.submit();
+    expect(h.leave()).toBe(false);
+  });
+
   it.each(['de', 'en'] as const)('renders and submits only enabled locale: %s', async (active) => {
     const h = await page({ locales: [active] });
     const inactive = active === 'de' ? 'en' : 'de';
