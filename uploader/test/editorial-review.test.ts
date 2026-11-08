@@ -281,6 +281,7 @@ describe('browser-direct review transport', () => {
       { message: 'response_format is not supported' },
       { message: 'This model does not support response_format' },
       { message: "Invalid parameter: 'response_format' of type 'json_object' is not supported with this model." },
+      { message: "response_format.type: Input should be 'json_schema'" },
       'Unknown parameter: response_format',
     ]) {
       const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(errorResponse(400, error)).mockResolvedValueOnce(completion());

@@ -212,6 +212,7 @@ window.LLM = (function () {
     const normalized = message.toLowerCase().replace(/['"`]/g, '');
     return /\b(?:unsupported|unknown|unrecognized|unexpected)\s+(?:(?:request|keyword)\s+)?(?:parameter|field|argument)(?:\s+supplied)?\s*:?\s*response_format\b(?![.\w])/.test(normalized) ||
       /\bresponse_format\s+(?:parameter\s+)?(?:of\s+type\s+json_object\s+)?(?:is\s+)?(?:not supported|unsupported|not implemented|not available)\b/.test(normalized) ||
+      /\bresponse_format(?:\.type)?\s*:\s*input should be\b/.test(normalized) ||
       /\b(?:does not|doesnt|do not)\s+support\s+(?:the\s+)?(?:parameter\s+)?response_format\b(?![.\w])/.test(normalized);
   }
 
@@ -290,7 +291,10 @@ window.LLM = (function () {
         headers['X-Title'] = identity.siteName;
       }
     }
-    const payload = { model, messages, response_format: { type: 'json_object' } };
+    const payload = { model, messages };
+    if (new URL(endpoint).origin !== 'https://api.anthropic.com') {
+      payload.response_format = { type: 'json_object' };
+    }
     if (maxTokens !== undefined) payload.max_tokens = maxTokens;
     const ctrl = new AbortController();
     let timedOut = false;
@@ -563,24 +567,27 @@ window.LLM = (function () {
     try {
       let res;
       try {
+        const requestPayload = {
+          model,
+          max_tokens: maxTokens,
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text },
+                { type: 'image_url', image_url: { url: dataUrl } },
+              ],
+            },
+          ],
+        };
+        if (new URL(endpoint).origin !== 'https://api.anthropic.com') {
+          requestPayload.temperature = 0.2;
+        }
         res = await fetch(endpoint, {
           method: 'POST', headers,
           credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer',
           signal: ctrl.signal,
-          body: JSON.stringify({
-            model,
-            temperature: 0.2,
-            max_tokens: maxTokens,
-            messages: [
-              {
-                role: 'user',
-                content: [
-                  { type: 'text', text },
-                  { type: 'image_url', image_url: { url: dataUrl } },
-                ],
-              },
-            ],
-          }),
+          body: JSON.stringify(requestPayload),
         });
       } catch {
         throw fail('connection failed');

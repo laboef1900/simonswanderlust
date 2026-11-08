@@ -1080,7 +1080,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     }
     const b = req.body as Record<string, unknown>;
     if (!isProviderKind(b.kind)) {
-      return reply.code(400).send({ error: 'AI provider kind must be lm-studio, openrouter, deepseek, anthropic, or custom.' });
+      return reply.code(400).send({ error: 'AI provider kind must be lm-studio, openrouter, deepseek, anthropic, openai, or custom.' });
     }
     const name = typeof b.name === 'string' ? b.name.trim() : '';
     const baseUrl = typeof b.baseUrl === 'string' ? b.baseUrl.trim() : '';

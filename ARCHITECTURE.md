@@ -802,7 +802,7 @@ See the [issue design](docs/superpowers/specs/2026-11-07-issue-550-ai-article-tr
 ### AI provider registry (2026-10-19)
 
 `settings.json` holds `aiProviders` (1–20 entries of `{ id, name, kind, baseUrl }`, `kind` one
-of `lm-studio` / `openrouter` / `deepseek` / `anthropic` / `custom`), `aiDefaultProviderId`, and one
+of `lm-studio` / `openrouter` / `deepseek` / `anthropic` / `openai` / `custom`), `aiDefaultProviderId`, and one
 assignment per use case — `reviewProviderId` (Story review & excerpts),
 `captionProviderId` (Photo descriptions: alt text and media details), and
 `translationProviderId` (Article translation) — where `null` follows the default.

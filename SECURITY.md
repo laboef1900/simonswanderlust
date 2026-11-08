@@ -1049,7 +1049,8 @@ also receives request-local `anthropic-dangerous-direct-browser-access: true` an
 the existing browser-held key into Anthropic's browser API access, not a new server fetch or
 storage path. HTTP, non-default ports and lookalike origins do not receive these headers.
 See `docs/superpowers/specs/2026-11-04-anthropic-browser-access.md`.
-The `anthropic` registry kind (2026-11-07) is a remote, API-key-required client preset,
+Because Anthropic's OpenAI-compatible `/chat/completions` endpoint accepts only `json_schema` with `strict: true` (rejecting `json_object` with HTTP 400), completions to `api.anthropic.com` omit `response_format`; vision captions omit `temperature` (values below 1 return 400 on Claude 4.7+).
+The `anthropic` (2026-11-07) and `openai` (2026-11-08) registry kinds are remote, API-key-required client presets,
 not a new transport or trust boundary. Existing Custom entries are preserved.
 Admin authorization, encrypted per-provider slots, endpoint/key binding, destination-change
 confirmation, local-caption isolation and no-store responses remain unchanged. Preset URLs

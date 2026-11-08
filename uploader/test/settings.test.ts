@@ -310,6 +310,19 @@ describe('AI provider registry validation', () => {
     expect(reloaded.pendingAiMigration()).toBeNull();
   });
 
+  it('preserves OpenAI assignments and existing Custom entries across a settings reload', () => {
+    const path = join(dir, 'settings.json');
+    const openai = provider('gpt', { kind: 'openai', baseUrl: 'https://api.openai.com/v1' });
+    const custom = provider('existing', { baseUrl: openai.baseUrl });
+    const store = createSettingsStore({ path, defaults: DEFAULTS });
+    store.update({ aiProviders: [LOCAL, custom, openai], reviewProviderId: openai.id, captionProviderId: openai.id });
+    const reloaded = createSettingsStore({ path, defaults: DEFAULTS });
+    expect(reloaded.get().aiProviders).toEqual([LOCAL, custom, openai]);
+    expect(resolveProvider(reloaded.get(), reloaded.get().reviewProviderId)).toEqual(openai);
+    expect(resolveProvider(reloaded.get(), reloaded.get().captionProviderId)).toEqual(openai);
+    expect(reloaded.pendingAiMigration()).toBeNull();
+  });
+
   it('accepts 1 to 20 providers and refuses 0 or 21', () => {
     const many = (n: number) => [LOCAL, ...Array.from({ length: n - 1 }, (_, i) => provider(`p-${i}`))];
     expect(() => validate(withProviders(many(1)))).not.toThrow();

@@ -1650,7 +1650,7 @@ describe('posts.html row actions', () => {
 // Fixtures mirror the AI provider registry contract (spec 2026-10-19 §4): the
 // settings response every /settings and /ai-providers route answers with.
 
-type ProviderKind = 'lm-studio' | 'openrouter' | 'deepseek' | 'anthropic' | 'custom';
+type ProviderKind = 'lm-studio' | 'openrouter' | 'deepseek' | 'anthropic' | 'openai' | 'custom';
 interface ProviderView { id: string; name: string; kind: ProviderKind; baseUrl: string; hasApiKey: boolean }
 interface SettingsResponse {
   aiProviders: ProviderView[];
@@ -3352,6 +3352,61 @@ describe('settings.html against the real settings and provider routes', () => {
     const assignedTranslation = (await app.inject({ url: '/ai-config?purpose=translation', cookies })).json();
     expect(assignedTranslation).toEqual({
       providerId: created!.id, providerName: 'Anthropic', providerKind: 'anthropic', baseUrl: created!.baseUrl,
+      model: 'remote-model', timeoutMs: 180000, apiKey: 'fixture-created-key',
+    });
+    expect(settings.get()).toMatchObject({ aiModel: 'remote-model', lmModel: defaultSettings().lmModel });
+  });
+
+  it('adds OpenAI, discovers models and binds its key only to assigned use cases', async () => {
+    const { el, ctx, fetcher, app, cookies, settings, secrets } = await realPage();
+    await el('addProvider').click();
+    el('providerKind').value = 'openai';
+    await el('providerKind').fire('change');
+    expect(el('providerName').value).toBe('OpenAI');
+    expect(el('providerBaseUrl').value).toBe('https://api.openai.com/v1');
+    await el('testProviderForm').click();
+    expect(fetcher.mock.calls.some(([url]) => String(url).startsWith('https://api.openai.com'))).toBe(false);
+    el('providerApiKey').value = 'fixture-created-key';
+    await el('providerForm').fire('submit');
+    const created = settings.get().aiProviders.find((p) => p.name === 'OpenAI');
+    expect(created).toMatchObject({ kind: 'openai', baseUrl: 'https://api.openai.com/v1' });
+    expect(await secrets.get('ai_provider_key:' + created!.id)).toBe('fixture-created-key');
+    expect(el('providerApiKey').value).toBe('');
+    expect(pageText(el)).not.toContain('fixture-created-key');
+
+    el('reviewProviderId').value = created!.id;
+    await el('reviewProviderId').fire('change');
+    await callPage(ctx, 'ensureModels');
+    const listing = fetcher.mock.calls.find(([url]) => String(url) === 'https://api.openai.com/v1/models');
+    expect(new Headers(listing?.[1]?.headers).get('authorization')).toBe('Bearer fixture-created-key');
+    expect(pageText(el)).not.toContain('fixture-created-key');
+    await chooseModel(el, 'aiModel', 'remote-model');
+    await el('saveAi').click();
+    expect(settings.get()).toMatchObject({ reviewProviderId: created!.id, captionProviderId: null, aiModel: 'remote-model' });
+
+    const config = (await app.inject({ url: '/ai-config', cookies })).json();
+    expect(config).toMatchObject({
+      aiProvider: 'openai', aiBaseUrl: 'https://api.openai.com/v1', hasAiApiKey: true, aiApiKey: 'fixture-created-key',
+    });
+    const caption = (await app.inject({ url: '/ai-config?purpose=caption', cookies })).json();
+    expect(caption).toMatchObject({ captionProvider: 'lm-studio', captionApiKey: null });
+    el('captionProviderId').value = created!.id;
+    await el('captionProviderId').fire('change');
+    await el('saveAi').click();
+    const assignedCaption = (await app.inject({ url: '/ai-config?purpose=caption', cookies })).json();
+    expect(assignedCaption).toMatchObject({
+      captionProvider: 'openai', captionBaseUrl: created!.baseUrl, captionApiKey: 'fixture-created-key',
+    });
+    const localTranslation = (await app.inject({ url: '/ai-config?purpose=translation', cookies })).json();
+    expect(localTranslation).toMatchObject({ providerKind: 'lm-studio', apiKey: null, model: 'qwen2.5-7b-instruct' });
+    el('translationProviderId').value = created!.id;
+    await el('translationProviderId').fire('change');
+    await chooseModel(el, 'translationModel', 'remote-model');
+    el('translationTimeoutSeconds').value = '180';
+    await el('saveAi').click();
+    const assignedTranslation = (await app.inject({ url: '/ai-config?purpose=translation', cookies })).json();
+    expect(assignedTranslation).toEqual({
+      providerId: created!.id, providerName: 'OpenAI', providerKind: 'openai', baseUrl: created!.baseUrl,
       model: 'remote-model', timeoutMs: 180000, apiKey: 'fixture-created-key',
     });
     expect(settings.get()).toMatchObject({ aiModel: 'remote-model', lmModel: defaultSettings().lmModel });

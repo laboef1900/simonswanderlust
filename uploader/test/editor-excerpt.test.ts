@@ -305,6 +305,17 @@ describe('EditorExcerpt controller', () => {
     expect(page.apply).not.toHaveBeenCalled();
   });
 
+  it('accepts OpenAI and presents its excerpt without changing the draft', async () => {
+    const page = excerptPage(async () => completion(excerptJson()),
+      remoteConfig({ aiProvider: 'openai', aiBaseUrl: 'https://api.openai.com/v1' }));
+    const before = page.state.de.excerpt;
+    page.view().action('generate').click();
+    await vi.waitFor(() => expect(page.view().state()).toBe('presented'));
+    expect(page.view().text()).toBe(suggestion);
+    expect(page.state.de.excerpt).toBe(before);
+    expect(page.apply).not.toHaveBeenCalled();
+  });
+
   it('labels the action "use" for an empty excerpt and dismisses without writing', async () => {
     const page = excerptPage(async () => completion(excerptJson('Three days on foot along an invented coast, from steep cliffs and quiet coves to a lighthouse.')));
     page.state.active = 'en';
@@ -429,6 +440,7 @@ describe('EditorExcerpt controller', () => {
       [remoteConfig({ aiApiKey: null }), '[excerptKeyMissing]'],
       [remoteConfig({ aiProvider: 'deepseek', aiApiKey: '  ' }), '[excerptKeyMissing]'],
       [remoteConfig({ aiProvider: 'anthropic', aiApiKey: null }), '[excerptKeyMissing]'],
+      [remoteConfig({ aiProvider: 'openai', aiApiKey: null }), '[excerptKeyMissing]'],
     ] as const) {
       const page = excerptPage(async () => completion(excerptJson()), config);
       page.view().action('generate').click();

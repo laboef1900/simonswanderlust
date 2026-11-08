@@ -6,7 +6,7 @@ import { randomBytes } from 'node:crypto';
  * @ai-context docs/superpowers/specs/2026-10-19-ai-provider-registry-design.md
  */
 
-export type AiProviderKind = 'lm-studio' | 'openrouter' | 'deepseek' | 'anthropic' | 'custom';
+export type AiProviderKind = 'lm-studio' | 'openrouter' | 'deepseek' | 'anthropic' | 'openai' | 'custom';
 
 export interface AiProvider {
   /** Server-assigned, immutable; the ONLY input a secret slot name is built from. */
@@ -28,6 +28,7 @@ export const PRESET_BASE_URLS: Readonly<Record<AiProviderKind, string>> = {
   openrouter: 'https://openrouter.ai/api/v1',
   deepseek: 'https://api.deepseek.com/v1',
   anthropic: 'https://api.anthropic.com/v1',
+  openai: 'https://api.openai.com/v1',
   custom: '',
 };
 
@@ -45,7 +46,7 @@ export function defaultProviders(): AiProvider[] {
 }
 
 export function isProviderKind(v: unknown): v is AiProviderKind {
-  return v === 'lm-studio' || v === 'openrouter' || v === 'deepseek' || v === 'anthropic' || v === 'custom';
+  return v === 'lm-studio' || v === 'openrouter' || v === 'deepseek' || v === 'anthropic' || v === 'openai' || v === 'custom';
 }
 
 export function isProviderId(v: unknown): v is string {
@@ -82,7 +83,7 @@ function providerError(v: unknown): string | null {
   if (typeof v !== 'object' || v === null || Array.isArray(v)) return 'Each AI provider must be an object.';
   const p = v as Record<string, unknown>;
   if (!isProviderId(p.id)) return 'AI provider id is invalid.';
-  if (!isProviderKind(p.kind)) return 'AI provider kind must be lm-studio, openrouter, deepseek, anthropic, or custom.';
+  if (!isProviderKind(p.kind)) return 'AI provider kind must be lm-studio, openrouter, deepseek, anthropic, openai, or custom.';
   return providerNameError(p.name) ?? providerUrlError(p.baseUrl);
 }
 

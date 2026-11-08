@@ -281,7 +281,7 @@ window.EditorReview = (function () {
     }
 
     function describe(config) {
-      if (!config || !['lm-studio', 'openrouter', 'deepseek', 'anthropic', 'custom'].includes(config.aiProvider) ||
+      if (!config || !['lm-studio', 'openrouter', 'deepseek', 'anthropic', 'openai', 'custom'].includes(config.aiProvider) ||
           typeof config.aiBaseUrl !== 'string' || typeof config.aiModel !== 'string' ||
           !config.aiModel.trim() || typeof config.reviewPrompt !== 'string') return null;
       let endpoint;
@@ -295,7 +295,7 @@ window.EditorReview = (function () {
     }
 
     function disclose(prepared) {
-      const names = { 'lm-studio': 'LM Studio', openrouter: 'OpenRouter', deepseek: 'DeepSeek', anthropic: 'Anthropic', custom: copy.reviewCustom };
+      const names = { 'lm-studio': 'LM Studio', openrouter: 'OpenRouter', deepseek: 'DeepSeek', anthropic: 'Anthropic', openai: 'OpenAI', custom: copy.reviewCustom };
       destination.textContent = copy.reviewDestination.replace('{provider}', names[prepared.provider])
         .replace('{endpoint}', prepared.endpoint).replace('{model}', prepared.model);
       destination.hidden = false;
@@ -326,7 +326,7 @@ window.EditorReview = (function () {
           unavailable('AI review needs a valid provider, endpoint and model in AI settings. Quick checks are still available.', true);
           return;
         }
-        if (['openrouter', 'deepseek', 'anthropic'].includes(config.aiProvider) && (typeof config.aiApiKey !== 'string' || !config.aiApiKey.trim())) {
+        if (['openrouter', 'deepseek', 'anthropic', 'openai'].includes(config.aiProvider) && (typeof config.aiApiKey !== 'string' || !config.aiApiKey.trim())) {
           unavailable(copy.reviewMissingKey, true);
           return;
         }
