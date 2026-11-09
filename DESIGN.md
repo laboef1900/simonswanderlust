@@ -1189,7 +1189,7 @@ and the `<dialog>`s appended to `<body>` share one set:
 - `[hidden]` is enforced globally with `!important`, because every control carries an
   author `display`.
 
-- A full-width 4rem masthead (brand on the left; descriptor and View site on the right)
+- A full-width 3rem masthead (brand on the left; descriptor and View site on the right)
   sits above a 13rem sidebar and a single rounded white workspace. The sidebar holds
   all page navigation (no journal header above it) and, at its foot, the account menu. Its
   trigger is the avatar alone: a 36px steel-blue (`--studio-accent`) circle with the white
