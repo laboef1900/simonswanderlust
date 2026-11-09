@@ -4,6 +4,24 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Implemented locally:** backend UI proportion and consistency refinement
+  (2026-11-09, owner-requested Impeccable critique follow-up). Tightened desktop
+  control tokens (`--control-h: 2.25rem` / `36px`, `--control-h-sm: 1.875rem` /
+  `30px`; `2.75rem` / `44px` preserved for `@media (pointer: coarse)`), removed
+  desktop `44px` overrides and `100%`-width button stretches (`Suggest with AI`,
+  `Calculate route`, `Import GPX`), and applied compact `--control-h-sm` sizing to
+  inspector, pager, and repeating row actions (`Settings · Navigation`,
+  `Site identity` social links, `Journey Editor` members). Fixed the 3-row Editor
+  command bar wrap and Media filter bar wrap at `1366px`, unified top
+  `.settings-savebar` placement across all saveable Settings sections, demoted
+  duplicate bottom Rebuild buttons to `.btn-secondary`, standardized disclosure
+  chevrons and `h1`/`h2`/`h3` heading scale, grouped `about.html`'s navigation and
+  locale tabs into `.about-toolbar`, moved `journeys.html` `.cms-page-actions`
+  inside `.cms-page-meta`, and replaced undefined `--admin-*` custom properties in
+  `editor-gpx.css` and `gpx-map.css` with canonical `admin.css` tokens. Uploader
+  typecheck and 12 DOM/admin Vitest suites (932 tests) pass. Verified live in
+  Brave at `1366×900` and `390×844`.
+
 - **Implemented locally:** OpenAI kind and Anthropic endpoint compatibility in Settings → AI models
   (2026-11-08, owner-requested). Prefills the official `https://api.openai.com/v1`
   endpoint and uses existing per-provider credentials and browser-direct transport.

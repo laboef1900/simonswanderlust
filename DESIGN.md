@@ -1110,7 +1110,7 @@ and the `<dialog>`s appended to `<body>` share one set:
 | Active navigation / New post | `--studio-accent` | `#416486` |
 | Active navigation surface | `--studio-accent-soft` | `#eaf0f6` |
 | Live-site mutation / destructive | `--red` / `--red-hover` | `#d23b30` / `#ac2a21` |
-| Control height (small) | `--control-h` (`--control-h-sm`) | `2.5rem` (`2rem`); both `2.75rem` on coarse pointers |
+| Control height (small) | `--control-h` (`--control-h-sm`) | `2.25rem` (`1.875rem`); both `2.75rem` on coarse pointers |
 | Focus ring | `--focus-ring` | `2px solid var(--studio-accent)` |
 
 **One control vocabulary.** Every page uses the same primitives; page CSS only places them.

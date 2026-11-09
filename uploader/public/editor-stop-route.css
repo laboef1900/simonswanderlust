@@ -27,7 +27,7 @@
 .stop-last[hidden], .stop-profile-note[hidden] { display: none; }
 .stop-profile-note { flex-basis: 100%; margin: 0; color: var(--warn-ink); }
 
-.stop-route__actions { display: grid; gap: 0.5rem; margin-top: 0.75rem; }
+.stop-route__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.375rem; margin-top: 0.75rem; }
 .stop-route__legs {
   display: grid;
   gap: 0.5rem;

@@ -209,6 +209,11 @@
       <section class="card" id="imageSettingsSection" aria-labelledby="imageHeading">
         <h2 id="imageHeading" class="card-heading"></h2>
         <form id="imageSettings">
+          <div class="settings-savebar">
+            <button id="saveImages" type="submit" disabled>Save image settings</button>
+            <p class="muted">Applies to new uploads and newly processed import images. Existing photos and queued uploads keep their settings. Original files stay private.</p>
+            <p id="imageOut" class="page-status" role="status"></p>
+          </div>
           <fieldset id="imageFields">
           <label class="check-field" for="convertJpeg">
             <input id="convertJpeg" type="checkbox" aria-describedby="conversionHelp" />
@@ -233,15 +238,7 @@
             1–100. Higher quality generally means larger files. Defaults: WebP 75, AVIF 55.
             These controls apply to WebP and AVIF output, not JPEG.
           </p>
-          <p class="muted">
-            Applies to new uploads and newly processed import images. Existing photos and queued
-            uploads keep their settings. Original files stay private.
-          </p>
           </fieldset>
-          <div class="form-actions">
-            <button id="saveImages" type="submit" disabled>Save image settings</button>
-          </div>
-          <p id="imageOut" class="page-status" role="status"></p>
         </form>
 
         <section class="quality-preview" id="qualityPreview" aria-labelledby="qualityPreviewHeading">
@@ -293,27 +290,33 @@
       <section class="settings-panel" id="panel-comments" role="tabpanel" aria-labelledby="tabbtn-comments" hidden>
       <section class="card" id="commentSettings" aria-labelledby="commentsHeading">
         <h2 id="commentsHeading" class="card-heading"></h2>
+        <div class="settings-savebar">
+          <button id="saveComments" type="button" data-settings-copy="settingsCommentsSave"></button>
+          <p class="muted" data-settings-copy="settingsCommentsTiming"></p>
+          <p id="commentsOut" class="page-status" role="status"></p>
+        </div>
         <label class="check-field" for="commentsEnabled">
           <input id="commentsEnabled" type="checkbox" aria-describedby="commentsHelp" />
           Enable comments on the site
         </label>
         <p id="commentsSavedState" class="muted" role="status"></p>
         <p id="commentsHelp" class="muted" data-settings-copy="settingsCommentsHelp"></p>
-        <p class="muted" data-settings-copy="settingsCommentsTiming"></p>
         <div class="form-actions">
-          <button id="saveComments" type="button" data-settings-copy="settingsCommentsSave"></button>
-          <a href="/admin/comments.html" data-settings-copy="settingsCommentsManage"></a>
+          <a href="/admin/comments.html" class="action-link" data-settings-copy="settingsCommentsManage"></a>
         </div>
-        <p id="commentsOut" class="page-status" role="status"></p>
       </section>
       </section>
 
       <section class="settings-panel" id="panel-language" role="tabpanel" aria-labelledby="tabbtn-language" hidden>
         <section class="card">
           <h2 class="card-heading" data-language-copy="Heading"></h2>
-          <p id="languageLock" class="muted" role="status" data-language-copy="Loading"></p>
           <form id="languageForm">
             <fieldset id="languageFields" disabled>
+              <div class="settings-savebar">
+                <button id="saveLanguage" type="submit" class="btn-primary" data-language-copy="Save"></button>
+                <p id="languageLock" class="muted" role="status" data-language-copy="Loading"></p>
+                <p id="languageStatus" class="page-status" role="status" tabindex="-1"></p>
+              </div>
               <label for="languageMode" data-language-copy="Mode"></label>
               <select id="languageMode" aria-describedby="languageLock languageScope">
                 <option value="de:de,en" data-language-copy="ModeDeBoth"></option>
@@ -322,15 +325,13 @@
                 <option value="en:en" data-language-copy="ModeEnOnly"></option>
               </select>
               <p id="languageScope" class="muted" data-language-copy="Intro"></p>
-              <div class="form-actions"><button id="saveLanguage" type="submit" class="btn-primary" data-language-copy="Save"></button></div>
             </fieldset>
           </form>
           <p><a id="prepareLanguage" hidden></a></p>
           <ul id="languageBlockers"></ul>
-          <p id="languageStatus" class="page-status" role="status" tabindex="-1"></p>
-          <div class="form-actions">
+          <div class="form-actions settings-footer-actions">
             <button type="button" id="languageReload" class="btn-secondary" data-language-copy="Reload"></button>
-            <a href="#site" data-language-copy="RebuildLink"></a>
+            <a href="#site" class="action-link" data-language-copy="RebuildLink"></a>
           </div>
         </section>
       </section>
@@ -414,9 +415,9 @@
               </fieldset>
             </div>
           </section>
-          <div class="form-actions">
+          <div class="form-actions settings-footer-actions">
             <button id="identityReload" type="button" class="btn-secondary"></button>
-            <button id="identityRebuild" type="button" class="btn-primary"></button>
+            <button id="identityRebuild" type="button" class="btn-secondary"></button>
           </div>
         </section>
       </section>
@@ -435,9 +436,9 @@
               <div id="navigationSlots"></div>
             </fieldset>
           </form>
-          <div class="form-actions">
+          <div class="form-actions settings-footer-actions">
             <button id="navigationReload" type="button" class="btn-secondary"></button>
-            <button id="navigationRebuild" type="button" class="btn-primary"></button>
+            <button id="navigationRebuild" type="button" class="btn-secondary"></button>
           </div>
           <p id="navigationSocialHelp" class="muted"></p>
           <ul id="navigationSocial"></ul>
