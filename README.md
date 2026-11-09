@@ -299,6 +299,23 @@ limitations, then check correspondence and delivery in the final rebuilt release
 
 ### Cutting a release
 
+**v0.21.1 — OpenAI provider kind and Anthropic endpoint compatibility** (linux/amd64 and linux/arm64,
+`ghcr.io/laboef1900/wanderlust-studio:0.21.1`). Changes since v0.21.0 (PR #555):
+
+- **OpenAI provider kind** (#555): dedicated OpenAI option in Settings → AI models with endpoint
+  prefilling (`https://api.openai.com/v1`), credential management, and registration across reviews,
+  excerpts, photo descriptions, and article translation.
+- **Anthropic endpoint compatibility** (#555): omits `response_format` and vision `temperature`
+  when querying `https://api.anthropic.com` to adhere to Anthropic's OpenAI-compatible endpoint
+  constraints, and adds fallback error recognition for `response_format.type` validation errors.
+
+Upgrade notes for v0.21.0 → v0.21.1 (the [release recovery checklist](ARCHITECTURE.md#release-recovery-checklist)):
+
+- **Image and deployment:** apply this release's image tag (`0.21.1`).
+- **Compose, `.env`, and schema:** no Compose changes, no `.env` changes, no schema migrations, and no
+  dump-format changes (writer stays v15); no site rebuild required.
+- **Rollback to v0.21.0:** fully supported by reverting the image tag.
+
 **v0.21.0 — visual manuscript editing, AI translation and editorial desk** (linux/amd64 and linux/arm64,
 `ghcr.io/laboef1900/wanderlust-studio:0.21.0`). Changes since v0.20.0 (PRs #540–#552):
 
