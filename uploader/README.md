@@ -596,7 +596,7 @@ Author-facing detail is in [`../docs/authoring-workflow.md`](../docs/authoring-w
 ## AI alt-text (browser-direct providers)
 
 Settings → **AI models** keeps a **Providers** list (Local LM Studio by default; add
-OpenRouter, DeepSeek, Anthropic, or any custom HTTP(S) OpenAI-compatible endpoint, each with its own
+OpenRouter, DeepSeek, Anthropic, OpenAI, or any custom HTTP(S) OpenAI-compatible endpoint, each with its own
 name, base URL and, for remote providers, its own encrypted API key) and a **Use case
 assignments** grid. **Photo descriptions** (alt text and media details) picks a provider —
 or follows the default — and a model; its prompt/timeout/output budget/max edge are independent

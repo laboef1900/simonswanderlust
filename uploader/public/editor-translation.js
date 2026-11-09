@@ -7,7 +7,7 @@ window.EditorTranslation = (function () {
   const describe = (config) => {
     if (!config || typeof config.providerId !== 'string' || !config.providerId ||
         typeof config.providerName !== 'string' || !config.providerName ||
-        !['lm-studio', 'openrouter', 'deepseek', 'anthropic', 'custom'].includes(config.providerKind) || typeof config.model !== 'string' || !config.model.trim() ||
+        !['lm-studio', 'openrouter', 'deepseek', 'anthropic', 'openai', 'custom'].includes(config.providerKind) || typeof config.model !== 'string' || !config.model.trim() ||
         !Number.isInteger(config.timeoutMs) || config.timeoutMs < 1000 || typeof config.baseUrl !== 'string') return null;
     let url;
     try { url = new URL(config.baseUrl); } catch (_) { return null; }
@@ -178,7 +178,7 @@ window.EditorTranslation = (function () {
         if (!current(request)) return;
         const prepared = describe(config);
         if (!prepared) throw new Error('Article translation configuration unavailable');
-        if (['openrouter', 'deepseek', 'anthropic'].includes(prepared.providerKind) && (typeof config.apiKey !== 'string' || !config.apiKey.trim())) {
+        if (['openrouter', 'deepseek', 'anthropic', 'openai'].includes(prepared.providerKind) && (typeof config.apiKey !== 'string' || !config.apiKey.trim())) {
           const error = new Error('Article translation credential unavailable');
           error.code = 'translation_missing_key';
           throw error;
