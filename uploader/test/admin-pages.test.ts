@@ -668,4 +668,13 @@ describe('admin UI control scale and stylesheet token consistency', () => {
       expect(settingsHtml).toMatch(new RegExp(`class="settings-savebar"[\\s\\S]{0,260}id="${saveId}"`));
     }
   });
+
+  it('scales auxiliary buttons to --control-h-sm via .btn-sm and keeps Review story inside More actions', () => {
+    const editorHtml = readFileSync('public/editor.html', 'utf8');
+    expect(adminCss).toMatch(/\.btn-sm,\s*:is\(/);
+    expect(adminCss).toMatch(/body\.editor-page\s+\.rich-text-gallery-heading\s*\{\s*display:\s*flex;/);
+    expect(adminCss).toMatch(/body\.editor-page\s+\.rich-text-gallery-edit\s*\{\s*min-height:\s*var\(--control-h-sm\);/);
+    expect(editorHtml).toMatch(/<details class="editor-actions-menu" id="editorActionsMenu">[\s\S]*id="reviewStory"[\s\S]*<\/details>/);
+    expect(settingsHtml).toMatch(/<button id="addProvider" type="button" class="btn-secondary btn-sm"/);
+  });
 });

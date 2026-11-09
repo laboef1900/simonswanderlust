@@ -1227,7 +1227,7 @@ and the `<dialog>`s appended to `<body>` share one set:
 
 - The editor has no visible page title: the shell's h1 (New post / Edit post) is
   visually hidden, so the command bar opens the workspace. The command bar separates
-  primary actions (Save draft, Publish, Review story, **Save & preview**, More actions) from the
+  primary actions (Save draft, Publish, **Save & preview**, More actions) from the
   full-width save/readiness status row; the actions come first in the DOM, so Tab reaches
   Save before the status. Confirmed draft saves use this status row alone, including saves confirmed by a recovery
   check. They never open a second success banner or offer **Check again** after success.
@@ -1238,14 +1238,15 @@ and the `<dialog>`s appended to `<body>` share one set:
   accessible name, so the phone action row does not wrap. Save draft names its shortcut (⌘S / Ctrl+S) in its tooltip and
   `aria-keyshortcuts`. **Save & preview** names its existing save-before-preview operation;
   its accessible name keeps "Draft preview — not the live site", and its description explains
-  that it does not publish. Below 52rem the same Review story button moves into More (no
-  duplicate handler); closing Review returns focus to More when its button is hidden. Re-reading the live state is
+  that it does not publish. **Review story** lives inside **More actions** at all viewport
+  widths alongside Unpublish; closing Review returns focus to the More actions trigger when
+  its menu is closed. Re-reading the live state is
   a small icon beside it (**Check the live site again**), not a full-height button. Above
   74rem readiness lives in a native **Publish checklist** disclosure in the status row:
   a live missing-field count, then the existing locale/trip links in its floating panel.
   A gap link closes it before revealing its field; Escape closes it and restores summary
-  focus. It never changes the draft or implies a successful publication. More actions
-  appears only when it holds Unpublish; below 74rem that menu carries readiness instead.
+  focus. It never changes the draft or implies a successful publication. Below 74rem
+  More actions carries readiness as well.
   The desktop manuscript title is a fixed 2rem; its placeholder uses `--muted`.
   On phones the status is one
   wrapping line ("Saved to server · Live ↻"), the story-details opener rides at the right

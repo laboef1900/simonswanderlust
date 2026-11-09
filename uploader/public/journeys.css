@@ -1,17 +1,22 @@
 /* Journey editor: the story editor's command bar and locale tabs, one locale
    panel at a time with its words beside its hero photo. */
 .journey-commandbar {
+  position: sticky;
+  top: 0;
+  z-index: 40;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 0.5rem 1rem;
-  padding-bottom: 0.75rem;
+  padding: 0.5rem 0 0.75rem;
   margin-bottom: 1.25rem;
   border-bottom: 1px solid var(--line);
+  background: var(--surface);
 }
 .journey-commandbar__nav { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem; min-width: 0; }
 .journey-commandbar__nav > .action-link { display: inline-flex; align-items: center; min-height: var(--control-h); white-space: nowrap; }
-.journey-commandbar__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.375rem; }
+.journey-commandbar__actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 0.375rem; }
+.journey-locale__hero .form-actions button { min-height: var(--control-h-sm); padding: 0.25rem 0.625rem; font-size: 0.75rem; }
 .journey-commandbar__status { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; }
 .journey-commandbar__status p { margin: 0; font-size: 0.8125rem; }
 .journey-commandbar__status p:empty { display: none; }

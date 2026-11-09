@@ -7,12 +7,12 @@
 .gpx-dialog__header, .gpx-dialog__footer { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem 1.25rem; background: var(--canvas); }
 .gpx-dialog__header { border-bottom: 1px solid var(--line); }
 .gpx-dialog__header h2 { margin: 0; font-size: 1.125rem; font-weight: 650; }
-.gpx-dialog__body { display: grid; gap: .85rem; min-height: 0; padding: 1rem 1.25rem; overflow: auto; }
+.gpx-dialog__body { display: grid; justify-items: start; gap: .85rem; min-height: 0; padding: 1rem 1.25rem; overflow: auto; }
 .gpx-dialog__footer { justify-content: flex-end; border-top: 1px solid var(--line); }
 .gpx-dialog button, .gpx-dialog input { min-height: var(--control-h); }
 .gpx-dialog :focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
-.gpx-map { height: clamp(15rem, 32vh, 22rem); background-color: var(--canvas); border: 1px solid var(--line-strong); border-radius: var(--control-radius); }
-.gpx-preview { display: grid; gap: .75rem; }
+.gpx-map { width: 100%; height: clamp(15rem, 32vh, 22rem); background-color: var(--canvas); border: 1px solid var(--line-strong); border-radius: var(--control-radius); }
+.gpx-preview { width: 100%; display: grid; justify-items: start; gap: .75rem; }
 .gpx-preview > p { margin: 0; }
 .gpx-preview[hidden], .gpx-dialog [hidden] { display: none !important; }
 .gpx-trim { display: grid; grid-template-columns: repeat(2, minmax(8rem, 1fr)); gap: .5rem .75rem; align-items: end; }
