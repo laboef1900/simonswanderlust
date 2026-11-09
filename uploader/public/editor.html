@@ -27,18 +27,17 @@
               English <span class="lang-code" aria-hidden="true">EN</span>
             </button>
           </div>
-          <button id="translateArticle" type="button" class="btn-secondary" aria-haspopup="dialog" aria-controls="articleTranslationDialog" hidden></button>
+          <button id="translateArticle" type="button" class="btn-secondary btn-sm" aria-haspopup="dialog" aria-controls="articleTranslationDialog" hidden></button>
         </div>
 
         <div class="editor-commandbar__actions">
           <button id="saveDraft" type="button">Save draft</button>
           <button id="publishBtn" type="button" class="btn-primary-publish" hidden>Publish</button>
-          <button id="reviewStory" type="button" class="btn-secondary" aria-haspopup="dialog" aria-controls="storyReviewDialog">Review story</button>
           <!-- Preview is a daily writing action, so it sits in the bar, not the menu.
                Its accessible name keeps the full "not the live site" warning. -->
           <button id="previewBtn" type="button" class="btn-secondary" aria-describedby="previewHelp"></button>
-          <!-- Desktop shows readiness in the status row; below 74rem it lives
-               here instead, so the menu only appears when it holds something. -->
+          <!-- Review story and secondary lifecycle actions live in More actions;
+               below 74rem publish readiness lives here too. -->
           <details class="editor-actions-menu" id="editorActionsMenu">
             <summary class="btn-secondary editor-actions-menu__trigger">More actions</summary>
             <div class="editor-actions-menu__panel">
@@ -47,6 +46,7 @@
                 <p id="mobileLocaleChip" class="locale-chip"></p>
                 <p id="previewHelp" class="muted"></p>
               </div>
+              <button id="reviewStory" type="button" class="btn-secondary" aria-haspopup="dialog" aria-controls="storyReviewDialog">Review story</button>
               <button id="unpublishBtn" type="button" class="btn-secondary" hidden>Unpublish</button>
             </div>
           </details>
@@ -1058,18 +1058,6 @@
       // action, on Escape (focus back to its trigger), or on a click outside it.
       const actionsMenu = $('editorActionsMenu');
       const compactEditor = window.matchMedia('(max-width: 52rem)');
-      function placeReviewAction() {
-        const review = $('reviewStory');
-        const focused = document.activeElement === review;
-        if (compactEditor.matches) actionsMenu.querySelector('.editor-actions-menu__panel').prepend(review);
-        else $('publishBtn').after(review);
-        if (focused) {
-          if (compactEditor.matches) actionsMenu.open = true;
-          review.focus({ preventScroll: true });
-        }
-      }
-      compactEditor.addEventListener('change', placeReviewAction);
-      placeReviewAction();
       actionsMenu.addEventListener('click', (event) => {
         const action = event.target.closest('button');
         if (action) actionsMenu.open = false;

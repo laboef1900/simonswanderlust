@@ -21,13 +21,13 @@
   font-size: 0.8125rem;
 }
 .stop-leg-field[hidden] { display: none; }
-.stop-leg-field select { width: auto; min-width: 9.5rem; min-height: var(--control-h); color: var(--ink); }
+.stop-leg-field select { width: auto; min-width: 9.5rem; min-height: var(--control-h-sm); padding-block: 0.25rem; font-size: 0.75rem; color: var(--ink); }
 .stop-leg-field select[aria-invalid="true"] { border-color: var(--warn-line); }
 .stop-last { margin: 0; font-size: 0.8125rem; }
 .stop-last[hidden], .stop-profile-note[hidden] { display: none; }
 .stop-profile-note { flex-basis: 100%; margin: 0; color: var(--warn-ink); }
 
-.stop-route__actions { display: grid; gap: 0.5rem; margin-top: 0.75rem; }
+.stop-route__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.375rem; margin-top: 0.75rem; }
 .stop-route__legs {
   display: grid;
   gap: 0.5rem;

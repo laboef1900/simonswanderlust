@@ -4,6 +4,25 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Implemented locally:** backend UI proportion and consistency refinement
+  (2026-11-09, owner-requested Impeccable critique follow-up). Reduced top masthead
+  height from `4rem` (64px) to `3rem` (48px) with a proportional 26px brand mark and
+  compact 30px View site action, reclaiming 16px of vertical height across all admin
+  surfaces. Tightened workspace `.cms-topbar` padding from 95px–117px down to 77px.
+  Collapsed the inflated Editor command bar status row by eliminating unreset `<p>`
+  margins (reducing sticky command bar height from 108px to 89px). Unified button
+  baselines across command bars (removed ragged 36px/30px mixing in `journey-editor.html`
+  and `about.html`), scaled More Actions dropdown buttons and Settings jump buttons to
+  compact `--control-h-sm` (30px), added `btn-sm` to auxiliary refresh and preview
+  controls, and removed redundant stacked hairlines in Settings AI models.
+  Tightened desktop control tokens (`--control-h: 2.25rem` / `36px`, `--control-h-sm: 1.875rem` /
+  `30px`; `2.75rem` / `44px` preserved for `@media (pointer: coarse)`), removed
+  desktop `44px` overrides and `100%`-width button stretches (`Suggest with AI`,
+  `Calculate route`, `Import GPX`), and applied compact `--control-h-sm` sizing to
+  inspector, pager, and repeating row actions. All 146 uploader Vitest test files
+  (4,399 tests) and 53 site test files (927 tests) pass; uploader typecheck passes.
+  Verified live in Brave.
+
 - **Implemented locally:** OpenAI kind and Anthropic endpoint compatibility in Settings → AI models
   (2026-11-08, owner-requested). Prefills the official `https://api.openai.com/v1`
   endpoint and uses existing per-provider credentials and browser-direct transport.

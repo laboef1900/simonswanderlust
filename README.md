@@ -299,6 +299,23 @@ limitations, then check correspondence and delivery in the final rebuilt release
 
 ### Cutting a release
 
+**v0.21.2 — backend UI proportions and design consistency** (linux/amd64 and linux/arm64,
+`ghcr.io/laboef1900/wanderlust-studio:0.21.2`). Changes since v0.21.1 (PRs #558, #559):
+
+- **Admin UI refinements** (#559): reduced masthead height to 48px, unified button sizing and
+  proportions across admin pages, introduced `.btn-sm` hierarchy, consolidated Review story into
+  More actions, and aligned gallery and settings controls.
+- **Brand accents and UI conventions** (#558): documented and aligned brand palette accents
+  (`--red: #d23b30`, `--navy: #263b51`), contrast requirements, and editorial desk design rules
+  across admin surfaces and documentation.
+
+Upgrade notes for v0.21.1 → v0.21.2 (the [release recovery checklist](ARCHITECTURE.md#release-recovery-checklist)):
+
+- **Image and deployment:** apply this release's image tag (`0.21.2`).
+- **Compose, `.env`, and schema:** no Compose changes, no `.env` changes, no schema migrations, and no
+  dump-format changes (writer stays v15); no site rebuild required.
+- **Rollback to v0.21.1:** fully supported by reverting the image tag.
+
 **v0.21.1 — OpenAI provider kind and Anthropic endpoint compatibility** (linux/amd64 and linux/arm64,
 `ghcr.io/laboef1900/wanderlust-studio:0.21.1`). Changes since v0.21.0 (PR #555):
 

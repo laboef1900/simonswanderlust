@@ -641,3 +641,40 @@ describe('import.html recovery copy', () => {
     expect(html).toMatch(/rejected > 0/);
   });
 });
+
+describe('admin UI control scale and stylesheet token consistency', () => {
+  const adminCss = readFileSync('public/admin.css', 'utf8');
+  const gpxCss = readFileSync('public/editor-gpx.css', 'utf8');
+  const stopRouteCss = readFileSync('public/editor-stop-route.css', 'utf8');
+  const journeysHtml = readFileSync('public/journeys.html', 'utf8');
+  const settingsHtml = readFileSync('public/settings.html', 'utf8');
+
+  it('defines the 36px/30px desktop control scale and preserves 44px coarse-pointer targets', () => {
+    expect(adminCss).toContain('--control-h: 2.25rem;');
+    expect(adminCss).toContain('--control-h-sm: 1.875rem;');
+    expect(adminCss).toMatch(/@media\s*\(pointer:\s*coarse\)\s*\{\s*:root\s*\{\s*--control-h:\s*2\.75rem;\s*--control-h-sm:\s*2\.75rem;/);
+  });
+
+  it('uses canonical admin.css tokens in editor-gpx.css and intrinsic flex layout for route actions', () => {
+    expect(gpxCss).not.toMatch(/--admin-(border|surface|subtle|focus)/);
+    expect(gpxCss).toContain('var(--line-control)');
+    expect(gpxCss).toMatch(/\.gpx-route__actions\s*\{\s*display:\s*flex;/);
+    expect(stopRouteCss).toMatch(/\.stop-route__actions\s*\{\s*display:\s*flex;/);
+  });
+
+  it('places page actions inside .cms-page-meta on journeys.html and uses .settings-savebar across settings sections', () => {
+    expect(journeysHtml).toMatch(/<header class="cms-page-meta">[\s\S]*<div class="cms-page-actions">[\s\S]*<\/header>/);
+    for (const saveId of ['saveAi', 'saveImages', 'saveComments', 'saveLanguage', 'identitySave', 'navigationSave', 'save', 'saveRouting']) {
+      expect(settingsHtml).toMatch(new RegExp(`class="settings-savebar"[\\s\\S]{0,260}id="${saveId}"`));
+    }
+  });
+
+  it('scales auxiliary buttons to --control-h-sm via .btn-sm and keeps Review story inside More actions', () => {
+    const editorHtml = readFileSync('public/editor.html', 'utf8');
+    expect(adminCss).toMatch(/\.btn-sm,\s*:is\(/);
+    expect(adminCss).toMatch(/body\.editor-page\s+\.rich-text-gallery-heading\s*\{\s*display:\s*flex;/);
+    expect(adminCss).toMatch(/body\.editor-page\s+\.rich-text-gallery-edit\s*\{\s*min-height:\s*var\(--control-h-sm\);/);
+    expect(editorHtml).toMatch(/<details class="editor-actions-menu" id="editorActionsMenu">[\s\S]*id="reviewStory"[\s\S]*<\/details>/);
+    expect(settingsHtml).toMatch(/<button id="addProvider" type="button" class="btn-secondary btn-sm"/);
+  });
+});

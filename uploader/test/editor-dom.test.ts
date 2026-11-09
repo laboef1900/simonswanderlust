@@ -2487,17 +2487,18 @@ describe('Story review in the real editor', () => {
     first.fire('keydown', { key: 'Escape' });
     expect(dialog.open).toBe(false);
     h.flushDialogEvents();
-    expect(h.document.activeElement).toBe(h.el('reviewStory'));
+    const menuSummary = h.el('editorActionsMenu').querySelector('summary');
+    expect(h.document.activeElement).toBe(menuSummary);
     h.el('reviewStory').click();
     h.el('closeReview').click();
     h.flushDialogEvents();
     expect(dialog.open).toBe(false);
-    expect(h.document.activeElement).toBe(h.el('reviewStory'));
+    expect(h.document.activeElement).toBe(menuSummary);
     h.el('reviewStory').click();
     dialog.dispatchEvent(new EditorEvent('cancel', { cancelable: true }));
     h.flushDialogEvents();
     expect(dialog.open).toBe(false);
-    expect(h.document.activeElement).toBe(h.el('reviewStory'));
+    expect(h.document.activeElement).toBe(menuSummary);
     await settle();
   });
 
@@ -3971,13 +3972,14 @@ describe('manuscript-first editor refinements', () => {
     expect(h.api.buildPayload()).toEqual(before);
   });
 
-  it('preserves the focused review action when it moves into More on mobile', async () => {
+  it('keeps the review action inside More actions across viewports and restores menu focus on close', async () => {
     const h = await loadEditor();
     const review = h.el('reviewStory');
+    expect(h.el('editorActionsMenu').contains(review)).toBe(true);
+    h.el('editorActionsMenu').open = true;
     review.focus();
     h.setMobile(true);
     expect(h.el('editorActionsMenu').contains(review)).toBe(true);
-    expect(h.el('editorActionsMenu').open).toBe(true);
     expect(h.document.activeElement).toBe(review);
     review.click();
     expect(h.el('editorActionsMenu').open).toBe(false);
@@ -3986,7 +3988,7 @@ describe('manuscript-first editor refinements', () => {
     h.flushDialogEvents();
     expect(h.document.activeElement).toBe(h.el('editorActionsMenu').querySelector('summary'));
     h.setMobile(false);
-    expect(h.el('editorActionsMenu').contains(review)).toBe(false);
+    expect(h.el('editorActionsMenu').contains(review)).toBe(true);
   });
 
   it('keeps a key-fact value on one logical line however it was typed or pasted', async () => {
