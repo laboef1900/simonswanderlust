@@ -48,11 +48,22 @@ This repo is the **Astro 7 static-site rebuild** of the current WordPress + Elem
 If a request conflicts with a spec in `docs/superpowers/`, a safety rule, or an explicit project
 constraint, stop and ask instead of guessing.
 
-**Design language:** Editorial magazine + "refined brand" voice, with an "Expedition Log" flavor
-layer (mono coordinates from frontmatter, N°XX entry numbers, contour textures, arrival stamps,
-dashed route dividers). See `docs/superpowers/specs/2026-06-11-blog-redesign-design.md`.
-(This replaces the template's "Glass & Bento" house style — do not reintroduce glassmorphism,
-bento grids, or a dark-by-default theme here.)
+**Design Systems & UI Conventions (Source of truth: `DESIGN.md` and `PRODUCT.md`):**
+The platform shares a unified brand palette, typography, and contrast rules across both surfaces, while tailoring density and layout to each environment:
+- **Shared Brand Palette & Typography:**
+  - **Brand Red:** `--color-brand-red` (`site/`) / `--red` (`uploader/`): `#d23b30` — primary accent on light backgrounds (AA 4.61:1).
+  - **Brand Red Light:** `--color-brand-red-light`: `#ff5a4e` — accent on dark/navy surfaces (AA 4.74:1; `#d23b30` fails at 3.1:1 on navy and MUST NOT be used on dark backgrounds; enforced by `tokens.test.ts`).
+  - **Brand Navy:** `--color-navy`: `#142a42` (`site/`) / `--navy`: `#263b51` (`uploader/`).
+  - **Typography:** Inter Variable / Inter (sans headings and body), IBM Plex Mono (data, labels, code).
+- **Public Blog (`site/`):** *Editorial Magazine & Expedition Log*
+  - Ink-on-paper aesthetic on light canvas (`--color-canvas: #fbfbfd`). Expedition accents: mono-tracked uppercase log labels (`tracking-log: 0.18em`), entry numbers (`N°XX`), coordinates, arrival stamps, contour textures, dashed route dividers.
+  - **The Opaque Plate Rule (Critical):** Text placed over photographs MUST have its own opaque or measured-floor plate (solid navy for white text, canvas for dark text); never rely on gradient scrims or backdrop blurs.
+  - **No Generic Blog Tropes:** No dark-by-default themes, glassmorphism, bento grids, or pill CTAs.
+  - **No Hardcoded Strings:** All UI copy lives in `site/src/i18n/ui.ts` (Golden Rule 7).
+- **Admin Studio (`uploader/public/`):** *Editorial Desk*
+  - Quiet, compact operating UI in vanilla HTML/CSS (`admin.css`). Light canvas (`--canvas: #f5f6f7`), white cards (`--surface: #fff`), steel-blue secondary chrome (`--studio-accent: #416486`).
+  - Carries the brand accent colors (`--red: #d23b30`, `--navy: #263b51`) for primary brand touchpoints, headers/badges, and publish/destructive actions.
+  - Clean operational surface: no decorative stamps, contour textures, or ornamental dividers in admin screens.
 
 ## Read these when relevant
 

@@ -49,12 +49,17 @@ editor-integrated form; the 2026-06-22 spec is historical.) See `uploader/README
 
 ## Design Tokens, Dependencies and Containers
 
-### Design Tokens (`site/src/styles/global.css`, Tailwind 4 `@theme`)
+### Design Tokens (`site/src/styles/global.css` & `uploader/public/admin.css`)
 
-- `--color-canvas: #fbfbfd` (page bg) · `--color-navy: #142a42` (brand/structure)
-- `--color-ink: #16212e` (body text) · `--color-brand-red: #d23b30` (accent/CTA)
-- `--color-brand-red-light: #ff5a4e` (accent on dark/photo backgrounds)
-- `--font-sans: Inter Variable` · `--font-mono: IBM Plex Mono`
+- **Public Site (`site/src/styles/global.css`, Tailwind 4 `@theme`):**
+  - `--color-canvas: #fbfbfd` (page bg) · `--color-navy: #142a42` (brand/structure)
+  - `--color-ink: #16212e` (body text) · `--color-brand-red: #d23b30` (accent/CTA)
+  - `--color-brand-red-light: #ff5a4e` (accent on dark/photo backgrounds)
+  - `--font-sans: Inter Variable` · `--font-mono: IBM Plex Mono`
+- **Admin Studio (`uploader/public/admin.css`):**
+  - `--canvas: #f5f6f7` · `--surface: #fff` · `--ink: #202630` · `--muted: #626974`
+  - `--navy: #263b51` · `--red: #d23b30` (shared brand accent) · `--studio-accent: #416486` (secondary chrome)
+  - `--sans: Inter` · `--mono: IBM Plex Mono`
 
 ### Dependency Integrity
 
