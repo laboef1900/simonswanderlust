@@ -1110,7 +1110,7 @@ and the `<dialog>`s appended to `<body>` share one set:
 | Active navigation / New post | `--studio-accent` | `#416486` |
 | Active navigation surface | `--studio-accent-soft` | `#eaf0f6` |
 | Live-site mutation / destructive | `--red` / `--red-hover` | `#d23b30` / `#ac2a21` |
-| Control height (small) | `--control-h` (`--control-h-sm`) | `2.5rem` (`2rem`); both `2.75rem` on coarse pointers |
+| Control height (small) | `--control-h` (`--control-h-sm`) | `2.25rem` (`1.875rem`); both `2.75rem` on coarse pointers |
 | Focus ring | `--focus-ring` | `2px solid var(--studio-accent)` |
 
 **One control vocabulary.** Every page uses the same primitives; page CSS only places them.
@@ -1189,7 +1189,7 @@ and the `<dialog>`s appended to `<body>` share one set:
 - `[hidden]` is enforced globally with `!important`, because every control carries an
   author `display`.
 
-- A full-width 4rem masthead (brand on the left; descriptor and View site on the right)
+- A full-width 3rem masthead (brand on the left; descriptor and View site on the right)
   sits above a 13rem sidebar and a single rounded white workspace. The sidebar holds
   all page navigation (no journal header above it) and, at its foot, the account menu. Its
   trigger is the avatar alone: a 36px steel-blue (`--studio-accent`) circle with the white
@@ -1227,7 +1227,7 @@ and the `<dialog>`s appended to `<body>` share one set:
 
 - The editor has no visible page title: the shell's h1 (New post / Edit post) is
   visually hidden, so the command bar opens the workspace. The command bar separates
-  primary actions (Save draft, Publish, Review story, **Save & preview**, More actions) from the
+  primary actions (Save draft, Publish, **Save & preview**, More actions) from the
   full-width save/readiness status row; the actions come first in the DOM, so Tab reaches
   Save before the status. Confirmed draft saves use this status row alone, including saves confirmed by a recovery
   check. They never open a second success banner or offer **Check again** after success.
@@ -1238,14 +1238,15 @@ and the `<dialog>`s appended to `<body>` share one set:
   accessible name, so the phone action row does not wrap. Save draft names its shortcut (⌘S / Ctrl+S) in its tooltip and
   `aria-keyshortcuts`. **Save & preview** names its existing save-before-preview operation;
   its accessible name keeps "Draft preview — not the live site", and its description explains
-  that it does not publish. Below 52rem the same Review story button moves into More (no
-  duplicate handler); closing Review returns focus to More when its button is hidden. Re-reading the live state is
+  that it does not publish. **Review story** lives inside **More actions** at all viewport
+  widths alongside Unpublish; closing Review returns focus to the More actions trigger when
+  its menu is closed. Re-reading the live state is
   a small icon beside it (**Check the live site again**), not a full-height button. Above
   74rem readiness lives in a native **Publish checklist** disclosure in the status row:
   a live missing-field count, then the existing locale/trip links in its floating panel.
   A gap link closes it before revealing its field; Escape closes it and restores summary
-  focus. It never changes the draft or implies a successful publication. More actions
-  appears only when it holds Unpublish; below 74rem that menu carries readiness instead.
+  focus. It never changes the draft or implies a successful publication. Below 74rem
+  More actions carries readiness as well.
   The desktop manuscript title is a fixed 2rem; its placeholder uses `--muted`.
   On phones the status is one
   wrapping line ("Saved to server · Live ↻"), the story-details opener rides at the right

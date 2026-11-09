@@ -13,7 +13,7 @@
       <div class="cms-page-actions">
         <p id="actionStatus" class="muted" role="status"></p>
         <p id="actionError" class="err" role="alert" hidden></p>
-        <button id="saveBtn" type="button" class="btn-primary-publish" data-pages-copy="Save"></button>
+        <button id="saveBtn" type="button" class="btn-secondary" data-pages-copy="Save"></button>
         <button id="publishBtn" type="button" class="btn-primary-publish" data-pages-copy="Publish" hidden></button>
         <button id="previewBtn" type="button" class="btn-secondary" data-pages-copy="Preview" disabled></button>
         <button id="unpublishBtn" type="button" class="btn-secondary" data-pages-copy="Unpublish" hidden></button>
@@ -21,16 +21,18 @@
       </div>
     </header>
     <main>
-      <a id="pagesBack" href="/admin/pages.html" data-pages-copy="Back"></a>
-      <p id="pageState" class="muted" role="status"></p>
+      <div class="about-toolbar">
+        <a id="pagesBack" class="action-link" href="/admin/pages.html" data-pages-copy="Back"></a>
+        <div class="lang-switch-bar about-tabs" role="tablist" aria-label="Page language">
+          <button type="button" class="tab-btn active" role="tab" id="tabbtn-de" aria-selected="true" aria-controls="tab-de" data-tab="de">Deutsch <span class="lang-code" aria-hidden="true">DE</span></button>
+          <button type="button" class="tab-btn" role="tab" id="tabbtn-en" aria-selected="false" tabindex="-1" aria-controls="tab-en" data-tab="en">English <span class="lang-code" aria-hidden="true">EN</span></button>
+        </div>
+        <p id="pageState" class="muted" role="status"></p>
+      </div>
       <p id="legalNote" class="muted" data-pages-copy="LegalNote" hidden></p>
       <p id="preparationNotice" class="muted" role="status" hidden></p>
       <a id="languageSettingsLink" href="/admin/settings.html#language" data-language-copy="Back" hidden></a>
       <div id="galleryMetadataWarnings" class="notice-warn" hidden></div>
-      <div class="lang-switch-bar about-tabs" role="tablist" aria-label="Page language">
-        <button type="button" class="tab-btn active" role="tab" id="tabbtn-de" aria-selected="true" aria-controls="tab-de" data-tab="de">Deutsch <span class="lang-code" aria-hidden="true">DE</span></button>
-        <button type="button" class="tab-btn" role="tab" id="tabbtn-en" aria-selected="false" tabindex="-1" aria-controls="tab-en" data-tab="en">English <span class="lang-code" aria-hidden="true">EN</span></button>
-      </div>
 
       <section id="tab-de" class="card locale-tab" role="tabpanel" aria-labelledby="tabbtn-de">
         <label for="deTitle">Heading</label>
