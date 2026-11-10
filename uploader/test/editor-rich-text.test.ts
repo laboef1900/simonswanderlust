@@ -6,8 +6,7 @@ import type { RichEditor, RichEditorCopy, RichEditorOptions } from '../src/edito
 const copy: RichEditorCopy = {
   bodyLabel: 'Story (visual editor, EN)', sourceLabel: 'Source block', sourceHelp: 'Edit this source in Markdown mode.',
   galleryLabel: 'Gallery', editGallery: 'Edit gallery', imageUnavailable: 'Image unavailable',
-  linkPrompt: 'Link URL', linkInvalid: 'Invalid link', galleryChecking: 'Checking Media',
-  galleryLookupFailed: 'Media lookup failed', galleryRetry: 'Retry',
+  galleryChecking: 'Checking Media', galleryLookupFailed: 'Media lookup failed', galleryRetry: 'Retry',
 };
 const windows: Window[] = [];
 const editors: RichEditor[] = [];
@@ -396,5 +395,40 @@ describe('editor commands and isolated histories', () => {
     german.undo();
     expect(german.getMarkdown()).toBe('Deutsch');
     expect(h.rich.getMarkdown()).toBe('English');
+  });
+
+  it.each([
+    ['accepts a safe address', 'https://example.org/route', true, 'A [lovely](https://example.org/route) place'],
+    ['cancels and leaves the text alone', null, false, 'A lovely place'],
+    ['refuses an unsafe address the host let through', 'javascript:alert(1)', false, 'A lovely place'],
+  ])('links the selection through the injected askLink: %s', async (_name, answer, applied, markdown) => {
+    const askLink = vi.fn(async () => answer);
+    const h = await mount('A lovely place', { askLink });
+    h.rich.setSelection({ from: 2, to: 8 });
+    expect(await h.rich.command('link')).toBe(applied);
+    expect(askLink).toHaveBeenCalledWith('');
+    expect(h.rich.getMarkdown()).toBe(markdown);
+    expect(h.rich.isActive('link')).toBe(applied);
+    if (applied) {
+      // One undo step; the link's address is offered back for editing.
+      expect(h.rich.undo()).toBe(true);
+      expect(h.rich.getMarkdown()).toBe('A lovely place');
+      expect(h.rich.redo()).toBe(true);
+      h.rich.setSelection({ from: 5, to: 5 });
+      await h.rich.command('link');
+      expect(askLink).toHaveBeenLastCalledWith('https://example.org/route');
+    }
+  });
+
+  it('removes the link on an empty answer and does nothing without a dialog', async () => {
+    const askLink = vi.fn(async () => '');
+    const h = await mount('See [the route](https://example.org/route) here', { askLink });
+    h.rich.setSelection({ from: 6, to: 6 });
+    expect(await h.rich.command('link')).toBe(true);
+    expect(h.rich.getMarkdown()).toBe('See the route here');
+    const bare = await mount('No dialog here');
+    bare.rich.setSelection({ from: 0, to: 2 });
+    expect(await bare.rich.command('link')).toBe(false);
+    expect(bare.rich.getMarkdown()).toBe('No dialog here');
   });
 });

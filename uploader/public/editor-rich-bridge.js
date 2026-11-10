@@ -4,7 +4,7 @@
 window.EditorRichBridge = (function () {
   function create({ mde, element, source, error, visualButton, markdownButton,
     galleryToggle, formatButtons, locale, imageOrigin, galleryLibrary, images, thumbnailUrl,
-    copy, galleryCopy, onEditGallery, onModeChange }) {
+    copy, galleryCopy, onEditGallery, onModeChange, askLink }) {
     const cm = mde.codemirror;
     // CodeMirror's default universal-newline split rewrites CRLF on load.
     // LF-only splitting retains every source byte (including mixed endings).
@@ -38,7 +38,8 @@ window.EditorRichBridge = (function () {
       visualButton.setAttribute('aria-pressed', String(mode === 'visual'));
       markdownButton.setAttribute('aria-pressed', String(mode === 'markdown'));
       visualButton.disabled = typeof window.RichTextEditor?.create !== 'function';
-      galleryToggle.hidden = mode === 'visual';
+      // Only the story editor has a rendered-gallery toggle; it belongs to Markdown mode.
+      if (galleryToggle) galleryToggle.hidden = mode === 'visual';
       refreshFormatting();
       onModeChange?.(mode);
     }
@@ -133,6 +134,16 @@ window.EditorRichBridge = (function () {
       event.preventDefault();
       rich.command('link');
     }
+    // The link address is asked in the admin's own dialog (AdminConfirm.prompt),
+    // never the browser's prompt: '' removes the link, null cancels. A caller
+    // may supply its own `askLink` with the same contract.
+    function promptLink(current) {
+      return AdminConfirm.prompt({
+        title: copy.richLinkTitle, body: copy.richLinkPrompt, label: copy.richLinkLabel, value: current,
+        confirmLabel: copy.richLinkConfirm, required: false,
+        validate: (text) => (window.RichTextEditor.safeLink(text) ? '' : copy.richLinkInvalid),
+      });
+    }
     function mountRich() {
       rich = window.RichTextEditor.create({
         element, markdown: cm.getValue(), locale, imageOrigin, galleryLibrary, images, thumbnailUrl,
@@ -140,10 +151,10 @@ window.EditorRichBridge = (function () {
           bodyLabel: copy.visualBodyLabel.replace('{locale}', locale.toUpperCase()),
           sourceLabel: copy.richSourceLabel, sourceHelp: copy.richSourceHelp, galleryLabel: copy.richGalleryLabel,
           editGallery: copy.richEditGallery, imageUnavailable: copy.richImageUnavailable,
-          linkPrompt: copy.richLinkPrompt, linkInvalid: copy.richLinkInvalid,
           galleryChecking: galleryCopy.checking, galleryLookupFailed: galleryCopy.mediaFailed,
           galleryRetry: galleryCopy.retry,
         },
+        askLink: askLink || promptLink,
         onChange: richChanged, onSelection: richSelectionChanged, onEditGallery,
       });
       element.querySelector('[contenteditable="true"]')?.setAttribute('aria-label',

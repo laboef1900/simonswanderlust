@@ -193,7 +193,9 @@ function shellSandbox(pathname: string, options: SandboxOptions = {}) {
           scrim.hidden = true;
           const workspace = makeElement();
           const close = makeElement('cmsNavClose', 'BUTTON');
+          close.parent = sidebar;
           const accountMenu = makeElement('cmsAccountMenu', 'DETAILS');
+          accountMenu.parent = sidebar;
           const accountTrigger = makeElement('', 'SUMMARY');
           accountTrigger.parent = accountMenu;
           const logout = makeElement('cmsLogoutBtn', 'BUTTON');
@@ -283,6 +285,7 @@ function shellSandbox(pathname: string, options: SandboxOptions = {}) {
     location,
     requestOptions,
     get title() { return documentStub.title; },
+    get activeElement() { return activeElement; },
     main,
     heading,
     lede,
@@ -500,6 +503,7 @@ describe('Auth navigation shell', () => {
     shell.menu.fire('click');
     expectDrawerOpen(shell);
     expect(shell.first.focused).toBe(true);
+    expect(shell.sidebar.contains(shell.activeElement)).toBe(true);
 
     shell.last.focus();
     expect(shell.key('Tab').defaultPrevented).toBe(true);

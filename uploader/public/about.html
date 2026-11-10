@@ -7,27 +7,32 @@
     <link rel="stylesheet" href="/admin/admin.css" />
     <link rel="stylesheet" href="/admin/vendor/easymde.min.css" />
   </head>
-  <body>
+  <body class="page-editor">
     <header class="cms-page-meta">
       <h1 id="pageHeading"></h1>
-      <div class="cms-page-actions">
-        <p id="actionStatus" class="muted" role="status"></p>
-        <p id="actionError" class="err" role="alert" hidden></p>
-        <button id="saveBtn" type="button" class="btn-secondary" data-pages-copy="Save"></button>
-        <button id="publishBtn" type="button" class="btn-primary-publish" data-pages-copy="Publish" hidden></button>
-        <button id="previewBtn" type="button" class="btn-secondary" data-pages-copy="Preview" disabled></button>
-        <button id="unpublishBtn" type="button" class="btn-secondary" data-pages-copy="Unpublish" hidden></button>
-        <button id="deleteBtn" type="button" class="btn-remove" data-pages-copy="Delete" hidden></button>
-      </div>
     </header>
     <main>
-      <div class="about-toolbar">
-        <a id="pagesBack" class="action-link" href="/admin/pages.html" data-pages-copy="Back"></a>
-        <div class="lang-switch-bar about-tabs" role="tablist" aria-label="Page language">
-          <button type="button" class="tab-btn active" role="tab" id="tabbtn-de" aria-selected="true" aria-controls="tab-de" data-tab="de">Deutsch <span class="lang-code" aria-hidden="true">DE</span></button>
-          <button type="button" class="tab-btn" role="tab" id="tabbtn-en" aria-selected="false" tabindex="-1" aria-controls="tab-en" data-tab="en">English <span class="lang-code" aria-hidden="true">EN</span></button>
+      <!-- The shared editor command bar: Back and the locale tabs on the left, actions on the right, status beneath. -->
+      <div class="commandbar">
+        <div class="commandbar__nav">
+          <a id="pagesBack" class="action-link commandbar__back" href="/admin/pages.html" data-pages-copy="Back"></a>
+          <div class="lang-switch-bar" role="tablist" aria-label="Page language">
+            <button type="button" class="tab-btn active" role="tab" id="tabbtn-de" aria-selected="true" aria-controls="tab-de" data-tab="de">Deutsch <span class="lang-code" aria-hidden="true">DE</span></button>
+            <button type="button" class="tab-btn" role="tab" id="tabbtn-en" aria-selected="false" tabindex="-1" aria-controls="tab-en" data-tab="en">English <span class="lang-code" aria-hidden="true">EN</span></button>
+          </div>
         </div>
-        <p id="pageState" class="muted" role="status"></p>
+        <div class="commandbar__actions">
+          <button id="saveBtn" type="button" class="commandbar__save" data-pages-copy="Save"></button>
+          <button id="publishBtn" type="button" class="btn-primary-publish" data-pages-copy="Publish" hidden></button>
+          <button id="previewBtn" type="button" class="btn-secondary" data-pages-copy="Preview" disabled></button>
+          <button id="unpublishBtn" type="button" class="btn-secondary" data-pages-copy="Unpublish" hidden></button>
+          <button id="deleteBtn" type="button" class="btn-remove" data-pages-copy="Delete" hidden></button>
+        </div>
+        <div class="commandbar__status">
+          <p id="pageState" class="muted" role="status"></p>
+          <p id="actionStatus" class="muted" role="status"></p>
+          <p id="actionError" class="err" role="alert" hidden></p>
+        </div>
       </div>
       <p id="legalNote" class="muted" data-pages-copy="LegalNote" hidden></p>
       <p id="preparationNotice" class="muted" role="status" hidden></p>
@@ -35,20 +40,66 @@
       <div id="galleryMetadataWarnings" class="notice-warn" hidden></div>
 
       <section id="tab-de" class="card locale-tab" role="tabpanel" aria-labelledby="tabbtn-de">
-        <label for="deTitle">Heading</label>
+        <label for="deTitle">Heading (DE)</label>
         <input id="deTitle" type="text" />
-        <div id="deSlugFields" hidden><label for="deSlug" data-pages-copy="Slug"></label>
+        <div id="deSlugFields" hidden><label id="deSlugLabel" for="deSlug"></label>
           <input id="deSlug" type="text" pattern="[a-z0-9][a-z0-9-]*" aria-describedby="deSlugHelp">
           <p id="deSlugHelp" class="muted" data-pages-copy="SlugHelp"></p></div>
-        <label for="deBody">Body (Markdown)</label>
-        <textarea id="deBody"></textarea>
-        <div class="body-img-row">
-          <input id="deBodyImgFile" type="file" accept="image/*" aria-label="Body image file (DE)" />
-          <input id="deBodyImgAlt" type="text" placeholder="Alt text (DE)" aria-label="Alt text for body image (DE)" />
-          <div class="body-img-row__actions">
-            <button type="button" id="deBodyImgUpload" class="btn-secondary">Insert body image</button>
+        <!-- The story editor's manuscript: one toolbar, a Photo tray, and the
+             Visual and Markdown views of the same body. The bar pins under the
+             command bar; inserts go in at the cursor. A roving toolbar: one Tab
+             stop, arrow keys inside. -->
+        <div class="page-manuscript">
+          <h2 class="section-label" id="deBodyLabel">Body (DE)</h2>
+          <div class="manuscript-tools" data-locale="de">
+            <div class="manuscript-bar" id="deManuscriptBar" role="toolbar" aria-label="Body tools (DE)">
+              <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="deFormatToggle" aria-expanded="false" aria-controls="deFormatPanel" hidden></button>
+              <div class="manuscript-format" id="deFormatPanel">
+                <div class="manuscript-bar__group">
+                  <button type="button" class="manuscript-bar__btn" data-format="bold" aria-label="Bold"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h9a4 4 0 0 1 0 8H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h7a4 4 0 0 1 0 8"/></svg></button>
+                  <button type="button" class="manuscript-bar__btn" data-format="italic" aria-label="Italic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 4h-9"/><path d="M14 20H5"/><path d="M15 4 9 20"/></svg></button>
+                  <button type="button" class="manuscript-bar__btn" data-format="heading" aria-label="Heading"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12"/><path d="M6 20V4"/><path d="M18 20V4"/></svg></button>
+                </div>
+                <div class="manuscript-bar__group">
+                  <button type="button" class="manuscript-bar__btn" data-format="quote" aria-label="Quote"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 6H3"/><path d="M21 12H8"/><path d="M21 18H8"/><path d="M3 12v6"/></svg></button>
+                  <button type="button" class="manuscript-bar__btn" data-format="bullets" aria-label="Bulleted list"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/></svg></button>
+                  <button type="button" class="manuscript-bar__btn" data-format="numbers" aria-label="Numbered list"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 6h11"/><path d="M10 12h11"/><path d="M10 18h11"/><path d="M4 6h1v4"/><path d="M4 10h2"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/></svg></button>
+                  <button type="button" class="manuscript-bar__btn" data-format="link" aria-label="Link"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>
+                  <button type="button" class="manuscript-bar__btn" data-format="code"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 6-6 6 6 6"/><path d="m16 6 6 6-6 6"/><path d="m14 3-4 18"/></svg></button>
+                </div>
+              </div>
+              <div class="manuscript-bar__group">
+                <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="dePhotoToggle" aria-expanded="false" aria-controls="dePhotoPanel"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.09-3.09a2 2 0 0 0-2.82 0L6 21"/></svg>Photo</button>
+              </div>
+              <div class="manuscript-bar__group manuscript-bar__group--view">
+                <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="deVisualMode" data-editor-mode="visual" aria-controls="deRichBody" aria-pressed="false"></button>
+                <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="deMarkdownMode" data-editor-mode="markdown" aria-controls="deMarkdownBody" aria-pressed="true"></button>
+              </div>
+            </div>
+            <p id="deBodyImgStatus" class="muted manuscript-tools__status" role="status"></p>
+            <div class="manuscript-photo" id="dePhotoPanel" role="group" aria-label="Insert a photo (DE)" hidden>
+              <div class="manuscript-photo__fields">
+                <div>
+                  <label for="deBodyImgFile">Photo file</label>
+                  <input id="deBodyImgFile" type="file" accept="image/*" class="hero-file-input" />
+                </div>
+                <div>
+                  <label for="deBodyImgAlt">Alt text (DE)</label>
+                  <input id="deBodyImgAlt" type="text" />
+                </div>
+              </div>
+              <div class="manuscript-photo__actions">
+                <button type="button" id="deBodyImgUpload">Upload and insert</button>
+                <p class="muted">Goes in at the cursor.</p>
+              </div>
+            </div>
           </div>
-          <p id="deBodyImgStatus" class="muted" role="status"></p>
+          <p id="deRichError" class="notice-warn" role="alert" hidden></p>
+          <div id="deRichBody" class="rich-text-editor" hidden></div>
+          <div id="deMarkdownBody" class="markdown-editor">
+            <label for="deBody" hidden>Body (Markdown)</label>
+            <textarea id="deBody" aria-label="Body (Markdown, DE)"></textarea>
+          </div>
         </div>
         <section id="deGearSection" class="about-gear" aria-labelledby="deGearHeading" hidden>
           <h2 id="deGearHeading" class="section-label"></h2>
@@ -67,20 +118,62 @@
       </section>
 
       <section id="tab-en" class="card locale-tab" role="tabpanel" aria-labelledby="tabbtn-en" hidden>
-        <label for="enTitle">Heading</label>
+        <label for="enTitle">Heading (EN)</label>
         <input id="enTitle" type="text" />
-        <div id="enSlugFields" hidden><label for="enSlug" data-pages-copy="Slug"></label>
+        <div id="enSlugFields" hidden><label id="enSlugLabel" for="enSlug"></label>
           <input id="enSlug" type="text" pattern="[a-z0-9][a-z0-9-]*" aria-describedby="enSlugHelp">
           <p id="enSlugHelp" class="muted" data-pages-copy="SlugHelp"></p></div>
-        <label for="enBody">Body (Markdown)</label>
-        <textarea id="enBody"></textarea>
-        <div class="body-img-row">
-          <input id="enBodyImgFile" type="file" accept="image/*" aria-label="Body image file (EN)" />
-          <input id="enBodyImgAlt" type="text" placeholder="Alt text (EN)" aria-label="Alt text for body image (EN)" />
-          <div class="body-img-row__actions">
-            <button type="button" id="enBodyImgUpload" class="btn-secondary">Insert body image</button>
+        <div class="page-manuscript">
+          <h2 class="section-label" id="enBodyLabel">Body (EN)</h2>
+          <div class="manuscript-tools" data-locale="en">
+            <div class="manuscript-bar" id="enManuscriptBar" role="toolbar" aria-label="Body tools (EN)">
+              <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="enFormatToggle" aria-expanded="false" aria-controls="enFormatPanel" hidden></button>
+              <div class="manuscript-format" id="enFormatPanel">
+                <div class="manuscript-bar__group">
+                  <button type="button" class="manuscript-bar__btn" data-format="bold" aria-label="Bold"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h9a4 4 0 0 1 0 8H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h7a4 4 0 0 1 0 8"/></svg></button>
+                  <button type="button" class="manuscript-bar__btn" data-format="italic" aria-label="Italic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 4h-9"/><path d="M14 20H5"/><path d="M15 4 9 20"/></svg></button>
+                  <button type="button" class="manuscript-bar__btn" data-format="heading" aria-label="Heading"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12"/><path d="M6 20V4"/><path d="M18 20V4"/></svg></button>
+                </div>
+                <div class="manuscript-bar__group">
+                  <button type="button" class="manuscript-bar__btn" data-format="quote" aria-label="Quote"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 6H3"/><path d="M21 12H8"/><path d="M21 18H8"/><path d="M3 12v6"/></svg></button>
+                  <button type="button" class="manuscript-bar__btn" data-format="bullets" aria-label="Bulleted list"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/></svg></button>
+                  <button type="button" class="manuscript-bar__btn" data-format="numbers" aria-label="Numbered list"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 6h11"/><path d="M10 12h11"/><path d="M10 18h11"/><path d="M4 6h1v4"/><path d="M4 10h2"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/></svg></button>
+                  <button type="button" class="manuscript-bar__btn" data-format="link" aria-label="Link"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>
+                  <button type="button" class="manuscript-bar__btn" data-format="code"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 6-6 6 6 6"/><path d="m16 6 6 6-6 6"/><path d="m14 3-4 18"/></svg></button>
+                </div>
+              </div>
+              <div class="manuscript-bar__group">
+                <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="enPhotoToggle" aria-expanded="false" aria-controls="enPhotoPanel"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.09-3.09a2 2 0 0 0-2.82 0L6 21"/></svg>Photo</button>
+              </div>
+              <div class="manuscript-bar__group manuscript-bar__group--view">
+                <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="enVisualMode" data-editor-mode="visual" aria-controls="enRichBody" aria-pressed="false"></button>
+                <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="enMarkdownMode" data-editor-mode="markdown" aria-controls="enMarkdownBody" aria-pressed="true"></button>
+              </div>
+            </div>
+            <p id="enBodyImgStatus" class="muted manuscript-tools__status" role="status"></p>
+            <div class="manuscript-photo" id="enPhotoPanel" role="group" aria-label="Insert a photo (EN)" hidden>
+              <div class="manuscript-photo__fields">
+                <div>
+                  <label for="enBodyImgFile">Photo file</label>
+                  <input id="enBodyImgFile" type="file" accept="image/*" class="hero-file-input" />
+                </div>
+                <div>
+                  <label for="enBodyImgAlt">Alt text (EN)</label>
+                  <input id="enBodyImgAlt" type="text" />
+                </div>
+              </div>
+              <div class="manuscript-photo__actions">
+                <button type="button" id="enBodyImgUpload">Upload and insert</button>
+                <p class="muted">Goes in at the cursor.</p>
+              </div>
+            </div>
           </div>
-          <p id="enBodyImgStatus" class="muted" role="status"></p>
+          <p id="enRichError" class="notice-warn" role="alert" hidden></p>
+          <div id="enRichBody" class="rich-text-editor" hidden></div>
+          <div id="enMarkdownBody" class="markdown-editor">
+            <label for="enBody" hidden>Body (Markdown)</label>
+            <textarea id="enBody" aria-label="Body (Markdown, EN)"></textarea>
+          </div>
         </div>
         <section id="enGearSection" class="about-gear" aria-labelledby="enGearHeading" hidden>
           <h2 id="enGearHeading" class="section-label"></h2>
@@ -107,31 +200,41 @@
     </main>
 
     <script src="/admin/editor-image-copy.js"></script>
+    <script src="/admin/admin-ui.js"></script>
     <script src="/admin/build-reporting.js"></script>
     <script src="/admin/auth.js"></script>
     <script src="/admin/language.js"></script>
     <script src="/admin/admin-confirm.js"></script>
     <script src="/admin/draft-guard.js"></script>
     <script src="/admin/write-recovery.js"></script>
+    <script src="/admin/vendor/easymde.min.js"></script>
+    <script src="/admin/vendor/editor-rich-text.js"></script>
+    <script src="/admin/editor-rich-bridge.js"></script>
+    <script src="/admin/manuscript-bar.js"></script>
     <script src="/admin/media-api.js"></script>
     <script src="/admin/upload-recovery.js"></script>
-    <script src="/admin/vendor/easymde.min.js"></script>
-    <script src="/admin/tabs.js"></script>
     <script src="/admin/image-markdown.js"></script>
+    <!-- PostsFilter.thumbUrl(): the Visual view's gallery previews use the same
+         never-upscale variant rule the posts list does. -->
+    <script src="/admin/posts-filter.js"></script>
+    <script src="/admin/tabs.js"></script>
     <script src="/admin/pages-ui.js"></script>
     <script src="/admin/about-equipment.js"></script>
+    <script src="/admin/gallery-library.js"></script>
     <script src="/admin/gallery-metadata-warnings.js"></script>
     <script type="module">
       import './gallery-fence.js';
       'use strict';
       const $ = (id) => document.getElementById(id);
       const KEY = new URLSearchParams(location.search).get('key') || 'about';
+      const editorCopy = EditorCopy.en;
       PagesUI.localize(document);
+      SiteLanguage.localize(document);
       $('pageHeading').textContent = PagesUI.text('Heading', { kind: PagesUI.kind(KEY) });
-      document.title = $('pageHeading').textContent;
+      Auth.setPageTitle($('pageHeading').textContent);
+      for (const locale of ['de', 'en']) $(locale + 'SlugLabel').textContent = PagesUI.text('Slug', { code: locale.toUpperCase() });
       let storedPage = null;
       let pageDefaults = null;
-      SiteLanguage.localize(document);
       const deImages = {}, enImages = {};
       // updatedAt of the page as loaded/last saved in THIS tab. Echoed back on
       // every save so the server can 409 when another tab saved meanwhile (#141).
@@ -143,12 +246,21 @@
       let loadBlocked = true;
       let confirmingSave = false;
 
+      // ---- the manuscript: EasyMDE holds the one Markdown body; the bridge adds the Visual view ----
       // EasyMDE's built-in autosave stays disabled — DraftGuard below stashes the
-      // full form (both locales) instead.
-      const deMDE = new EasyMDE({ element: $('deBody'), spellChecker: false, autosave: { enabled: false },
-        toolbar: ['bold', 'italic', 'heading', '|', 'quote', 'unordered-list', 'ordered-list', '|', 'link', 'image', '|', 'preview'] });
-      const enMDE = new EasyMDE({ element: $('enBody'), spellChecker: false, autosave: { enabled: false },
-        toolbar: ['bold', 'italic', 'heading', '|', 'quote', 'unordered-list', 'ordered-list', '|', 'link', 'image', '|', 'preview'] });
+      // full form (both locales) instead. The shared manuscript bar is the
+      // toolbar; EasyMDE's read-only preview/fullscreen shortcuts are disabled
+      // so they cannot hide the synchronized writing surface.
+      const MDE_OPTIONS = {
+        spellChecker: false,
+        autoDownloadFontAwesome: false,
+        autosave: { enabled: false },
+        toolbar: false,
+        shortcuts: { togglePreview: null, toggleSideBySide: null, toggleFullScreen: null },
+      };
+      const deMDE = new EasyMDE({ ...MDE_OPTIONS, element: $('deBody') });
+      const enMDE = new EasyMDE({ ...MDE_OPTIONS, element: $('enBody') });
+      const mdeFor = (locale) => (locale === 'en' ? enMDE : deMDE);
       // EasyMDE hides the labelled <textarea> and types into CodeMirror's own
       // input, which starts nameless — a screen reader would hear "edit text".
       deMDE.codemirror.getInputField().setAttribute('aria-label', 'Body (Markdown, DE)');
@@ -162,11 +274,20 @@
         collect: () => ({ de: localeObj('de'), en: localeObj('en') }),
       });
       writeRecovery = WriteRecovery.create({
-        kind: 'pages', guard, copy: EditorCopy.en, anchor: $('actionError'),
+        kind: 'pages', guard, copy: editorCopy, anchor: $('actionError'),
         resourceId: () => KEY, base: () => loadedUpdatedAt,
         collect: () => ({ de: localeObj('de'), en: localeObj('en') }),
+        // A conflict is compared field by field, in words; only the fields that differ are shown.
+        describe: (version) => editableLocales.flatMap((locale) => {
+          const code = locale.toUpperCase(), fields = version?.[locale] || {};
+          return [
+            { label: 'Heading (' + code + ')', value: fields.title || '' },
+            ...(KEY === 'about' ? [] : [{ label: 'Slug (' + code + ')', value: fields.slug || '' }]),
+            { label: 'Body (' + code + ')', value: fields.bodyMarkdown || '' },
+          ];
+        }),
         restoreBase: (value) => { loadedUpdatedAt = value; },
-        error: (body, status) => { showErr(body?.error || (EditorCopy.en.writeRefused + ' ' + status)); setStatus(''); },
+        error: (body, status) => { showErr(body?.error || (editorCopy.writeRefused + ' ' + status)); setStatus(''); },
         adopt: async (saved, attempt, acknowledgement) => {
           acceptSaved(saved);
           // Gallery diagnostics ride only on this tab's own acknowledgement, never a probe.
@@ -188,24 +309,121 @@
           guard.markClean();
         },
       });
-      const mainEl = document.querySelector('main');
-      mainEl.addEventListener('input', () => guard.markDirty());
-      mainEl.addEventListener('change', () => guard.markDirty());
-      deMDE.codemirror.on('change', () => guard.markDirty());
-      enMDE.codemirror.on('change', () => guard.markDirty());
 
-      const tabsApi = Tabs.wire(document.querySelector('[role="tablist"]'), {
-        onChange: (tab) => { (tab === 'en' ? enMDE : deMDE).codemirror.refresh(); },
+      // ---- manuscript bar: formatting, photo, the two views ----
+      // The toolbar pins under the sticky command bar, whose height is
+      // measured into the shared --editor-commandbar-height, as in the story editor.
+      const commandbar = document.querySelector('.commandbar');
+      if (typeof ResizeObserver !== 'undefined') {
+        new ResizeObserver(() => {
+          document.body.style.setProperty('--editor-commandbar-height', commandbar.getBoundingClientRect().height + 'px');
+        }).observe(commandbar);
+      }
+      const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '');
+      const shortcutLabel = (key) => (isMac ? '⌘' : 'Ctrl+') + key;
+      const compactEditor = window.matchMedia('(max-width: 52rem)');
+      const galleryLibrary = GalleryLibrary.create({
+        client: MediaApi.makeClient({ onUnauthed: () => guard.redirectToLogin() }),
+        imageOrigin: EditorGalleryImageOrigin,
       });
+      const bodyEditors = {};
+      // A gallery block renders in the Visual view; pages have no gallery
+      // picker, so editing it means its Markdown: the source view, at the block.
+      function editGallerySource(locale, sourceStart) {
+        const cm = mdeFor(locale).codemirror;
+        bodyEditors[locale].setMode('markdown');
+        const position = cm.posFromIndex(sourceStart);
+        cm.setCursor(position);
+        cm.scrollIntoView(position, 80);
+        cm.focus();
+      }
+      function wireManuscriptBar(locale) {
+        const bar = $(locale + 'ManuscriptBar');
+        // Roving focus, the phone Format tray and the formatting buttons are
+        // the shared toolbar (manuscript-bar.js), as in the story editor.
+        const tools = ManuscriptBar.wire({
+          bar, formatToggle: $(locale + 'FormatToggle'), formatPanel: $(locale + 'FormatPanel'),
+          compact: compactEditor, formatLabel: editorCopy.formatTools, codeLabel: editorCopy.codeBlock, shortcutLabel,
+          onOpenFormat: () => closePhotoPanel(locale),
+          isVisual: () => bodyEditors[locale].isVisual(),
+          command: (name) => bodyEditors[locale].command(name),
+          markdown: (action) => EasyMDE[action](mdeFor(locale)),
+        });
+        bodyEditors[locale] = EditorRichBridge.create({
+          mde: mdeFor(locale), element: $(locale + 'RichBody'), source: $(locale + 'MarkdownBody'),
+          error: $(locale + 'RichError'), visualButton: $(locale + 'VisualMode'), markdownButton: $(locale + 'MarkdownMode'),
+          // No gallery picker on a page, so no gallery view toggle is passed.
+          formatButtons: bar.querySelectorAll('[data-format]'),
+          locale, imageOrigin: EditorGalleryImageOrigin,
+          copy: { ...editorCopy, visualBodyLabel: editorCopy.pagesVisualBodyLabel, visualHelp: editorCopy.pagesVisualHelp },
+          galleryCopy: EditorGalleryCopy.en,
+          galleryLibrary, images: () => (locale === 'de' ? deImages : enImages), thumbnailUrl: PostsFilter.thumbUrl,
+          onEditGallery: (sourceStart) => editGallerySource(locale, sourceStart),
+          onModeChange: () => {
+            tools.closeFormat();
+            closePhotoPanel(locale);
+            tools.settle();
+          },
+        });
+        const toggle = $(locale + 'PhotoToggle');
+        toggle.addEventListener('click', () => {
+          tools.closeFormat();
+          if ($(locale + 'PhotoPanel').hidden) openPhotoPanel(locale);
+          else closePhotoPanel(locale, toggle);
+        });
+        $(locale + 'PhotoPanel').addEventListener('keydown', (event) => {
+          if (event.key !== 'Escape') return;
+          event.preventDefault();
+          closePhotoPanel(locale, toggle);
+        });
+      }
+      function openPhotoPanel(locale) {
+        $(locale + 'PhotoPanel').hidden = false;
+        $(locale + 'PhotoToggle').setAttribute('aria-expanded', 'true');
+        // The tray lies in the pinned bar's area; a scrolling focus would drag
+        // the page away from the caret it is about to insert at.
+        $(locale + 'BodyImgFile').focus({ preventScroll: true });
+      }
+      /** Close the photo panel; `focus` is where the caret goes next (default: nowhere). */
+      function closePhotoPanel(locale, focus) {
+        const panel = $(locale + 'PhotoPanel');
+        if (panel.hidden) return;
+        panel.hidden = true;
+        $(locale + 'PhotoToggle').setAttribute('aria-expanded', 'false');
+        focus?.focus({ preventScroll: true });
+      }
+      wireManuscriptBar('de');
+      wireManuscriptBar('en');
+
+      // ---- tabs ----
+      const tabsApi = Tabs.wire(document.querySelector('[role="tablist"]'), {
+        onChange: (tab) => { mdeFor(tab).codemirror.refresh(); },
+      });
+      // Each tab's chip says whether that locale has anything written yet.
+      function syncTabStates() {
+        for (const locale of editableLocales) {
+          const missing = !$(locale + 'Title').value.trim() && !mdeFor(locale).value().trim();
+          SiteLanguage.tabState($('tabbtn-' + locale), missing ? 'missing' : 'available',
+            missing ? SiteLanguage.text('PageEmpty', { language: SiteLanguage.names[locale] }) : '');
+        }
+      }
       const galleryMetadataWarnings = GalleryMetadataWarnings.create({
         root: $('galleryMetadataWarnings'),
         editors: { de: deMDE.codemirror, en: enMDE.codemirror },
-        activate: (locale) => {
-          tabsApi.select(locale);
-          (locale === 'de' ? deMDE : enMDE).codemirror.refresh();
-        },
+        activate: (locale) => { tabsApi.select(locale); mdeFor(locale).codemirror.refresh(); },
+        // A diagnostic names a source line, so it is shown in the Markdown view.
+        reveal: (locale) => bodyEditors[locale].setMode('markdown'),
         onUnauthed: () => guard.redirectToLogin(),
       });
+
+      const mainEl = document.querySelector('main');
+      mainEl.addEventListener('input', (event) => {
+        guard.markDirty();
+        if (event.target.hasAttribute('aria-invalid')) AdminField.valid(event.target);
+        syncTabStates();
+      });
+      mainEl.addEventListener('change', () => guard.markDirty());
+      for (const mde of [deMDE, enMDE]) mde.codemirror.on('change', () => { guard.markDirty(); syncTabStates(); });
 
       function showErr(msg) { const el = $('actionError'); el.textContent = msg; el.hidden = !msg; }
       function setStatus(msg) { $('actionStatus').textContent = msg; }
@@ -221,7 +439,7 @@
         try {
           const body = await UploadRecovery.run({
             file, fields: { key: 'pages/' + KEY + '/' + imgSlug, alt }, ownerId, recovery: writeRecovery,
-            status: statusEl, button: $(locale + 'BodyImgUpload'), copy: EditorCopy.en,
+            status: statusEl, button: $(locale + 'BodyImgUpload'), copy: editorCopy,
             onUnauthed: () => guard.redirectToLogin(),
           });
           if (!body || !writeRecovery.canAdopt(ownerId)) return;
@@ -230,13 +448,19 @@
             height: body.height,
             ...(body.format === 'jpeg' ? { format: body.format } : {}),
           };
-          // replaceSelection fires a CodeMirror change → marks the guard dirty
-          (locale === 'de' ? deMDE : enMDE).codemirror.replaceSelection(ImageMarkdown.image(alt, body.src));
+          // The caret is mirrored between the two views, so this goes in where the
+          // author is writing in either one; the CodeMirror change marks the guard dirty.
+          mdeFor(locale).codemirror.replaceSelection(ImageMarkdown.image(alt, body.src));
           statusEl.textContent = 'Inserted: ' + body.src;
+          // Clear only what this upload consumed; a newer pick or alt stays.
           if (fileInput.files[0] === file) fileInput.value = '';
           if (altInput.value === alt) altInput.value = '';
+          // The tray has done its job: back to writing, right after the photo.
+          closePhotoPanel(locale);
+          bodyEditors[locale].focus();
         } catch (e) {
-          statusEl.textContent = 'Upload failed: ' + e;
+          const detail = String(e?.message || e);
+          statusEl.textContent = 'Could not upload the photo: ' + detail + (detail.endsWith('.') ? '' : '.');
         }
       }
       $('deBodyImgUpload').addEventListener('click', () => uploadBodyImg('de'));
@@ -244,18 +468,31 @@
 
       function localeObj(loc) {
         return { locale: loc, title: $(loc + 'Title').value.trim(), slug: KEY === 'about' ? '' : $(loc + 'Slug').value.trim(),
-          bodyMarkdown: (loc === 'de' ? deMDE : enMDE).value(), images: { ...(loc === 'de' ? deImages : enImages) } };
+          bodyMarkdown: mdeFor(loc).value(), images: { ...(loc === 'de' ? deImages : enImages) } };
+      }
+
+      // No untitled pages: the primary language's heading names the page everywhere.
+      // A translation being prepared may stay empty; its default heading is used.
+      function requireHeading() {
+        const primary = language.primary;
+        if (!editableLocales.includes(primary)) return true;
+        const field = $(primary + 'Title');
+        if (field.value.trim()) { AdminField.valid(field); return true; }
+        tabsApi.select(primary);
+        AdminField.invalid(field, PagesUI.text('HeadingRequired', { language: SiteLanguage.names[primary] }));
+        return false;
       }
 
       $('saveBtn').addEventListener('click', async () => {
         if (!language || loadBlocked || confirmingSave || $('saveBtn').disabled) return;
+        if (!requireHeading()) return;
         confirmingSave = true;
         let ok = true;
         try {
           if (storedPage?.status === 'published') ok = await AdminConfirm.ask({
             title: prepareLocale ? SiteLanguage.text('PrepTitle') : PagesUI.text('SaveConfirm'),
             body: prepareLocale ? SiteLanguage.text('PrepConfirm', { language: SiteLanguage.names[prepareLocale] }) : PagesUI.text('SaveScope'),
-            confirmLabel: prepareLocale ? SiteLanguage.text('PrepSave') : PagesUI.text('SaveLive'),
+            confirmLabel: prepareLocale ? SiteLanguage.text('PrepSave') : PagesUI.text('SaveLive'), tone: 'publish',
           });
         } finally { confirmingSave = false; }
         if (!ok) return;
@@ -265,11 +502,16 @@
           ...Object.fromEntries(editableLocales.map((locale) => [locale, localeObj(locale)])),
           ...(prepareLocale ? { prepareLocale } : {}) };
         const btn = $('saveBtn');
+        const restoreFocus = AdminFocus.hold(btn);
         btn.disabled = true;
+        let adopted = false;
         try {
-          await writeRecovery.save(payload, snap);
+          adopted = await writeRecovery.save(payload, snap);
         } finally {
           btn.disabled = false;
+          restoreFocus();
+          // A conflict or refusal reports itself elsewhere; the busy text must not outlive the request.
+          if (!adopted && $('actionStatus').textContent === PagesUI.text('Busy')) setStatus('');
         }
       });
 
@@ -278,7 +520,8 @@
         const live = pair.status === 'published';
         $('pageState').textContent = PagesUI.text(live ? 'Published' : 'Draft');
         $('saveBtn').textContent = prepareLocale ? SiteLanguage.text('PrepSave') : PagesUI.text(live ? 'SaveLive' : 'Save');
-        $('saveBtn').className = live && !prepareLocale ? 'btn-primary-publish' : '';
+        // Saving a live page rebuilds the site, so that save is the one filled action.
+        $('saveBtn').className = live && !prepareLocale ? 'btn-primary-publish' : 'commandbar__save';
         $('publishBtn').hidden = !!prepareLocale || live || !pair.updatedAt;
         $('unpublishBtn').hidden = !!prepareLocale || !live || KEY === 'about';
         $('deleteBtn').hidden = !!prepareLocale || !pair.updatedAt || KEY === 'about';
@@ -298,27 +541,33 @@
         if (hasUnsaved()) { showErr(PagesUI.text('SaveFirst')); return; }
         const name = action === 'publish' ? 'Publish' : 'Unpublish';
         if (!await AdminConfirm.ask({ title: PagesUI.text(name), body: PagesUI.text(name + 'Scope', { paths: PagesUI.paths(storedPage, language).join(' · ') }),
-          confirmLabel: PagesUI.text(name), danger: action === 'unpublish' })) return;
-        const button = $(action + 'Btn'); button.disabled = true; showErr('');
+          confirmLabel: PagesUI.text(name), danger: action === 'unpublish', tone: 'publish' })) return;
+        const button = $(action + 'Btn');
+        const restoreFocus = AdminFocus.hold(button);
+        button.disabled = true; showErr('');
         try {
           const result = await PagesUI.request('/' + KEY + '/' + action, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ updatedAt: loadedUpdatedAt }) });
           acceptSaved(result.saved);
           BuildReporting.renderOutcome($('actionStatus'), action, result, { title: PagesUI.kind(KEY) });
         } catch (error) { showErr(error.message); }
-        finally { button.disabled = false; }
+        finally {
+          button.disabled = false;
+          // The action just taken hides its own button; Save is the next thing to do.
+          restoreFocus($('saveBtn'));
+        }
       });
       $('deleteBtn').addEventListener('click', async () => {
         if (hasUnsaved()) { showErr(PagesUI.text('SaveFirst')); return; }
         $('deleteBtn').disabled = true; showErr('');
         let cancelled = false;
-        const snapshot = guard.snapshot();
         try {
           const result = await PagesUI.remove(KEY);
           if (result) {
-            guard.markClean(snapshot); loadBlocked = true;
-            $('saveBtn').disabled = true;
-            for (const id of ['deleteBtn', 'publishBtn', 'unpublishBtn', 'previewBtn']) $(id).hidden = true;
-            BuildReporting.renderOutcome($('actionStatus'), 'delete', result, { title: PagesUI.kind(KEY) });
+            // The page is gone: nothing left here is worth a stash or an unload prompt.
+            // Its outcome is shown by the Pages list this editor returns to.
+            guard.markClean(); loadBlocked = true;
+            AdminFlash.set(BuildReporting.describeOutcome('delete', result, { title: PagesUI.kind(KEY) }));
+            location.href = $('pagesBack').getAttribute('href');
           } else cancelled = true;
         } catch (error) {
           showErr(error.message);
@@ -341,7 +590,7 @@
           const li = document.createElement('li');
           li.className = 'revision-row';
           const label = document.createElement('span');
-          const when = new Date(rev.savedAt).toLocaleString();
+          const when = AdminFormat.dateTime(rev.savedAt);
           label.textContent = when + ' — ' + (rev.title || '(untitled)');
           const btn = document.createElement('button');
           btn.type = 'button';
@@ -362,30 +611,29 @@
         showErr('');
         const res = await fetch('/pages/' + KEY + '/revisions/' + encodeURIComponent(id));
         if (res.status === 401) { guard.redirectToLogin(); return; }
-        if (!res.ok) { showErr('Could not load revision: ' + res.status); return; }
+        if (!res.ok) { showErr('Could not load the revision (HTTP ' + res.status + '). Try again.'); return; }
         const rev = await res.json();
         for (const locale of editableLocales) fill(locale, rev.snapshot[locale]);
         enMDE.codemirror.refresh();
         guard.markDirty();
-        setStatus('Restored the revision from ' + new Date(rev.savedAt).toLocaleString()
-          + ' into the editor — review it, then Save & rebuild to keep it.');
+        setStatus('Restored the revision from ' + AdminFormat.dateTime(rev.savedAt)
+          + ' into the editor — review it, then ' + $('saveBtn').textContent + ' to keep it.');
       }
 
       async function loadPage() {
         const res = await fetch('/pages/' + KEY);
         if (res.status === 401) { guard.redirectToLogin(); return; }
-        if (!res.ok) { setStatus('Could not load: ' + res.status); return; }
+        if (!res.ok) { setStatus('Could not load the page (HTTP ' + res.status + '). Reload to try again.'); return; }
         const p = await res.json();
         if (!writeRecovery.canAdopt(p.ownerUserId)) {
           writeRecovery.observeOwner(p.ownerUserId);
-          throw new Error(EditorCopy.en.writeOwnerChanged);
+          throw new Error(editorCopy.writeOwnerChanged);
         }
         fill('de', p.de); fill('en', p.en);
         loadedUpdatedAt = p.updatedAt || null;
         loadBlocked = false;
         acceptSaved(p);
         enMDE.codemirror.refresh();
-        setStatus('Loaded.');
         loadRevisions().catch(() => {});
       }
 
@@ -393,11 +641,13 @@
         if (!data) return;
         $(loc + 'Title').value = data.title || '';
         $(loc + 'Slug').value = data.slug || (!storedPage?.updatedAt && pageDefaults ? pageDefaults[loc] : '') || '';
-        (loc === 'de' ? deMDE : enMDE).value(data.bodyMarkdown || '');
+        // A whole-form fill is a new undo baseline for both views of the body.
+        bodyEditors[loc].replaceDocument(data.bodyMarkdown || '');
         const images = loc === 'de' ? deImages : enImages;
         for (const key of Object.keys(images)) delete images[key];
         if (data.images) Object.assign(images, data.images);
         void galleryMetadataWarnings.reopen(loc);
+        syncTabStates();
       }
 
       (async () => {
@@ -423,7 +673,7 @@
             $('preparationNotice').textContent = SiteLanguage.text('PrepNotice', { language: SiteLanguage.names[prepareLocale] });
             $('languageSettingsLink').hidden = false;
             $('saveBtn').textContent = SiteLanguage.text('PrepSave');
-            $('saveBtn').className = '';
+            $('saveBtn').className = 'commandbar__save';
           }
           // Equipment is site identity, saved on its own (#514); a translation being
           // prepared has no identity locale to write, so that view leaves it out.
@@ -432,7 +682,7 @@
           }
           await loadPage();
         } catch (e) {
-          setStatus('Could not load: ' + e);
+          setStatus(e?.message || PagesUI.text('Failed'));
           $('saveBtn').disabled = true;
           return;
         }
@@ -442,7 +692,7 @@
         if (stash && !guard.wasDismissed(stash)) {
           const restore = await AdminConfirm.ask({
             title: PagesUI.text('Restore'),
-            body: 'Found unsaved changes from ' + new Date(stash.savedAt).toLocaleString() + '.',
+            body: 'Found unsaved changes from ' + AdminFormat.dateTime(stash.savedAt) + '.',
             confirmLabel: 'Restore',
           });
           if (restore) {
@@ -452,10 +702,10 @@
             guard.restoreGeneration(stash.generation);
             if (!writeRecovery.restore(stash.recovery)) {
               loadBlocked = true;
-              showErr(EditorCopy.en.writeUnsafeBase);
+              showErr(editorCopy.writeUnsafeBase);
             }
             await writeRecovery.probe();
-            setStatus(EditorCopy.en.writeRestored);
+            setStatus(editorCopy.writeRestored);
           } else {
             guard.dismissRestore(stash);
           }

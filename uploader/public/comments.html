@@ -13,7 +13,7 @@
     </header>
 
     <main>
-      <div class="inline-field">
+      <div class="comment-filter">
         <label for="statusFilter">Show</label>
         <select id="statusFilter">
           <option value="pending">Pending</option>
@@ -22,7 +22,7 @@
       </div>
       <p id="out" class="page-status" role="status"></p>
       <ul id="list" class="comment-list"></ul>
-      <nav id="pagination" class="comment-actions">
+      <nav id="pagination" class="comment-actions" hidden>
         <button id="previousPage" type="button" class="btn-secondary" disabled></button>
         <span id="pageIndicator" tabindex="-1" role="status"></span>
         <button id="nextPage" type="button" class="btn-secondary" disabled></button>
@@ -31,6 +31,7 @@
 
     <script src="/admin/editor-image-copy.js"></script>
     <script src="/admin/auth.js"></script>
+    <script src="/admin/admin-ui.js"></script>
     <script src="/admin/admin-confirm.js"></script>
     <script src="/admin/language.js"></script>
     <script>
@@ -49,11 +50,15 @@
       $('previousPage').textContent = copy.commentsPrevious;
       $('nextPage').textContent = copy.commentsNext;
       $('pagination').setAttribute('aria-label', copy.commentsPagination);
+      const PAGE_SIZE = 50;
 
       // Page-lifetime only: changing views must not discard another reply.
       const replyDrafts = new Map();
       const pendingReplies = new Set();
       const renderedRows = new Map();
+      // Story titles by translation key, read with every list load so a row names
+      // its story rather than its key; null until the first successful read.
+      let storyTitles = null;
       let viewRequest = 0;
       let filterRevision = 0;
       let loadedView = null;
@@ -62,13 +67,19 @@
       let refreshFocus = null;
 
       function focusedReplyControl() {
+        const ids = [...renderedRows.keys()];
         for (const [id, { controls, ta }] of renderedRows) {
           const index = controls.indexOf(document.activeElement);
-          if (index !== -1) return {
-            id, index,
-            selection: document.activeElement === ta
-              ? [ta.selectionStart, ta.selectionEnd, ta.selectionDirection] : null,
-          };
+          if (index !== -1) {
+            const position = ids.indexOf(id);
+            return {
+              id, index,
+              // Neighbours at capture time: a row that leaves the list hands focus on.
+              next: ids[position + 1] ?? null, previous: ids[position - 1] ?? null,
+              selection: document.activeElement === ta
+                ? [ta.selectionStart, ta.selectionEnd, ta.selectionDirection] : null,
+            };
+          }
         }
         return null;
       }
@@ -76,9 +87,15 @@
       function restoreReplyFocus(focus) {
         if (!focus) return;
         const control = renderedRows.get(focus.id)?.controls[focus.index];
-        if (!control) { $('statusFilter').focus({ preventScroll: true }); return; }
-        control.focus({ preventScroll: true });
-        if (focus.selection) control.setSelectionRange(...focus.selection);
+        if (control) {
+          control.focus({ preventScroll: true });
+          if (focus.selection) control.setSelectionRange(...focus.selection);
+          return;
+        }
+        // The row left the list: the next comment's first action, else the
+        // previous one's, else the view filter.
+        const neighbour = renderedRows.get(focus.next) || renderedRows.get(focus.previous);
+        (neighbour ? neighbour.controls[0] : $('statusFilter')).focus({ preventScroll: true });
       }
 
       // A real focus move cancels restoration, even if the user later blurs it.
@@ -98,6 +115,12 @@
         return data;
       }
 
+      /** "Could not approve the comment: Failed to fetch." — never a bare lowercase server code. */
+      function failure(action, error) {
+        const detail = String(error && error.message ? error.message : error).trim();
+        return 'Could not ' + action + (detail ? ': ' + detail.charAt(0).toUpperCase() + detail.slice(1).replace(/\.?$/, '.') : '.');
+      }
+
       async function setStatus(c, status) {
         return await api('POST', '/moderation/comments/' + encodeURIComponent(c.id) + '/status', { status }) !== null;
       }
@@ -113,12 +136,27 @@
         return ok ? await fn() : false;
       }
 
+      // Titles come from the posts list the admin can already read. A failed
+      // read keeps the titles from the last one instead of blocking the queue.
+      async function readStoryTitles() {
+        try {
+          const posts = await api('GET', '/posts');
+          if (Array.isArray(posts)) storyTitles = new Map(posts.map((p) => [p.translationKey, String(p.title || '')]));
+        } catch { /* rows keep the previous titles */ }
+      }
+
+      /** "Bukarest in 4 Tagen · DE · 29 Sept 2026, 05:56" — the key itself is never shown. */
+      function storyLine(c) {
+        const title = storyTitles ? (storyTitles.get(c.translationKey) || 'Deleted story') : '';
+        return [title, String(c.locale).toUpperCase(), AdminFormat.dateTime(c.createdAt)].filter(Boolean).join(' · ');
+      }
+
       function row(c) {
         const li = el('li', undefined, 'comment');
         const head = el('p', undefined, 'comment__meta');
         head.appendChild(el('strong', c.name));
         if (c.isAuthor) head.appendChild(el('span', ' (author)'));
-        head.appendChild(el('span', ' · ' + c.translationKey + ' / ' + c.locale + ' · ' + new Date(c.createdAt).toLocaleString(), 'muted'));
+        head.appendChild(el('span', ' · ' + storyLine(c), 'muted'));
         li.appendChild(head);
         if (c.publicLocale === false) {
           li.appendChild(el('p', SiteLanguage.text('CommentHidden', { language: SiteLanguage.names[c.locale] }), 'muted'));
@@ -128,7 +166,7 @@
 
         const actions = el('div', undefined, 'comment-actions');
         const controls = [];
-        const act = (label, fn, variant) => {
+        const act = (label, fn, variant, done, verb) => {
           const b = el('button', label);
           b.type = 'button';
           if (variant) b.className = variant;
@@ -139,49 +177,52 @@
             b.disabled = true;
             try {
               const changed = await fn();
-              if (changed && view === filterRevision) await load(focus, '', true);
+              if (changed && view === filterRevision) await load(focus, done, true);
             } catch (e) {
-              if (request === viewRequest) $('out').textContent = 'Failed: ' + e.message;
+              if (request === viewRequest) $('out').textContent = failure(verb, e);
             }
             finally { b.disabled = false; }
           });
           actions.appendChild(b);
           controls.push(b);
         };
-        if (c.status === 'pending') act('Approve', () => setStatus(c, 'approved'));
-        else act('Unapprove', () => setStatus(c, 'pending'), 'btn-secondary');
+        if (c.status === 'pending') act('Approve', () => setStatus(c, 'approved'), undefined, 'Comment approved.', 'approve the comment');
+        else act('Unapprove', () => setStatus(c, 'pending'), 'btn-secondary', 'Comment moved back to pending.', 'move the comment back to pending');
         act('Spam', () => confirmThen({
           title: 'Mark as spam?',
           body: text(c.status === 'approved' ? 'commentsDeleteApprovedBody' : 'commentsDeleteBody', { name: c.name }),
           confirmLabel: 'Delete as spam', danger: true,
-        }, () => deleteComment(c)), 'btn-remove');
+        }, () => deleteComment(c)), 'btn-remove', 'Comment deleted as spam.', 'delete the comment');
         act('Delete', () => confirmThen({
           title: 'Delete this comment?',
           body: text(c.status === 'approved' ? 'commentsDeleteApprovedBody' : 'commentsDeleteBody', { name: c.name }),
           confirmLabel: 'Delete', danger: true,
-        }, () => deleteComment(c)), 'btn-remove');
+        }, () => deleteComment(c)), 'btn-remove', 'Comment deleted.', 'delete the comment');
         li.appendChild(actions);
 
         const form = el('form', undefined, 'comment-reply');
         const ta = el('textarea');
+        ta.id = 'reply-' + c.id;
+        const caption = el('label', 'Reply as author');
+        caption.htmlFor = ta.id;
         ta.maxLength = 2000;
         ta.rows = 2;
-        ta.setAttribute('aria-label', 'Reply as author');
-        ta.placeholder = 'Reply as the author…';
         ta.value = replyDrafts.get(c.id) || '';
         ta.addEventListener('input', () => {
+          AdminField.valid(ta);
           if (ta.value) replyDrafts.set(c.id, ta.value);
           else replyDrafts.delete(c.id);
         });
-        const send = el('button', 'Reply as author', 'btn-secondary');
+        const send = el('button', 'Reply as author', 'btn-secondary btn-sm');
         send.type = 'submit';
         send.disabled = pendingReplies.has(c.id);
-        form.append(ta, send);
+        form.append(caption, ta, send);
         controls.push(ta, send);
         renderedRows.set(c.id, { controls, ta, send });
         form.addEventListener('submit', async (e) => {
           e.preventDefault();
-          if (pendingReplies.has(c.id) || !ta.value.trim()) return;
+          if (pendingReplies.has(c.id)) return;
+          if (!ta.value.trim()) { AdminField.invalid(ta, 'Write a reply first.'); return; }
           const body = ta.value;
           replyDrafts.set(c.id, body);
           const focus = focusedReplyControl();
@@ -217,7 +258,7 @@
               await load(focus, 'Reply published.', true);
             }
           } catch (err) {
-            if (focusRequest === viewRequest) $('out').textContent = 'Reply failed: ' + err.message;
+            if (focusRequest === viewRequest) $('out').textContent = failure('publish the reply', err);
           }
           finally {
             releasePendingReply();
@@ -246,7 +287,7 @@
         hasMore = false;
         $('previousPage').disabled = true;
         $('nextPage').disabled = true;
-        $('pageIndicator').textContent = text('commentsPage', { page: offset / 50 + 1 });
+        $('pageIndicator').textContent = text('commentsPage', { page: offset / PAGE_SIZE + 1 });
         const ul = $('list');
         // Capture the latest draft/caret before removing obsolete actions.
         // Draft text itself lives in replyDrafts, not in the cleared rows.
@@ -259,19 +300,24 @@
         ul.setAttribute('aria-busy', 'true');
         $('out').textContent = 'Loading ' + status + ' comments…';
         try {
-          const data = await api('GET', '/moderation/comments?status=' + encodeURIComponent(status) + '&offset=' + view.offset);
+          const [data] = await Promise.all([
+            api('GET', '/moderation/comments?status=' + encodeURIComponent(status) + '&offset=' + view.offset),
+            readStoryTitles(),
+          ]);
           if (!isCurrent() || !data) return;
           for (const c of data.comments) ul.appendChild(row(c));
           hasMore = data.hasMore === true;
           $('previousPage').disabled = view.offset === 0;
           $('nextPage').disabled = !hasMore;
-          $('out').textContent = data.comments.length ? message
-            : view.offset > 0 ? copy.commentsEmptyPage : 'No ' + status + ' comments.';
+          // One page needs no pager.
+          $('pagination').hidden = view.offset === 0 && !hasMore;
+          const empty = data.comments.length ? '' : view.offset > 0 ? copy.commentsEmptyPage : 'No ' + status + ' comments.';
+          $('out').textContent = [message, empty].filter(Boolean).join(' ');
           if (document.activeElement === document.body) restoreReplyFocus(refreshFocus);
         } catch (e) {
           if (!isCurrent()) return;
           $('out').textContent = e.message === 'invalid pagination'
-            ? copy.commentsPaginationError : 'Could not load comments: ' + e.message;
+            ? copy.commentsPaginationError : failure('load comments', e);
           if (refreshFocus && document.activeElement === document.body) $('statusFilter').focus({ preventScroll: true });
         } finally {
           if (isCurrent()) {
@@ -292,8 +338,8 @@
         $('pageIndicator').focus({ preventScroll: true });
         return load();
       }
-      $('previousPage').addEventListener('click', () => navigatePage(-50));
-      $('nextPage').addEventListener('click', () => navigatePage(50));
+      $('previousPage').addEventListener('click', () => navigatePage(-PAGE_SIZE));
+      $('nextPage').addEventListener('click', () => navigatePage(PAGE_SIZE));
 
       (async () => {
         const s = await Auth.ensureAuthed({ admin: true });

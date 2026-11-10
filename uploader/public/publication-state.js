@@ -32,7 +32,7 @@ window.PublicationState = (function () {
     if (!attention(p) || !status) return '';
     const parts = [];
     if (status.running) parts.push(text(status.running.owner === 'this_process' ? 'running' : 'unverified'));
-    if (status.last?.result === 'failed') parts.push(text('failed', { time: new Date(status.last.finishedAt).toLocaleString() }));
+    if (status.last?.result === 'failed') parts.push(text('failed', { time: AdminFormat.dateTime(status.last.finishedAt) }));
     if (status.last?.result === 'interrupted') parts.push(text('interrupted'));
     return parts.join(' ');
   }

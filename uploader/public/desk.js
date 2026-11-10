@@ -64,27 +64,6 @@ window.Desk = (function () {
     return release;
   }
 
-  function secondaryBodyLabel(status, lang) {
-    const secondary = lang.locales.find((locale) => locale !== lang.primary);
-    if (!secondary || status === 'none' || status === 'omitted') return '';
-    return SiteLanguage.text(status === 'started' ? 'BodyStarted' : status === 'empty' ? 'BodyEmpty' : 'BodyUnknown',
-      { language: SiteLanguage.names[secondary] });
-  }
-
-  function formatUpdatedAt(value, locales) {
-    if (value === null || value === undefined || value === '') return '';
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return '';
-    try {
-      return new Intl.DateTimeFormat(locales, {
-        dateStyle: 'medium',
-        timeStyle: 'short',
-      }).format(date);
-    } catch {
-      return '';
-    }
-  }
-
   // Coalescing the whole load/render cycle prevents a double-clicked retry
   // from starting a second request or letting an older result overwrite it.
   function resilientLoader(load, view) {
@@ -109,8 +88,6 @@ window.Desk = (function () {
     encodeCount,
     releaseState,
     releaseFromResponse,
-    formatUpdatedAt,
-    secondaryBodyLabel,
     resilientLoader,
     byUpdated,
   };

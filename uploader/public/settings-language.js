@@ -36,7 +36,7 @@ window.SettingsLanguage = (function () {
           : localeLocked ? SiteLanguage.error({ code: 'language_locale_published' }) : '';
       }
       $('languageLock').textContent = loaded.lockedAt
-        ? SiteLanguage.text('Locked', { date: new Date(loaded.lockedAt).toLocaleString() })
+        ? SiteLanguage.text('Locked', { date: AdminFormat.dateTime(loaded.lockedAt) })
         : SiteLanguage.text('Unlocked');
       const secondary = loaded.primary === 'de' ? 'en' : 'de';
       const prepare = $('prepareLanguage');
@@ -51,12 +51,13 @@ window.SettingsLanguage = (function () {
     async function load() {
       if (busy) return;
       busy = true;
+      const restore = AdminFocus.hold($('languageReload'));
       $('languageFields').disabled = true;
       $('languageReload').disabled = true;
       status(SiteLanguage.text('Loading'));
       try { paint(await SiteLanguage.get(true)); status(''); }
       catch (error) { status(error.message); }
-      finally { busy = false; $('languageReload').disabled = false; }
+      finally { busy = false; $('languageReload').disabled = false; restore(); }
     }
     $('languageMode').addEventListener('change', () => {
       $('languageScope').textContent = scope();
@@ -74,10 +75,11 @@ window.SettingsLanguage = (function () {
       const next = candidate();
       let mutating = false;
       busy = true;
+      const restore = AdminFocus.hold($('saveLanguage'));
       $('languageFields').disabled = true;
       $('languageReload').disabled = true;
       try {
-        if (!(await AdminConfirm.ask({ title: SiteLanguage.text('ChangeTitle'), body: scope(), confirmLabel: SiteLanguage.text('Save') }))) return;
+        if (!(await AdminConfirm.ask({ title: SiteLanguage.text('ChangeTitle'), body: scope(), confirmLabel: SiteLanguage.text('Save'), tone: 'publish' }))) return;
         mutating = true;
         publication.beginAction();
         status(SiteLanguage.text('Saving'));
@@ -105,6 +107,9 @@ window.SettingsLanguage = (function () {
         $('languageReload').disabled = false;
         syncSave();
         if (mutating) publication.endAction();
+        // A refused save already moved focus to the status line; a saved one
+        // disables Save (nothing left to save), so focus goes to the status.
+        restore($('languageStatus'));
       }
     });
     return load();

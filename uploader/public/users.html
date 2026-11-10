@@ -9,35 +9,40 @@
   <body>
     <header class="cms-page-meta">
       <h1>Users</h1>
+      <p class="lede">Everyone listed here can sign in and write; an administrator can also publish, moderate comments and change settings.</p>
     </header>
     <main>
       <!-- Real <form>s (not bare inputs plus a click handler) so that Enter in a
-           field submits — keyboard-only account management must work. -->
+           field submits — keyboard-only account management must work. The
+           browser's native validation bubble is replaced by the inline
+           sentence under the field (novalidate + AdminField). -->
       <section class="card form-narrow">
-        <h2 class="card-heading">Existing users</h2>
+        <h2 class="card-heading" id="listHeading" tabindex="-1">Existing users</h2>
         <ul id="list" class="user-list"></ul>
         <p id="listout" class="page-status" role="status"></p>
         <button id="reloadUsers" type="button" class="btn-secondary btn-sm" aria-describedby="listout"></button>
       </section>
-      <form class="card form-narrow" id="addForm">
+      <form class="card form-narrow" id="addForm" novalidate>
         <h2 class="card-heading">Add a user</h2>
         <label for="username">Username</label>
         <input id="username" type="text" autocomplete="off" maxlength="64" pattern="[A-Za-z0-9._\-]+" aria-describedby="usernameHint" />
         <p class="muted" id="usernameHint">1–64 characters: letters, digits, ".", "_" and "-".</p>
         <label for="password">Password</label>
-        <input id="password" type="password" autocomplete="new-password" />
+        <input id="password" type="password" autocomplete="new-password" minlength="12" aria-describedby="passwordHint" />
+        <p class="muted" id="passwordHint">At least 12 characters.</p>
         <label class="check-field"><input id="isAdmin" type="checkbox" /> Administrator</label>
         <div class="form-actions">
           <button id="add" type="submit">Add user</button>
         </div>
         <p id="out" class="page-status" role="status"></p>
       </form>
-      <form class="card form-narrow" id="pwForm">
+      <form class="card form-narrow" id="pwForm" novalidate>
         <h2 class="card-heading">Change my password</h2>
         <label for="curpw">Current password</label>
         <input id="curpw" type="password" autocomplete="current-password" />
         <label for="newpw">New password</label>
-        <input id="newpw" type="password" autocomplete="new-password" />
+        <input id="newpw" type="password" autocomplete="new-password" minlength="12" aria-describedby="newpwHint" />
+        <p class="muted" id="newpwHint">At least 12 characters.</p>
         <div class="form-actions">
           <button id="changepw" type="submit">Change password</button>
         </div>
@@ -46,15 +51,43 @@
     </main>
     <script src="/admin/editor-image-copy.js"></script>
     <script src="/admin/auth.js"></script>
+    <script src="/admin/admin-ui.js"></script>
     <script src="/admin/admin-confirm.js"></script>
     <script>
       const $ = (id) => document.getElementById(id);
       const copy = EditorCopy.en;
       $('reloadUsers').textContent = copy.usersReload;
+      // The server's rules (uploader/src/users.ts), repeated here so the
+      // sentence appears under the field before a request is sent.
+      const USERNAME_RE = /^[A-Za-z0-9._-]{1,64}$/;
+      const MIN_PASSWORD = 12;
+      const USERNAME_RULE = 'Use 1–64 letters, digits, “.”, “_” or “-”.';
+      const PASSWORD_RULE = 'Use at least ' + MIN_PASSWORD + ' characters.';
       let me = null;
       let loadGeneration = 0;
+      // Rows of the last successful load, in list order ({ username, button|null }).
+      let currentRows = [];
+
+      /** After deleting `username`: the next account's Delete, else the previous one's, else the list heading. */
+      function neighbourDelete(username, oldRows) {
+        const index = oldRows.findIndex((row) => row.username === username);
+        const order = [...oldRows.slice(index + 1), ...oldRows.slice(0, index).reverse()];
+        for (const old of order) {
+          const button = currentRows.find((row) => row.username === old.username)?.button;
+          if (button) return button;
+        }
+        return $('listHeading');
+      }
+
+      /** "Could not add the user: Username already exists." — known server codes get their own sentence. */
+      function refusal(action, error) {
+        const detail = typeof error === 'string' ? error.trim() : '';
+        return 'Could not ' + action + (detail ? ': ' + detail.charAt(0).toUpperCase() + detail.slice(1).replace(/\.?$/, '.') : '.');
+      }
+
       async function load() {
         const reload = $('reloadUsers');
+        const restore = AdminFocus.hold(reload);
         const generation = ++loadGeneration;
         reload.disabled = true;
         const ul = $('list');
@@ -71,9 +104,10 @@
           }
           const users = await res.json();
           if (generation !== loadGeneration) return;
+          const rows = [];
           for (const u of users) {
             const li = document.createElement('li');
-            const role = u.isAdmin ? 'admin' : 'author';
+            const role = u.isAdmin ? 'administrator' : 'author';
             const name = document.createElement('span');
             name.className = 'user-list__name';
             name.textContent = u.username;
@@ -83,45 +117,59 @@
             li.append(name, roleLabel);
             if (!(me && u.username === me.username)) {
               const btn = document.createElement('button');
-              btn.textContent = 'Remove';
+              btn.type = 'button';
+              btn.textContent = 'Delete';
               btn.className = 'btn-remove';
-              btn.setAttribute('aria-label', 'Remove user ' + u.username);
+              btn.setAttribute('aria-label', 'Delete account ' + u.username);
               btn.addEventListener('click', async () => {
                 const ok = await AdminConfirm.ask({
-                  title: 'Remove this account?',
-                  body: 'Remove the ' + role + ' account "' + u.username + '"?\n\nThey are logged out of every session immediately, and their name is cleared from the photos they uploaded. This cannot be undone.',
-                  confirmLabel: 'Remove',
+                  title: 'Delete this account?',
+                  body: 'Delete the ' + role + ' account “' + u.username + '”?\n\nThey are logged out of every session immediately, and their name is cleared from the photos they uploaded. This cannot be undone.',
+                  confirmLabel: 'Delete account',
                   danger: true,
                 });
                 if (!ok) return;
+                const restoreRow = AdminFocus.hold(btn);
                 btn.disabled = true;
-                $('out').textContent = 'Removing ' + u.username + '…';
+                $('out').textContent = 'Deleting ' + u.username + '…';
                 try {
                   const d = await fetch('/users/' + u.id, { method: 'DELETE' });
                   if (d.status === 401) { location.href = '/login'; return; }
-                  if (d.ok) { $('out').textContent = 'Removed ' + u.username + '.'; load(); return; }
+                  if (d.ok) {
+                    $('out').textContent = 'Account ' + u.username + ' deleted.';
+                    await load();
+                    restoreRow(neighbourDelete(u.username, rows));
+                    return;
+                  }
                   const r = await d.json().catch(() => ({}));
-                  $('out').textContent = r.error || ('Failed: ' + d.status);
+                  $('out').textContent = d.status === 404 ? 'This account no longer exists. Reload the user list.'
+                    : r.error === 'cannot remove the last admin' ? 'The last administrator cannot be deleted.'
+                    : r.error === 'you cannot delete your own account' ? 'You cannot delete your own account.'
+                    : refusal('delete the account', r.error);
                 } catch (e) {
-                  $('out').textContent = 'Failed: ' + (e && e.message ? e.message : 'network error');
+                  $('out').textContent = refusal('delete the account', e && e.message ? e.message : 'network error');
                 } finally {
                   btn.disabled = false;
+                  restoreRow();
                 }
               });
               li.appendChild(btn);
-            }
+              rows.push({ username: u.username, button: btn });
+            } else rows.push({ username: u.username, button: null });
             ul.appendChild(li);
           }
-          $('listout').textContent = copy.usersLoaded.replace('{count}', String(users.length));
+          currentRows = rows;
+          $('listout').textContent = AdminFormat.count(users.length, 'account');
         } catch {
           if (generation === loadGeneration) $('listout').textContent = copy.usersLoadNetworkFailed;
         } finally {
-          if (generation === loadGeneration) reload.disabled = false;
+          if (generation === loadGeneration) { reload.disabled = false; restore(); }
         }
       }
       $('reloadUsers').addEventListener('click', () => {
         if (!$('reloadUsers').disabled) return load();
       });
+      for (const id of ['username', 'password', 'curpw', 'newpw']) $(id).addEventListener('input', () => AdminField.valid($(id)));
       $('addForm').addEventListener('submit', async (ev) => {
         ev.preventDefault();
         if ($('add').disabled) return;
@@ -129,6 +177,9 @@
         const password = $('password').value;
         const isAdmin = $('isAdmin').checked;
         if (!username || !password) { $('out').textContent = copy.usersAddRequired; return; }
+        if (!USERNAME_RE.test(username)) { AdminField.invalid($('username'), USERNAME_RULE); return; }
+        if (password.length < MIN_PASSWORD) { AdminField.invalid($('password'), PASSWORD_RULE); return; }
+        const restore = AdminFocus.hold($('add'));
         $('add').disabled = true;
         $('out').textContent = copy.usersAdding;
         try {
@@ -142,12 +193,18 @@
             await load();
           } else {
             const r = await res.json().catch(() => ({}));
-            $('out').textContent = r.error || copy.usersActionFailed.replace('{status}', String(res.status));
+            const error = typeof r.error === 'string' ? r.error : '';
+            $('out').textContent = '';
+            if (res.status === 409) AdminField.invalid($('username'), 'This username is already taken.', { focus: false });
+            else if (error.startsWith('username')) AdminField.invalid($('username'), USERNAME_RULE, { focus: false });
+            else if (error.startsWith('password')) AdminField.invalid($('password'), PASSWORD_RULE, { focus: false });
+            else $('out').textContent = error ? refusal('add the user', error) : copy.usersActionFailed.replace('{status}', String(res.status));
           }
         } catch {
           $('out').textContent = copy.usersAddNetworkFailed;
         } finally {
           $('add').disabled = false;
+          restore();
         }
       });
       $('pwForm').addEventListener('submit', async (ev) => {
@@ -156,6 +213,8 @@
         const currentPassword = $('curpw').value;
         const newPassword = $('newpw').value;
         if (!currentPassword || !newPassword) { $('pwout').textContent = copy.usersPasswordRequired; return; }
+        if (newPassword.length < MIN_PASSWORD) { AdminField.invalid($('newpw'), PASSWORD_RULE); return; }
+        const restore = AdminFocus.hold($('changepw'));
         $('changepw').disabled = true;
         $('pwout').textContent = copy.usersPasswordChanging;
         try {
@@ -167,12 +226,18 @@
             if ($('newpw').value === newPassword) $('newpw').value = '';
           } else {
             const r = await res.json().catch(() => ({}));
-            $('pwout').textContent = r.error || copy.usersActionFailed.replace('{status}', String(res.status));
+            const error = typeof r.error === 'string' ? r.error : '';
+            $('pwout').textContent = '';
+            if (error === 'current password is incorrect') AdminField.invalid($('curpw'), 'The current password is incorrect.', { focus: false });
+            else if (error.startsWith('new password')) AdminField.invalid($('newpw'), PASSWORD_RULE, { focus: false });
+            else if (res.status === 429) $('pwout').textContent = 'Too many attempts. Wait a moment and try again.';
+            else $('pwout').textContent = error ? refusal('change the password', error) : copy.usersActionFailed.replace('{status}', String(res.status));
           }
         } catch {
           $('pwout').textContent = copy.usersPasswordNetworkFailed;
         } finally {
           $('changepw').disabled = false;
+          restore();
         }
       });
       (async () => {

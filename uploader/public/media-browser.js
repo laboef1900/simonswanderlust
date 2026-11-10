@@ -1,11 +1,14 @@
 // The media library page (media.html). DOM only — every pure helper lives in
 // media-api.js, which is unit-tested.
 //
-// Three rules, all load-bearing at this size (~700 lines of vanilla JS with no
+// Three rules, all load-bearing at this size (~1600 lines of vanilla JS with no
 // reactive layer):
 //   1. ONE state object, ONE render(). The grid is rebuilt from state; it is
 //      never mutated ad hoc. Five interacting states (selection × folder ×
-//      filter × queue × detail-dirty) is where this kind of module rots.
+//      filter × queue × detail-dirty) is where this kind of module rots. The
+//      one deliberate exception is the encoding poll (see "encoding poll"),
+//      which updates a processing photo's row in `state.items` and repaints
+//      only that tile, so selection, focus, scroll and page survive it.
 //   2. DOM is built with textContent. `innerHTML` is permitted ONLY for `= ''`.
 //      This module renders attacker-influenced EXIF strings, folder names and
 //      captions — see the browser-mirror test that pins this.
@@ -31,6 +34,8 @@
     q: '',
     tag: '',
     status: '',
+    alt: '',             // '' or 'missing' (photos with no alt text in either language)
+    altMissing: 0,       // ready photos in this view without alt text, from the last listing
     sort: 'uploaded',
     order: 'desc',
     page: 1,
@@ -136,6 +141,23 @@
   }
 
   function say(msg) { $('out').textContent = msg; }
+  function photos(n) { return window.AdminFormat.count(n, 'photo'); }
+
+  // ---- the folder and alt filter live in the URL, so a reload keeps them --
+
+  function readUrlState() {
+    var params = new URLSearchParams(typeof location.search === 'string' ? location.search : '');
+    return { folder: params.get('folder') || '', alt: params.get('alt') === 'missing' ? 'missing' : '' };
+  }
+
+  function syncUrl() {
+    if (!window.history || typeof window.history.replaceState !== 'function') return;
+    var params = new URLSearchParams();
+    if (state.folder) params.set('folder', state.folder);
+    if (state.alt) params.set('alt', state.alt);
+    var query = params.toString();
+    window.history.replaceState(null, '', (location.pathname || '') + (query ? '?' + query : ''));
+  }
 
   /** The shortcut modifier the visitor's own keyboard prints. */
   function isMac() {
@@ -172,10 +194,11 @@
       foregroundPending = true;
       foregroundMessage = msg;
     }
+    syncUrl();
     try {
       var query = {
         folder: state.folder, recursive: state.recursive, q: state.q, tag: state.tag,
-        status: state.status, sort: state.sort, order: state.order,
+        status: state.status, alt: state.alt, sort: state.sort, order: state.order,
         page: state.page, pageSize: state.pageSize,
       };
       var res;
@@ -195,6 +218,7 @@
       state.page = query.page;
       state.items = res.items;
       state.total = res.total;
+      state.altMissing = Number(res.altMissing) || 0;
       state.folders = folders;
       // Drop selections for photos no longer in view.
       var visible = state.items.map(function (i) { return i.key; });
@@ -205,7 +229,7 @@
       var message = foregroundPending ? foregroundMessage : msg;
       render(!foregroundPending);
       if (focusedKey) focusCell(visible.indexOf(focusedKey));
-      say(message != null ? message : state.total + ' photo(s)');
+      say(message != null ? message : photos(state.total));
       foregroundPending = false;
       foregroundMessage = undefined;
     } catch (e) {
@@ -248,7 +272,7 @@
     var grid = $('grid');
     grid.innerHTML = '';
     var empty = !state.items.length;
-    var narrowed = Boolean(state.folder || state.q || state.tag || state.status || !state.recursive || state.page > 1);
+    var narrowed = Boolean(state.folder || state.q || state.tag || state.status || state.alt || !state.recursive || state.page > 1);
     $('mediaEmpty').hidden = !empty;
     grid.hidden = empty;
     $('mediaEmptyMessage').textContent = empty
@@ -263,42 +287,90 @@
       // Roving tabindex: exactly one cell is tabbable at a time.
       cell.tabIndex = index === 0 ? 0 : -1;
       cell.dataset.key = item.key;
-
-      var figure = el('div', 'media-cell__thumb');
-      if (item.thumbSrc) {
-        var img = document.createElement('img');
-        img.src = item.thumbSrc;
-        img.alt = '';
-        img.loading = 'lazy';
-        figure.appendChild(img);
-      } else {
-        figure.appendChild(el('span', 'thumb-placeholder'));
-      }
-      cell.appendChild(figure);
-
-      var badge = api.statusLabel(item);
-      if (badge) cell.appendChild(el('span', 'media-cell__badge', badge));
-
-      // A title the author gave reads as the photo's name; a bare file name is
-      // only a fallback and is set back, so the photograph leads the tile.
-      cell.appendChild(el('span', 'media-cell__title' + (item.title ? '' : ' is-filename'),
-        item.title || item.key.split('/').pop()));
-      if (item.status === 'ready' && !(item.alt && (item.alt.de || item.alt.en))) {
-        cell.appendChild(el('span', 'media-cell__flag', 'No alt text'));
-      }
-      if (item.usedIn && item.usedIn.length) {
-        // "(published version)": the live post still renders it although the
-        // draft dropped it — the admin has to republish before it can go.
-        cell.appendChild(el('span', 'media-cell__used', 'used in: '
-          + item.usedIn.map(function (u) {
-            return u.title + (u.published && !u.working ? ' (published version)' : '');
-          }).join(', ')));
-      }
-
+      fillCell(cell, item);
       cell.addEventListener('click', function (ev) { onCellActivate(item.key, ev); });
       cell.addEventListener('keydown', function (ev) { onGridKey(ev, index); });
       grid.appendChild(cell);
     });
+  }
+
+  /**
+   * The tile's content — photograph, status badge, name, usage. The cell itself
+   * (selection, tabindex, listeners) is left alone so the encoding poll can
+   * refill a tile without disturbing focus.
+   */
+  function fillCell(cell, item) {
+    cell.innerHTML = '';
+    var figure = el('div', 'media-cell__thumb');
+    if (item.thumbSrc) {
+      var img = document.createElement('img');
+      img.src = item.thumbSrc;
+      img.alt = '';
+      img.loading = 'lazy';
+      figure.appendChild(img);
+    } else {
+      figure.appendChild(el('span', 'thumb-placeholder'));
+    }
+    cell.appendChild(figure);
+
+    var badge = api.statusLabel(item);
+    if (badge) cell.appendChild(el('span', 'media-cell__badge', badge));
+
+    // A title the author gave reads as the photo's name; a bare file name is
+    // only a fallback and is set back, so the photograph leads the tile.
+    cell.appendChild(el('span', 'media-cell__title' + (item.title ? '' : ' is-filename'),
+      item.title || item.key.split('/').pop()));
+    if (item.usedIn && item.usedIn.length) {
+      // "(published version)": the live post still renders it although the
+      // draft dropped it — the admin has to republish before it can go.
+      cell.appendChild(el('span', 'media-cell__used', 'used in: '
+        + item.usedIn.map(function (u) {
+          return u.title + (u.published && !u.working ? ' (published version)' : '');
+        }).join(', ')));
+    }
+  }
+
+  /**
+   * One line above the grid about alt text: how many ready photos in this view
+   * have none, with the filter as its action — instead of a tag on every tile
+   * (DESIGN.md, "Media leads with the photograph").
+   */
+  function renderAltLine() {
+    var line = $('altMissingLine');
+    var text = $('altMissingText');
+    var action = $('altMissingAction');
+    if (state.alt === 'missing') {
+      text.textContent = 'Showing photos without alt text.';
+      action.textContent = 'Show all photos in this view';
+      line.hidden = false;
+    } else if (state.altMissing > 0) {
+      text.textContent = window.AdminFormat.count(state.altMissing, 'ready photo') + ' in this view '
+        + (state.altMissing === 1 ? 'has' : 'have') + ' no alt text.';
+      action.textContent = 'Show only these';
+      line.hidden = false;
+    } else {
+      text.textContent = '';
+      action.textContent = '';
+      line.hidden = true;
+    }
+  }
+
+  /** Applies the alt-text filter from the count line or the select; `missing` or ''. */
+  function setAltFilter(value) {
+    state.alt = value === 'missing' ? 'missing' : '';
+    state.page = 1;
+    $('fAlt').value = state.alt;
+    // The active filter must be visible, so More filters opens with it.
+    if (state.alt) setMoreFilters(true);
+    reload();
+  }
+
+  function setMoreFilters(open) {
+    var extra = $('fExtra');
+    var more = $('fMore');
+    extra.hidden = !open;
+    more.setAttribute('aria-expanded', open ? 'true' : 'false');
+    more.textContent = open ? 'Fewer filters' : 'More filters';
   }
 
   function renderToolbar() {
@@ -341,6 +413,12 @@
     return copy.uploadRefusedTooLarge.replace('{max}', api.formatBytes(api.MAX_UPLOAD_BYTES));
   }
 
+  /** The server received the file and refused it for good: sending it again can never succeed. */
+  function rejectionText(reason) {
+    if (reason === 'too_large') return copy.uploadRejectedTooLarge.replace('{max}', api.formatBytes(api.MAX_UPLOAD_BYTES));
+    return copy.uploadRejectedUnreadable;
+  }
+
   function renderQueue() {
     var box = $('uploadQueue');
     var snap = state.queue;
@@ -351,6 +429,7 @@
     box.hidden = false;
     box.appendChild(el('p', 'muted', snap.done + ' of ' + snap.total + ' uploaded'
       + (snap.failed ? ' · ' + snap.failed + ' failed' : '')
+      + (snap.rejected ? ' · ' + copy.uploadRejectedCount.replace('{count}', snap.rejected) : '')
       + (snap.refused ? ' · ' + copy.uploadRefusedCount.replace('{count}', snap.refused) : '')));
     // Phones suspend a backgrounded tab's transfers; encoding needs no tab at all.
     if (snap.unsettled) {
@@ -373,7 +452,8 @@
       });
       var stop = el('button', 'btn-secondary', copy.uploadStop); stop.type = 'button';
       stop.addEventListener('click', async function () {
-        var count = uploads.snapshot().items.filter(function (item) { return ['queued', 'needs-auth', 'failed', 'retryable'].indexOf(item.state) !== -1; }).length;
+        // The same states stopWaiting() removes: unsent, and the definitely refused or rejected.
+        var count = uploads.snapshot().items.filter(function (item) { return ['queued', 'needs-auth', 'failed', 'retryable', 'refused', 'rejected'].indexOf(item.state) !== -1; }).length;
         if (count && await window.AdminConfirm.ask({ title: copy.uploadStop, body: copy.uploadStopConfirm.replace('{count}', count), confirmLabel: copy.uploadStop, danger: true })) uploads.stopWaiting();
       });
       banner.append(login, resume, stop); box.appendChild(banner);
@@ -390,10 +470,12 @@
         : i.state === 'needs-auth' ? copy.uploadNeedsAuth : i.state === 'retryable' ? copy.uploadRetryable
         : i.state === 'gone' ? copy.uploadGone
         : i.state === 'refused' ? refusalText(i.error)
+        : i.state === 'rejected' ? rejectionText(i.error)
         // Transferred is not encoded: the grid badge reports processing → ready/failed.
         : i.state === 'done' && !(i.result && i.result.duplicate) ? copy.uploadDone
         : api.queueState(i);
-      var status = el('span', 'upload-row__state' + (i.state === 'refused' || i.state === 'failed' ? ' is-refused' : ''), label);
+      var settled = i.state === 'refused' || i.state === 'rejected' || i.state === 'failed';
+      var status = el('span', 'upload-row__state' + (settled ? ' is-refused' : ''), label);
       status.id = 'upload-state-' + i.id;
       row.appendChild(status);
       row.setAttribute('aria-describedby', status.id);
@@ -415,7 +497,7 @@
       retry.addEventListener('click', function () { uploads.retryFailed(); });
       box.appendChild(retry);
     }
-    if ((snap.done || snap.refused) && snap.active === 0 && !snap.paused && !snap.unsettled) {
+    if ((snap.done || snap.refused || snap.rejected) && snap.active === 0 && !snap.paused && !snap.unsettled) {
       var clear = el('button', 'btn-secondary', 'Clear finished');
       clear.type = 'button';
       clear.addEventListener('click', function () { uploads.clearFinished(); reload(); });
@@ -430,7 +512,7 @@
   // it mid-edit throws that text away, so while `detailDirty` is set the panel
   // is left untouched — whatever reload() or a selection change did to the rest
   // of the page — until the edits are saved or explicitly discarded
-  // (see detailReplaceable).
+  // (see whenReplaceable).
   function renderDetail(background) {
     if (state.detailDirty) return;
     var item = state.items.filter(function (i) { return i.key === state.detailKey; })[0];
@@ -482,39 +564,25 @@
     back.type = 'button';
     back.id = 'detailBack';
     back.addEventListener('click', function () {
-      if (!detailReplaceable(null)) return;
-      state.detailKey = null;
-      renderDetail();
-      focusCell(state.items.findIndex(function (photo) { return photo.key === item.key; }));
+      whenReplaceable(null, function () {
+        state.detailKey = null;
+        renderDetail();
+        focusCell(state.items.findIndex(function (photo) { return photo.key === item.key; }));
+      });
     });
     header.appendChild(back);
     panel.appendChild(header);
     // The photo comes first: alt text and captions are written while looking at it.
     var preview = el('figure', 'media-detail__preview');
-    if (item.thumbSrc) {
-      var previewImg = document.createElement('img');
-      previewImg.src = item.thumbSrc;
-      // The fields below are this photo's description; the preview itself adds none.
-      previewImg.alt = '';
-      if (item.width && item.height) { previewImg.width = item.width; previewImg.height = item.height; }
-      preview.appendChild(previewImg);
-    } else {
-      preview.appendChild(el('span', 'thumb-placeholder', api.statusLabel(item) || 'No preview'));
-    }
-    var shot = [
-      item.exif && item.exif.camera,
-      item.exif && item.exif.takenAt ? api.formatTakenAt(item.exif.takenAt) : '',
-      item.width && item.height ? item.width + ' × ' + item.height : '',
-    ].filter(Boolean).join(' · ');
-    if (shot) preview.appendChild(el('figcaption', 'media-detail__shot', shot));
+    fillPreview(preview, item);
     panel.appendChild(preview);
     panel.appendChild(el('p', 'media-key', item.key));
     renderSuggest(panel, item);
 
     var fields = [
       { id: 'dTitle', label: 'Title', value: item.title },
-      { id: 'dAltDe', label: 'Alt (DE)', value: item.alt.de },
-      { id: 'dAltEn', label: 'Alt (EN)', value: item.alt.en },
+      { id: 'dAltDe', label: 'Alt text (DE)', value: item.alt.de },
+      { id: 'dAltEn', label: 'Alt text (EN)', value: item.alt.en },
       { id: 'dCapDe', label: 'Caption (DE)', value: item.caption.de },
       { id: 'dCapEn', label: 'Caption (EN)', value: item.caption.en },
       { id: 'dTags', label: 'Tags (comma-separated)', value: (item.tags || []).join(', ') },
@@ -595,46 +663,67 @@
     });
     panel.appendChild(dl);
 
+    renderEncodingActions(panel, item);
+  }
+
+  /** The photograph itself, or its status while it has no thumbnail yet; refilled by the poll. */
+  function fillPreview(preview, item) {
+    preview.innerHTML = '';
+    if (item.thumbSrc) {
+      var previewImg = document.createElement('img');
+      previewImg.src = item.thumbSrc;
+      // The fields below are this photo's description; the preview itself adds none.
+      previewImg.alt = '';
+      if (item.width && item.height) { previewImg.width = item.width; previewImg.height = item.height; }
+      preview.appendChild(previewImg);
+    } else {
+      preview.appendChild(el('span', 'thumb-placeholder', api.statusLabel(item) || 'No preview'));
+    }
+    // Camera, capture time and pixel size: measurements, set in mono (DESIGN.md).
+    var shot = [
+      item.exif && item.exif.camera,
+      item.exif && item.exif.takenAt ? window.AdminFormat.dateTime(item.exif.takenAt, { utc: true }) : '',
+      item.width && item.height ? item.width + ' × ' + item.height : '',
+    ].filter(Boolean).join(' · ');
+    if (shot) preview.appendChild(el('figcaption', 'media-detail__shot', shot));
+  }
+
+  /**
+   * Retry encoding (failed photos) and Delete photo (admins) at the end of the
+   * panel. While the photo is still encoding, Delete is disabled with a note:
+   * the server refuses (409) while the encoder may write under this key
+   * (#116). The encoding poll flips it the moment the status settles.
+   */
+  function renderEncodingActions(panel, item) {
+    ['dRetry', 'dDelete', 'deleteNote'].forEach(function (id) { var old = $(id); if (old) old.remove(); });
     if (item.status === 'failed') {
       var retryOne = el('button', 'btn-secondary', 'Retry encoding');
       retryOne.type = 'button';
-      retryOne.addEventListener('click', function () {
-        client.retry([item.key]).then(function () { reload('Re-queued for encoding.'); }, fail);
+      retryOne.id = 'dRetry';
+      retryOne.addEventListener('click', async function () {
+        var restore = window.AdminFocus.hold(retryOne);
+        retryOne.disabled = true;
+        try {
+          await client.retry([item.key]);
+          await reload('Re-queued for encoding.');
+        } catch (e) { retryOne.disabled = false; fail(e); }
+        restore($('dDelete'), $('detail'));
       });
       panel.appendChild(retryOne);
     }
-    if (state.me && state.me.isAdmin) {
-      var del = el('button', 'btn-remove', 'Delete photo');
-      del.type = 'button';
-      if (item.status === 'processing') {
-        // The server refuses (409) while the encoder may still write under
-        // this key (#116); say so up front instead of after the confirm.
-        // `state.items` only changes on reload(), so offer a one-item
-        // re-check that flips the button in place — a full re-render would
-        // throw away whatever the admin has typed into the details form.
-        var note = el('p', 'muted', 'Still encoding — delete becomes available once it finishes or fails. ');
-        note.id = 'deleteNote';
-        var recheck = el('button', 'btn-link', 'Check again');
-        recheck.type = 'button';
-        recheck.addEventListener('click', async function () {
-          try {
-            var fresh = await client.get(item.key);
-            item.status = fresh.status; item.error = fresh.error;
-            if (fresh.status === 'processing') { say('Still encoding.'); return; }
-            del.disabled = false;
-            del.removeAttribute('aria-describedby');
-            note.remove();
-            say(fresh.status === 'ready' ? 'Encoding finished.' : 'Encoding ' + fresh.status + '.');
-          } catch (e) { fail(e); }
-        });
-        note.appendChild(recheck);
-        del.disabled = true;
-        del.setAttribute('aria-describedby', 'deleteNote');
-        panel.appendChild(note);
-      }
-      del.addEventListener('click', function () { deleteOne(item); });
-      panel.appendChild(del);
+    if (!state.me || !state.me.isAdmin) return;
+    var del = el('button', 'btn-remove', 'Delete photo');
+    del.type = 'button';
+    del.id = 'dDelete';
+    if (item.status === 'processing') {
+      var note = el('p', 'muted', 'Still encoding — Delete becomes available once it finishes or fails.');
+      note.id = 'deleteNote';
+      del.disabled = true;
+      del.setAttribute('aria-describedby', 'deleteNote');
+      panel.appendChild(note);
     }
+    del.addEventListener('click', function () { deleteOne(item); });
+    panel.appendChild(del);
   }
 
   function render(background) {
@@ -642,9 +731,105 @@
     // repaint their own state; replacing either here would discard focused controls.
     if (!background) renderFolders();
     renderGrid();
+    renderAltLine();
     renderToolbar();
     renderDetail(background);
     if (!background) renderQueue();
+    schedulePoll();
+  }
+
+  // ---- encoding poll ------------------------------------------------------
+  // A tile shows `processing` the moment its upload lands; the encoder finishes
+  // later with no event back to this page. While any photo on the page is still
+  // processing, re-read those photos every few seconds and update their tiles
+  // (and an open panel) in place — no reload, so selection, focus, scroll,
+  // filters and page stay put. Paused while the tab is hidden; a failed round
+  // says nothing and the next one still runs.
+
+  var POLL_MS = 3000;
+  var poll = { timer: null, running: false };
+
+  function processingKeys() {
+    return state.items.filter(function (i) { return i.status === 'processing'; }).map(function (i) { return i.key; });
+  }
+
+  function stopPoll() {
+    clearTimeout(poll.timer);
+    poll.timer = null;
+  }
+
+  /** Called after every render: keeps one round pending while anything is processing, none otherwise. */
+  function schedulePoll() {
+    if (document.hidden || poll.running || !processingKeys().length) { stopPoll(); return; }
+    if (poll.timer === null) poll.timer = setTimeout(runPoll, POLL_MS);
+  }
+
+  async function runPoll() {
+    poll.timer = null;
+    if (document.hidden || poll.running) return;
+    poll.running = true;
+    var ready = 0;
+    var failed = 0;
+    var stop = false;
+    try {
+      var keys = processingKeys();
+      for (var i = 0; i < keys.length && !document.hidden; i += 1) {
+        var fresh;
+        try { fresh = await client.get(keys[i]); }
+        catch (e) {
+          // The 401 path has already paused the queue and said so; keep polling
+          // through anything else and let the next round try again.
+          if (e && (e.status === 401 || e.code === 'owner_changed')) { stop = true; break; }
+          continue;
+        }
+        var outcome = applyEncoded(keys[i], fresh);
+        if (outcome === 'ready') ready += 1;
+        else if (outcome === 'failed' || outcome === 'missing') failed += 1;
+      }
+    } finally {
+      poll.running = false;
+      if (ready || failed) {
+        say([ready ? photos(ready) + ' ready' : '', failed ? (ready ? String(failed) : photos(failed)) + ' failed' : '']
+          .filter(Boolean).join(', ') + '.');
+      }
+      if (!stop) schedulePoll();
+    }
+  }
+
+  /**
+   * Folds a re-read photo into the row the page already holds and repaints its
+   * tile and panel. Returns the new status, or null when nothing changed (still
+   * processing, paged away meanwhile, or an unusable response).
+   */
+  function applyEncoded(key, fresh) {
+    if (!fresh || typeof fresh !== 'object' || fresh.key !== key || typeof fresh.status !== 'string') return null;
+    var index = state.items.findIndex(function (i) { return i.key === key; });
+    var current = state.items[index];
+    if (!current || current.status !== 'processing' || fresh.status === 'processing') return null;
+    // The same object stays in state.items: the tile's listeners and the open
+    // panel hold it. Only what encoding changes is copied — never the text the
+    // panel's diff base must keep reflecting what the author saw.
+    current.status = fresh.status;
+    current.error = fresh.error === undefined ? null : fresh.error;
+    current.thumbSrc = fresh.thumbSrc === undefined ? current.thumbSrc : fresh.thumbSrc;
+    if (typeof fresh.variantBytes === 'number') current.variantBytes = fresh.variantBytes;
+    var cell = $('grid').querySelectorAll('.media-cell')[index];
+    if (cell && cell.dataset.key === key) fillCell(cell, current);
+    updateOpenDetail(current);
+    return current.status;
+  }
+
+  /** The open panel follows an encoded photo: rebuilt when clean and unfocused, patched in place otherwise. */
+  function updateOpenDetail(item) {
+    var panel = $('detail');
+    if (panel.dataset.key !== item.key) return;
+    if (!state.detailDirty && !panel.contains(document.activeElement)) { renderDetail(); return; }
+    // The author is typing here: swap the preview, enable Delete, offer Retry
+    // and the AI suggestion — and leave every field exactly as it is.
+    var preview = panel.querySelector('.media-detail__preview');
+    if (preview) fillPreview(preview, item);
+    renderEncodingActions(panel, item);
+    refreshSuggest(item);
   }
 
   // ---- selection ----------------------------------------------------------
@@ -659,15 +844,25 @@
   }
 
   /**
-   * True when the detail panel may be replaced. Asks first if it holds unsaved
-   * edits, so a mis-click on a neighbouring photo cannot silently eat them.
+   * Runs `proceed` once the detail panel may be replaced: at once when it holds
+   * nothing unsaved (or shows `nextKey` already), otherwise after the author
+   * confirms discarding — so a mis-click on a neighbouring photo cannot
+   * silently eat their text.
    */
-  function detailReplaceable(nextKey) {
-    if (!state.detailDirty || nextKey === state.detailKey) return true;
-    var key = $('detail').dataset.key || state.detailKey;
-    if (!confirm('Discard the unsaved changes to "' + key + '"?')) return false;
-    state.detailDirty = false;
-    return true;
+  function whenReplaceable(nextKey, proceed) {
+    if (!state.detailDirty || nextKey === state.detailKey) { proceed(); return; }
+    var item = state.detailItem;
+    var name = item ? (item.title || item.key.split('/').pop()) : ($('detail').dataset.key || '');
+    window.AdminConfirm.ask({
+      title: 'Discard unsaved details?',
+      body: 'The details of "' + name + '" have unsaved changes. Discarding them cannot be undone.',
+      confirmLabel: 'Discard changes',
+      danger: true,
+    }).then(function (ok) {
+      if (!ok) return;
+      state.detailDirty = false;
+      proceed();
+    });
   }
 
   function markDetailDirty() {
@@ -678,21 +873,21 @@
   }
 
   function onCellActivate(key, ev) {
-    if (!detailReplaceable(key)) return;
-    if (ev && ev.shiftKey && state.anchor) {
-      state.selected = api.rangeBetween(visibleKeys(), state.anchor, key);
-    } else if (ev && (ev.ctrlKey || ev.metaKey)) {
-      toggle(key);
-      state.anchor = key;
-    } else {
-      state.selected = [key];
-      state.anchor = key;
-    }
-    state.detailKey = key;
-    render();
-    if (window.matchMedia('(max-width: 900px)').matches && !(ev && (ev.shiftKey || ev.ctrlKey || ev.metaKey))) {
-      revealDetail();
-    }
+    var modifier = !!(ev && (ev.shiftKey || ev.ctrlKey || ev.metaKey));
+    whenReplaceable(key, function () {
+      if (ev && ev.shiftKey && state.anchor) {
+        state.selected = api.rangeBetween(visibleKeys(), state.anchor, key);
+      } else if (ev && (ev.ctrlKey || ev.metaKey)) {
+        toggle(key);
+        state.anchor = key;
+      } else {
+        state.selected = [key];
+        state.anchor = key;
+      }
+      state.detailKey = key;
+      render();
+      if (window.matchMedia('(max-width: 900px)').matches && !modifier) revealDetail();
+    });
   }
 
   /** Roving tabindex + arrow keys; Space toggles, Shift+Arrow extends. */
@@ -706,10 +901,11 @@
     var next = null;
     if (ev.key === 'Enter') {
       ev.preventDefault();
-      if (!detailReplaceable(keys[index])) return;
-      state.detailKey = keys[index];
-      renderDetail();
-      revealDetail();
+      whenReplaceable(keys[index], function () {
+        state.detailKey = keys[index];
+        renderDetail();
+        revealDetail();
+      });
       return;
     }
     if (ev.key === 'ArrowRight') next = index + 1;
@@ -720,12 +916,13 @@
     else if (ev.key === 'End') next = keys.length - 1;
     else if (ev.key === ' ' || ev.key === 'Spacebar') {
       ev.preventDefault();
-      if (!detailReplaceable(keys[index])) return;
-      toggle(keys[index]);
-      state.anchor = keys[index];
-      state.detailKey = keys[index];
-      render();
-      focusCell(index);
+      whenReplaceable(keys[index], function () {
+        toggle(keys[index]);
+        state.anchor = keys[index];
+        state.detailKey = keys[index];
+        render();
+        focusCell(index);
+      });
       return;
     } else if ((ev.ctrlKey || ev.metaKey) && (ev.key === 'a' || ev.key === 'A')) {
       ev.preventDefault();
@@ -748,7 +945,7 @@
     // detail panel when nothing is unsaved there, so a keyboard user can look
     // around without being asked to discard on every keystroke — and
     // detailKey stays what the panel shows, which is what the switch guard
-    // in detailReplaceable compares against.
+    // in whenReplaceable compares against.
     if (!state.detailDirty) state.detailKey = keys[next];
     render();
     focusCell(next);
@@ -765,21 +962,36 @@
 
   // ---- AI suggestion for the photo in the panel ----------------------------
 
+  /** The thumbnail a model may be shown, or null while the photo has none (still encoding, failed). */
+  function suggestUrl(item) {
+    return window.MediaAi.photoUrl(item, imageOrigin(), location.origin);
+  }
+
   function renderSuggest(panel, item) {
-    var url = window.MediaAi.photoUrl(item, imageOrigin(), location.origin);
     var row = el('div', 'media-ai-suggest');
-    var button = el('button', 'btn-secondary', state.suggest ? 'Asking the model…' : 'Suggest with AI');
+    var button = el('button', 'btn-secondary', 'Suggest with AI');
     button.id = 'dSuggest';
     button.type = 'button';
-    button.disabled = !url || !!state.suggest;
-    button.addEventListener('click', function () { suggestDetail(item, url); });
-    var status = el('p', 'muted', state.suggest ? 'Asking the photo model…'
-      : url ? '' : 'Available once the photo has finished encoding.');
+    button.addEventListener('click', function () { suggestDetail(item, suggestUrl(item)); });
+    var status = el('p', 'muted');
     status.id = 'dSuggestStatus';
     status.setAttribute('role', 'status');
     row.appendChild(button);
     row.appendChild(status);
     panel.appendChild(row);
+    refreshSuggest(item);
+  }
+
+  /** Button and note follow the photo's state: unavailable while it has no thumbnail, busy while asking. */
+  function refreshSuggest(item) {
+    var button = $('dSuggest');
+    var status = $('dSuggestStatus');
+    if (!button || !status) return;
+    var url = suggestUrl(item);
+    button.disabled = !url || !!state.suggest;
+    button.textContent = state.suggest ? 'Asking the model…' : 'Suggest with AI';
+    status.textContent = state.suggest ? 'Asking the photo model…'
+      : url ? '' : 'Available once the photo has finished encoding.';
   }
 
   function cancelSuggest() {
@@ -857,7 +1069,7 @@
     var offered = offers.length;
     if (filled) markDetailDirty();
     if (!filled && !offered) return 'The model suggested nothing new for this photo.';
-    return (filled ? 'Filled ' + filled + ' empty field' + (filled === 1 ? '' : 's') + '. ' : '')
+    return (filled ? 'Filled ' + window.AdminFormat.count(filled, 'empty field') + '. ' : '')
       + (offered ? 'Fields that already had text keep it; the suggestion is shown below each. ' : '')
       + 'Review, then Save details.';
   }
@@ -1000,6 +1212,10 @@
     var generation = state.detailGeneration;
     var titleInput = $('dTitle');
     var refreshListing = false;
+    // Save details (or Use mine) is disabled while it runs and rebuilt after;
+    // keyboard focus comes back to Save details rather than falling to <body>.
+    var trigger = document.activeElement;
+    var restore = window.AdminFocus.hold(trigger && trigger === $('dUseMine') ? trigger : $('dSave'));
     setDetailSaving(true);
     detailRefresh.beginAction();
     state.detailChanged = null;
@@ -1055,6 +1271,7 @@
       else fail(error);
     } finally {
       setDetailSaving(false);
+      restore($('dSave'));
       detailRefresh.endAction(false);
       // Reconcile server-side filters, order and selection after adoption.
       // reload preserves dirty panels and fences superseded list responses.
@@ -1070,12 +1287,18 @@
       danger: true,
     });
     if (!ok) return;
+    var index = state.items.findIndex(function (photo) { return photo.key === item.key; });
     try {
       await client.remove(item.key);
       state.detailKey = null;
       state.detailDirty = false;
-      await reload('Deleted.');
-    } catch (e) { fail(e); }
+      await reload('Photo deleted.');
+    } catch (e) { fail(e); return; }
+    // The tile is gone and the panel with it: land on the photo that took its
+    // place, else the one before it, else the upload action of the empty state.
+    var cells = $('grid').querySelectorAll('.media-cell');
+    if (cells.length) focusCell(Math.min(Math.max(index, 0), cells.length - 1));
+    else $('emptyChoosePhotos').focus();
   }
 
   // ---- wiring -------------------------------------------------------------
@@ -1099,15 +1322,18 @@
       state.recursive = $('fRecursive').checked;
       reload();
     });
-    var more = $('fMore');
-    if (more) more.addEventListener('click', function () {
-      var extra = $('fExtra');
-      extra.hidden = !extra.hidden;
-      more.setAttribute('aria-expanded', extra.hidden ? 'false' : 'true');
-      more.textContent = extra.hidden ? 'More filters' : 'Fewer filters';
+    $('fAlt').addEventListener('change', function () { setAltFilter($('fAlt').value); });
+    $('altMissingAction').addEventListener('click', function () {
+      setAltFilter(state.alt === 'missing' ? '' : 'missing');
     });
+    $('fMore').addEventListener('click', function () { setMoreFilters($('fExtra').hidden); });
     $('prevPage').addEventListener('click', function () { state.page = Math.max(1, state.page - 1); reload(); });
     $('nextPage').addEventListener('click', function () { state.page += 1; reload(); });
+    // The encoding poll follows the tab: nothing is read while it is hidden.
+    document.addEventListener('visibilitychange', function () {
+      if (document.hidden) stopPoll(); else schedulePoll();
+    });
+    window.addEventListener('pagehide', stopPoll);
   }
 
   function bindUpload() {
@@ -1116,7 +1342,7 @@
     var accept = function (files) {
       if (!files || !files.length) return;
       uploads.add(files, { folder: state.folder });
-      say(copy.uploadStarted.replace('{count}', files.length));
+      say(copy.uploadStarted.replace('{count}', window.AdminFormat.count(files.length, 'file')));
     };
     input.addEventListener('change', function () { accept(input.files); input.value = ''; });
     ['dragenter', 'dragover'].forEach(function (t) {
@@ -1183,8 +1409,17 @@
           || operation.kind === 'move' && (!Number.isSafeInteger(acknowledged.moved) || acknowledged.moved < 0 || acknowledged.moved > operation.keys.length)) {
           throw Object.assign(new Error('invalid_response'), { unknown: true });
         }
+        if (operation.kind === 'folder') {
+          // Acknowledged: the recovery panel has nothing to say. Open the new
+          // folder and report it where every other outcome is reported.
+          panel.remove();
+          state.folder = operation.path;
+          state.page = 1;
+          void reload('Folder created.').catch(function () {});
+          return;
+        }
         // A valid acknowledgement is displayed separately from this optional refresh.
-        message.textContent = operation.kind === 'folder' ? copy.folderPresent : copy.moveStored;
+        message.textContent = copy.moveStored;
         void reload().catch(function () {});
       } catch (error) {
         if (api.isUnknown(error)) { busy = false; await probe(); }
@@ -1198,19 +1433,38 @@
 
   function bindFolderActions() {
     $('newFolder').addEventListener('click', async function () {
-      var path = prompt('New folder name (inside "' + (state.folder || 'root') + '"):');
-      if (!path) return;
-      var full = state.folder ? state.folder + '/' + path : path;
-      await folderMoveOperation({ kind: 'folder', path: full });
+      var parent = state.folder;
+      var name = await window.AdminConfirm.prompt({
+        title: 'New folder',
+        body: parent ? 'Inside "' + parent + '".' : 'At the top level of the library.',
+        label: 'Folder name',
+        confirmLabel: 'Create folder',
+        required: 'Enter a folder name.',
+        validate: function (text) { return api.folderNameRefusal(text, parent); },
+      });
+      if (name === null) return;
+      await folderMoveOperation({ kind: 'folder', path: (parent ? parent + '/' : '') + name.normalize('NFC') });
     });
     $('renameFolder').addEventListener('click', async function () {
       if (!state.folder) { say('Pick a folder first.'); return; }
-      var to = prompt('Rename "' + state.folder + '" to:', state.folder);
-      if (!to || to === state.folder) return;
+      var from = state.folder;
+      var parent = api.parentOf(from);
+      var name = await window.AdminConfirm.prompt({
+        title: 'Rename folder',
+        body: 'The photos and subfolders of "' + from + '" move with it.',
+        label: 'Folder name',
+        value: from.split('/').pop(),
+        confirmLabel: 'Rename folder',
+        required: 'Enter a folder name.',
+        validate: function (text) { return api.folderNameRefusal(text, parent); },
+      });
+      if (name === null) return;
+      var to = (parent ? parent + '/' : '') + name.normalize('NFC');
+      if (to === from) return;
       try {
-        var res = await client.renameFolder(state.folder, to);
+        var res = await client.renameFolder(from, to);
         state.folder = to;
-        await reload('Folder renamed (' + res.moved + ' photo(s) moved).');
+        await reload('Folder renamed (' + photos(res.moved) + ' moved).');
       } catch (e) { fail(e); }
     });
     $('deleteFolder').addEventListener('click', async function () {
@@ -1226,7 +1480,11 @@
         await client.deleteFolder(state.folder);
         state.folder = api.parentOf(state.folder);
         await reload('Folder deleted.');
-      } catch (e) { fail(e); }
+      } catch (e) { fail(e); return; }
+      // Delete is disabled for "All photos", so focus moves on to the folder
+      // that is now current — the parent, or All photos.
+      var current = $('folderTree').querySelectorAll('.is-current')[0];
+      if (current) current.focus();
     });
   }
 
@@ -1239,7 +1497,7 @@
     $('retrySelected').addEventListener('click', async function () {
       try {
         var res = await client.retry(state.selected);
-        await reload('Re-queued ' + res.queued + ' photo(s).');
+        await reload('Re-queued ' + photos(res.queued) + '.');
       } catch (e) { fail(e); }
     });
     $('aiSelected').addEventListener('click', function () { aiDialog.open('selected'); });
@@ -1247,8 +1505,13 @@
       aiDialog.open(state.selected.length ? 'selected' : 'all');
     });
     $('clearSelection').addEventListener('click', function () {
+      var anchor = state.anchor;
       state.selected = [];
       render();
+      // The bulk bar (and this button) is gone: continue from the photo the
+      // selection started at, else the first one.
+      var keys = visibleKeys();
+      focusCell(Math.max(0, keys.indexOf(anchor)));
     });
     $('rescan').addEventListener('click', async function () {
       say('Reconciling…');
@@ -1268,6 +1531,7 @@
       : 'every folder'];
     if (state.q) parts.push('search “' + state.q + '”');
     if (state.status) parts.push('status ' + state.status);
+    if (state.alt === 'missing') parts.push('without alt text');
     return parts.join(', ');
   }
 
@@ -1282,7 +1546,7 @@
           description: viewDescription(),
           query: {
             folder: state.folder, recursive: state.recursive, q: state.q, tag: state.tag,
-            status: state.status, sort: state.sort, order: state.order,
+            status: state.status, alt: state.alt, sort: state.sort, order: state.order,
           },
         };
       },
@@ -1316,10 +1580,10 @@
     });
     $('emptyShowAll').textContent = copy.mediaShowAll;
     $('emptyShowAll').addEventListener('click', function () {
-      state.folder = state.q = state.tag = state.status = '';
+      state.folder = state.q = state.tag = state.status = state.alt = '';
       state.recursive = true;
       state.page = 1;
-      $('fSearch').value = $('fStatus').value = '';
+      $('fSearch').value = $('fStatus').value = $('fAlt').value = '';
       $('fRecursive').checked = true;
       $('fSearch').focus();
       reload();
@@ -1333,6 +1597,18 @@
     $('detail').addEventListener('input', markDetailDirty);
     $('detail').addEventListener('change', markDetailDirty);
     detailRefresh.start(false);
+    // The folder and the alt filter survive a reload through the URL. A folder
+    // that no longer exists falls back to All photos instead of an empty view.
+    var restored = readUrlState();
+    state.alt = restored.alt;
+    $('fAlt').value = state.alt;
+    if (state.alt) setMoreFilters(true);
+    if (restored.folder) {
+      try {
+        var folders = await client.folders();
+        if (folders.indexOf(restored.folder) !== -1) state.folder = restored.folder;
+      } catch (_) { /* reload() below reports the failure once */ }
+    }
     await reload();
   }
   (async function init() {

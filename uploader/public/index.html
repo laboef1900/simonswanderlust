@@ -77,6 +77,7 @@
     <script src="/admin/publication-refresh.js"></script>
     <script src="/admin/auth.js"></script>
     <script src="/admin/language.js"></script>
+    <script src="/admin/admin-ui.js"></script>
     <script src="/admin/posts-filter.js"></script>
     <script src="/admin/desk.js"></script>
     <script src="/admin/admin-confirm.js"></script>
@@ -149,11 +150,20 @@
         return response.json();
       }
 
-      function tripLink(post, label) {
+      function storyLink(post, label) {
         const a = el('a', 'desk-title');
         a.href = editorHref(post.translationKey);
         a.textContent = label || post.title || SiteLanguage.text('Untitled');
         return a;
+      }
+
+      // The same chips as the story's Posts row, from the same computation.
+      function languageChips(post) {
+        const chips = el('div', 'post-languages');
+        for (const { locale, state, copy: name } of PostsFilter.languageStates(post, SiteLanguage.config())) {
+          chips.appendChild(SiteLanguage.chip(locale, state, SiteLanguage.text(name, { language: SiteLanguage.names[locale] })));
+        }
+        return chips;
       }
 
       function heroFigure(post) {
@@ -188,14 +198,11 @@
         const card = el('article', 'desk-next-card');
         card.appendChild(heroFigure(post));
         const body = el('div', 'desk-next-body');
-        body.appendChild(tripLink(post));
+        body.appendChild(storyLink(post));
+        body.appendChild(languageChips(post));
         const meta = el('p', 'muted');
-        const bits = [
-          post.country,
-          post.region,
-          Desk.secondaryBodyLabel(post.secondaryStatus, SiteLanguage.config()),
-        ].filter(Boolean);
-        const edited = Desk.formatUpdatedAt(post.updatedAt);
+        const bits = [post.country, AdminFormat.region(post.region)].filter(Boolean);
+        const edited = AdminFormat.dateTime(post.updatedAt);
         if (edited) bits.push('Last edited ' + edited);
         meta.textContent = bits.join(' · ');
         body.appendChild(meta);
@@ -221,7 +228,7 @@
         const ul = el('ul', 'desk-unpub');
         posts.forEach((post) => {
           const li = el('li');
-          li.appendChild(tripLink(post));
+          li.appendChild(storyLink(post));
           const publication = el('p', 'muted');
           publication.textContent = PublicationState.label(post.publication, isAdmin);
           li.appendChild(publication);
@@ -306,9 +313,7 @@
         if (count > 0) {
           const a = el('a', 'action-link');
           a.href = '/admin/media.html';
-          a.textContent = count === 1
-            ? '1 photo is in the processing queue'
-            : count + ' photos are in the processing queue';
+          a.textContent = AdminFormat.count(count, 'photo') + (count === 1 ? ' is' : ' are') + ' in the processing queue';
           root.appendChild(a);
         } else {
           root.textContent = 'Photo processing queue is idle.';
@@ -377,7 +382,7 @@
         if (!await AdminConfirm.ask({
           title: PublicationState.text('rebuildConfirm'),
           body: PublicationState.text('rebuildScope'),
-          confirmLabel: PublicationState.text('rebuild'),
+          confirmLabel: PublicationState.text('rebuild'), tone: 'publish',
         })) return;
         $('deskRebuild').disabled = true;
         publicationRefresh.beginAction();

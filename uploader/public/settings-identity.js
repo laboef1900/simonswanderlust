@@ -6,6 +6,7 @@ window.SettingsIdentity = (function () {
     const $ = (id) => document.getElementById(id);
     const locale = document.documentElement.lang === 'de' ? 'de' : 'en';
     const copy = EditorCopy[locale];
+    const text = (key, values) => copy[key].replace(/\{(\w+)\}/g, (_, name) => String(values[name]));
     const fields = ['tagline', 'aboutRole', 'aboutGear', 'studioDescriptor'];
     const limits = { tagline: 160, aboutRole: 80, aboutGear: 200, studioDescriptor: 80 };
     const labels = {
@@ -80,6 +81,9 @@ window.SettingsIdentity = (function () {
       const control = $('identity-' + role + '-file');
       if (!remove && control.files?.length !== 1) { status(copy.identityAssetOneFile, true); return; }
       if (!remove && control.files[0].size > 2 * 1024 * 1024) { status(copy.identityAssetInputLarge, true); return; }
+      // The pressed button is disabled while the request runs and may stay so
+      // afterwards (an uploaded file is cleared; a removed asset has no Remove).
+      const restore = AdminFocus.hold($('identity-' + role + '-' + (remove ? 'remove' : 'upload')));
       // Lock before confirmation too: no text/other-asset save can race its revision.
       lock(true);
       try {
@@ -118,7 +122,10 @@ window.SettingsIdentity = (function () {
           status(remove ? copy.identityAssetRemoved : copy.identityAssetSaved);
         }
       } catch { status(copy.identityAssetFailed, true); }
-      finally { lock(false); }
+      finally {
+        lock(false);
+        restore($('identity-' + role + '-remove'), $('identity-' + role + '-upload'), control);
+      }
     }
     for (const role of roles) {
       const label = role === 'logo' ? copy.identityLogo : copy.identityFavicon;
@@ -136,7 +143,7 @@ window.SettingsIdentity = (function () {
     function input(parent, id, label, value, maxLength, type = 'text') {
       const group = document.createElement('div');
       const caption = document.createElement('label');
-      caption.htmlFor = id;
+      caption.setAttribute('for', id);
       caption.textContent = label;
       const control = document.createElement('input');
       control.id = id;
@@ -160,9 +167,9 @@ window.SettingsIdentity = (function () {
         const pair = document.createElement('div');
         pair.className = 'settings-field-pair';
         for (const language of locales) {
-          const languageLabel = language === 'de' ? copy.identityGerman : copy.identityEnglish;
+          // A label naming a language appends its code: "Tagline (DE)".
           input(pair, 'identity-' + field + '-' + language,
-            labels[field] + ' · ' + languageLabel, identity[field]?.[language], limits[field]);
+            labels[field] + ' (' + language.toUpperCase() + ')', identity[field]?.[language], limits[field]);
         }
         $('identityLocalized').append(pair);
       }
@@ -239,6 +246,7 @@ window.SettingsIdentity = (function () {
         assets = data.assets;
         paintAssets();
         for (const role of roles) $('identity-' + role + '-file').value = '';
+        for (const control of $('identityForm').querySelectorAll('input')) AdminField.valid(control);
         dirty = conflicted = false;
         draft.clean();
         for (const role of roles) assetDrafts[role].clean();
@@ -247,10 +255,15 @@ window.SettingsIdentity = (function () {
         status(copy.identityLoadFailed, true);
       } finally { lock(false); }
     }
-    $('identityForm').addEventListener('input', () => { dirty = true; });
+    $('identityForm').addEventListener('input', (event) => {
+      dirty = true;
+      // Typing in a refused field clears its error until the next save.
+      if (event.target && event.target.id) AdminField.valid(event.target);
+    });
     $('identityUseBrowserOrigin').addEventListener('click', () => {
       if (busy) return;
       $('identityCanonicalOrigin').value = location.origin;
+      AdminField.valid($('identityCanonicalOrigin'));
       dirty = true;
       draft.mark();
       $('identityCanonicalOrigin').focus();
@@ -266,37 +279,68 @@ window.SettingsIdentity = (function () {
       if (busy) return;
       if ((dirty || roles.some((role) => $('identity-' + role + '-file').files?.length)) &&
           !await AdminConfirm.ask({ title: copy.identityReload, body: copy.identityReloadConfirm, confirmLabel: copy.identityReload })) return;
+      const restore = AdminFocus.hold($('identityReload'));
       await load();
+      restore();
     });
+
+    function fieldLabel(control) {
+      const label = document.querySelector('label[for="' + control.id + '"]');
+      return label ? label.textContent : control.id;
+    }
+    function httpsUrl(value) {
+      try { return new URL(value).protocol === 'https:'; } catch { return false; }
+    }
+    /**
+     * The sentence a field's value earns before any request, or ''. HTML
+     * maxlength counts UTF-16 units, not the contract's NFC code points, so the
+     * limit is checked here; typed text is never truncated, only refused intact.
+     */
+    function problemFor(control) {
+      const value = control.value.normalize('NFC').trim();
+      const limit = Number(control.dataset.identityMaxLength);
+      const length = [...value].length;
+      if (Number.isFinite(limit) && length > limit) return text('identityTooLong', { label: fieldLabel(control), max: limit, count: length });
+      if (control.id === 'identityCanonicalOrigin') {
+        if (value === '') return '';
+        try { new URL(control.value); return ''; } catch { return copy.identityCanonicalInvalid; }
+      }
+      if (control.id.startsWith('identity-link-label-')) return value ? '' : copy.identityLinkLabelRequired;
+      if (control.id.startsWith('identity-link-url-')) return httpsUrl(control.value.trim()) ? '' : copy.identityLinkUrlInvalid;
+      return '';
+    }
+    /** Server validation field paths → the control holding that value. */
+    function controlFor(path) {
+      const link = /^socialLinks\[(\d+)\]\.(label|url)$/.exec(path || '');
+      if (link) return $('identity-link-' + link[2] + '-' + link[1]);
+      const fixed = { siteName: 'identitySiteName', authorName: 'identityAuthorName', canonicalOrigin: 'identityCanonicalOrigin' };
+      if (Object.hasOwn(fixed, path)) return $(fixed[path]);
+      const localized = /^(tagline|aboutRole|aboutGear|studioDescriptor)\.(de|en)$/.exec(path || '');
+      return localized ? $('identity-' + localized[1] + '-' + localized[2]) : null;
+    }
+
     $('identityForm').addEventListener('submit', async (event) => {
       event.preventDefault();
-      if (busy || conflicted || revision === null || !$('identityForm').reportValidity()) return;
-      // HTML maxlength counts UTF-16 units, not the contract's NFC code points.
-      // Never truncate typed identity text; reject excess with its input intact.
-      for (const control of $('identityForm').querySelectorAll('input')) {
-        const limit = Number(control.dataset.identityMaxLength);
-        if (Number.isFinite(limit) && [...control.value.normalize('NFC').trim()].length > limit) {
-          const label = document.querySelector('label[for="' + control.id + '"]');
-          status(copy.identityInvalid + ' ' + (label?.textContent || ''));
-          control.focus();
-          return;
-        }
+      if (busy || conflicted || revision === null) return;
+      const controls = [...$('identityForm').querySelectorAll('input')];
+      for (const control of controls) AdminField.valid(control);
+      // Every refused field is marked with its reason; focus goes to the first,
+      // and the status line only summarises when several fail.
+      const problems = controls.map((control) => [control, problemFor(control)]).filter(([, problem]) => problem);
+      if (problems.length) {
+        problems.forEach(([control, problem], index) => AdminField.invalid(control, problem, { focus: index === 0 }));
+        status(problems.length > 1 ? text('identityInvalidFields', { count: problems.length }) : '');
+        return;
       }
       const canonicalInput = $('identityCanonicalOrigin').value;
       const requestedOrigin = canonicalInput.trim() === '' ? null : canonicalInput;
-      let serializedOrigin = null;
-      try {
-        if (requestedOrigin !== null) serializedOrigin = new URL(requestedOrigin).origin;
-      } catch {
-        status(copy.identityInvalid + ' ' + copy.identityCanonicalOrigin);
-        $('identityCanonicalOrigin').focus();
-        return;
-      }
+      const serializedOrigin = requestedOrigin === null ? null : new URL(requestedOrigin).origin;
       const identity = { siteName: $('identitySiteName').value, authorName: $('identityAuthorName').value,
         canonicalOrigin: requestedOrigin, socialLinks: links };
       for (const field of fields) {
         identity[field] = Object.fromEntries(locales.map((language) => [language, $('identity-' + field + '-' + language).value]));
       }
+      const restore = AdminFocus.hold($('identitySave'));
       lock(true);
       if (serializedOrigin !== canonicalOrigin) {
         const confirmed = await AdminConfirm.ask({
@@ -304,9 +348,9 @@ window.SettingsIdentity = (function () {
           body: copy.identityCanonicalConfirmBody
             .replace('{from}', canonicalOrigin || copy.identityCanonicalUnset)
             .replace('{to}', serializedOrigin || copy.identityCanonicalUnset),
-          confirmLabel: copy.identitySave,
+          confirmLabel: copy.identitySave, tone: 'publish',
         });
-        if (!confirmed) { lock(false); return; }
+        if (!confirmed) { lock(false); restore(); return; }
       }
       status(copy.identitySaving);
       publication.beginAction();
@@ -321,7 +365,12 @@ window.SettingsIdentity = (function () {
           status(copy.identityConflict, true);
         } else if (response.status === 400 && result.code === 'invalid_identity') {
           // Field paths come from the server's fixed validation contract, not its supplied value.
-          status(copy.identityInvalid + ' ' + (result.field || ''), true);
+          const control = controlFor(result.field);
+          if (control) {
+            status('');
+            lock(false);
+            AdminField.invalid(control, text('identityRefusedField', { label: fieldLabel(control) }));
+          } else status(copy.identityRefused, true);
         } else if (!response.ok) {
           status(BuildReporting.text('unknown'), true);
         } else {
@@ -333,10 +382,11 @@ window.SettingsIdentity = (function () {
           status(copy.identitySaved);
         }
       } catch { status(BuildReporting.text('unknown'), true); }
-      finally { lock(false); publication.endAction(); }
+      finally { lock(false); publication.endAction(); restore($('identityStatus')); }
     });
     $('identityRebuild').addEventListener('click', async () => {
-      if (busy || !await AdminConfirm.ask({ title: copy.identityRebuild, body: copy.identityRebuildConfirm, confirmLabel: copy.identityRebuild })) return;
+      if (busy || !await AdminConfirm.ask({ title: copy.identityRebuild, body: copy.identityRebuildConfirm, confirmLabel: copy.identityRebuild, tone: 'publish' })) return;
+      const restore = AdminFocus.hold($('identityRebuild'));
       lock(true);
       status(copy.identityRebuilding);
       publication.beginAction();
@@ -350,6 +400,7 @@ window.SettingsIdentity = (function () {
       finally {
         lock(false);
         publication.endAction();
+        restore($('identityStatus'));
       }
     });
     return load();

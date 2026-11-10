@@ -2,8 +2,9 @@ import { readFileSync } from 'node:fs';
 import { webcrypto } from 'node:crypto';
 import vm from 'node:vm';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { editorDocument, EditorElement } from './editor-dom-harness.js';
+import { editorDocument } from './editor-dom-harness.js';
 import { browserScript, galleryCodecBindings } from './gallery-browser-module.js';
+import { markdownEditorDouble, type MarkdownEditor } from './page-editor-double.js';
 import { analyzeGallerySource } from '../../site/src/lib/gallery-source.js';
 import { galleryWarnings } from '../public/gallery-photo-line.js';
 import { ui } from '../../site/src/i18n/ui.js';
@@ -35,42 +36,19 @@ function storage() {
 
 async function loadPage(save: (payload: PagePayload) => Promise<Response>) {
   const dom = editorDocument(markup);
-  const editors: BodyEditor[] = [];
-  class BodyEditor {
-    text = '';
-    selection: { line: number; ch: number } | null = null;
-    readonly undo: string[] = [];
-    readonly input = dom.document.createElement('textarea');
-    readonly listeners: (() => void)[] = [];
-    constructor({ element }: { element: EditorElement }) {
-      element.parentElement!.appendChild(this.input);
-      editors.push(this);
-    }
-    codemirror = {
-      getInputField: () => this.input,
-      getValue: () => this.text,
-      getLine: (line: number) => this.text.split('\n')[line] ?? '',
-      on: (_event: string, callback: () => void) => { this.listeners.push(callback); },
-      refresh() {}, scrollIntoView() {},
-      focus: () => this.input.focus(),
-      setSelection: (position: { line: number; ch: number }) => { this.selection = position; },
-    };
-    value(text?: string) {
-      if (text !== undefined) { this.text = text; this.listeners.forEach((callback) => callback()); }
-      return this.text;
-    }
-  }
+  const editors: MarkdownEditor[] = [];
   const el = (id: string) => {
     const node = dom.document.getElementById(id);
     if (!node) throw new Error('Missing page control ' + id);
     return node;
   };
   const context: Record<string, unknown> = {
-    ...galleryCodecBindings, document: dom.document, EasyMDE: BodyEditor,
+    ...galleryCodecBindings, document: dom.document, EasyMDE: markdownEditorDouble({ document: dom.document, editors }),
     AbortController, setTimeout, clearTimeout, console, crypto: webcrypto, structuredClone, addEventListener() {},
+    navigator: { platform: 'MacIntel' }, matchMedia: () => ({ matches: false, addEventListener() {} }), EditorGalleryImageOrigin: 'https://img',
     localStorage: storage(), sessionStorage: storage(),
     location: { origin: 'http://localhost', search: '' }, URLSearchParams,
-    Auth: { ensureAuthed: async () => ({ isAdmin: true, userId: OWNER }), renderHeader() {} },
+    Auth: { ensureAuthed: async () => ({ isAdmin: true, userId: OWNER }), renderHeader() {}, setPageTitle() {} },
     EditorCopy: { en: Object.fromEntries(Object.entries(ui.en).filter(([key]) => key.startsWith('editor.chrome.')).map(([key, value]) => [key.slice('editor.chrome.'.length), value])) },
     AdminConfirm: { ask: async () => true },
     BuildCopy: Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [locale,
@@ -100,7 +78,7 @@ async function loadPage(save: (payload: PagePayload) => Promise<Response>) {
   };
   context.window = context;
   vm.createContext(context);
-  for (const file of ['build-reporting.js', 'language.js', 'tabs.js', 'pages-ui.js', 'about-equipment.js', 'draft-guard.js', 'write-recovery.js', 'gallery-fence.js', 'gallery-metadata-warnings.js']) vm.runInContext(browserScript(file), context);
+  for (const file of ['admin-ui.js', 'build-reporting.js', 'language.js', 'tabs.js', 'editor-rich-bridge.js', 'manuscript-bar.js', 'media-api.js', 'gallery-library.js', 'posts-filter.js', 'pages-ui.js', 'about-equipment.js', 'draft-guard.js', 'write-recovery.js', 'gallery-fence.js', 'gallery-metadata-warnings.js']) vm.runInContext(browserScript(file), context);
   vm.runInContext(script, context);
   const api = vm.runInContext('({ fill })', context) as { fill(locale: string, data: { title: string; bodyMarkdown: string }): void };
   // Let initialization (language + stored page) settle before the test edits.

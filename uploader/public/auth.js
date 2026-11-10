@@ -141,6 +141,8 @@ window.Auth = (function () {
     }
     if (scrim) scrim.hidden = false;
     setBackgroundInert(shell, true);
+    // The drawer is visible the moment .is-open applies (admin.css delays
+    // visibility only while it slides shut), so this focus lands synchronously.
     drawerFocusables(sidebar)[0]?.focus();
   }
 

@@ -202,6 +202,17 @@ maybe('pgMediaStore (integration)', () => {
     expect(page.total).toBe(3);
   });
 
+  it('alt: missing matches blank alt text in both locales through the SQL pattern, never a filled one', async () => {
+    await add('none');
+    await add('blank', { alt: { de: '  ', en: ' ' } });
+    await add('de-only', { alt: { de: 'Fjord im Morgenlicht', en: '' } });
+    await add('both', { alt: { de: 'Fjord', en: 'Fjord' } });
+    await add('encoding', { status: 'processing' });
+    expect((await store.list({ alt: 'missing' })).items.map((i) => i.key).sort()).toEqual(['blank', 'encoding', 'none']);
+    expect((await store.list({ alt: 'missing', status: 'ready' })).total).toBe(2);
+    expect((await store.list({ alt: 'missing', q: 'blank' })).items.map((i) => i.key)).toEqual(['blank']);
+  });
+
   it('an unknown sort falls back instead of reaching SQL', async () => {
     await add('k1');
     // A raw value here would be a SQL-injection point: sort/order are

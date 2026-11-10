@@ -26,16 +26,19 @@ window.EditorGalleries = (function () {
     let altFailed = false;
     let refreshTimer;
     let analysisSnapshot = null;
-    const analysisStatus = el('p', 'muted editor-gallery__status');
+    // The check's outcome is a manuscript message: it sits in the status line
+    // under the toolbar, never between the toolbar's buttons.
+    const analysisStatus = el('p', 'muted manuscript-tools__status editor-gallery__analysis');
     analysisStatus.setAttribute('role', 'status');
     const analysisRetry = el('button', 'btn-secondary', copy.retry);
     analysisRetry.type = 'button';
     analysisRetry.hidden = true;
-    toggle.parentElement.appendChild(analysisStatus);
-    toggle.parentElement.appendChild(analysisRetry);
+    const bar = toggle.closest('[role="toolbar"]');
+    if (bar) bar.after(analysisStatus); else toggle.parentElement.appendChild(analysisStatus);
     function failed(error) {
       if (error?.status === 401) onUnauthed();
       analysisStatus.textContent = copy.analysisFailed;
+      analysisStatus.appendChild(analysisRetry);
       analysisRetry.hidden = false;
     }
     analysisRetry.addEventListener('click', async () => {

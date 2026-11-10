@@ -45,19 +45,45 @@ window.MediaApi = (function () {
   }
 
   /**
-   * Format an EXIF capture time.
-   * @ai-warning getUTC* ONLY. EXIF stores naive wall-clock with no zone and the
-   * server relabels those digits as UTC, so a shot taken at 18:23 in Norway is
-   * stored as 18:23Z. A local-time formatter double-shifts it and silently
-   * mislabels photos across timezones.
+   * A server message as a sentence: capital, full stop. Server strings are
+   * lowercase codes or fragments ("invalid folder"); the author reads
+   * "Could not …: Invalid folder."
    */
-  function formatTakenAt(iso) {
-    if (!iso) return '';
-    var d = new Date(iso);
-    if (isNaN(d.getTime())) return '';
-    var p = function (n) { return String(n).padStart(2, '0'); };
-    return d.getUTCFullYear() + '-' + p(d.getUTCMonth() + 1) + '-' + p(d.getUTCDate())
-      + ' ' + p(d.getUTCHours()) + ':' + p(d.getUTCMinutes());
+  function sentence(text) {
+    var t = String(text == null ? '' : text).trim();
+    if (!t) return '';
+    t = t.charAt(0).toUpperCase() + t.slice(1);
+    return /[.!?]$/.test(t) ? t : t + '.';
+  }
+
+  // One segment of a folder path, as media-conditional.js accepts it: 1–64
+  // characters, letters/digits at both ends, letters, digits, spaces, `_`, `.`
+  // and `-` between. Nesting and total length are capped there as well.
+  var FOLDER_NAME_MAX = 64;
+  var FOLDER_DEPTH_MAX = 6;
+  var FOLDER_PATH_MAX = 200;
+
+  /**
+   * Why a folder name typed into the New folder / Rename folder prompt cannot
+   * be used, as a sentence — or '' when the server will accept it under
+   * `parent`. Checked here so the refusal reads under the field instead of
+   * arriving as a raw server error after the request.
+   */
+  function folderNameRefusal(name, parent) {
+    var text = String(name == null ? '' : name).trim().normalize('NFC');
+    if (!text) return 'Enter a folder name.';
+    if (text.indexOf('/') !== -1) return 'A folder name cannot contain a slash. Create one level at a time.';
+    if (/[\p{C}\p{Zl}\p{Zp}]/u.test(text)) return 'A folder name cannot contain control or invisible characters.';
+    if (text.length > FOLDER_NAME_MAX) return 'A folder name can be at most ' + FOLDER_NAME_MAX + ' characters.';
+    if (!/^[\p{L}\p{N}]/u.test(text) || !/[\p{L}\p{N}]$/u.test(text)) return 'A folder name must start and end with a letter or a digit.';
+    if (!/^[\p{L}\p{N} _.\-]*$/u.test(text)) return 'A folder name can contain only letters, digits, spaces, hyphens, underscores and dots.';
+    var path = parent ? parent + '/' + text : text;
+    if (path.split('/').length > FOLDER_DEPTH_MAX) return 'Folders can be nested at most ' + FOLDER_DEPTH_MAX + ' levels deep.';
+    if (path.length > FOLDER_PATH_MAX) return 'The full folder path can be at most ' + FOLDER_PATH_MAX + ' characters.';
+    // The shared rule set has the last word, so the two can never drift apart silently.
+    try { window.MediaConditional.assertSafeFolder(path); }
+    catch (_) { return 'This folder name cannot be used.'; }
+    return '';
   }
 
   /**
@@ -103,10 +129,13 @@ window.MediaApi = (function () {
    * State label for one upload-queue row. A duplicate names the folder the
    * photo already lives in: the server keeps a curated folder on re-upload
    * (#135), so "done" alone would suggest it landed where the author dropped it.
+   * A definite failure the author may send again reads as a sentence, never as
+   * the server's raw string; a rejection (see uploadRejection) is worded by the
+   * page from its reason.
    */
   function queueState(item) {
     if (item.state === 'uploading') return Math.round(item.progress * 100) + '%';
-    if (item.state === 'failed') return item.error || 'failed';
+    if (item.state === 'failed') return 'Could not upload: ' + sentence(item.error || 'unknown error');
     if (item.state === 'done' && item.result && item.result.duplicate) {
       return 'already in ' + (item.result.folder || 'root');
     }
@@ -130,6 +159,7 @@ window.MediaApi = (function () {
     put('q', s.q);
     put('tag', s.tag);
     put('status', s.status);
+    put('alt', s.alt);
     put('sort', s.sort);
     put('order', s.order);
     put('page', s.page);
@@ -384,6 +414,21 @@ window.MediaApi = (function () {
     return !!error.unknown || !error.status || error.status >= 500 || error.status === 429;
   }
 
+  /**
+   * Why the server definitively refused the file itself, or null when the
+   * failure is about something else. Sending the same bytes again can never
+   * succeed, so such a row is `rejected`: not counted in or resent by "Send
+   * upload again", and cleared with the finished ones. A 400 without a `code`
+   * is the upload route's own verdict on the image ("expected an image file",
+   * "invalid key or image", "could not read that image"); coded 400s describe
+   * the request's identity, not the file.
+   */
+  function uploadRejection(error) {
+    if (error.status === 413) return 'too_large';
+    if (error.status === 400 && !error.code) return 'unreadable';
+    return null;
+  }
+
   /** One immutable file identity, never persisted. Only server retry generations
    * authorize retransmission after an uncertain request. */
   function createUploadAttempt(client, file, fields, ownerId, options) {
@@ -446,11 +491,14 @@ window.MediaApi = (function () {
           }
         } catch (error) {
           item.error = error.message;
+          var rejection = unresolved ? null : uploadRejection(error);
           if (error.status === 401 || error.code === 'owner_changed') {
             item.state = unresolved ? 'unknown' : 'needs-auth';
             if (o.onPause) o.onPause();
           } else if (isUnknown(error) || error.code === 'upload_generation_changed') {
             unresolved = true; await probe();
+          } else if (rejection) {
+            item.state = 'rejected'; item.error = rejection;
           } else {
             item.state = unresolved ? 'unknown' : 'failed';
           }
@@ -498,7 +546,8 @@ window.MediaApi = (function () {
         done: rows.filter(function (i) { return i.state === 'done'; }).length,
         failed: rows.filter(function (i) { return i.state === 'failed' || i.state === 'retryable'; }).length,
         refused: rows.filter(function (i) { return i.state === 'refused'; }).length,
-        waiting: rows.filter(function (i) { return ['done', 'gone', 'refused'].indexOf(i.state) === -1; }).length,
+        rejected: rows.filter(function (i) { return i.state === 'rejected'; }).length,
+        waiting: rows.filter(function (i) { return ['done', 'gone', 'refused', 'rejected'].indexOf(i.state) === -1; }).length,
         active: running,
         unsettled: rows.some(function (i) { return ['queued', 'uploading', 'needs-auth', 'unknown', 'checking', 'retryable'].indexOf(i.state) !== -1; }),
       };
@@ -548,12 +597,12 @@ window.MediaApi = (function () {
       stopWaiting: function () {
         // Unknown/in-flight evidence and landed records are never discarded.
         items = items.filter(function (i) {
-          return ['queued', 'needs-auth', 'failed', 'retryable', 'refused'].indexOf(i.attempt.snapshot().state) === -1;
+          return ['queued', 'needs-auth', 'failed', 'retryable', 'refused', 'rejected'].indexOf(i.attempt.snapshot().state) === -1;
         });
         notify();
       },
       clearFinished: function () {
-        items = items.filter(function (i) { return ['done', 'refused'].indexOf(i.attempt.snapshot().state) === -1; });
+        items = items.filter(function (i) { return ['done', 'refused', 'rejected'].indexOf(i.attempt.snapshot().state) === -1; });
         notify();
       },
       snapshot: snapshot,
@@ -564,8 +613,10 @@ window.MediaApi = (function () {
     UPLOAD_CONCURRENCY: UPLOAD_CONCURRENCY,
     MAX_UPLOAD_BYTES: MAX_UPLOAD_BYTES,
     uploadRefusal: uploadRefusal,
+    uploadRejection: uploadRejection,
     formatBytes: formatBytes,
-    formatTakenAt: formatTakenAt,
+    sentence: sentence,
+    folderNameRefusal: folderNameRefusal,
     rangeBetween: rangeBetween,
     folderTree: folderTree,
     parentOf: parentOf,

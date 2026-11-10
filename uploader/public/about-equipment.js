@@ -49,10 +49,9 @@ window.AboutEquipment = (function () {
 
     for (const locale of LOCALES) {
       if (!$(locale + 'GearSection')) continue;
-      const language = locale === 'de' ? copy.identityGerman : copy.identityEnglish;
       $(locale + 'GearHeading').textContent = copy.identityAboutGear;
       $(locale + 'GearHelp').textContent = copy.aboutGearHelp;
-      $(locale + 'GearLabel').textContent = format(copy.aboutGearLabel, { language });
+      $(locale + 'GearLabel').textContent = format(copy.aboutGearLabel, { code: locale.toUpperCase() });
       $(locale + 'GearSave').textContent = copy.aboutGearSave;
       $(locale + 'GearTiming').textContent = copy.aboutGearTiming;
       $(locale + 'GearSettings').textContent = copy.aboutGearSettings;

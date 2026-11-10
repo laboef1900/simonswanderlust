@@ -387,7 +387,7 @@ export function validateDraft(pair: unknown, language: LanguageConfig = DEFAULT_
     }
     const slug = l.slug ?? '';
     if (slug !== '') checkSlug(slug as string, locale);
-    if (locale === language.primary && !(typeof l.title === 'string' && l.title.trim())) throw new PostError(`a ${localeName(locale)} title is required to start a draft`, 'invalid_post');
+    if (locale === language.primary && !(typeof l.title === 'string' && l.title.trim())) throw new PostError(`A ${localeName(locale)} title is required to start a draft.`, 'invalid_post');
   }
 }
 

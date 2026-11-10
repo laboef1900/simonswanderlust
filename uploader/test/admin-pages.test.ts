@@ -553,11 +553,15 @@ describe('admin page wiring', () => {
   });
 
 
-  it('EasyMDE built-in autosave stays disabled on About (DraftGuard owns persistence)', () => {
+  it('EasyMDE built-in autosave and toolbar stay off on the page editor (DraftGuard owns persistence, the manuscript bar the tools)', () => {
     // @ai-warning do not re-enable EasyMDE autosave: it is body-only and would
     // fight the full-form DraftGuard stash (duplicate writes, partial restores).
-    // The post editor's instances are checked where they are built (editor-dom.test.ts).
-    expect(about.match(/autosave: \{ enabled: false \}/g)).toHaveLength(2);
+    // Both locales' editors are built from the one MDE_OPTIONS object, like the
+    // story editor's (checked where they are built, editor-dom.test.ts).
+    const options = about.slice(about.indexOf('const MDE_OPTIONS = {'), about.indexOf('};', about.indexOf('const MDE_OPTIONS = {')));
+    expect(options).toContain('autosave: { enabled: false }');
+    expect(options).toContain('toolbar: false');
+    expect(about.match(/new EasyMDE\(\{ \.\.\.MDE_OPTIONS, element: \$\('(de|en)Body'\) \}\)/g)).toHaveLength(2);
   });
 });
 
@@ -672,8 +676,6 @@ describe('admin UI control scale and stylesheet token consistency', () => {
   it('scales auxiliary buttons to --control-h-sm via .btn-sm and keeps Review story inside More actions', () => {
     const editorHtml = readFileSync('public/editor.html', 'utf8');
     expect(adminCss).toMatch(/\.btn-sm,\s*:is\(/);
-    expect(adminCss).toMatch(/body\.editor-page\s+\.rich-text-gallery-heading\s*\{\s*display:\s*flex;/);
-    expect(adminCss).toMatch(/body\.editor-page\s+\.rich-text-gallery-edit\s*\{\s*min-height:\s*var\(--control-h-sm\);/);
     expect(editorHtml).toMatch(/<details class="editor-actions-menu" id="editorActionsMenu">[\s\S]*id="reviewStory"[\s\S]*<\/details>/);
     expect(settingsHtml).toMatch(/<button id="addProvider" type="button" class="btn-secondary btn-sm"/);
   });

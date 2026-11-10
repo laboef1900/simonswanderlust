@@ -7,7 +7,8 @@ import { editorDocument, EditorEvent, type EditorElement } from './editor-dom-ha
 const src = readFileSync('public/admin-confirm.js', 'utf8');
 
 interface Api {
-  ask(opts: { title?: string; body?: string; confirmLabel?: string; danger?: boolean; typed?: string }): Promise<boolean>;
+  ask(opts: { title?: string; body?: string; confirmLabel?: string; danger?: boolean; typed?: string; tone?: 'publish' }): Promise<boolean>;
+  prompt(opts: { title?: string; label?: string; value?: string; confirmLabel?: string; required?: string | false; validate?: (text: string) => string }): Promise<string | null>;
   liveUrls(slugs: { de?: string; en?: string }): { de: string; en: string };
   urlsPlain(slugs: { de?: string; en?: string }): string;
 }
@@ -186,5 +187,106 @@ describe('AdminConfirm.ask native dialog', () => {
     dom.document.getElementById('adminConfirmTyped')!.value = 'delete';
     close('ok');
     await expect(wrongToken).resolves.toBe(false);
+  });
+
+  it('paints the action red only for a live-site or destructive decision, and never focuses Delete', async () => {
+    const { api, dom, close } = nativeDialog();
+    const ok = () => dom.document.getElementById('adminConfirmOk')!;
+    const cancel = () => dom.document.getElementById('adminConfirmCancel')!;
+
+    const restore = api.ask({ title: 'Restore unsaved draft?', confirmLabel: 'Restore' });
+    expect(ok().className).toBe('');
+    expect(dom.document.activeElement).toBe(ok());
+    close('cancel');
+    await restore;
+
+    const publish = api.ask({ title: 'Publish to the live site?', confirmLabel: 'Publish', tone: 'publish' });
+    expect(ok().className).toBe('btn-publish');
+    expect(dom.document.activeElement).toBe(ok());
+    close('cancel');
+    await publish;
+
+    const remove = api.ask({ title: 'Delete this comment?', confirmLabel: 'Delete', danger: true });
+    expect(ok().className).toBe('btn-remove');
+    expect(dom.document.activeElement).toBe(cancel());
+    close('cancel');
+    await remove;
+
+    // A live-site action that is also destructive (Unpublish) keeps the destructive defaults.
+    const unpublish = api.ask({ title: 'Unpublish?', danger: true, tone: 'publish' });
+    expect(ok().className).toBe('btn-remove');
+    expect(dom.document.activeElement).toBe(cancel());
+    close('cancel');
+    await unpublish;
+  });
+
+  it('asks for one line of text in the same dialog and returns it trimmed', async () => {
+    const { api, dom, dialog } = nativeDialog();
+    const asked = api.prompt({ title: 'New folder', label: 'Folder name', confirmLabel: 'Create folder' });
+    const input = dom.document.getElementById('adminConfirmText')!;
+    expect(dom.document.activeElement).toBe(input);
+    expect(dom.document.querySelector('label[for=adminConfirmText]')!.textContent).toBe('Folder name');
+    input.value = '  Rumänien 2026  ';
+    input.fire('keydown', { key: 'Enter' });
+    expect(dialog().open).toBe(false);
+    dom.flushDialogEvents();
+    await expect(asked).resolves.toBe('Rumänien 2026');
+  });
+
+  it('refuses an empty or invalid name with a sentence under the field, and keeps the dialog open', async () => {
+    const { api, dom, dialog, close } = nativeDialog();
+    const asked = api.prompt({
+      title: 'Rename folder', value: 'trips', required: 'Enter a folder name.',
+      validate: (text) => text.includes('/') ? 'A folder name cannot contain “/”.' : '',
+    });
+    const input = dom.document.getElementById('adminConfirmText')!;
+    const error = dom.document.getElementById('adminConfirmTextError')!;
+    expect(input.value).toBe('trips');
+
+    input.value = '   ';
+    input.fire('keydown', { key: 'Enter' });
+    expect(dialog().open).toBe(true);
+    expect(error.hidden).toBe(false);
+    expect(error.textContent).toBe('Enter a folder name.');
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+
+    input.value = 'a/b';
+    const click = dom.document.getElementById('adminConfirmOk')!.fire('click');
+    expect(click.defaultPrevented).toBe(true);
+    expect(error.textContent).toBe('A folder name cannot contain “/”.');
+
+    // A forced close with an invalid value is a cancel, never the invalid text.
+    close('ok');
+    await expect(asked).resolves.toBeNull();
+  });
+
+  it('returns null when the text prompt is cancelled, and starts each prompt clean', async () => {
+    const { api, dom, dialog, close } = nativeDialog();
+    const first = api.prompt({ title: 'New folder' });
+    dom.document.getElementById('adminConfirmText')!.value = 'draft';
+    dialog().fire('keydown', { key: 'Escape' });
+    dom.flushDialogEvents();
+    await expect(first).resolves.toBeNull();
+
+    const second = api.prompt({ title: 'New folder' });
+    expect(dom.document.getElementById('adminConfirmText')!.value).toBe('');
+    expect(dom.document.querySelectorAll('#adminConfirmText')).toHaveLength(1);
+    close('cancel');
+    await expect(second).resolves.toBeNull();
+  });
+
+  it('accepts an empty answer only when the caller says the text is optional, and tells it apart from Cancel', async () => {
+    const { api, dom, dialog, close } = nativeDialog();
+    const cleared = api.prompt({ title: 'Link', label: 'Link address', value: 'https://example.com/', required: false });
+    const input = dom.document.getElementById('adminConfirmText')!;
+    input.value = '   ';
+    input.fire('keydown', { key: 'Enter' });
+    expect(dialog().open).toBe(false);
+    dom.flushDialogEvents();
+    await expect(cleared).resolves.toBe('');
+
+    const cancelled = api.prompt({ title: 'Link', label: 'Link address', required: false });
+    close('cancel');
+    await expect(cancelled).resolves.toBeNull();
   });
 });

@@ -144,6 +144,7 @@ function setup(options: SetupOptions = {}) {
   };
   context.window = context;
   vm.createContext(context);
+  vm.runInContext(readFileSync('public/admin-ui.js', 'utf8'), context, { filename: 'admin-ui.js' });
   vm.runInContext(script, context, { filename: 'editor-gpx.js' });
   const host = {
     getPost: () => ({ ...state }),
@@ -319,7 +320,7 @@ function fullEditor(candidate: typeof preview, fetchOverride?: SetupOptions['fet
     alert() {},
     confirm: () => false,
     EasyMDE,
-    Auth: { ensureAuthed: async () => options.initialize ? { isAdmin: true, userId: owner } : null, renderHeader() {} },
+    Auth: { ensureAuthed: async () => options.initialize ? { isAdmin: true, userId: owner } : null, renderHeader() {}, setPageTitle() {} },
     AdminConfirm: { ask: async ({ title }: { title: string }) => options.confirm ? options.confirm(title) : true, liveUrls: () => ({ de: '', en: '' }), urlsPlain: () => '' },
     MediaPicker: { open() {} },
     AltSuggest: { wire() {} },
@@ -335,10 +336,10 @@ function fullEditor(candidate: typeof preview, fetchOverride?: SetupOptions['fet
   };
   context.window = context;
   vm.createContext(context);
-  for (const file of ['build-reporting.js', 'publication-state.js', 'publication-refresh.js', 'language.js', 'draft-guard.js', 'write-recovery.js', 'journeys-ui.js', 'waypoint-lookup.js', 'editor-stop-route.js', 'posts-filter.js', 'editor-title-image.js',
+  for (const file of ['admin-ui.js', 'build-reporting.js', 'publication-state.js', 'publication-refresh.js', 'language.js', 'draft-guard.js', 'write-recovery.js', 'journeys-ui.js', 'waypoint-lookup.js', 'editor-stop-route.js', 'posts-filter.js', 'editor-title-image.js',
     'gallery-fence.js', 'gallery-metadata-warnings.js', 'media-api.js', 'gallery-library.js', 'editor-galleries.js', 'editor-linter.js',
     'llm.js', 'editor-excerpt.js', 'country-centers.js', 'country-coordinates.js', 'tabs.js',
-    'editor-review.js', 'editor-translation.js', 'editor-alt-audit.js', 'editor-inspector.js', 'editor-rich-bridge.js', 'editor-gpx.js']) {
+    'editor-review.js', 'editor-translation.js', 'editor-alt-audit.js', 'editor-inspector.js', 'editor-rich-bridge.js', 'manuscript-bar.js', 'editor-gpx.js']) {
     vm.runInContext(browserScript(file), context, { filename: file });
   }
   vm.runInContext(`SiteLanguage.accept({primary:'de',locales:['de','en'],lockedAt:null,updatedAt:'2026-10-27T00:00:00.000Z'})`, context);
@@ -620,6 +621,21 @@ describe('private GPX editor lifecycle', () => {
     expect(routeWrites(h)).toEqual([]);
   });
 
+  it('names the loaded file, pluralises its counts in mono and keeps Attach a draft action', async () => {
+    const h = setup({ locale: 'en', preview: { ...preview, counts: { ...preview.counts, waypoints: 2 }, waypoints: [{ name: 'A', lat: 2, lng: 1 }, { name: 'B', lat: 2.1, lng: 1.1 }] } });
+    await importPreview(h);
+    expect(h.element('gpxStatus').textContent).toBe('“walk.gpx” is ready to preview.');
+    // The native file input is reset, so it reads "No file chosen"; the status carries the name.
+    expect(h.element('gpxFile').value).toBe('');
+    expect(h.element('gpxCounts').textContent).toBe('3 points · 1 segment · 2 waypoints');
+    expect(h.element('gpxKept').textContent).toBe('3 points kept');
+    expect(h.element('gpxRemoved').textContent).toBe('0 points removed');
+    expect(h.element('gpxSegments').querySelector('span')!.textContent).toBe('Remove segment 1 (3 points)');
+    // Attach only changes the draft: the one navy primary of the dialog, never the publish red.
+    expect(h.element('gpxAttach').className).toBe('');
+    expect(h.element('gpxAttach').textContent).toBe(ui.en['gpx.attach']);
+  });
+
   it('retains the preview and makes no attachment request when first save fails', async () => {
     const h = setup({ newPost: true, failSave: true });
     await importPreview(h);
@@ -884,6 +900,8 @@ describe('GPX shares the real editor write queue', () => {
       return undefined;
     });
     await settle();
+    h.element('deTitle').value = 'Walk with a route';
+    h.element('deTitle').fire('input');
     await importPreview(h);
     h.element('gpxAttach').click();
     await settle();
