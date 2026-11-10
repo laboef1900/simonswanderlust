@@ -1,7 +1,14 @@
-// Designed confirm for high-stakes admin actions (Publish, Rebuild, Unpublish,
-// Delete). Native <dialog> when the browser has it; window.confirm /
-// prompt otherwise so vm tests and older browsers still get a real yes/no
-// instead of a silent no-op.
+// Designed confirm for admin decisions. Native <dialog> when the browser has
+// it; window.confirm / prompt otherwise so vm tests and older browsers still
+// get a real answer instead of a silent no-op.
+//
+// The action button follows the action, not the dialog:
+//   danger: true      destructive — filled red, and focus opens on Cancel so
+//                     Enter never deletes
+//   tone: 'publish'   changes the live site (Publish, Rebuild, a save that
+//                     rebuilds) — filled red
+//   neither           everything else (Restore a draft, Reload, Discard form
+//                     edits) — the navy primary
 window.AdminConfirm = (function () {
   function liveUrls(slugs) {
     const origin = (typeof location !== 'undefined' && location.origin) ? location.origin : '';
@@ -33,7 +40,7 @@ window.AdminConfirm = (function () {
     dlg.innerHTML =
       '<form method="dialog" id="adminConfirmForm">' +
         '<h2 id="adminConfirmTitle" class="card-heading"></h2>' +
-        '<p id="adminConfirmBody" class="help" style="white-space:pre-wrap"></p>' +
+        '<p id="adminConfirmBody" class="help admin-modal__body"></p>' +
         '<div id="adminConfirmExtra"></div>' +
         '<div class="admin-modal__foot">' +
           '<button type="submit" value="cancel" class="btn-secondary" id="adminConfirmCancel">Cancel</button>' +
@@ -51,7 +58,7 @@ window.AdminConfirm = (function () {
     extra.replaceChildren();
     const ok = dlg.querySelector('#adminConfirmOk');
     ok.textContent = o.confirmLabel || 'Confirm';
-    ok.className = o.danger ? 'btn-remove' : 'btn-publish';
+    ok.className = o.danger ? 'btn-remove' : o.tone === 'publish' ? 'btn-publish' : '';
     return extra;
   }
 
@@ -102,9 +109,77 @@ window.AdminConfirm = (function () {
       dlg.returnValue = '';
       dlg.showModal();
       if (typedInput) typedInput.focus();
+      else if (o.danger) dlg.querySelector('#adminConfirmCancel').focus();
       else dlg.querySelector('#adminConfirmOk').focus();
     });
   }
 
-  return { ask, liveUrls, urlsPlain };
+  // One line of text in the same dialog (a folder name, a link address).
+  // Resolves to the trimmed text, or null when cancelled. An empty answer is
+  // refused with the `required` sentence — unless `required: false`, where ''
+  // is a valid answer (clearing a link). `validate(text)` returns a sentence to
+  // refuse a non-empty value, or '' to accept it; it shows under the field.
+  function prompt(opts) {
+    const o = opts || {};
+    const refuse = (text) => !text
+      ? (o.required === false ? '' : (o.required || 'Enter a name.'))
+      : (o.validate ? o.validate(text) : '');
+    const dlg = ensureDialog();
+    if (!dlg || typeof dlg.showModal !== 'function') {
+      const v = window.prompt((o.title || '') + (o.body ? '\n\n' + o.body : ''), o.value || '');
+      const text = v == null ? null : String(v).trim();
+      return Promise.resolve(text !== null && !refuse(text) ? text : null);
+    }
+    const extra = fillChrome(dlg, o);
+    const label = document.createElement('label');
+    label.setAttribute('for', 'adminConfirmText');
+    label.textContent = o.label || o.title || '';
+    const input = document.createElement('input');
+    input.id = 'adminConfirmText';
+    input.type = 'text';
+    input.autocomplete = 'off';
+    input.value = o.value || '';
+    input.setAttribute('aria-describedby', 'adminConfirmTextError');
+    const error = document.createElement('p');
+    error.id = 'adminConfirmTextError';
+    error.className = 'field-error';
+    error.hidden = true;
+    const refusal = () => refuse(input.value.trim());
+    function accept() {
+      const message = refusal();
+      error.textContent = message;
+      error.hidden = !message;
+      if (message) { input.setAttribute('aria-invalid', 'true'); input.focus(); return false; }
+      input.removeAttribute('aria-invalid');
+      return true;
+    }
+    input.addEventListener('keydown', function (event) {
+      if (event.key !== 'Enter' || event.isComposing) return;
+      // The form's first submit button is Cancel; never use its implicit submit.
+      event.preventDefault();
+      if (!accept()) return;
+      dlg.returnValue = 'ok';
+      dlg.close();
+    });
+    extra.appendChild(label);
+    extra.appendChild(input);
+    extra.appendChild(error);
+    const ok = dlg.querySelector('#adminConfirmOk');
+    function onOk(event) { if (!accept()) event.preventDefault(); }
+    ok.addEventListener('click', onOk);
+    return new Promise(function (resolve) {
+      function onClose() {
+        dlg.removeEventListener('close', onClose);
+        ok.removeEventListener('click', onOk);
+        resolve(dlg.returnValue === 'ok' && !refusal() ? input.value.trim() : null);
+      }
+      dlg.addEventListener('close', onClose);
+      dlg.returnValue = '';
+      dlg.showModal();
+      input.focus();
+      if (typeof input.select === 'function') input.select();
+    });
+  }
+
+  return { ask, prompt, liveUrls, urlsPlain };
 })();

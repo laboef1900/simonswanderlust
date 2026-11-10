@@ -2,6 +2,7 @@ import { webcrypto, randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import * as MediaConditional from '../public/media-conditional.js';
 
 // media-api.js is a plain browser IIFE (window.MediaApi) holding the library
 // client's pure parts — selection math, formatting, query building and the
@@ -12,12 +13,14 @@ const src = readFileSync('public/media-api.js', 'utf8');
 
 interface QueueSnapshot {
   items: { id: number; name: string; state: string; progress: number; error: string | null; result: unknown }[];
-  total: number; done: number; failed: number; active: number;
+  total: number; done: number; failed: number; rejected: number; refused: number; waiting: number; active: number;
 }
 interface Api {
   UPLOAD_CONCURRENCY: number;
   formatBytes(n: unknown): string;
-  formatTakenAt(iso: unknown): string;
+  sentence(text: unknown): string;
+  folderNameRefusal(name: unknown, parent?: string): string;
+  uploadRejection(error: { status?: number; code?: string }): string | null;
   rangeBetween(keys: string[], anchor: string, target: string): string[];
   folderTree(paths: string[]): { path: string; name: string; depth: number }[];
   parentOf(path: string): string;
@@ -47,7 +50,8 @@ class FakeFormData {
 }
 
 function load(extraGlobals: Record<string, unknown> = {}): Api {
-  const windowStub: Record<string, unknown> = { fetch: () => {}, FormData: FakeFormData, XMLHttpRequest: class {}, crypto: webcrypto };
+  // The shared folder rules are an ES module the page loads beside this script.
+  const windowStub: Record<string, unknown> = { fetch: () => {}, FormData: FakeFormData, XMLHttpRequest: class {}, crypto: webcrypto, MediaConditional };
   vm.runInNewContext(src, { window: windowStub, FormData: FakeFormData, AbortController, setTimeout, clearTimeout, ...extraGlobals });
   return windowStub.MediaApi as Api;
 }
@@ -63,12 +67,39 @@ describe('MediaApi pure helpers', () => {
     expect(api.formatBytes(-1)).toBe('0 B');
   });
 
-  // @ai-warning: EXIF is naive wall-clock relabelled as UTC. A local-time
-  // formatter double-shifts it and silently mislabels photos across timezones.
-  it('formats a capture time with UTC accessors, not local time', () => {
-    expect(api.formatTakenAt('2026-07-04T18:23:11.000Z')).toBe('2026-07-04 18:23');
-    expect(api.formatTakenAt(null)).toBe('');
-    expect(api.formatTakenAt('not a date')).toBe('');
+  it('turns a server fragment into a sentence and leaves a sentence alone', () => {
+    expect(api.sentence('invalid folder')).toBe('Invalid folder.');
+    expect(api.sentence('Already a sentence.')).toBe('Already a sentence.');
+    expect(api.sentence('  spaced  ')).toBe('Spaced.');
+    expect(api.sentence('')).toBe('');
+    expect(api.sentence(null)).toBe('');
+  });
+
+  it('refuses a folder name with a sentence for each rule the server enforces, and accepts the rest', () => {
+    expect(api.folderNameRefusal('Iceland 2024', '')).toBe('');
+    expect(api.folderNameRefusal('Süd-Insel_v.2', 'Trips/North')).toBe('');
+    expect(api.folderNameRefusal('', '')).toBe('Enter a folder name.');
+    expect(api.folderNameRefusal('a/b', '')).toBe('A folder name cannot contain a slash. Create one level at a time.');
+    expect(api.folderNameRefusal('a\u200bb', '')).toBe('A folder name cannot contain control or invisible characters.');
+    expect(api.folderNameRefusal('x'.repeat(65), '')).toBe('A folder name can be at most 64 characters.');
+    expect(api.folderNameRefusal('-trips', '')).toBe('A folder name must start and end with a letter or a digit.');
+    expect(api.folderNameRefusal('trips.', '')).toBe('A folder name must start and end with a letter or a digit.');
+    expect(api.folderNameRefusal('a%b', '')).toBe('A folder name can contain only letters, digits, spaces, hyphens, underscores and dots.');
+    expect(api.folderNameRefusal('deep', 'a/b/c/d/e/f')).toBe('Folders can be nested at most 6 levels deep.');
+    expect(api.folderNameRefusal('leaf', 'p'.repeat(60) + '/' + 'q'.repeat(60) + '/' + 'r'.repeat(60) + '/' + 's'.repeat(30)))
+      .toBe('The full folder path can be at most 200 characters.');
+    // Decomposed input is accepted: the page normalizes it to NFC before sending.
+    expect(api.folderNameRefusal('A\u0301lesund', '')).toBe('');
+  });
+
+  it('classifies a definitive refusal of the file itself, and nothing else, as a rejection', () => {
+    expect(api.uploadRejection({ status: 400 })).toBe('unreadable');
+    expect(api.uploadRejection({ status: 413, code: 'FST_REQ_FILE_TOO_LARGE' })).toBe('too_large');
+    // A coded 400 is about the request's identity, not the image; 409/5xx/network are not rejections.
+    expect(api.uploadRejection({ status: 400, code: 'invalid_upload_identity' })).toBeNull();
+    expect(api.uploadRejection({ status: 409, code: 'upload_id_reused' })).toBeNull();
+    expect(api.uploadRejection({ status: 503 })).toBeNull();
+    expect(api.uploadRejection({})).toBeNull();
   });
 
   it('computes an inclusive selection range in either direction', () => {
@@ -104,9 +135,10 @@ describe('MediaApi pure helpers', () => {
     expect(api.statusLabel({ status: 'failed', error: 'decode_failed' })).toBe('failed: decode_failed');
   });
 
-  it('names the folder a duplicate already lives in instead of a bare "done"', () => {
+  it('names the folder a duplicate already lives in and words a definite failure as a sentence', () => {
     expect(api.queueState({ state: 'uploading', progress: 0.5 })).toBe('50%');
-    expect(api.queueState({ state: 'failed', error: 'too large' })).toBe('too large');
+    expect(api.queueState({ state: 'failed', error: 'upload id reused' })).toBe('Could not upload: Upload id reused.');
+    expect(api.queueState({ state: 'failed', error: null })).toBe('Could not upload: Unknown error.');
     expect(api.queueState({ state: 'done', result: { duplicate: false } })).toBe('done');
     expect(api.queueState({ state: 'done', result: { duplicate: true, folder: 'Iceland/South' } })).toBe('already in Iceland/South');
     expect(api.queueState({ state: 'done', result: { duplicate: true, folder: '' } })).toBe('already in root');
@@ -118,6 +150,8 @@ describe('MediaApi pure helpers', () => {
     expect(api.listQuery({ folder: '', q: '' })).toBe('?folder=');
     expect(api.listQuery({ folder: 'Island Süd', recursive: true, q: 'a b', page: 2 }))
       .toBe('?folder=Island%20S%C3%BCd&recursive=1&q=a%20b&page=2');
+    expect(api.listQuery({ status: 'ready', alt: 'missing' })).toBe('?status=ready&alt=missing');
+    expect(api.listQuery({ alt: '' })).toBe('');
   });
 
   it('URL-encodes a search term so it cannot break out of the query string', () => {
@@ -186,9 +220,9 @@ describe('MediaApi upload queue', () => {
     expect(snaps.length).toBeGreaterThan(0);
   });
 
-  it('tracks definitely refused uploads separately and retries only those', async () => {
+  it('tracks definite non-file failures separately and retries only those', async () => {
     const api = load();
-    const { FakeXhr, instances } = fakeXhrClass([{ status: 413, body: { error: 'too large' } }, { status: 200, body: { key: 'k' } }]);
+    const { FakeXhr, instances } = fakeXhrClass([{ status: 409, body: { error: 'upload id reused', code: 'upload_id_reused' } }, { status: 200, body: { key: 'k' } }]);
     const client = api.makeClient({ XMLHttpRequest: FakeXhr, fetch: async () => ({ status: 200, ok: true, json: async () => ({}) }) });
     const q = api.createUploadQueue(client, { concurrency: 1 });
     q.initialize(randomUUID());
@@ -196,14 +230,38 @@ describe('MediaApi upload queue', () => {
     instances[0]!.resolve();
     await flush();
     expect(q.snapshot().failed).toBe(1);
-    expect(q.snapshot().items[0]!.error).toBe('too large');
+    expect(q.snapshot().items[0]!.error).toBe('upload id reused');
 
-    // Explicit retry is safe only for a refusal; network/5xx stay Unknown.
+    // Explicit retry is safe only for a definite 4xx; network/5xx stay Unknown.
     q.retryFailed();
     expect(q.snapshot().failed).toBe(0);
     instances[1]!.resolve();
     await flush();
     expect(q.snapshot().done).toBe(1);
+  });
+
+  it('ends a file the server refused as rejected: never counted as failed, never resent, cleared with the finished', async () => {
+    const api = load();
+    const { FakeXhr, instances } = fakeXhrClass([
+      { status: 400, body: { error: 'invalid key or image' } },
+      { status: 413, body: { statusCode: 413, code: 'FST_REQ_FILE_TOO_LARGE', error: 'Payload Too Large' } },
+      { status: 200, body: { key: 'k' } },
+    ]);
+    const client = api.makeClient({ XMLHttpRequest: FakeXhr, fetch: async () => ({ status: 200, ok: true, json: async () => ({}) }) });
+    const q = api.createUploadQueue(client, { concurrency: 3 });
+    q.initialize(randomUUID());
+    q.add([file('scan.jpg'), file('huge.jpg'), file('ok.jpg')]);
+    instances.forEach((x) => x.resolve());
+    await flush();
+    expect(q.snapshot().items.map((i) => [i.state, i.error])).toEqual([
+      ['rejected', 'unreadable'], ['rejected', 'too_large'], ['done', null],
+    ]);
+    expect(q.snapshot()).toMatchObject({ failed: 0, rejected: 2, done: 1, waiting: 0, refused: 0 });
+    q.retryFailed();
+    await flush();
+    expect(instances).toHaveLength(3);
+    q.clearFinished();
+    expect(q.snapshot().items).toEqual([]);
   });
 
   it('probes a 503 once and never resends its unknown file through Retry failed', async () => {
@@ -248,7 +306,7 @@ describe('MediaApi upload queue', () => {
 
   it('clearFinished drops completed items but keeps failures visible', async () => {
     const api = load();
-    const { FakeXhr, instances } = fakeXhrClass([{ status: 200, body: {} }, { status: 400, body: { error: 'invalid image' } }]);
+    const { FakeXhr, instances } = fakeXhrClass([{ status: 200, body: {} }, { status: 409, body: { error: 'upload id reused', code: 'upload_id_reused' } }]);
     const client = api.makeClient({ XMLHttpRequest: FakeXhr, fetch: async () => ({ status: 200, ok: true, json: async () => ({}) }) });
     const q = api.createUploadQueue(client, { concurrency: 2 });
     q.initialize(randomUUID());

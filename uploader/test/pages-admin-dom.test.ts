@@ -2,16 +2,18 @@ import { readFileSync } from 'node:fs';
 import { webcrypto } from 'node:crypto';
 import vm from 'node:vm';
 import { describe, expect, it } from 'vitest';
-import { editorDocument } from './editor-dom-harness.js';
+import { editorDocument, type EditorElement } from './editor-dom-harness.js';
 import { browserScript, galleryCodecBindings } from './gallery-browser-module.js';
+import { markdownEditorDouble, type MarkdownEditor } from './page-editor-double.js';
 import { ui } from '../../site/src/i18n/ui.js';
 const stamp = '2026-10-29T00:00:00.000Z';
 const copy = { en: Object.fromEntries(Object.entries(ui.en).filter(([key]) => key.startsWith('editor.chrome.')).map(([key, value]) => [key.slice(14), value])) };
+const galleryCopy = { en: Object.fromEntries(Object.entries(ui.en).filter(([key]) => key.startsWith('editor.gallery.')).map(([key, value]) => [key.slice('editor.gallery.'.length), value])) };
 const buildCopy = Object.fromEntries(['de', 'en'].map(locale => [locale, Object.fromEntries(Object.entries(ui[locale as 'de' | 'en']).filter(([key]) => key.startsWith('admin.build.')).map(([key, value]) => [key.slice(12), value]))]));
 const owner = '11111111-1111-4111-8111-111111111111';
 type UnloadEvent = { defaultPrevented: boolean; returnValue?: string; preventDefault(): void };
 async function settle() { for (let i = 0; i < 40; i++) await Promise.resolve(); }
-async function editor(key = 'contact', status = 'draft', prepare = false, options: { storage?: Map<string, string>; userId?: string; singleLocale?: boolean } = {}) {
+async function editor(key = 'contact', status = 'draft', prepare = false, options: { storage?: Map<string, string>; userId?: string; singleLocale?: boolean; revisions?: { id: string; savedAt: string; title: string }[] } = {}) {
   const html = readFileSync('public/about.html', 'utf8'); const dom = editorDocument(html);
   const el = (id: string) => { const node = dom.document.getElementById(id); if (!node) throw new Error(id); return node; };
   const locale = (locale: 'de' | 'en') => ({ locale, title: locale + ' title', bodyMarkdown: locale + ' body', images: {}, slug: key === 'about' ? '' : locale + '-contact', publishedAt: status === 'published' && !(prepare && locale === 'en') ? stamp : null });
@@ -21,18 +23,17 @@ async function editor(key = 'contact', status = 'draft', prepare = false, option
   let lifecycleWait: Promise<void> | undefined;
   let unload: ((event: UnloadEvent) => void) | undefined;
   const storage = options.storage ?? new Map<string, string>();
+  const session = new Map<string, string>();
   const userId = options.userId ?? owner;
   const timers = new Map<number, () => void>();
   let timerId = 0;
-  class EasyMDE {
-    private body = ''; codemirror = { getInputField: () => dom.document.createElement('textarea'), on() {}, refresh() {},
-      getValue: () => this.body, getLine: (line: number) => this.body.split('\n')[line] ?? '' };
-    value(value?: string) { if (value !== undefined) this.body = value; return this.body; }
-  }
+  const editors: MarkdownEditor[] = [];
   const response = (body: unknown, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => body });
   const context: Record<string, unknown> = {
-    document: dom.document, URLSearchParams, EasyMDE, EditorCopy: copy, BuildCopy: buildCopy,
-    crypto: webcrypto, structuredClone, AbortController,
+    document: dom.document, URLSearchParams, EasyMDE: markdownEditorDouble({ document: dom.document, editors }), EditorCopy: copy, BuildCopy: buildCopy,
+    EditorGalleryCopy: galleryCopy, EditorGalleryImageOrigin: 'https://journal.test',
+    crypto: webcrypto, structuredClone, AbortController, navigator: { platform: 'MacIntel' },
+    matchMedia: () => ({ matches: false, addEventListener() {} }),
     location: { search: '?key=' + key + (prepare ? '&prepareLocale=en' : ''), pathname: '/admin/about.html', origin: 'https://journal.test', href: '' },
     localStorage: {
       getItem: (key: string) => storage.get(key) ?? null,
@@ -41,10 +42,11 @@ async function editor(key = 'contact', status = 'draft', prepare = false, option
       get length() { return storage.size; },
       key: (index: number) => [...storage.keys()][index] ?? null,
     },
+    sessionStorage: { getItem: (key: string) => session.get(key) ?? null, setItem: (key: string, value: string) => session.set(key, value), removeItem: (key: string) => session.delete(key) },
     setTimeout: (callback: () => void) => { const id = ++timerId; timers.set(id, callback); return id; },
     clearTimeout: (id: number) => timers.delete(id),
     addEventListener: (type: string, callback: (event: UnloadEvent) => void) => { if (type === 'beforeunload') unload = callback; },
-    Auth: { ensureAuthed: async () => ({ userId, isAdmin: true }), renderHeader() {} },
+    Auth: { ensureAuthed: async () => ({ userId, isAdmin: true }), renderHeader() {}, setPageTitle() {} },
     AdminConfirm: { ask: async (question: { title: string; body: string }) => { questions.push(question); return confirmed; } },
     fetch: async (url: string, init: RequestInit = {}) => {
       requests.push({ url, init });
@@ -52,7 +54,9 @@ async function editor(key = 'contact', status = 'draft', prepare = false, option
       if (init.method && failure) return response(failure.body, failure.status);
       if (url === '/language') return response({ primary: 'de', locales: prepare || options.singleLocale ? ['de'] : ['de', 'en'], updatedAt: stamp, lockedAt: null });
       if (url === '/pages') return response({ pages: [{ key, known: true, defaults: { de: 'kontakt', en: 'contact' } }] });
-      if (url.endsWith('/revisions')) return response([]);
+      if (url.endsWith('/revisions')) return response(options.revisions ?? []);
+      const revision = options.revisions?.find((rev) => url === '/pages/' + key + '/revisions/' + rev.id);
+      if (revision) return response({ ...revision, snapshot: { de: { ...page.de, title: 'Earlier German heading', bodyMarkdown: 'Earlier German body' }, en: page.en } });
       if (url.endsWith('/deletion')) return response({ key, titles: { de: page.de.title, en: page.en.title }, paths: ['/de-contact/', '/en/en-contact/'], revisions: 3,
         navigation: [{ slot: 'footer', label: { en: 'Write to Simon' } }], bodyReferences: 2, updatedAt: stamp });
       if (init.method === 'PUT') {
@@ -67,17 +71,21 @@ async function editor(key = 'contact', status = 'draft', prepare = false, option
   };
   context.window = context; vm.createContext(context);
   Object.assign(context, galleryCodecBindings);
-  for (const file of ['build-reporting.js', 'draft-guard.js', 'language.js', 'tabs.js', 'pages-ui.js', 'about-equipment.js', 'gallery-fence.js', 'gallery-metadata-warnings.js', 'write-recovery.js']) vm.runInContext(browserScript(file), context);
+  // admin-ui.js first: build-reporting.js formats through AdminFormat. No RichTextEditor is
+  // installed, so the production bridge falls back to the Markdown view, as in the story editor's tests.
+  for (const file of ['admin-ui.js', 'build-reporting.js', 'draft-guard.js', 'language.js', 'tabs.js', 'editor-rich-bridge.js', 'manuscript-bar.js', 'media-api.js', 'gallery-library.js', 'posts-filter.js', 'pages-ui.js', 'about-equipment.js', 'gallery-fence.js', 'gallery-metadata-warnings.js', 'write-recovery.js']) vm.runInContext(browserScript(file), context);
   // The page script is a module (it imports the gallery fence); run its body.
   const start = html.lastIndexOf('<script type="module">');
   vm.runInContext(html.slice(html.indexOf("'use strict'", start), html.lastIndexOf('</script>')), context);
   await settle();
   return {
-    dom, el, requests, questions, page, context, storage,
+    dom, el, requests, questions, page, context, storage, editors,
     confirm(value: boolean) { confirmed = value; },
     fail(status: number, body: object) { failure = { status, body }; },
     pauseLifecycle() { const gate = Promise.withResolvers<void>(); lifecycleWait = gate.promise; return gate.resolve; },
     flushStash() { for (const [id, callback] of timers) { timers.delete(id); callback(); } },
+    /** What the Pages list would show after this editor navigated away. */
+    flash: () => vm.runInContext('AdminFlash.take()', context) as string,
     beforeUnload() {
       const event: UnloadEvent = { defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
       unload?.(event); return event;
@@ -162,18 +170,24 @@ describe('generalized page editor', () => {
     h.el('deSlug').value = 'new-contact'; h.el('saveBtn').click(); await settle();
     const put = h.requests.find(({ init }) => init.method === 'PUT')!;
     expect(put.url).toBe('/pages/contact'); expect(JSON.parse(String(put.init.body)).de.slug).toBe('new-contact');
-    expect(h.questions).toEqual([]); expect(h.el('actionStatus').textContent).toContain('The site was not rebuilt');
+    expect(h.questions).toEqual([]); expect(h.el('actionStatus').textContent).toContain(ui.en['admin.build.noBuild']);
   });
-  it('preserves local inputs and compares the current generic page after a conflict without replay', async () => {
+  it('preserves local inputs after a conflict, clears the busy status and compares the differing fields in words', async () => {
     const h = await editor('contact', 'published'); h.el('deTitle').value = 'My unsaved title';
     h.page.updatedAt = '2026-10-29T00:02:00.000Z';
     h.page.de.title = 'Other tab title';
     h.fail(409, { code: 'conflict', error: 'Saved elsewhere' });
     h.el('saveBtn').click(); await settle();
     expect(h.el('deTitle').value).toBe('My unsaved title');
+    // "Saving the change…" must not outlive a save that produced no outcome to report.
+    expect(h.el('actionStatus').textContent).toBe('');
     const panel = h.dom.document.querySelector('.write-recovery')!;
+    expect(panel.textContent).toContain('Heading (DE)');
     expect(panel.textContent).toContain('My unsaved title');
     expect(panel.textContent).toContain('Other tab title');
+    // Only the fields that differ are compared; the unchanged body and slug stay out of the way.
+    expect(panel.textContent).not.toContain('Body (DE)');
+    expect(panel.textContent).not.toContain('Slug (DE)');
     expect(h.requests.filter(({ url }) => url === '/pages/contact')).toHaveLength(3);
     expect(h.requests.filter(({ init }) => init.method === 'PUT')).toHaveLength(1);
   });
@@ -183,9 +197,21 @@ describe('generalized page editor', () => {
     expect(h.questions[0]!.body).toContain('Revisions: 3'); expect(h.questions[0]!.body).toContain('footer: Write to Simon');
     expect(h.questions[0]!.body).toContain('Possible body references: 2'); expect(h.questions[0]!.body).toContain('/en/en-contact/');
     expect(h.requests.some(({ init }) => init.method === 'DELETE')).toBe(false);
+    expect(h.context.location).toMatchObject({ href: '' });
     h.confirm(true); h.el('deleteBtn').click(); await settle();
     const request = h.requests.find(({ init }) => init.method === 'DELETE')!;
     expect(JSON.parse(String(request.init.body))).toEqual({ updatedAt: stamp });
+  });
+  it('returns to the Pages list after a deletion, carrying the outcome and without an unload prompt', async () => {
+    const h = await editor('contact', 'published');
+    h.el('deleteBtn').click(); await settle();
+    expect(h.requests.some(({ init }) => init.method === 'DELETE')).toBe(true);
+    expect(h.context.location).toMatchObject({ href: '/admin/pages.html' });
+    const flash = h.flash();
+    expect(flash).toContain(ui.en['admin.build.deleteDraft'].replace('{title}', ui.en['editor.chrome.pagesContact']));
+    expect(flash).toContain(ui.en['admin.build.noBuild']);
+    expect(h.flash()).toBe('');
+    expect(h.beforeUnload().defaultPrevented).toBe(false);
   });
   it('restores keyboard focus to Delete after cancelling its native confirmation', async () => {
     const h = await editor('contact', 'published');
@@ -232,7 +258,7 @@ describe('generalized page editor', () => {
     const payload = JSON.parse(String(h.requests.find(({ init }) => init.method === 'PUT')!.init.body));
     expect(payload.de).toBeUndefined(); expect(payload.prepareLocale).toBe('en'); expect(payload.en.slug).toBe('prepared-contact');
     expect(h.el('preparationNotice').textContent).toContain('not public');
-    expect(h.el('actionStatus').textContent).toContain('Saved in the CMS');
+    expect(h.el('actionStatus').textContent).toContain(ui.en['admin.build.page']);
   });
   it('keeps ordinary and inactive-language recovery records separate across saves', async () => {
     const storage = new Map<string, string>();
@@ -258,58 +284,236 @@ describe('generalized page editor', () => {
     const restoredOrdinary = await editor('contact', 'published', false, options);
     expect(restoredOrdinary.el('deTitle').value).toBe('Unsent German edit');
   });
+  it('offers the command bar actions a draft page, a published page and About each need, with the state beside them', async () => {
+    const draft = await editor('contact', 'draft');
+    const chrome = ui.en;
+    expect(draft.el('pagesBack').textContent).toBe(chrome['editor.chrome.pagesBack']);
+    expect(draft.el('pagesBack').getAttribute('href')).toBe('/admin/pages.html');
+    expect(draft.el('saveBtn').textContent).toBe(chrome['editor.chrome.pagesSave']);
+    expect(draft.el('previewBtn').textContent).toBe(chrome['editor.chrome.pagesPreview']);
+    expect(draft.el('previewBtn').disabled).toBe(false);
+    expect(draft.el('publishBtn').hidden).toBe(false);
+    expect(draft.el('unpublishBtn').hidden).toBe(true);
+    expect(draft.el('deleteBtn').hidden).toBe(false);
+    expect(draft.el('pageState').textContent).toBe(chrome['editor.chrome.pagesDraft']);
+    // Loading is the normal state and says nothing; the status line is for outcomes.
+    expect(draft.el('actionStatus').textContent).toBe('');
+    const published = await editor('contact', 'published');
+    expect(published.el('saveBtn').textContent).toBe(chrome['editor.chrome.pagesSaveLive']);
+    expect(published.el('saveBtn').classList.contains('btn-primary-publish')).toBe(true);
+    expect(published.el('publishBtn').hidden).toBe(true);
+    expect(published.el('unpublishBtn').hidden).toBe(false);
+    expect(published.el('deleteBtn').hidden).toBe(false);
+    expect(published.el('pageState').textContent).toBe(chrome['editor.chrome.pagesPublished']);
+    const about = await editor('about', 'draft');
+    expect(about.el('saveBtn').textContent).toBe(chrome['editor.chrome.pagesSave']);
+    expect(about.el('publishBtn').hidden).toBe(false);
+    expect(about.el('unpublishBtn').hidden).toBe(true);
+    expect(about.el('deleteBtn').hidden).toBe(true);
+    expect(about.el('deSlugFields').hidden).toBe(true);
+    for (const h of [draft, published, about]) {
+      const bar = h.dom.document.querySelector('.commandbar')!;
+      for (const id of ['pagesBack', 'tabbtn-de', 'saveBtn', 'publishBtn', 'previewBtn', 'unpublishBtn', 'deleteBtn', 'pageState', 'actionStatus', 'actionError']) {
+        expect(bar.contains(h.el(id))).toBe(true);
+      }
+    }
+  });
+  it('writes the body through the manuscript’s Markdown view and round-trips it through save, revision restore and recovery', async () => {
+    const storage = new Map<string, string>();
+    const h = await editor('contact', 'draft', false, { storage, revisions: [{ id: 'rev-1', savedAt: '2026-10-29T10:05:00.000Z', title: 'Earlier German heading' }] });
+    // No visual engine in this environment: the Markdown view stays editable and says why Visual is off.
+    expect(h.el('deRichError').hidden).toBe(false);
+    expect(h.el('deRichError').textContent).toBe(ui.en['editor.chrome.richTextUnavailable']);
+    expect(h.el('deVisualMode').disabled).toBe(true);
+    expect(h.el('deMarkdownBody').hidden).toBe(false);
+    expect(h.el('deRichBody').hidden).toBe(true);
+    expect(h.editors[0]!.value()).toBe('de body'); expect(h.editors[1]!.value()).toBe('en body');
+    // The Photo tray belongs to the toolbar and names its fields by language code.
+    expect(h.el('dePhotoPanel').hidden).toBe(true);
+    h.el('dePhotoToggle').click();
+    expect(h.el('dePhotoPanel').hidden).toBe(false);
+    expect(h.dom.document.activeElement).toBe(h.el('deBodyImgFile'));
+    expect(h.dom.document.querySelector('label[for="deBodyImgAlt"]')!.textContent).toBe('Alt text (DE)');
+    h.el('dePhotoPanel').fire('keydown', { key: 'Escape' });
+    expect(h.el('dePhotoPanel').hidden).toBe(true);
+    h.editors[0]!.value('Rewritten German body'); h.flushStash();
+    expect(h.beforeUnload().defaultPrevented).toBe(true);
+    h.el('saveBtn').click(); await settle();
+    const sent = JSON.parse(String(h.requests.find(({ init }) => init.method === 'PUT')!.init.body));
+    expect(sent.de.bodyMarkdown).toBe('Rewritten German body');
+    expect(sent.en.bodyMarkdown).toBe('en body');
+    // Revisions read in the one admin date format and restoring fills the same Markdown document.
+    const when = vm.runInContext('AdminFormat.dateTime("2026-10-29T10:05:00.000Z")', h.context) as string;
+    expect(when).toMatch(/^\d{1,2} \w{3} \d{4}, \d{2}:\d{2}$/);
+    const row = h.el('revisionsList').querySelector('li')!;
+    expect(row.querySelector('span')!.textContent).toBe(when + ' — Earlier German heading');
+    expect(row.querySelector('button')!.getAttribute('aria-label')).toBe('Restore the revision from ' + when + ' into the editor');
+    row.querySelector('button')!.click(); await settle();
+    expect(h.editors[0]!.value()).toBe('Earlier German body');
+    expect(h.el('deTitle').value).toBe('Earlier German heading');
+    expect(h.el('actionStatus').textContent).toBe('Restored the revision from ' + when + ' into the editor — review it, then Save draft to keep it.');
+    // The restored body is unsaved work: it is stashed and offered again in a fresh tab, from the Markdown document.
+    h.flushStash();
+    const again = await editor('contact', 'draft', false, { storage });
+    expect(again.questions.at(-1)!.body).toMatch(/^Found unsaved changes from \d{1,2} \w{3} \d{4}, \d{2}:\d{2}\.$/);
+    expect(again.editors[0]!.value()).toBe('Earlier German body');
+    expect(again.el('deTitle').value).toBe('Earlier German heading');
+  });
+  it('carries each locale’s state in its tab chip and follows typing', async () => {
+    const h = await editor('contact', 'draft');
+    const name = ui.en['editor.chrome.languagePageEmpty'].replace('{language}', ui.en['editor.chrome.languageEnglish']);
+    expect(h.el('tabbtn-en').textContent).not.toContain(name);
+    expect(h.el('tabbtn-en').getAttribute('title')).toBeFalsy();
+    h.el('enTitle').value = ''; h.editors[1]!.value('');
+    h.el('enTitle').fire('input');
+    expect(h.el('tabbtn-en').textContent).toContain(name);
+    expect(h.el('tabbtn-en').getAttribute('title')).toBe(name);
+    expect(h.el('tabbtn-de').textContent).not.toContain(ui.en['editor.chrome.languageGerman'] + ':');
+    h.editors[1]!.value('Some English text');
+    expect(h.el('tabbtn-en').textContent).not.toContain(name);
+    expect(h.el('tabbtn-en').getAttribute('title')).toBeFalsy();
+  });
+  it.each(['contact', 'about'])('refuses to save %s without a primary-language heading and says so under the field', async (key) => {
+    const h = await editor(key, 'draft');
+    h.el('tabbtn-en').click();
+    h.el('deTitle').value = '   ';
+    h.el('saveBtn').click(); await settle();
+    expect(h.requests.some(({ init }) => init.method === 'PUT')).toBe(false);
+    expect(h.questions).toEqual([]);
+    expect(h.el('tabbtn-de').getAttribute('aria-selected')).toBe('true');
+    expect(h.el('deTitle').getAttribute('aria-invalid')).toBe('true');
+    expect(h.el('deTitleError').textContent).toBe(ui.en['editor.chrome.pagesHeadingRequired'].replace('{language}', ui.en['editor.chrome.languageGerman']));
+    expect(h.el('deTitle').getAttribute('aria-describedby')).toContain('deTitleError');
+    expect(h.dom.document.activeElement).toBe(h.el('deTitle'));
+    expect(h.el('actionStatus').textContent).toBe('');
+    h.el('deTitle').value = 'Kontakt'; h.el('deTitle').fire('input');
+    expect(h.el('deTitle').getAttribute('aria-invalid')).toBeNull();
+    expect(h.el('deTitleError').hidden).toBe(true);
+    h.el('saveBtn').click(); await settle();
+    expect(JSON.parse(String(h.requests.find(({ init }) => init.method === 'PUT')!.init.body)).de.title).toBe('Kontakt');
+  });
+  it('keeps a prepared translation saveable without a heading, since its default heading is used', async () => {
+    const h = await editor('about', 'published', true);
+    h.el('enTitle').value = '';
+    h.el('saveBtn').click(); await settle();
+    expect(JSON.parse(String(h.requests.find(({ init }) => init.method === 'PUT')!.init.body)).en.title).toBe('');
+  });
 });
 
 describe('page catalogue DOM', () => {
-  it('shows only the active locale, escapes authored titles, and leaves unknown kinds delete-only', async () => {
+  interface ListedPage { key: string; known: boolean; exists: boolean; status: string; deletable: boolean; locales: { de: { title: string }; en: { title: string } } }
+  const catalogue = async (options: {
+    pages: ListedPage[]; language?: { primary: 'de' | 'en'; locales: ('de' | 'en')[] }; flash?: string; search?: string;
+    deletion?: (pages: ListedPage[]) => ListedPage[];
+  }) => {
     const html = readFileSync('public/pages.html', 'utf8'); const dom = editorDocument(html);
-    const pages = ['about', 'contact', 'privacy', 'legal', 'retired-kind'].map((key) => ({
-      key, known: key !== 'retired-kind', exists: key === 'about' || key === 'contact' || key === 'retired-kind',
-      status: key === 'about' ? 'published' : 'draft', deletable: key !== 'about',
-      locales: { de: { title: 'INACTIVE GERMAN' }, en: { title: '<img src=x onerror=alert(1)>' } },
-    }));
+    const requests: { url: string; init: RequestInit }[] = []; const titles: string[] = [];
+    const stored = new Map<string, string>(options.flash ? [['admin.flash', options.flash]] : []);
+    let pages = options.pages;
     const context: Record<string, unknown> = {
-      document: dom.document, URLSearchParams, EditorCopy: copy, location: { search: '', href: '' },
-      Auth: { ensureAuthed: async () => ({ isAdmin: true }), renderHeader() {} },
-      fetch: async () => ({ ok: true, status: 200, json: async () => ({ pages, language: { primary: 'en', locales: ['en'] } }) }),
-    };
-    context.window = context; vm.createContext(context);
-    for (const file of ['language.js', 'pages-ui.js']) vm.runInContext(readFileSync('public/' + file, 'utf8'), context);
-    vm.runInContext(html.slice(html.lastIndexOf('<script>') + 8, html.lastIndexOf('</script>')), context); await settle();
-    const list = dom.document.getElementById('pagesList')!; const rows = list.querySelectorAll('section');
-    expect(rows).toHaveLength(5);
-    expect(rows[0]!.querySelector('button')).toBeNull();
-    expect(rows[1]!.querySelector('a')!.href).toBe('/admin/about.html?key=contact');
-    expect(rows[1]!.children[2]!.textContent).toBe('EN: <img src=x onerror=alert(1)>');
-    expect(rows[1]!.querySelector('img')).toBeNull();
-    expect(rows[4]!.querySelector('a')).toBeNull(); expect(rows[4]!.querySelector('button')).not.toBeNull();
-  });
-  it('returns keyboard focus to the catalogue Delete button after Escape', async () => {
-    const html = readFileSync('public/pages.html', 'utf8'); const dom = editorDocument(html);
-    const requests: { url: string; init: RequestInit }[] = [];
-    const context: Record<string, unknown> = {
-      document: dom.document, URLSearchParams, EditorCopy: copy, location: { search: '', href: '' },
-      Auth: { ensureAuthed: async () => ({ isAdmin: true }), renderHeader() {} },
+      document: dom.document, URLSearchParams, EditorCopy: copy, BuildCopy: buildCopy, location: { search: options.search ?? '', href: '' },
+      Auth: { ensureAuthed: async () => ({ isAdmin: true }), renderHeader() {}, setPageTitle: (page: string) => { titles.push(page); } },
+      sessionStorage: { getItem: (key: string) => stored.get(key) ?? null, setItem: (key: string, value: string) => { stored.set(key, value); }, removeItem: (key: string) => { stored.delete(key); } },
       fetch: async (url: string, init: RequestInit = {}) => {
         requests.push({ url, init });
-        const body = url.endsWith('/deletion')
-          ? { titles: { de: 'Kontakt', en: 'Contact' }, paths: ['/contact/'], revisions: 2, navigation: [], bodyReferences: 0, updatedAt: stamp }
-          : { pages: [{ key: 'contact', known: true, exists: true, status: 'draft', deletable: true,
-            locales: { de: { title: 'Kontakt' }, en: { title: 'Contact' } } }], language: { primary: 'en', locales: ['en'] } };
-        return { ok: true, status: 200, json: async () => body };
+        if (url.endsWith('/deletion')) return { ok: true, status: 200, json: async () => ({ titles: { de: 'Kontakt', en: 'Contact' }, paths: ['/contact/'], revisions: 2, navigation: [], bodyReferences: 0, updatedAt: stamp }) };
+        if (init.method === 'DELETE') { pages = options.deletion!(pages); return { ok: true, status: 200, json: async () => ({ deleted: true }) }; }
+        return { ok: true, status: 200, json: async () => ({ pages, language: options.language ?? { primary: 'en', locales: ['en'] } }) };
       },
     };
     context.window = context; vm.createContext(context);
-    for (const file of ['language.js', 'admin-confirm.js', 'pages-ui.js']) vm.runInContext(readFileSync('public/' + file, 'utf8'), context);
+    for (const file of ['build-reporting.js', 'language.js', 'admin-ui.js', 'admin-confirm.js', 'pages-ui.js']) vm.runInContext(readFileSync('public/' + file, 'utf8'), context);
     vm.runInContext(html.slice(html.lastIndexOf('<script>') + 8, html.lastIndexOf('</script>')), context); await settle();
-    const remove = dom.document.getElementById('pagesList')!.querySelector('button')!;
+    const list = dom.document.getElementById('pagesList')!;
+    return { dom, list, requests, titles, stored, rows: () => list.querySelectorAll('section') };
+  };
+  const page = (key: string, overrides: Partial<ListedPage> = {}): ListedPage => ({
+    key, known: key !== 'retired-kind', exists: key === 'about' || key === 'contact' || key === 'retired-kind',
+    status: key === 'about' ? 'published' : 'draft', deletable: key !== 'about',
+    locales: { de: { title: 'INACTIVE GERMAN' }, en: { title: '<img src=x onerror=alert(1)>' } }, ...overrides,
+  });
+  const chipsOf = (row: EditorElement) => row.querySelectorAll('.lang-chip').map((chip) => ({ code: chip.textContent, className: chip.className, name: chip.getAttribute('aria-label') }));
+
+  it('shows only the active locale as a chip with its heading, escapes authored titles, and leaves unknown kinds delete-only', async () => {
+    const h = await catalogue({ pages: ['about', 'contact', 'privacy', 'legal', 'retired-kind'].map((key) => page(key)) });
+    const rows = h.rows();
+    expect(rows).toHaveLength(5);
+    expect(rows[0]!.querySelector('button')).toBeNull();
+    expect(rows[1]!.querySelector('a')!.href).toBe('/admin/about.html?key=contact');
+    expect(chipsOf(rows[1]!)).toEqual([{ code: 'EN', className: 'lang-chip', name: 'English: heading set' }]);
+    expect(rows[1]!.querySelectorAll('.pages-row__locale')[0]!.textContent).toBe('EN<img src=x onerror=alert(1)>');
+    expect(rows[1]!.textContent).not.toContain('INACTIVE GERMAN');
+    expect(rows[1]!.querySelector('img')).toBeNull();
+    // A page that is not created yet has nothing to say per language.
+    expect(chipsOf(rows[2]!)).toEqual([]);
+    expect(rows[2]!.querySelector('a')!.textContent).toBe(ui.en['editor.chrome.pagesCreate']);
+    expect(rows[4]!.querySelector('a')).toBeNull(); expect(rows[4]!.querySelector('button')).not.toBeNull();
+  });
+
+  it('marks each enabled locale written or still without a heading, in primary order', async () => {
+    const h = await catalogue({
+      pages: [page('about', { locales: { de: { title: 'Über mich' }, en: { title: 'About me' } } }), page('contact', { locales: { de: { title: 'Kontakt' }, en: { title: '' } } })],
+      language: { primary: 'de', locales: ['de', 'en'] },
+    });
+    const [about, contact] = h.rows();
+    expect(chipsOf(about!)).toEqual([{ code: 'DE', className: 'lang-chip', name: 'German: heading set' }, { code: 'EN', className: 'lang-chip', name: 'English: heading set' }]);
+    expect(about!.querySelectorAll('.pages-row__locale').map((item) => item.textContent)).toEqual(['DEÜber mich', 'ENAbout me']);
+    expect(chipsOf(contact!)).toEqual([{ code: 'DE', className: 'lang-chip', name: 'German: heading set' }, { code: 'EN', className: 'lang-chip is-missing', name: 'English: no heading yet' }]);
+    expect(contact!.querySelectorAll('.pages-row__locale')[1]!.textContent).toBe('EN' + ui.en['editor.chrome.pagesNone']);
+  });
+
+  it('leads with a lede, titles itself through the shared page title, and keeps every row’s action in the actions column with About’s note under its kind', async () => {
+    const h = await catalogue({ pages: [page('about'), page('contact')] });
+    expect(h.dom.document.querySelector('.lede')!.textContent).toBe(ui.en['editor.chrome.pagesIntro']);
+    expect(h.titles).toEqual([ui.en['editor.chrome.pagesTitle']]);
+    const [about, contact] = h.rows();
+    for (const row of [about!, contact!]) {
+      const actions = row.querySelectorAll('.pages-row__actions')[0]!;
+      expect(actions.querySelectorAll('a').map((a) => a.textContent)).toEqual([ui.en['editor.chrome.pagesEdit']]);
+      expect(actions.querySelector('.pages-row__fixed')).toBeNull();
+    }
+    expect(about!.querySelectorAll('.pages-row__kind')[0]!.querySelector('.pages-row__fixed')!.textContent).toBe(ui.en['editor.chrome.pagesFixed']);
+    expect(contact!.querySelector('.pages-row__fixed')).toBeNull();
+    expect(about!.querySelector('a')!.getAttribute('aria-label')).toBe('Edit About');
+  });
+
+  it('shows a message carried over from the page editor once in its status line, then forgets it', async () => {
+    const h = await catalogue({ pages: [page('about')], flash: 'Deleted “Contact”. The site was not rebuilt.' });
+    const outcome = h.dom.document.getElementById('pagesOutcome')!;
+    expect(outcome.getAttribute('role')).toBe('status');
+    expect(outcome.textContent).toBe('Deleted “Contact”. The site was not rebuilt.');
+    expect(h.stored.has('admin.flash')).toBe(false);
+  });
+
+  it('returns keyboard focus to the catalogue Delete button after Escape', async () => {
+    const h = await catalogue({ pages: [page('contact', { locales: { de: { title: 'Kontakt' }, en: { title: 'Contact' } } })] });
+    const remove = h.list.querySelector('button')!;
     remove.focus(); remove.click(); await settle();
-    const dialog = dom.document.getElementById('adminConfirm')!;
+    const dialog = h.dom.document.getElementById('adminConfirm')!;
     expect(dialog.open).toBe(true);
-    dialog.fire('keydown', { key: 'Escape' }); dom.flushDialogEvents(); await settle();
+    dialog.fire('keydown', { key: 'Escape' }); h.dom.flushDialogEvents(); await settle();
     expect(remove.disabled).toBe(false);
-    expect(dom.document.activeElement).toBe(remove);
-    expect(requests.some(({ init }) => init.method === 'DELETE')).toBe(false);
-    expect(dom.document.getElementById('pagesList')!.querySelector('button')).toBe(remove);
+    expect(h.dom.document.activeElement).toBe(remove);
+    expect(h.requests.some(({ init }) => init.method === 'DELETE')).toBe(false);
+    expect(h.list.querySelector('button')).toBe(remove);
+  });
+
+  it('hands keyboard focus to the row’s Create link after deleting its page', async () => {
+    const h = await catalogue({
+      pages: [page('about'), page('contact', { locales: { de: { title: 'Kontakt' }, en: { title: 'Contact' } } })],
+      deletion: (pages) => pages.map((item) => item.key === 'contact' ? { ...item, exists: false, status: 'draft' } : item),
+    });
+    const remove = h.list.querySelector('button')!;
+    remove.focus(); remove.click(); await settle();
+    // Confirm as the native <form method="dialog"> would: result "ok", then close.
+    const dialog = h.dom.document.getElementById('adminConfirm')!;
+    dialog.returnValue = 'ok'; dialog.close(); h.dom.flushDialogEvents(); await settle();
+    expect(h.requests.some(({ init }) => init.method === 'DELETE')).toBe(true);
+    const contact = h.rows()[1]!;
+    expect(contact.textContent).toContain(ui.en['editor.chrome.pagesMissing']);
+    const create = contact.querySelector('a')!;
+    expect(create.textContent).toBe(ui.en['editor.chrome.pagesCreate']);
+    expect(h.dom.document.activeElement).toBe(create);
+    expect(h.dom.document.getElementById('pagesOutcome')!.textContent).toBe('Deleted draft “Contact”. The site was not rebuilt.');
   });
 });

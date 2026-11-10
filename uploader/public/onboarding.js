@@ -172,7 +172,7 @@ window.Onboarding = (function () {
       message.setAttribute('aria-live', 'polite');
       message.setAttribute('aria-atomic', 'true');
       if (view.language.lockedAt !== null) {
-        detail.appendChild(element('p', 'muted', text('languageLocked', { date: new Date(view.language.lockedAt).toLocaleString() })));
+        detail.appendChild(element('p', 'muted', text('languageLocked', { date: window.AdminFormat.dateTime(view.language.lockedAt) })));
         const settings = element('a', '', copy.onboardingLanguageSettings);
         settings.href = '/admin/settings.html#language';
         detail.appendChild(settings);
@@ -324,7 +324,7 @@ window.Onboarding = (function () {
       let sent = false;
       try {
         if (!(await window.AdminConfirm.ask({
-          title: copy.languageChangeTitle, body: languageScope(next), confirmLabel: copy.onboardingLanguageSave,
+          title: copy.languageChangeTitle, body: languageScope(next), confirmLabel: copy.onboardingLanguageSave, tone: 'publish',
         }))) return;
         languageNotice = copy.saveSaving;
         root.querySelector('.onboarding-language-status').textContent = languageNotice;

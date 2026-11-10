@@ -4,6 +4,30 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Implemented locally:** admin consistency review fixes (2026-11-10, owner-requested
+  Impeccable critique + audit; decisions and invariants in
+  `docs/superpowers/specs/2026-11-10-admin-consistency-review-fixes.md`). On the road:
+  Media re-reads processing photos and settles tiles in place; save conflicts compare
+  field by field with the resolving actions first; offline/recovery panels are styled
+  notices in plain sentences; focus survives saves, moderation and deletes; the phone
+  drawer takes focus on open. One system: one language chip on Posts, Pages, Journeys and
+  locale tabs; one `.commandbar` for story, journey and page editors; the page editor uses
+  the story editor's Visual / Markdown manuscript (build exception extended, no Gallery
+  picker on pages); neutral navy confirmations with red reserved for live-site and
+  destructive actions; in-page prompts replace `prompt()`/`confirm()`; the picker keeps its
+  footer on screen; Media counts and filters photos without alt text instead of tagging
+  tiles; inspector titles are uppercase everywhere; command bars stay 32px on all pointers
+  (owner decision, `DESIGN.md`). Words and formats: one date format, pluralised counts,
+  one inline error pattern, "story" as the one noun, outcome sentences without release
+  ids. Tokens: radius steps, status pairs, sunken surface and a `--z-*` scale replace raw
+  values in `admin.css`. New shared scripts `admin-ui.js` and `manuscript-bar.js`; additive
+  read fields `GET /media?alt=missing` → `altMissing` and journey list `omitted`. Uploader:
+  147 Vitest files (4,521 tests) pass and typecheck passes; `data-owner.integration` needs
+  the native `owned-flock` build and does not load here. Site: 53 files (927 tests) pass.
+  Not run locally: `astro check` and the Postgres-backed integration suites (no database).
+  Verified in Chrome against working-tree assets at 1440, 1100, 820 and 390px; the two
+  server fields are covered by Vitest only.
+
 - **Implemented locally:** backend UI proportion and consistency refinement
   (2026-11-09, owner-requested Impeccable critique follow-up). Reduced top masthead
   height from `4rem` (64px) to `3rem` (48px) with a proportional 26px brand mark and

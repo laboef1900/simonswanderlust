@@ -208,7 +208,7 @@
       <section class="settings-panel" id="panel-images" role="tabpanel" aria-labelledby="tabbtn-images" hidden>
       <section class="card" id="imageSettingsSection" aria-labelledby="imageHeading">
         <h2 id="imageHeading" class="card-heading"></h2>
-        <form id="imageSettings">
+        <form id="imageSettings" novalidate>
           <div class="settings-savebar">
             <button id="saveImages" type="submit" disabled>Save image settings</button>
             <p class="muted">Applies to new uploads and newly processed import images. Existing photos and queued uploads keep their settings. Original files stay private.</p>
@@ -352,7 +352,7 @@
             <span id="identityDomainNoticeText"></span>
             <a id="identityDomainNoticeLink" href="/admin/settings.html#identity"></a>
           </p>
-          <form id="identityForm" aria-describedby="identityTiming identityOptional">
+          <form id="identityForm" aria-describedby="identityTiming identityOptional" novalidate>
             <fieldset id="identityFields" disabled>
               <p id="identityOptional" class="muted"></p>
               <h3 class="section-label" data-settings-copy="settingsIdentityPublic"></h3>
@@ -447,12 +447,12 @@
       </section>
 
       <section class="settings-panel" id="panel-site" role="tabpanel" aria-labelledby="tabbtn-site" hidden>
-      <div class="settings-jumps">
-        <button type="button" class="btn-secondary" data-settings-section="publishingHeading" data-settings-copy="settingsPublishing"></button>
-        <button type="button" class="btn-secondary" data-settings-section="siteSettingsHeading" data-settings-copy="settingsBackups"></button>
-        <button type="button" class="btn-secondary" data-settings-section="importTuning" data-settings-copy="settingsImportTuning"></button>
-        <button id="routingJump" type="button" class="btn-secondary" data-settings-section="routingHeading"></button>
-      </div>
+      <ul class="settings-jumps" aria-label="Sections on this tab">
+        <li><a href="#publishingHeading" class="action-link" data-settings-section="publishingHeading" data-settings-copy="settingsPublishing"></a></li>
+        <li><a href="#siteSettingsHeading" class="action-link" data-settings-section="siteSettingsHeading" data-settings-copy="settingsBackups"></a></li>
+        <li><a href="#importTuning" class="action-link" data-settings-section="importTuning" data-settings-copy="settingsImportTuning"></a></li>
+        <li><a id="routingJump" href="#routingHeading" class="action-link" data-settings-section="routingHeading"></a></li>
+      </ul>
       <section class="card" aria-labelledby="publishingHeading">
         <h2 id="publishingHeading" class="card-heading" tabindex="-1" data-settings-copy="settingsPublishing"></h2>
         <p class="muted" data-settings-copy="settingsPublishingHelp"></p>
@@ -577,6 +577,7 @@
     <script src="/admin/gpx-copy.js"></script>
     <script src="/admin/stop-route-copy.js"></script>
     <script src="/admin/auth.js"></script>
+    <script src="/admin/admin-ui.js"></script>
     <script src="/admin/admin-confirm.js"></script>
     <script src="/admin/llm.js"></script>
     <script src="/admin/tabs.js"></script>
@@ -591,13 +592,24 @@
       for (const element of document.querySelectorAll('[data-settings-copy]')) {
         element.textContent = copy[element.dataset.settingsCopy];
       }
-      for (const button of document.querySelectorAll('[data-settings-section]')) {
-        button.addEventListener('click', () => {
-          const target = $(button.dataset.settingsSection);
+      // Section jumps are navigation within the tab: the hash stays the tab's,
+      // and focus lands on the section heading (or opens the disclosure).
+      for (const link of document.querySelectorAll('[data-settings-section]')) {
+        link.addEventListener('click', (event) => {
+          event.preventDefault();
+          const target = $(link.dataset.settingsSection);
           if (target.tagName === 'DETAILS') target.open = true;
           target.scrollIntoView({ block: 'start' });
           target.focus();
         });
+      }
+
+      /** "Could not save: Webp quality must be 1–100." — a server refusal as a sentence, never a status number. */
+      function refusal(action, error) {
+        const detail = typeof error === 'string' && error.trim() ? error.trim() : '';
+        // The server's own sentences pass through; its short lowercase codes become one.
+        if (/^[A-Z].*\.$/.test(detail)) return detail;
+        return 'Could not ' + action + (detail ? ': ' + detail.charAt(0).toUpperCase() + detail.slice(1).replace(/\.?$/, '.') : '.');
       }
       const aiDraft = SettingsDrafts.watch('ai', $('useCaseSection'), copy.settingsAiSection);
       const providerDraft = SettingsDrafts.watch('provider', $('providerForm'), copy.settingsProvider);
@@ -767,14 +779,36 @@
         return n;
       }
 
-      function rowAction(label, name, run, className) {
+      const rowButtons = new Map();   // provider id -> Map(label -> button) of the rendered rows
+
+      /** The Edit button of a provider's rendered row, if it is still listed. */
+      function rowEdit(id) { return rowButtons.get(id)?.get('Edit'); }
+
+      /**
+       * Where focus goes after a row action re-renders the list: the same action
+       * in the provider's new row, its Edit, the next row's Edit (else the
+       * previous one's), else Add provider.
+       */
+      function rowFocusTargets(id, label, order) {
+        const index = order.indexOf(id);
+        const neighbour = [...order.slice(index + 1), ...order.slice(0, index).reverse()].map(rowEdit).find(Boolean);
+        return [rowButtons.get(id)?.get(label), rowEdit(id), neighbour, $('addProvider')];
+      }
+
+      function rowAction(p, buttons, label, run, className) {
         const btn = node('button', className || 'provider-action', label);
         btn.type = 'button';
-        btn.setAttribute('aria-label', label + ' ' + name);
+        btn.setAttribute('aria-label', label + ' ' + p.name);
         btn.addEventListener('click', async () => {
+          const order = saved ? saved.aiProviders.map((provider) => provider.id) : [];
+          const restore = AdminFocus.hold(btn);
           btn.disabled = true;
-          try { await run(); } finally { btn.disabled = false; }
+          try { await run(); } finally {
+            btn.disabled = false;
+            restore(...rowFocusTargets(p.id, label, order));
+          }
         });
+        buttons.set(label, btn);
         return btn;
       }
 
@@ -788,12 +822,14 @@
         main.append(title, node('p', 'provider-meta', KINDS[p.kind].label + ' · ' + keyState(p)), node('p', 'provider-url', p.baseUrl));
 
         const actions = node('div', 'provider-actions');
-        const makeDefault = rowAction('Set default', p.name, () => setDefault(p.id));
-        const remove = rowAction('Delete', p.name, () => deleteProvider(p.id), 'provider-action provider-action--danger');
+        const buttons = new Map();
+        rowButtons.set(p.id, buttons);
+        const makeDefault = rowAction(p, buttons, 'Set default', () => setDefault(p.id));
+        const remove = rowAction(p, buttons, 'Delete', () => deleteProvider(p.id), 'provider-action provider-action--danger');
         actions.append(
-          rowAction('Edit', p.name, async () => openForm(p.id)),
+          rowAction(p, buttons, 'Edit', async () => openForm(p.id)),
           makeDefault,
-          rowAction('Test', p.name, () => runProviderTest(p.id, (text) => {
+          rowAction(p, buttons, 'Test', () => runProviderTest(p.id, (text) => {
             testNotes.set(p.id, text);
             const out = rowOutputs.get(p.id);
             if (out) out.textContent = text;
@@ -827,6 +863,7 @@
           $('providersOut').textContent = copy.settingsProviderRemoved;
         }
         rowOutputs.clear();
+        rowButtons.clear();
         const list = $('providerList');
         list.replaceChildren();
         if (!saved) {
@@ -972,6 +1009,7 @@
         const body = p ? { name, baseUrl } : { name, kind, baseUrl };
         if (typedKey) body.apiKey = $('providerApiKey').value;
         $('providerApiKey').value = '';
+        const restore = AdminFocus.hold($('saveProvider'));
         origin.busy = true;
         setProviderBusy(true);
         $('providerFormOut').textContent = 'Saving…';
@@ -989,6 +1027,9 @@
           else showProviderOutcome(message);
         } else if (!r.ok) $('providersOut').textContent += ' ' + message;
         syncForm();
+        // A closed form leaves focus nowhere: the saved provider's row, else Add provider.
+        const savedProvider = p || (saved && saved.aiProviders.find((provider) => provider.name === name));
+        restore(savedProvider ? rowEdit(savedProvider.id) : null, $('addProvider'));
       });
 
       $('removeProviderKey').addEventListener('click', async () => {
@@ -1006,6 +1047,7 @@
         })) return;
         if (form !== origin || !saved) return;
         $('providerApiKey').value = '';
+        const restore = AdminFocus.hold($('removeProviderKey'));
         origin.busy = true;
         setProviderBusy(true);
         const r = await send('PUT', providerPath(p.id), { apiKey: null });
@@ -1017,6 +1059,7 @@
         const message = outcome(r, 'Removed the stored key for “' + p.name + '”.');
         if (refreshed) showProviderOutcome(message);
         else if (!r.ok) $('providersOut').textContent += ' ' + message;
+        restore(rowEdit(p.id), $('addProvider'));
       });
 
       async function setDefault(id) {
@@ -1115,6 +1158,7 @@
       $('testProviderForm').addEventListener('click', async () => {
         if (!form || !saved || form.busy) return;
         const origin = form;
+        const restore = AdminFocus.hold($('testProviderForm'));
         $('testProviderForm').disabled = true;
         try {
           await runProviderTest(origin.id, (text) => {
@@ -1123,6 +1167,7 @@
           });
         } finally {
           if (form === origin) setProviderBusy(Boolean(origin.busy));
+          restore($('addProvider'));
         }
       });
 
@@ -1311,7 +1356,10 @@
         });
         $(u.reload).addEventListener('click', async () => {
           const p = selectedProvider(u);
-          if (p) await lookupModels(p, true);
+          if (!p) return;
+          // The button is disabled while the provider's list loads.
+          const restore = AdminFocus.hold($(u.reload));
+          try { await lookupModels(p, true); } finally { restore($(u.model)); }
         });
       }
 
@@ -1381,12 +1429,14 @@
           translationModel: USE_CASES.translation.current,
           translationTimeoutMs: Math.round(Number($('translationTimeoutSeconds').value) * 1000),
         };
+        const restore = AdminFocus.hold($('saveAi'));
         $('saveAi').disabled = true;
         $('aiFields').disabled = true;
         $('aiOut').textContent = 'Saving…';
         const r = await send('POST', '/settings', body);
         $('saveAi').disabled = false;
         $('aiFields').disabled = false;
+        restore();
         if (!r) return;
         // Success applies the server's values; a failure keeps the pending edits for a retry.
         if (r.ok) applyAi(r.result, true);
@@ -1428,6 +1478,7 @@
         const controller = new AbortController();
         reviewTestController = controller;
         const timer = setTimeout(() => controller.abort(), timeout);
+        const restore = AdminFocus.hold($('testReview'));
         $('testReview').disabled = true;
         $('reviewTestOut').textContent = copy.reviewTestRunning;
         let apiKey = null;
@@ -1462,6 +1513,7 @@
           if (reviewTestController === controller) {
             reviewTestController = null;
             $('testReview').disabled = false;
+            restore();
           }
         }
       });
@@ -1509,6 +1561,7 @@
       $('saveRouting').addEventListener('click', async () => {
         const btn = $('saveRouting');
         if ($('routingFields').disabled) return;
+        const restore = AdminFocus.hold(btn);
         $('routingFields').disabled = true;
         btn.disabled = true;
         $('routingOut').textContent = routingCopy.settingsSaving;
@@ -1527,6 +1580,7 @@
         } finally {
           btn.disabled = false;
           $('routingFields').disabled = false;
+          restore();
         }
       });
 
@@ -1540,6 +1594,7 @@
 
       $('saveComments').addEventListener('click', async () => {
         const btn = $('saveComments');
+        const restore = AdminFocus.hold(btn);
         btn.disabled = true;
         $('commentsEnabled').disabled = true;
         $('commentsOut').textContent = 'Saving…';
@@ -1550,7 +1605,7 @@
           });
           if (res.status === 401) { location.href = '/login'; return; }
           const r = await res.json().catch(() => ({}));
-          if (!res.ok) { $('commentsOut').textContent = 'Not saved: ' + (r.error || res.status); return; }
+          if (!res.ok) { $('commentsOut').textContent = refusal('save', r.error); return; }
           fillComments(r);
           $('commentsOut').textContent = r.commentsEnabled ? 'Comments are on.' : 'Comments are off.';
         } catch {
@@ -1558,6 +1613,7 @@
         } finally {
           btn.disabled = false;
           $('commentsEnabled').disabled = false;
+          restore();
         }
       });
 
@@ -1565,15 +1621,16 @@
         try {
           const res = await fetch('/settings');
           if (res.status === 401) { location.href = '/login'; return; }
-          if (!res.ok) { $('settingsLoadStatus').textContent = 'Could not load settings: ' + res.status; return; }
+          if (!res.ok) { $('settingsLoadStatus').textContent = 'Could not load settings. Reload the page to try again (HTTP ' + res.status + ').'; return; }
           fill(await res.json());
           await ensureModels();
-        } catch (e) { $('settingsLoadStatus').textContent = 'Error: ' + e; }
+        } catch { $('settingsLoadStatus').textContent = 'Could not load settings. Check your connection and reload the page.'; }
       }
 
       // Site settings only: AI, image and comment settings save from their own tabs.
       $('save').addEventListener('click', async () => {
         if ($('siteFields').disabled) return;
+        const restore = AdminFocus.hold($('save'));
         $('siteFields').disabled = true;
         $('save').disabled = true;
         $('siteOut').textContent = copy.settingsSaving;
@@ -1597,12 +1654,29 @@
         } finally {
           $('siteFields').disabled = false;
           $('save').disabled = false;
+          restore();
         }
       });
+
+      // The HTML min/max stay as constraints; the sentence under the field
+      // replaces the browser's bubble (the form is novalidate).
+      const QUALITY_FIELDS = { webpQuality: 'WebP', avifQuality: 'AVIF' };
+      function qualityProblem(id) {
+        const value = String($(id).value).trim();
+        return /^\d{1,3}$/.test(value) && Number(value) >= 1 && Number(value) <= 100 ? '' : QUALITY_FIELDS[id] + ' quality must be between 1 and 100.';
+      }
+      for (const id of Object.keys(QUALITY_FIELDS)) $(id).addEventListener('input', () => AdminField.valid($(id)));
 
       $('imageSettings').addEventListener('submit', async (event) => {
         event.preventDefault();
         if ($('imageFields').disabled) return;
+        const problems = Object.keys(QUALITY_FIELDS).map((id) => [id, qualityProblem(id)]).filter(([, problem]) => problem);
+        for (const id of Object.keys(QUALITY_FIELDS)) AdminField.valid($(id));
+        if (problems.length) {
+          problems.forEach(([id, problem], index) => AdminField.invalid($(id), problem, { focus: index === 0 }));
+          return;
+        }
+        const restore = AdminFocus.hold($('saveImages'));
         $('imageFields').disabled = true;
         $('saveImages').disabled = true;
         $('imageOut').textContent = 'Saving image settings…';
@@ -1618,7 +1692,7 @@
           if (res.status === 401) { location.href = '/login'; return; }
           const result = await res.json().catch(() => ({}));
           if (!res.ok) {
-            $('imageOut').textContent = 'Not saved: ' + (result.error || res.status);
+            $('imageOut').textContent = refusal('save image settings', result.error);
             return;
           }
           fillImages(result);
@@ -1628,6 +1702,7 @@
         } finally {
           $('saveImages').disabled = false;
           $('imageFields').disabled = false;
+          restore();
         }
       });
 
@@ -1672,6 +1747,7 @@
 
       $('previewFile').addEventListener('change', () => {
         clearPreview();
+        AdminField.valid($('previewFile'));
         $('previewOut').textContent = '';
       });
 
@@ -1693,17 +1769,19 @@
 
       $('previewRun').addEventListener('click', async () => {
         const file = $('previewFile').files && $('previewFile').files[0];
-        if (!file) { $('previewOut').textContent = 'Choose a test photo first.'; return; }
+        AdminField.valid($('previewFile'));
+        if (!file) { AdminField.invalid($('previewFile'), 'Choose a test photo first.'); return; }
         const f = PREVIEW_FORMATS[previewFormat];
         const quality = String($(f.field).value).trim();
         if (!/^\d{1,3}$/.test(quality) || Number(quality) < 1 || Number(quality) > 100) {
-          $('previewOut').textContent = 'Set the ' + f.label + ' quality to a whole number from 1 to 100 first.';
+          AdminField.invalid($(f.field), 'Set the ' + f.label + ' quality to a whole number from 1 to 100 first.');
           return;
         }
         const body = new FormData();
         body.append('format', previewFormat);
         body.append('quality', quality);
         body.append('file', file);
+        const restorePreview = AdminFocus.hold($('previewRun'));
         $('previewRun').disabled = true;
         $('previewOut').textContent = 'Encoding a ' + f.label + ' preview at quality ' + quality + '…';
         try {
@@ -1712,7 +1790,7 @@
           if (!res.ok) {
             const r = await res.json().catch(() => ({}));
             $('previewOut').textContent = res.status === 413 ? 'That photo is over the 25 MB upload limit. Choose a smaller one.'
-              : typeof r.error === 'string' && r.error ? r.error : 'The preview failed (HTTP ' + res.status + '). Try again.';
+              : refusal('generate the preview', r.error);
             return;
           }
           const encoded = await res.blob();
@@ -1736,16 +1814,18 @@
           $('previewOut').textContent = 'Could not reach the server. Check your connection and try again.';
         } finally {
           $('previewRun').disabled = false;
+          restorePreview();
         }
       });
 
       function renderBackups(data) {
         const st = data.state || {};
+        // Backup moments read like every other date in the admin: "10 Nov 2026, 08:43".
         $('backupStatus').textContent = data.running
-          ? 'Running… (started ' + st.lastAttemptAt + ')'
+          ? 'Backing up… started ' + AdminFormat.dateTime(st.lastAttemptAt) + '.'
           : st.lastError
-            ? 'FAILED at ' + st.lastAttemptAt + ': ' + st.lastError
-            : st.lastSuccessAt ? 'OK at ' + st.lastSuccessAt : copy.settingsBackupUnknown;
+            ? 'The last backup failed at ' + AdminFormat.dateTime(st.lastAttemptAt) + ': ' + st.lastError
+            : st.lastSuccessAt ? 'The last backup succeeded at ' + AdminFormat.dateTime(st.lastSuccessAt) + '.' : copy.settingsBackupUnknown;
         renderFileList($('backupFiles'), data.files || [], copy.settingsBackupEmpty);
         renderFileList($('imageArchives'), data.imageArchives || [], copy.settingsImagesEmpty);
         renderFileList($('routeArchives'), data.routeArchives || [], copy.settingsRoutesEmpty);
@@ -1776,6 +1856,7 @@
       }
 
       async function loadBackups() {
+        const restore = AdminFocus.hold($('reloadBackups'));
         $('reloadBackups').disabled = true;
         try {
           const res = await fetch('/backups');
@@ -1783,7 +1864,7 @@
           renderBackups(await res.json());
         } catch {
           $('backupStatus').textContent = copy.settingsBackupLoadFailed;
-        } finally { $('reloadBackups').disabled = false; }
+        } finally { $('reloadBackups').disabled = false; restore(); }
       }
       $('reloadBackups').addEventListener('click', loadBackups);
 
@@ -1792,6 +1873,7 @@
       // the await and leave "Backing up…" / "Rebuilding…" on screen for good.
       $('backupNow').addEventListener('click', async () => {
         const btn = $('backupNow');
+        const restore = AdminFocus.hold(btn);
         btn.disabled = true;
         $('backupStatus').textContent = 'Backing up…';
         try {
@@ -1799,14 +1881,15 @@
           if (res.status === 401) { location.href = '/login'; return; }
           if (!res.ok) {
             const r = await res.json().catch(() => ({}));
-            $('backupStatus').textContent = 'Backup failed: ' + (r.error || 'HTTP ' + res.status);
+            $('backupStatus').textContent = refusal('back up', r.error);
             return;
           }
           await loadBackups();
         } catch (e) {
-          $('backupStatus').textContent = 'Backup failed: ' + e;
+          $('backupStatus').textContent = refusal('back up', e && e.message ? e.message : '');
         } finally {
           btn.disabled = false;
+          restore();
         }
       });
 
@@ -1837,10 +1920,11 @@
         const ok = await AdminConfirm.ask({
           title: 'Rebuild the live site?',
           body: 'This rebuilds the public journal from the current published content. It can take several minutes. Live pages stay unchanged until the rebuild finishes.',
-          confirmLabel: 'Rebuild',
+          confirmLabel: 'Rebuild', tone: 'publish',
         });
         if (!ok) return;
         const btn = $('rebuild');
+        const restore = AdminFocus.hold(btn);
         btn.disabled = true;
         publicationRefresh.beginAction();
         $('out').textContent = 'Rebuilding the site — this takes a minute…';
@@ -1855,6 +1939,7 @@
         } finally {
           btn.disabled = false;
           publicationRefresh.endAction();
+          restore();
         }
       });
 

@@ -35,6 +35,8 @@ interface Element {
   value: string;
   textContent: string;
   href: string;
+  /** `label.htmlFor`, as the pages set it on created labels. */
+  htmlFor: string;
   innerHTML: string;
   hidden: boolean;
   disabled: boolean;
@@ -54,9 +56,15 @@ interface Element {
   attrs: Record<string, string>;
   options: { value: string }[];
   children: Element[];
+  /** Set by appendChild/append/after; cleared when the child is removed or its parent's children are replaced. */
+  parentElement: Element | null;
+  /** Markup elements (`el(id)`) are in the document; created nodes only once appended under one. */
+  rooted: boolean;
+  readonly isConnected: boolean;
   classList: { toggle(name: string, on?: boolean): void; contains(name: string): boolean };
   add(option: { value: string }): void;
-  remove(index: number): void;
+  /** `select.remove(index)` drops an option; `node.remove()` detaches the node from its parent. */
+  remove(index?: number): void;
   listeners: Record<string, ((event?: Record<string, unknown>) => Promise<void> | void)[]>;
   addEventListener(type: string, fn: (event?: Record<string, unknown>) => Promise<void> | void): void;
   removeEventListener(type: string, fn: (event?: Record<string, unknown>) => Promise<void> | void): void;
@@ -64,22 +72,28 @@ interface Element {
   fire(type: string, event?: Record<string, unknown>): Promise<void>;
   appendChild(child?: Element): void;
   append(...children: Element[]): void;
+  after(...nodes: Element[]): void;
   replaceChildren(): void;
   contains(node: unknown): boolean;
   setAttribute(name: string, value: string): void;
   getAttribute(name: string): string | null;
+  hasAttribute(name: string): boolean;
+  removeAttribute(name: string): void;
+  toggleAttribute(name: string, force?: boolean): boolean;
   querySelectorAll(selector: string): Element[];
   focus(): void;
 }
 
 function element(): Element {
   const listeners: Element['listeners'] = {};
+  const detach = (children: Element[]) => { for (const child of children) child.parentElement = null; children.length = 0; };
   const e: Element = {
-    id: '', value: '', textContent: '', innerHTML: '', href: '', hidden: false, disabled: false, checked: false,
+    id: '', value: '', textContent: '', innerHTML: '', href: '', htmlFor: '', hidden: false, disabled: false, checked: false,
     tagName: 'DIV',
     indeterminate: false, open: false, focused: false, className: '', tabIndex: 0, dataset: {},
     src: '', alt: '', scrollLeft: 0, scrollTop: 0, files: [],
-    style: {}, attrs: {}, listeners, options: [], children: [],
+    style: {}, attrs: {}, listeners, options: [], children: [], parentElement: null, rooted: false,
+    get isConnected() { return this.parentElement ? this.parentElement.isConnected : this.rooted; },
     classList: {
       toggle(name, on) {
         const names = new Set(e.className.split(/\s+/).filter(Boolean));
@@ -89,19 +103,43 @@ function element(): Element {
       contains(name) { return e.className.split(/\s+/).includes(name); },
     },
     add(option) { this.options.push(option); },
-    remove(index) { this.options.splice(index, 1); },
+    remove(index) {
+      if (index !== undefined) { this.options.splice(index, 1); return; }
+      const parent = this.parentElement;
+      if (!parent) return;
+      parent.children.splice(parent.children.indexOf(this), 1);
+      this.parentElement = null;
+    },
     addEventListener(type, fn) { (listeners[type] ??= []).push(fn); },
     removeEventListener(type, fn) { listeners[type] = (listeners[type] || []).filter((listener) => listener !== fn); },
     async click() { await this.fire('click'); },
     async fire(type, event = {}) {
       for (const fn of listeners[type] ?? []) await fn({ preventDefault() {}, ...event });
     },
-    appendChild(child) { if (child) this.children.push(child); },
+    appendChild(child) { if (child) { child.remove(); child.parentElement = this; this.children.push(child); } },
     append(...children) { for (const child of children) this.appendChild(child); },
-    replaceChildren() { this.children.length = 0; },
+    after(...nodes) {
+      const parent = this.parentElement;
+      if (!parent) return;
+      let anchor: Element = this;
+      for (const node of nodes) {
+        node.remove();
+        node.parentElement = parent;
+        parent.children.splice(parent.children.indexOf(anchor) + 1, 0, node);
+        anchor = node;
+      }
+    },
+    replaceChildren() { detach(this.children); },
     contains(node) { return node === this || this.children.some((child) => child.contains(node)); },
     setAttribute(name, value) { this.attrs[name] = value; },
     getAttribute(name) { return this.attrs[name] ?? null; },
+    hasAttribute(name) { return name in this.attrs; },
+    removeAttribute(name) { delete this.attrs[name]; },
+    toggleAttribute(name, force) {
+      const on = force ?? !(name in this.attrs);
+      if (on) this.attrs[name] = ''; else delete this.attrs[name];
+      return on;
+    },
     querySelectorAll(selector) {
       return this.children.flatMap((child) => [
         ...((selector.startsWith('.') ? child.classList.contains(selector.slice(1))
@@ -114,12 +152,12 @@ function element(): Element {
   let markup = '';
   Object.defineProperty(e, 'innerHTML', {
     get: () => markup,
-    set: (value: string) => { markup = value; e.children.length = 0; },
+    set: (value: string) => { markup = value; detach(e.children); },
   });
   let text = '';
   Object.defineProperty(e, 'textContent', {
     get: () => text,
-    set: (value: string) => { text = value; e.children.length = 0; },
+    set: (value: string) => { text = value; detach(e.children); },
   });
   return e;
 }
@@ -150,7 +188,7 @@ function loadPage(file: string, extraGlobals: Record<string, unknown>, scripts: 
   const el = (id: string): Element => {
     if (!ids.has(id)) throw new Error('no element #' + id + ' in ' + file);
     let e = elements.get(id);
-    if (!e) { e = createElement(); e.id = id; elements.set(id, e); }
+    if (!e) { e = createElement(); e.id = id; e.rooted = true; elements.set(id, e); }
     return e;
   };
   // ARIA tabs carry their state in markup that tabs.js reads; mirror just that.
@@ -179,17 +217,26 @@ function loadPage(file: string, extraGlobals: Record<string, unknown>, scripts: 
     el(attr(tag, 'id')!).hidden = /\shidden[\s>]/.test(tag);
   }
   const windowListeners: Record<string, Listener[]> = {};
+  // An element itself, so a page can listen on the document (outside-click
+  // dismissal) and a test can fire there with an explicit target. It is the
+  // connected root: anything a test appends under it reads as connected.
+  const documentStub = Object.assign(element(), {
+    rooted: true,
+    referrer: '',
+    title: '',
+    documentElement: { lang: /<html\b[^>]*lang="([^"]+)"/.exec(html)?.[1] ?? 'en' },
+    // Markup ids resolve to their stub; a created element is found once it hangs under one (AdminField's error lines).
+    getElementById: (id: string): Element | null => {
+      if (ids.has(id)) return el(id);
+      const within = (node: Element): Element | undefined => node.children.find((child) => child.id === id) ?? node.children.map(within).find(Boolean);
+      for (const root of [documentStub, ...elements.values()]) { const found = within(root); if (found) return found; }
+      return null;
+    },
+    createElement,
+    createTextNode: (text: string) => Object.assign(element(), { textContent: text }),
+  });
   const ctx: Record<string, unknown> = {
-    // An element itself, so a page can listen on the document (outside-click
-    // dismissal) and a test can fire there with an explicit target.
-    document: Object.assign(element(), {
-      referrer: '',
-      title: '',
-      documentElement: { lang: /<html\b[^>]*lang="([^"]+)"/.exec(html)?.[1] ?? 'en' },
-      getElementById: (id: string): Element | null => (ids.has(id) ? el(id) : null),
-      createElement,
-      createTextNode: (text: string) => Object.assign(element(), { textContent: text }),
-    }),
+    document: documentStub,
     location: {
       href: 'http://localhost/admin/posts.html',
       origin: 'http://localhost',
@@ -231,6 +278,8 @@ function loadPage(file: string, extraGlobals: Record<string, unknown>, scripts: 
   vm.createContext(ctx);
   vm.runInContext(renderGpxCopy(), ctx);
   vm.runInContext(renderStopRouteCopy(), ctx);
+  // Every admin page loads admin-ui.js before the scripts that format or focus through it.
+  vm.runInContext(readFileSync('public/admin-ui.js', 'utf8'), ctx);
   vm.runInContext(readFileSync('public/build-reporting.js', 'utf8'), ctx);
   vm.runInContext(readFileSync('public/publication-state.js', 'utf8'), ctx);
   vm.runInContext(readFileSync('public/publication-refresh.js', 'utf8'), ctx);
@@ -242,6 +291,14 @@ function loadPage(file: string, extraGlobals: Record<string, unknown>, scripts: 
   return { ctx, el, windowListeners };
 }
 
+// The real posts-filter.js, not a stub: counts, filtering and language chip
+// states are its contract.
+function realPostsFilter() {
+  const windowStub: Record<string, unknown> = {};
+  vm.runInNewContext(readFileSync('public/posts-filter.js', 'utf8'), { window: windowStub, URLSearchParams, PublicationState: loadPublicationState() });
+  return windowStub.PostsFilter as Record<string, unknown>;
+}
+
 function loadPosts(extraGlobals: Record<string, unknown> = {}, languageRead?: () => Promise<Response>) {
   const request = extraGlobals.fetch as ((url: string, init?: RequestInit) => unknown) | undefined;
   const page: PageSurface = loadPage('public/posts.html', {
@@ -251,6 +308,7 @@ function loadPosts(extraGlobals: Record<string, unknown> = {}, languageRead?: ()
       countries: () => [],
       extraFilterCount: () => 0,
       fromSearch: () => ({ q: '', status: '', region: '', country: '', sort: 'updated', order: 'desc' }),
+      languageStates: realPostsFilter().languageStates,
       thumbUrl: () => null,
       toSearch: () => '',
     },
@@ -260,8 +318,30 @@ function loadPosts(extraGlobals: Record<string, unknown> = {}, languageRead?: ()
       : request ? request(url, init) : Promise.reject(NETWORK_DOWN),
   });
   vm.runInContext('listStale = false', page.ctx);
+  // Two things a browser does that the stub's flat tree cannot know: clearing
+  // the rows drops the focus that was inside them, and the bulk buttons live in
+  // #bulkBar, so a hidden bar neither keeps nor takes their focus.
+  const doc = page.ctx.document as Element & { activeElement: Element | null };
+  const list = page.el('postsList');
+  const rows = Object.getOwnPropertyDescriptor(list, 'innerHTML')!;
+  Object.defineProperty(list, 'innerHTML', {
+    get: rows.get,
+    set: (value: string) => { if (doc.activeElement && list.contains(doc.activeElement)) doc.activeElement = null; rows.set!.call(list, value); },
+  });
+  const bar = page.el('bulkBar');
+  const bulkButtons = ['bulkPublish', 'bulkUnpublish', 'bulkDelete'].map((id) => page.el(id));
+  let barHidden = true; // hidden in the markup until something is selected
+  Object.defineProperty(bar, 'hidden', {
+    get: () => barHidden,
+    set: (value: boolean) => { barHidden = value; if (value && bulkButtons.includes(doc.activeElement!)) doc.activeElement = null; },
+  });
+  for (const button of bulkButtons) button.focus = () => { if (!barHidden && !button.disabled) { button.focused = true; doc.activeElement = button; } };
   return page;
 }
+
+/** The page harness's stub document: the stub element loadPage installs, plus the focus seam the tests drive. */
+type PageDocument = Element & { body: Element; activeElement: Element | null; createElement(tag: string): Element };
+const documentOf = (page: PageSurface) => page.ctx.document as PageDocument;
 
 describe('import.html rejection accounting', () => {
   it('shows a rejection-only completed summary and renders HTML-like slugs only as text', () => {
@@ -275,14 +355,85 @@ describe('import.html rejection accounting', () => {
         images: { total: 0, hosted: 0, failed: 0 }, warnings: [warning],
       },
     });
-    expect(el('results').style.display).toBe('');
+    // Results and callouts are revealed through the hidden attribute, never an inline style.
+    expect(el('results').hidden).toBe(false);
     expect(el('counts').textContent).toContain('Rejected: 1');
-    expect(el('importRejected').style.display).toBe('');
-    expect(el('importRejected').textContent).toContain('1 post group(s)');
+    expect(el('importRejected').hidden).toBe(false);
+    expect(el('importRejected').textContent).toContain('1 story group');
+    expect(el('importRejected').textContent).not.toContain('(s)');
+    expect(el('importPartial').hidden).toBe(true);
     expect(el('warnings').children).toHaveLength(1);
     expect(el('warnings').children[0]!.textContent).toBe(warning);
     expect(el('warnings').children[0]!.innerHTML).toBe('');
     expect(el('warnings').children[0]!.children).toEqual([]);
+  });
+
+  it('pluralises missing photos and hides stale callouts when a later job finishes cleanly', () => {
+    const { ctx, el } = loadPage('public/import.html', {});
+    const renderFinished = vm.runInContext('renderFinished', ctx) as (job: unknown) => void;
+    renderFinished({ status: 'done', summary: { imported: 2, updated: 0, images: { total: 5, hosted: 2, failed: 3 }, warnings: [] } });
+    expect(el('importPartial').hidden).toBe(false);
+    expect(el('importPartial').textContent).toMatch(/^3 photos could not be downloaded/);
+    expect(el('out').textContent).toBe('Finished with missing photos.');
+    renderFinished({ status: 'done', summary: { imported: 2, updated: 0, images: { total: 1, hosted: 1, failed: 0 }, warnings: [] } });
+    expect(el('importPartial').hidden).toBe(true);
+    expect(el('importRejected').hidden).toBe(true);
+    expect(el('out').textContent).toBe('Done.');
+  });
+
+  it('asks for the export under the file field instead of in the status line, and clears it once a file is chosen', async () => {
+    const fetch = vi.fn();
+    const page = loadPage('public/import.html', { fetch });
+    const { el } = page;
+    const doc = documentOf(page);
+    const field = el('wxr');
+    const card = doc.createElement('div');
+    doc.appendChild(card);
+    card.appendChild(field);
+    await el('importBtn').click();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(el('out').textContent).toBe('');
+    expect(field.getAttribute('aria-invalid')).toBe('true');
+    const error = card.children[1]!;
+    expect(error.id).toBe('wxrError');
+    expect(error.textContent).toBe('Choose a WordPress export (.xml) first.');
+    expect(error.hidden).toBe(false);
+    expect(field.getAttribute('aria-describedby')).toContain('wxrError');
+    expect(doc.activeElement).toBe(field);
+    field.files = [new File(['<rss/>'], 'export.xml', { type: 'text/xml' })];
+    await field.fire('change');
+    expect(field.getAttribute('aria-invalid')).toBeNull();
+    expect(error.hidden).toBe(true);
+  });
+
+  it('dates a running job like every other admin moment and hands focus back to Import when it finishes', async () => {
+    let status = 'running';
+    const fetch = vi.fn(async (url: string) => {
+      if (url === '/import') return Response.json({ planned: { groups: { total: 2, done: 0 }, images: { planned: 4, hosted: 0, failed: 0 } } }, { status: 202 });
+      return Response.json({ job: { status, startedAt: '2026-11-10T08:43:00Z', progress: { groups: { total: 2, done: 1 }, images: { planned: 4, hosted: 1, failed: 0 } },
+        summary: { imported: 2, updated: 0, images: { total: 4, hosted: 4, failed: 0 }, warnings: [] } } });
+    });
+    const ticks: (() => void)[] = [];
+    const page = loadPage('public/import.html', { fetch, FormData, setTimeout: (tick: () => void) => { ticks.push(tick); return ticks.length; } });
+    const { ctx, el } = page;
+    const doc = documentOf(page);
+    const format = vm.runInContext('AdminFormat', ctx) as { dateTime(value: string): string };
+    el('wxr').files = [new File(['<rss/>'], 'export.xml', { type: 'text/xml' })];
+    el('importBtn').focus();
+    await el('importBtn').click();
+    for (let index = 0; index < 20; index++) await Promise.resolve();
+    expect(el('importBtn').disabled).toBe(true);
+    expect(el('out').textContent).toBe('Running… started ' + format.dateTime('2026-11-10T08:43:00Z') + '.');
+    expect(el('out').textContent).not.toContain('2026-11-10T');
+    expect(el('progressText').textContent).toBe('Photos 1 of 4  ·  Stories 1 of 2');
+    // A disabled control cannot hold focus: the browser drops it to <body>.
+    doc.activeElement = null;
+    status = 'done';
+    ticks.pop()!();
+    for (let index = 0; index < 20; index++) await Promise.resolve();
+    expect(el('importBtn').disabled).toBe(false);
+    expect(doc.activeElement).toBe(el('importBtn'));
+    expect(el('out').textContent).toBe('Done.');
   });
 });
 
@@ -365,11 +516,11 @@ describe('users.html failure recovery', () => {
     await remove;
     // The successful mutation's fresh read must finish independently of the old GET.
     for (let index = 0; index < 12; index++) await Promise.resolve();
-    expect(el('listout').textContent).toBe(ui.en['editor.chrome.usersLoaded'].replace('{count}', '0'));
+    expect(el('listout').textContent).toBe('0 accounts');
     stale.resolve(Response.json([user]));
     await oldLoad;
     expect(el('list').children).toHaveLength(0);
-    expect(el('listout').textContent).toBe(ui.en['editor.chrome.usersLoaded'].replace('{count}', '0'));
+    expect(el('listout').textContent).toBe('0 accounts');
   });
 
   const actions = [
@@ -449,6 +600,100 @@ describe('users.html failure recovery', () => {
     expect(el('list').children[0]?.children[0]?.textContent).toBe(user.username);
     expect(fetcher.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
   });
+
+  it('counts the accounts in the list status and deletes a row through a Delete action that hands focus to the next account', async () => {
+    const accounts = [
+      { id: 1, username: 'anna', isAdmin: true }, { id: 2, username: 'bert', isAdmin: false }, { id: 3, username: 'cleo', isAdmin: false },
+    ];
+    const deletion = Promise.withResolvers<Response>();
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(Response.json(accounts))
+      .mockReturnValueOnce(deletion.promise)
+      .mockResolvedValueOnce(Response.json(accounts.filter((account) => account.username !== 'bert')));
+    const questions: Record<string, unknown>[] = [];
+    const page = loadPage('public/users.html', { fetch: fetcher, AdminConfirm: { ask: async (question: Record<string, unknown>) => { questions.push(question); return true; } } });
+    const { el } = page;
+    const doc = documentOf(page);
+    await el('reloadUsers').click();
+    expect(el('listout').textContent).toBe('3 accounts');
+    const rowOf = (name: string) => el('list').children.find((row) => row.children[0]?.textContent === name)!;
+    const bert = rowOf('bert').children[2]!;
+    expect(bert.textContent).toBe('Delete');
+    expect(bert.getAttribute('aria-label')).toBe('Delete account bert');
+    bert.focus();
+    const removing = bert.click();
+    for (let index = 0; index < 10; index++) await Promise.resolve();
+    expect(questions).toEqual([expect.objectContaining({ title: 'Delete this account?', confirmLabel: 'Delete account', danger: true })]);
+    expect(fetcher).toHaveBeenLastCalledWith('/users/2', expect.objectContaining({ method: 'DELETE' }));
+    // A disabled control cannot hold focus: the browser drops it to <body>.
+    doc.activeElement = null;
+    deletion.resolve(new Response(null, { status: 204 }));
+    await removing;
+    expect(el('out').textContent).toBe('Account bert deleted.');
+    expect(el('listout').textContent).toBe('2 accounts');
+    expect(el('list').children.map((row) => row.children[0]?.textContent)).toEqual(['anna', 'cleo']);
+    expect(doc.activeElement).toBe(rowOf('cleo').children[2]);
+  });
+
+  it('shows one account in the singular', async () => {
+    const { el } = loadPage('public/users.html', { fetch: vi.fn().mockResolvedValueOnce(Response.json([user])) });
+    await el('reloadUsers').click();
+    expect(el('listout').textContent).toBe('1 account');
+  });
+
+  it('refuses a malformed username and a short password under their fields before any request', async () => {
+    const fetcher = vi.fn();
+    const page = loadPage('public/users.html', { fetch: fetcher });
+    const { el } = page;
+    const doc = documentOf(page);
+    const fields = Object.fromEntries(['username', 'password'].map((id) => {
+      const wrap = doc.createElement('div');
+      doc.appendChild(wrap);
+      wrap.appendChild(el(id));
+      return [id, wrap];
+    }));
+    el('username').value = 'simon wanderlust';
+    el('password').value = 'long-enough-password';
+    await el('addForm').fire('submit');
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(el('username').getAttribute('aria-invalid')).toBe('true');
+    expect(fields.username!.children[1]!.textContent).toBe('Use 1–64 letters, digits, “.”, “_” or “-”.');
+    expect(doc.activeElement).toBe(el('username'));
+    expect(el('out').textContent).toBe('');
+    el('username').value = 'simon.w';
+    await el('username').fire('input');
+    expect(el('username').getAttribute('aria-invalid')).toBeNull();
+    el('password').value = 'short';
+    await el('addForm').fire('submit');
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(el('password').getAttribute('aria-invalid')).toBe('true');
+    expect(fields.password!.children[1]!.textContent).toBe('Use at least 12 characters.');
+    expect(doc.activeElement).toBe(el('password'));
+  });
+
+  it('puts a taken username and a wrong current password under their fields as sentences', async () => {
+    const page = loadPage('public/users.html', { fetch: vi.fn()
+      .mockResolvedValueOnce(Response.json({ error: 'username already exists' }, { status: 409 }))
+      .mockResolvedValueOnce(Response.json({ error: 'current password is incorrect' }, { status: 400 })) });
+    const { el } = page;
+    const doc = documentOf(page);
+    const wrap = (id: string) => { const node = doc.createElement('div'); doc.appendChild(node); node.appendChild(el(id)); return node; };
+    const username = wrap('username');
+    const current = wrap('curpw');
+    el('username').value = 'anna';
+    el('password').value = 'fixture-new-password';
+    await el('addForm').fire('submit');
+    expect(username.children[1]!.textContent).toBe('This username is already taken.');
+    expect(el('username').getAttribute('aria-invalid')).toBe('true');
+    expect(el('out').textContent).toBe('');
+    expect(el('username').value).toBe('anna');
+    el('curpw').value = 'fixture-wrong-password';
+    el('newpw').value = 'fixture-new-password';
+    await el('pwForm').fire('submit');
+    expect(current.children[1]!.textContent).toBe('The current password is incorrect.');
+    expect(el('pwout').textContent).toBe('');
+    expect(el('pwout').textContent).not.toContain('current password is incorrect');
+  });
 });
 
 describe('posts.html actions survive a dropped connection', () => {
@@ -481,11 +726,11 @@ describe('posts.html actions survive a dropped connection', () => {
     expect(vm.runInContext('selected.size', ctx)).toBe(1);
   });
 
-  it('Export all re-enables its button and names the failure', async () => {
+  it('Export all re-enables its button and names the failure as a sentence', async () => {
     const { el } = loadPosts();
     await el('exportAll').click();
     expect(el('exportAll').disabled).toBe(false);
-    expect(el('out').textContent).toBe('Export failed: TypeError: Failed to fetch');
+    expect(el('out').textContent).toBe('Could not export: the connection failed.');
   });
 
   it('load() reports a dropped connection instead of rejecting', async () => {
@@ -507,7 +752,7 @@ describe('posts.html actions survive a dropped connection', () => {
 });
 
 describe('posts action build reporting', () => {
-  it.each(['delete', 'unpublish'])('%s preserves the CMS acknowledgement when its rebuild fails', async (action) => {
+  it.each(['delete', 'unpublish'])('%s keeps the acknowledgement when its rebuild fails, without a release id', async (action) => {
     const { ctx, el } = loadPosts({
       fetch: async (_url: string, init?: RequestInit) => init?.method
         ? Response.json({ [action === 'delete' ? 'deleted' : 'unpublished']: true, build: { ok: false, code: 'no_space', error: 'SECRET', liveRelease: null } })
@@ -515,10 +760,29 @@ describe('posts action build reporting', () => {
     });
     const fn = vm.runInContext(action === 'delete' ? 'deletePost' : 'unpublishPost', ctx) as (post: unknown, button: Element) => Promise<void>;
     await fn(post, element());
-    expect(el('out').textContent).toContain('CMS');
-    expect(el('out').textContent).toContain('No live release yet');
+    expect(el('out').textContent).toContain(action === 'delete' ? 'Deleted “Bukarest”.' : 'Unpublished “Bukarest”.');
+    expect(el('out').textContent).toContain('The live site was not updated because the rebuild failed');
+    expect(el('out').textContent).toContain('Nothing is live yet.');
     expect(el('out').textContent).not.toContain('SECRET');
+    expect(el('out').textContent).not.toMatch(/\d{13}-\d+-\d+|promoted|CMS/);
     expect(el('out').children.some((node) => node.href === '/admin/settings.html#site')).toBe(true);
+  });
+
+  it.each(['delete', 'unpublish'])('%s of a live story says what the live site now does, with the build moment and no release id', async (action) => {
+    const release = '1793000000000-1-0001';
+    const { ctx, el } = loadPosts({
+      fetch: async (_url: string, init?: RequestInit) => init?.method
+        ? Response.json({ [action === 'delete' ? 'deleted' : 'unpublished']: true, publication: action === 'delete' ? { availability: 'missing' } : publication('draft'),
+          build: { ok: true, attemptId: release, release, liveRelease: release } })
+        : Response.json([]),
+    });
+    const fn = vm.runInContext(action === 'delete' ? 'deletePost' : 'unpublishPost', ctx) as (post: unknown, button: Element) => Promise<void>;
+    await fn(post, element());
+    const outcome = el('out').textContent;
+    expect(outcome).toMatch(action === 'delete'
+      ? /^Deleted “Bukarest”\. The live site no longer shows it \(built \d{1,2} \w{3} 2026, \d{2}:\d{2}\)\.$/
+      : /^Unpublished “Bukarest”\. The live site no longer shows it \(built \d{1,2} \w{3} 2026, \d{2}:\d{2}\)\.$/);
+    expect(outcome).not.toContain(release);
   });
 
   it.each([true, false])('bulk keeps explicitly successful/failed counts with build success=%s', async (ok) => {
@@ -531,8 +795,10 @@ describe('posts action build reporting', () => {
     vm.runInContext("selected.add('tk1'); selected.add('tk2'); allPosts = [" + JSON.stringify(post) + ']', ctx);
     const runBulk = vm.runInContext('runBulk', ctx) as (action: string) => Promise<void>;
     await runBulk('publish');
-    expect(el('out').textContent).toContain('1 saved in the CMS, 1 failed');
-    expect(el('out').textContent).toContain('Live release status is unavailable');
+    expect(el('out').textContent).toContain('Publish: 1 done, 1 failed.');
+    expect(el('out').textContent).toContain('The live site’s current version could not be checked.');
+    if (ok) expect(el('out').textContent).toContain('A new version of the site was built.');
+    expect(el('out').textContent).not.toContain('1793000000000');
     expect(el('out').textContent).not.toContain('SECRET');
     if (!ok) expect(el('out').children.some((node) => node.textContent === ui.en['admin.build.stoppedRecovery'])).toBe(true);
   });
@@ -557,6 +823,7 @@ describe('posts.html selection, recovery and disclosures', () => {
     countries: () => [],
     extraFilterCount: () => 0,
     fromSearch: () => ({ q: '', status: '', region: '', country: '', sort: 'updated', order: 'desc' }),
+    languageStates: realPostsFilter().languageStates,
     thumbUrl: () => null,
     toSearch: () => '',
   };
@@ -785,16 +1052,21 @@ describe('comments.html moderation view', () => {
   const response = (data: Record<string, unknown> = {}): CommentResponse => ({
     status: 200, ok: true, json: async () => 'comments' in data ? { hasMore: false, ...data } : data,
   });
-  function commentsPage(fetch: (url: string, options: { method: string; body?: string }) => Promise<unknown>) {
-    const page = loadPage('public/comments.html', { fetch });
-    const doc = page.ctx.document as Element & {
-      body: Element; activeElement: Element; createElement: () => Element;
-    };
+  const listResponse = (rows: unknown[]): CommentResponse => ({ status: 200, ok: true, json: async () => rows });
+  /** The posts list the page reads titles from; a comment whose key is missing names a deleted story. */
+  const stories = [{ translationKey: 'tk1', title: 'Bukarest in 4 Tagen' }, { translationKey: 'tk2', title: 'Second story' }];
+  function commentsPage(fetch: (url: string, options: { method: string; body?: string }) => Promise<unknown>, posts: unknown[] | (() => Promise<unknown>) = stories) {
+    const page = loadPage('public/comments.html', {
+      fetch: (url: string, options: { method: string; body?: string }) => url === '/posts'
+        ? (typeof posts === 'function' ? posts() : Promise.resolve(listResponse(posts)))
+        : fetch(url, options),
+    });
+    const doc = documentOf(page);
     doc.body = element();
     doc.activeElement = doc.body;
-    doc.createElement = () => {
+    doc.createElement = (tag = 'div') => {
       const node = Object.assign(element(), {
-        selectionStart: 0, selectionEnd: 0, selectionDirection: 'none',
+        tagName: tag.toUpperCase(), selectionStart: 0, selectionEnd: 0, selectionDirection: 'none',
         setSelectionRange(start: number, end: number, direction: string) {
           this.selectionStart = start;
           this.selectionEnd = end;
@@ -812,6 +1084,7 @@ describe('comments.html moderation view', () => {
     const list = page.el('list');
     list.replaceChildren = () => {
       if (list.contains(doc.activeElement)) doc.activeElement = doc.body;
+      for (const child of list.children) child.parentElement = null;
       list.children.length = 0;
     };
     const load = vm.runInContext('load', page.ctx) as () => Promise<void>;
@@ -820,14 +1093,15 @@ describe('comments.html moderation view', () => {
       if (!node) throw new Error('Missing comment ' + id);
       const form = node.children.find((child) => child.className === 'comment-reply');
       if (!form) throw new Error('Missing reply form ' + id);
-      const ta = form.children[0] as Element & {
+      const ta = form.children.find((child) => child.tagName === 'TEXTAREA') as Element & {
         selectionStart: number; selectionEnd: number; selectionDirection: string;
         setSelectionRange(start: number, end: number, direction: string): void;
       };
-      const send = form.children[1];
+      const send = form.children.find((child) => child.tagName === 'BUTTON');
       const actions = node.children.find((child) => child.className === 'comment-actions');
       if (!ta || !send || !actions) throw new Error('Missing comment controls ' + id);
-      return { form, ta, send, action: (label: string) => actions.children.find((child) => child.textContent === label)! };
+      const meta = node.children[0]!.children.map((part) => part.textContent).join('');
+      return { node, form, ta, send, meta, action: (label: string) => actions.children.find((child) => child.textContent === label)! };
     };
     const type = async (id: string, text: string) => {
       const { ta } = row(id);
@@ -1025,7 +1299,7 @@ describe('comments.html moderation view', () => {
     await page.load();
     await page.type('A', 'Keep A');
     await page.row('A').action('Delete').click();
-    if (outcome === 'failed') expect(page.el('out').textContent).toContain('Failed: Failed to fetch');
+    if (outcome === 'failed') expect(page.el('out').textContent).toBe('Could not delete the comment: Failed to fetch.');
     await page.load();
     expect(page.row('A').ta.value).toBe('Keep A');
   });
@@ -1058,7 +1332,7 @@ describe('comments.html moderation view', () => {
     failed.reject(NETWORK_DOWN);
     await refresh;
     expect(page.el('list').children).toHaveLength(0);
-    expect(page.el('out').textContent).toBe('Could not load comments: Failed to fetch');
+    expect(page.el('out').textContent).toBe('Could not load comments: Failed to fetch.');
     expect(page.el('list').getAttribute('aria-busy')).toBe('false');
     page.el('statusFilter').value = 'pending';
     await page.load();
@@ -1482,15 +1756,117 @@ describe('comments.html moderation view', () => {
     expect(offsets).toEqual([0, 50, 0, 0]);
     expect(page.el('nextPage').disabled).toBe(true);
   });
+
+  it('names the story, locale and moment of each comment instead of its key', async () => {
+    const page = commentsPage(async () => response({ comments: [
+      comment('A'), { ...comment('B'), translationKey: 'tk2', locale: 'en', createdAt: '2026-10-01T15:20:00Z' },
+      { ...comment('C'), translationKey: '0f3a7a2c-1b3e-4f0a-9c1d-2e8b6a7d5c44' },
+    ] }));
+    await page.load();
+    const format = vm.runInContext('AdminFormat', page.ctx) as { dateTime(value: string): string };
+    expect(page.row('A').meta).toBe('A · Bukarest in 4 Tagen · DE · ' + format.dateTime('2026-09-29T04:56:50Z'));
+    expect(page.row('B').meta).toBe('B · Second story · EN · ' + format.dateTime('2026-10-01T15:20:00Z'));
+    // A story that no longer exists is named as such; the key itself is never shown.
+    expect(page.row('C').meta).toBe('C · Deleted story · DE · ' + format.dateTime('2026-09-29T04:56:50Z'));
+    for (const id of ['A', 'B', 'C']) {
+      expect(page.row(id).meta).not.toMatch(/tk\d|0f3a7a2c/);
+      expect(page.row(id).meta).not.toContain('2026-');
+    }
+  });
+
+  it('keeps the queue usable and the keys hidden when the posts list cannot be read', async () => {
+    const page = commentsPage(async () => response({ comments: [comment('A')] }), () => Promise.reject(NETWORK_DOWN));
+    await page.load();
+    expect(page.row('A').meta).not.toContain('tk1');
+    expect(page.row('A').meta).not.toContain('Deleted story');
+    expect(page.row('A').action('Approve')).toBeDefined();
+  });
+
+  it.each([
+    ['Approve', 'pending', 'Comment approved.'],
+    ['Unapprove', 'approved', 'Comment moved back to pending.'],
+    ['Spam', 'pending', 'Comment deleted as spam.'],
+    ['Delete', 'pending', 'Comment deleted.'],
+  ] as const)('says what %s did and hands focus to the next comment’s first action', async (label, status, outcome) => {
+    let stored = ['A', 'B', 'C'].map((id) => ({ ...comment(id), status }));
+    const page = commentsPage(async (url, options) => {
+      if (options.method !== 'GET') { stored = stored.filter((c) => c.id !== 'B'); return response(); }
+      return response({ comments: [...stored] });
+    });
+    page.el('statusFilter').value = status;
+    await page.load();
+    const action = page.row('B').action(label);
+    action.focus();
+    await action.click();
+    expect(page.el('out').textContent).toBe(outcome);
+    expect(page.el('list').children.map((row) => row.children[0]?.children[0]?.textContent)).toEqual(['A', 'C']);
+    expect(page.doc.activeElement).toBe(page.row('C').action(label === 'Unapprove' ? 'Unapprove' : 'Approve'));
+  });
+
+  it('falls back to the previous comment’s first action when the acted-on row was last, and to the filter when none is left', async () => {
+    let stored = [comment('A'), comment('B')];
+    const page = commentsPage(async (url, options) => {
+      if (options.method !== 'GET') { stored = stored.filter((c) => !url.includes('/' + c.id + '/')); return response(); }
+      return response({ comments: [...stored] });
+    });
+    await page.load();
+    const approveB = page.row('B').action('Approve');
+    approveB.focus();
+    await approveB.click();
+    expect(page.doc.activeElement).toBe(page.row('A').action('Approve'));
+    await page.row('A').action('Approve').click();
+    expect(page.el('out').textContent).toBe('Comment approved. No pending comments.');
+    expect(page.doc.activeElement).toBe(page.el('statusFilter'));
+  });
+
+  it('reports a published reply and refuses an empty one under its labelled field', async () => {
+    const posted: string[] = [];
+    const page = commentsPage(async (url, options) => {
+      if (url.endsWith('/reply')) { posted.push(String(options.body)); return response(); }
+      return response({ comments: [comment('A')] });
+    });
+    await page.load();
+    const { form, ta, send } = page.row('A');
+    const label = form.children[0]!;
+    expect(label.tagName).toBe('LABEL');
+    expect(label.textContent).toBe('Reply as author');
+    expect(label.htmlFor).toBe(ta.id);
+    expect(ta.id).toBe('reply-A');
+    expect(send.className).toContain('btn-sm');
+    send.focus();
+    await form.fire('submit');
+    expect(posted).toEqual([]);
+    expect(ta.getAttribute('aria-invalid')).toBe('true');
+    const error = form.children.find((child) => child.id === 'reply-AError')!;
+    expect(error.textContent).toBe('Write a reply first.');
+    expect(error.hidden).toBe(false);
+    expect(page.doc.activeElement).toBe(ta);
+    await page.type('A', 'Danke!');
+    expect(ta.getAttribute('aria-invalid')).toBeNull();
+    await form.fire('submit');
+    expect(posted).toEqual([JSON.stringify({ body: 'Danke!' })]);
+    expect(page.el('out').textContent).toBe('Reply published.');
+  });
+
+  it('shows the pager only when there is more than one page', async () => {
+    const page = commentsPage(async (url) => {
+      const more = new URL(url, 'http://localhost').searchParams.get('status') === 'approved';
+      return response({ comments: [comment('A')], hasMore: more });
+    });
+    await page.load();
+    expect(page.el('pagination').hidden).toBe(true);
+    page.el('statusFilter').value = 'approved';
+    await page.load();
+    expect(page.el('pagination').hidden).toBe(false);
+    expect(page.el('nextPage').disabled).toBe(false);
+    await page.el('nextPage').click();
+    expect(page.el('pagination').hidden).toBe(false);
+    expect(page.el('pageIndicator').textContent).toBe('Page 2');
+  });
 });
 
 describe('posts.html status views and language states', () => {
-  // The real helper, not a stub: counts and filtering are its contract.
-  const realFilter = () => {
-    const windowStub: Record<string, unknown> = {};
-    vm.runInNewContext(readFileSync('public/posts-filter.js', 'utf8'), { window: windowStub, URLSearchParams, PublicationState: loadPublicationState() });
-    return windowStub.PostsFilter;
-  };
+  const realFilter = realPostsFilter;
   const library = [
     { ...post, translationKey: 'a', title: 'Altstadt', status: 'draft', publication: publication('draft'), country: 'Romania', region: 'europe', secondaryStatus: 'started' },
     { ...post, translationKey: 'b', title: 'Parks', status: 'published', publication: publication('published', true), country: 'Romania', region: 'europe', secondaryStatus: 'empty' },
@@ -1573,51 +1949,81 @@ describe('posts.html status views and language states', () => {
     expect(el('bulkDelete').disabled).toBe(true);
   });
 
-  it('reports secondary body state without claiming publish readiness, and keeps trip meta', () => {
+  // Every row's chips: code, the state's class, and the sentence a screen reader hears.
+  const chipsOf = (row: Element) => {
+    const languages = row.children.find((td) => td.className === 'col-languages')?.children[0];
+    if (!languages) throw new Error('Post language chips are missing');
+    return languages.children.map((chip) => ({ code: chip.textContent, className: chip.className, name: chip.attrs['aria-label'] }));
+  };
+
+  it('shows one chip per locale whose state says whether the translation is written, missing, unknown or left out', () => {
     const { ctx, el } = loadPosts({ PostsFilter: realFilter() });
     const rows = [
-      { ...post, translationKey: 'p', country: 'Romania', date: '2024-05-01', secondaryStatus: 'started' },
-      { ...post, translationKey: 'm', country: 'Romania', date: '2024-05-01', secondaryStatus: 'empty' },
-      { ...post, translationKey: 'u', country: 'Romania', date: '2024-05-01' },
+      { ...post, translationKey: 'p', country: 'Romania', date: '2021-02-18', secondaryStatus: 'started' },
+      { ...post, translationKey: 'm', country: 'Romania', date: '2021-02-18', secondaryStatus: 'empty' },
+      { ...post, translationKey: 'u', country: 'Romania', date: '2021-02-18' },
+      { ...post, translationKey: 'o', country: 'Romania', date: '2021-02-18', secondaryStatus: 'omitted' },
     ];
     (vm.runInContext('renderRows', ctx) as (posts: unknown[]) => void)(rows);
 
-    const badges = el('postsList').children.map((row) => {
-      const languages = row.children.find((td) => td.className === 'col-languages')?.children[0];
-      if (!languages) throw new Error('Post language indicators are missing');
-      return languages.children.map((badge) => ({ code: badge.textContent, className: badge.className, name: badge.attrs['aria-label'] }));
-    });
-    for (const rowBadges of badges) {
-      expect(rowBadges[0]).toEqual({ code: 'DE', className: 'post-language', name: 'German: primary language' });
+    const chips = el('postsList').children.map(chipsOf);
+    for (const rowChips of chips) {
+      expect(rowChips[0]).toEqual({ code: 'DE', className: 'lang-chip', name: 'German: primary language' });
     }
-    expect(badges.map((rowBadges) => rowBadges[1])).toEqual([
-      { code: 'EN', className: 'post-language', name: ui.en['editor.chrome.languageBodyStarted'].replace('{language}', 'English') },
-      { code: 'EN', className: 'post-language is-missing', name: ui.en['editor.chrome.languageBodyEmpty'].replace('{language}', 'English') },
-      { code: 'EN', className: 'post-language', name: ui.en['editor.chrome.languageBodyUnknown'].replace('{language}', 'English') },
+    expect(chips.map((rowChips) => rowChips[1])).toEqual([
+      { code: 'EN', className: 'lang-chip', name: 'English body started' },
+      { code: 'EN', className: 'lang-chip is-missing', name: 'English body not started' },
+      { code: 'EN', className: 'lang-chip is-unknown', name: 'English body status unknown' },
+      // A live DE-only story no longer looks like a bilingual one.
+      { code: 'EN', className: 'lang-chip is-omitted', name: 'English: not requested for publication' },
     ]);
 
-    // Country and trip date survive under the title; only a confirmed missing
-    // EN body adds the textual cue, an unknown one does not.
+    // Country and trip date survive under the title — the date formatted as a
+    // day, in mono — and only a confirmed missing EN body adds the textual cue.
     const meta = el('postsList').children.map((row) => row.children.find((td) => td.className === 'col-title')!.children
-      .find((child) => child.className === 'post-trip-meta')!.children.map((part) => part.className || part.textContent));
+      .find((child) => child.className === 'post-trip-meta')!.children.map((part) => part.className === 'post-trip-date' ? 'date:' + part.textContent : part.className || part.textContent));
     expect(meta).toEqual([
-      ['Romania', 'post-trip-sep', '2024-05-01'],
-      ['Romania', 'post-trip-sep', '2024-05-01', 'post-trip-sep', 'post-locale-state'],
-      ['Romania', 'post-trip-sep', '2024-05-01'],
+      ['Romania', 'post-trip-sep', 'date:18 Feb 2021'],
+      ['Romania', 'post-trip-sep', 'date:18 Feb 2021', 'post-trip-sep', 'post-locale-state'],
+      ['Romania', 'post-trip-sep', 'date:18 Feb 2021'],
+      ['Romania', 'post-trip-sep', 'date:18 Feb 2021'],
     ]);
   });
 
-  it.each([{ locales: ['en'] }, { locales: ['en', 'de'] }])('shows only enabled language indicators in primary order: %j', ({ locales }) => {
+  it('writes the Updated column as a day, never an ISO stamp', () => {
+    const { ctx, el } = loadPosts({ PostsFilter: realFilter() });
+    (vm.runInContext('renderRows', ctx) as (posts: unknown[]) => void)([{ ...post, updatedAt: '2026-11-10T12:00:00.000Z' }, { ...post, translationKey: 'n', updatedAt: '' }]);
+    const updated = el('postsList').children.map((row) => row.children.find((td) => td.className.includes('col-updated'))!);
+    expect(updated[0]!.textContent).toBe('10 Nov 2026');
+    expect(updated[0]!.className).toContain('posts-date');
+    expect(updated[1]!.textContent).toBe('');
+  });
+
+  it.each([{ locales: ['en'] }, { locales: ['en', 'de'] }])('shows only enabled language chips in primary order: %j', ({ locales }) => {
     const { ctx, el } = loadPosts();
     vm.runInContext(`SiteLanguage.accept({primary:'en',locales:${JSON.stringify(locales)},lockedAt:null,updatedAt:'2026-10-27T00:00:00.000Z'})`, ctx);
     const renderRows = vm.runInContext('renderRows', ctx) as (rows: unknown[]) => void;
     renderRows([{ ...post, title: 'English title', secondaryStatus: locales.length === 1 ? 'none' : 'omitted' }]);
     const cells = el('postsList').children[0]!.children;
-    const badges = cells.find((cell) => cell.className === 'col-languages')!.children[0]!.children;
-    expect(badges.map((badge) => badge.textContent)).toEqual(locales.map((locale) => locale.toUpperCase()));
-    expect(badges[0]!.attrs['aria-label']).toBe('English: primary language');
-    if (locales.length === 2) expect(badges[1]!.attrs['aria-label']).toBe('German: not requested for publication');
+    const chips = chipsOf(el('postsList').children[0]!);
+    expect(chips.map((chip) => chip.code)).toEqual(locales.map((locale) => locale.toUpperCase()));
+    expect(chips[0]!.name).toBe('English: primary language');
+    if (locales.length === 2) expect(chips[1]).toEqual({ code: 'DE', className: 'lang-chip is-omitted', name: 'German: not requested for publication' });
     expect(cells.find((cell) => cell.className === 'col-title')!.children.some((child) => child.textContent === 'English title')).toBe(true);
+  });
+
+  it('shows a message carried over from an editor once, then forgets it', async () => {
+    const stored = new Map<string, string>([['admin.flash', 'Deleted draft “Bukarest”. The site was not rebuilt.']]);
+    const sessionStorage = { getItem: (key: string) => stored.get(key) ?? null, setItem: (key: string, value: string) => { stored.set(key, value); }, removeItem: (key: string) => { stored.delete(key); } };
+    const { el } = loadPosts({
+      sessionStorage,
+      Auth: { ensureAuthed: async () => ({ isAdmin: true }), renderHeader() {} },
+      fetch: async (url: string) => Response.json(url === '/posts' ? [post] : { record: 'missing' }),
+    });
+    for (let i = 0; i < 8; i++) await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(el('out').textContent).toBe('Deleted draft “Bukarest”. The site was not rebuilt.');
+    expect(el('out').attrs.role).toBe('status');
+    expect(stored.has('admin.flash')).toBe(false);
   });
 });
 
@@ -1632,17 +2038,101 @@ describe('posts.html row actions', () => {
         : child.textContent);
     });
   };
+  const draft = { ...post, translationKey: 'd', title: 'Draft story', status: 'draft', publication: publication('draft') };
 
   it('gives an author Edit alone, never an empty More actions menu', () => {
     const { ctx, el } = loadPosts();
-    expect(rowActions(ctx, el, false, [post, { ...post, translationKey: 'd', status: 'draft', publication: publication('draft') }]))
-      .toEqual([['Edit'], ['Edit']]);
+    expect(rowActions(ctx, el, false, [post, draft])).toEqual([['Edit'], ['Edit']]);
   });
 
-  it('gives an admin Unpublish on a CMS-published trip and Delete on every trip', () => {
+  it('gives an admin a More actions menu only where there are two actions; a draft shows Delete as a plain button', () => {
     const { ctx, el } = loadPosts();
-    expect(rowActions(ctx, el, true, [post, { ...post, translationKey: 'd', status: 'draft', publication: publication('draft') }]))
-      .toEqual([['Edit', ['Unpublish', 'Delete']], ['Edit', ['Delete']]]);
+    expect(rowActions(ctx, el, true, [post, draft])).toEqual([['Edit', ['Unpublish', 'Delete']], ['Edit', 'Delete']]);
+    const draftDelete = el('postsList').children[1]!.children.find((td) => td.className === 'col-actions')!.children[0]!.children[1]!;
+    expect(draftDelete.tagName).toBe('BUTTON');
+    expect(draftDelete.className).toBe('btn-remove');
+    expect(draftDelete.attrs['aria-label']).toBe('Delete Draft story');
+  });
+
+  it('says story, not trip, and what Unpublish does now when asking before it acts', async () => {
+    const questions: { title: string; body: string }[] = [];
+    const { ctx } = loadPosts({ AdminConfirm: { ask: async (question: { title: string; body: string }) => { questions.push(question); return false; } } });
+    await (vm.runInContext('unpublishPost', ctx) as (p: unknown, b: Element) => Promise<void>)(post, element());
+    await (vm.runInContext('deletePost', ctx) as (p: unknown, b: Element) => Promise<void>)(post, element());
+    expect(questions.map((q) => q.title)).toEqual(['Unpublish this story?', 'Delete this story?']);
+    expect(questions[0]!.body).toContain('removed from the live site now (the site rebuilds; this can take several minutes) and returns to your drafts');
+    expect(questions[0]!.body).not.toMatch(/next build|trip/i);
+    expect(questions[1]!.body).toContain('is deleted and removed from the live site now');
+    expect(questions.every((q) => !/\btrip\b|\bpost\b/i.test(q.title + q.body))).toBe(true);
+  });
+
+  // What a browser does on its own: focus inside the rows is lost when the
+  // rows are rebuilt (loadPosts models that), so the page must hand it on.
+  // The page's unauthenticated bootstrap settles first; otherwise its
+  // microtask resets `me` while the action is still running.
+  const settled = () => new Promise<void>((resolve) => setImmediate(resolve));
+  const focusAfterDelete = async (rows: (typeof post)[], target: string) => {
+    const { ctx, el } = loadPosts({
+      fetch: async (url: string, init?: RequestInit) => init?.method === 'DELETE'
+        ? Response.json({ deleted: true, publication: { availability: 'missing' } })
+        : Response.json(url === '/posts' ? rows.filter((row) => row.translationKey !== target) : { record: 'missing' }),
+    });
+    await settled();
+    vm.runInContext(`me = { isAdmin: true }; allPosts = ${JSON.stringify(rows)}`, ctx);
+    (vm.runInContext('render', ctx) as () => void)();
+    // The row's Delete is the plain button beside Edit; the page tags it with its story key.
+    const remove = el('postsList').querySelectorAll('.btn-remove').find((button) => button.dataset.postKey === target)!;
+    remove.focus();
+    await remove.click();
+    return { ctx, el, doc: ctx.document as { activeElement: Element | null } };
+  };
+  const drafts = ['a', 'b', 'c'].map((key) => ({ ...draft, translationKey: key, title: 'Story ' + key }));
+  const editLinkOf = (el: (id: string) => Element, key: string) =>
+    el('postsList').querySelectorAll('.action-link').find((link) => link.dataset.postKey === key && link.dataset.postControl === 'edit');
+
+  it('moves focus to the next row’s Edit link after deleting a story', async () => {
+    const { el, doc } = await focusAfterDelete(drafts, 'b');
+    expect(doc.activeElement).toBe(editLinkOf(el, 'c'));
+    expect(doc.activeElement?.attrs['aria-label']).toBe('Edit Story c');
+  });
+
+  it('moves focus to the previous row’s Edit link when the deleted story was last', async () => {
+    const { el, doc } = await focusAfterDelete(drafts, 'c');
+    expect(doc.activeElement).toBe(editLinkOf(el, 'b'));
+  });
+
+  it('moves focus to New post when the deleted story was the only one', async () => {
+    const { el, doc } = await focusAfterDelete([drafts[0]!], 'a');
+    expect(doc.activeElement).toBe(el('newPost'));
+  });
+
+  it('moves focus from the hidden bulk bar to the row after the deleted stories', async () => {
+    const { ctx, el } = loadPosts({
+      fetch: async (url: string) => url === '/posts/bulk'
+        ? Response.json({ succeeded: 2, failed: 0, results: [{ key: 'a', ok: true, publication: { availability: 'missing' } }, { key: 'b', ok: true, publication: { availability: 'missing' } }] })
+        : Response.json(url === '/posts' ? [drafts[2]] : { record: 'missing' }),
+    });
+    await settled();
+    vm.runInContext(`me = { isAdmin: true }; allPosts = ${JSON.stringify(drafts)}; selected.add('a'); selected.add('b');`, ctx);
+    (vm.runInContext('render', ctx) as () => void)();
+    const doc = ctx.document as { activeElement: Element | null };
+    el('bulkDelete').focus();
+    expect(doc.activeElement).toBe(el('bulkDelete'));
+    await el('bulkDelete').click();
+    expect(el('bulkBar').hidden).toBe(true);
+    expect(doc.activeElement).toBe(editLinkOf(el, 'c'));
+  });
+
+  it('returns focus to the bulk button when the batch fails and the bar stays', async () => {
+    const { ctx, el } = loadPosts();
+    await settled();
+    vm.runInContext(`me = { isAdmin: true }; allPosts = ${JSON.stringify(drafts)}; selected.add('a');`, ctx);
+    (vm.runInContext('render', ctx) as () => void)();
+    const doc = ctx.document as { activeElement: Element | null };
+    el('bulkPublish').focus();
+    await el('bulkPublish').click();
+    expect(el('bulkBar').hidden).toBe(false);
+    expect(doc.activeElement).toBe(el('bulkPublish'));
   });
 });
 
@@ -1866,8 +2356,43 @@ describe('Settings safety and recovery state', () => {
     await callPage(page.ctx, 'renderBackups', {
       state: { lastSuccessAt: '2026-11-06T00:00:00Z' }, files: [], imageArchives: [], routeArchives: [],
     });
-    expect(page.el('backupStatus').textContent).toContain('2026-11-06T00:00:00Z');
+    const format = vm.runInContext('AdminFormat', page.ctx) as { dateTime(value: string): string };
+    expect(page.el('backupStatus').textContent).toBe('The last backup succeeded at ' + format.dateTime('2026-11-06T00:00:00Z') + '.');
+    expect(page.el('backupStatus').textContent).not.toContain('2026-11-06T');
     expect(page.el('backupFiles').children[0]?.textContent).toBe(EDITOR_COPY.settingsBackupEmpty);
+    await callPage(page.ctx, 'renderBackups', {
+      running: true, state: { lastAttemptAt: '2026-11-07T06:30:00Z' }, files: [], imageArchives: [], routeArchives: [],
+    });
+    expect(page.el('backupStatus').textContent).toBe('Backing up… started ' + format.dateTime('2026-11-07T06:30:00Z') + '.');
+    await callPage(page.ctx, 'renderBackups', {
+      state: { lastAttemptAt: '2026-11-07T06:30:00Z', lastError: 'disk full' }, files: [], imageArchives: [], routeArchives: [],
+    });
+    expect(page.el('backupStatus').textContent).toBe('The last backup failed at ' + format.dateTime('2026-11-07T06:30:00Z') + ': disk full');
+  });
+
+  it('returns focus to the pressed Save after the comments and site settings have saved', async () => {
+    for (const [button, status, outcome] of [['saveComments', 'commentsOut', 'Comments are off.'], ['save', 'siteOut', EDITOR_COPY.settingsSaved]] as const) {
+      const page = await apiPage(settingsResponse(), { hash: '#comments' });
+      const { el } = page;
+      const doc = documentOf(page);
+      el(button).focus();
+      const pending = el(button).click();
+      expect(el(button).disabled).toBe(true);
+      // A disabled control cannot hold focus: the browser drops it to <body>.
+      doc.activeElement = null;
+      await pending;
+      expect(el(button).disabled).toBe(false);
+      expect(el(status).textContent).toBe(outcome);
+      expect(doc.activeElement).toBe(el(button));
+    }
+  });
+
+  it('turns a refused comments save into a sentence without a status number', async () => {
+    const page = await apiPage(settingsResponse(), {
+      hash: '#comments', route: (request) => request.method === 'POST' ? Response.json({ error: 'comments setting unavailable' }, { status: 400 }) : undefined,
+    });
+    await page.el('saveComments').click();
+    expect(page.el('commentsOut').textContent).toBe('Could not save: Comments setting unavailable.');
   });
 
   it('converts fractional seconds to exact import milliseconds and saves only the backup/import scope', async () => {
@@ -1993,11 +2518,18 @@ describe('settings.html tabs', () => {
 });
 
 describe('settings.html actions survive a dropped connection', () => {
-  it('Back up now re-enables its button and names the failure in the backup status', async () => {
-    const { el } = loadSettingsPage();
-    await el('backupNow').click();
+  it('Back up now re-enables its button, names the failure as a sentence and keeps focus on the button', async () => {
+    const page = loadSettingsPage();
+    const { el } = page;
+    const doc = documentOf(page);
+    el('backupNow').focus();
+    const pending = el('backupNow').click();
+    // A disabled control cannot hold focus: the browser drops it to <body>.
+    doc.activeElement = null;
+    await pending;
     expect(el('backupNow').disabled).toBe(false);
-    expect(el('backupStatus').textContent).toBe('Backup failed: TypeError: Failed to fetch');
+    expect(el('backupStatus').textContent).toBe('Could not back up: Failed to fetch.');
+    expect(doc.activeElement).toBe(el('backupNow'));
   });
 
   it('Rebuild site now re-enables its button and names the failure', async () => {
@@ -2031,11 +2563,11 @@ describe('Settings rebuild report and independent status', () => {
     await el('rebuild').click();
     await (vm.runInContext('publicationRefresh.refresh()', ctx) as Promise<void>);
     expect(requests).toEqual(['/rebuild', '/publication/summary', '/rebuild/status']);
-    expect(el('out').textContent).toContain(ok ? 'was promoted' : 'failed before a release was promoted');
-    expect(el('out').textContent).toContain('No live release yet');
+    expect(el('out').textContent).toContain(ok ? 'A new version of the site was built' : 'The rebuild failed, so the live site was not updated');
+    expect(el('out').textContent).toContain('Nothing is live yet');
     expect(el('out').textContent).not.toContain('SECRET');
     expect(el('buildStatus').textContent).toContain('record could not be read');
-    expect(el('buildStatus').textContent).toContain('observed serving');
+    expect(el('buildStatus').textContent).toContain('The live site is serving the version built');
     expect(el('buildStatus').textContent).not.toContain('succeeded');
     vm.runInContext('publicationRefresh.stop()', ctx);
   });
@@ -3514,6 +4046,52 @@ describe('settings.html image controls', () => {
     expect(el('aiModel').value).toBe('unsaved-review-model');
     expect(el('saveImages').disabled).toBe(false);
   });
+
+  it('refuses an out-of-range quality under its field without the browser bubble or a request', async () => {
+    const fetch = vi.fn();
+    const page = await loadImageSettings(fetch);
+    const { el } = page;
+    const doc = documentOf(page);
+    const wrap = (id: string) => { const node = doc.createElement('div'); doc.appendChild(node); node.appendChild(el(id)); return node; };
+    const webp = wrap('webpQuality');
+    const avif = wrap('avifQuality');
+    el('webpQuality').value = '140';
+    el('avifQuality').value = '0';
+    await el('imageSettings').fire('submit');
+    expect(fetch).not.toHaveBeenCalled();
+    expect(el('webpQuality').getAttribute('aria-invalid')).toBe('true');
+    expect(webp.children[1]!.textContent).toBe('WebP quality must be between 1 and 100.');
+    expect(avif.children[1]!.textContent).toBe('AVIF quality must be between 1 and 100.');
+    expect(el('webpQuality').getAttribute('aria-describedby')).toBe('imageQualityHelp webpQualityError');
+    expect(doc.activeElement).toBe(el('webpQuality'));
+    expect(el('imageOut').textContent).toBe('');
+    el('webpQuality').value = '80';
+    await el('webpQuality').fire('input');
+    expect(el('webpQuality').getAttribute('aria-invalid')).toBeNull();
+    expect(webp.children[1]!.hidden).toBe(true);
+  });
+
+  it('returns focus to Save image settings once the save has finished', async () => {
+    const page = await loadImageSettings(async () => ({ ok: true, status: 200, json: async () => settingsResponse({ webpQuality: 80 }) }));
+    const { el } = page;
+    const doc = documentOf(page);
+    el('webpQuality').value = '80';
+    el('saveImages').focus();
+    const pending = el('imageSettings').fire('submit');
+    expect(el('saveImages').disabled).toBe(true);
+    // A disabled control cannot hold focus: the browser drops it to <body>.
+    doc.activeElement = null;
+    await pending;
+    expect(el('saveImages').disabled).toBe(false);
+    expect(el('imageOut').textContent).toBe('Image settings saved. Existing photos are unchanged.');
+    expect(doc.activeElement).toBe(el('saveImages'));
+  });
+
+  it('turns a refused image save into a sentence', async () => {
+    const { el } = await loadImageSettings(async () => ({ ok: false, status: 400, json: async () => ({ error: 'webpQuality must be an integer' }) }));
+    await el('imageSettings').fire('submit');
+    expect(el('imageOut').textContent).toBe('Could not save image settings: WebpQuality must be an integer.');
+  });
 });
 
 describe('settings.html Compare quality', () => {
@@ -3626,7 +4204,7 @@ describe('settings.html Compare quality', () => {
     [429, { error: 'A preview is already running. Try again in a moment.' }, 'A preview is already running. Try again in a moment.'],
     [400, { error: 'Could not read that image.' }, 'Could not read that image.'],
     [413, { error: 'request file too big' }, 'That photo is over the 25 MB upload limit. Choose a smaller one.'],
-    [500, {}, 'The preview failed (HTTP 500). Try again.'],
+    [500, {}, 'Could not generate the preview.'],
   ])('names a %i refusal and keeps the last result', async (status, body, message) => {
     let refuse = false;
     const { el, created } = await previewPage(() => (refuse ? Response.json(body, { status }) : encodedResponse()));
@@ -3652,15 +4230,27 @@ describe('settings.html Compare quality', () => {
     expect(el('previewRun').disabled).toBe(false);
   });
 
-  it('asks for a photo and a valid quality before sending anything', async () => {
-    const { el, fetch } = await previewPage();
+  it('asks for a photo and a valid quality under their fields before sending anything', async () => {
+    const page = await previewPage();
+    const { el, fetch } = page;
+    const doc = documentOf(page);
+    const wrap = (id: string) => { const node = doc.createElement('div'); doc.appendChild(node); node.appendChild(el(id)); return node; };
+    const file = wrap('previewFile');
+    const quality = wrap('webpQuality');
     await el('previewRun').click();
-    expect(el('previewOut').textContent).toBe('Choose a test photo first.');
+    expect(el('previewOut').textContent).toBe('');
+    expect(el('previewFile').getAttribute('aria-invalid')).toBe('true');
+    expect(file.children[1]!.textContent).toBe('Choose a test photo first.');
+    expect(doc.activeElement).toBe(el('previewFile'));
     el('previewFile').files = [photo()];
-    for (const quality of ['0', '101', '7.5', '']) {
-      el('webpQuality').value = quality;
+    await el('previewFile').fire('change');
+    expect(el('previewFile').getAttribute('aria-invalid')).toBeNull();
+    for (const value of ['0', '101', '7.5', '']) {
+      el('webpQuality').value = value;
       await el('previewRun').click();
-      expect(el('previewOut').textContent).toBe('Set the WebP quality to a whole number from 1 to 100 first.');
+      expect(el('webpQuality').getAttribute('aria-invalid')).toBe('true');
+      expect(quality.children[1]!.textContent).toBe('Set the WebP quality to a whole number from 1 to 100 first.');
+      expect(doc.activeElement).toBe(el('webpQuality'));
     }
     expect(fetch).not.toHaveBeenCalled();
   });
@@ -3750,7 +4340,7 @@ describe('publication refresh in list, Desk and Settings consumers', () => {
     vm.runInContext('publicationRefresh.stop()', page.ctx);
   });
 
-  it('retains row keyboard focus by story identity after reordering and falls back when its action disappears', async () => {
+  it('retains row keyboard focus by story identity after reordering and hands it to a neighbour when the row disappears', async () => {
     startClock();
     let rows = [post, { ...post, translationKey: 'other', title: 'Other' }];
     const page = loadPosts({ ...clockGlobals(),
@@ -3770,9 +4360,11 @@ describe('publication refresh in list, Desk and Settings consumers', () => {
     rows = [rows[0]!, { ...post, status: 'draft', publication: publication('draft') }];
     await (vm.runInContext('publicationRefresh.refresh()', page.ctx) as Promise<void>);
     expect(doc.activeElement).toBe(list.querySelectorAll('.post-title-link')[1]);
+    // The focused story vanished elsewhere: the row before it takes the focus.
     rows = [rows[0]!];
     await (vm.runInContext('publicationRefresh.refresh()', page.ctx) as Promise<void>);
-    expect(doc.activeElement).toBe(page.el('fSearch'));
+    expect(doc.activeElement).toBe(list.querySelectorAll('.action-link')[0]);
+    expect(doc.activeElement?.attrs['aria-label']).toBe('Edit Other');
     vm.runInContext('publicationRefresh.stop()', page.ctx);
   });
 
@@ -3997,6 +4589,44 @@ describe('publication refresh in list, Desk and Settings consumers', () => {
   });
 });
 
+describe('index.html draft card', () => {
+  const chipFacts = (chips: Element) => chips.children.map((chip) => ({ code: chip.textContent, className: chip.className, name: chip.attrs['aria-label'] }));
+  const draft = { ...post, status: 'draft', publication: publication('draft'), country: 'Romania', region: 'europe', secondaryStatus: 'omitted', updatedAt: '2026-11-10T12:00:00.000Z' };
+
+  it('names the region, formats the last edit as a moment and shows the story’s language chips', async () => {
+    const page = loadPage('public/index.html', {
+      fetch: async (url: string) => Response.json(url === '/posts' ? [draft] : { record: 'missing' }),
+    }, ['public/posts-filter.js', 'public/desk.js']);
+    vm.runInContext('isAdmin = false; authenticatedContext = { isAdmin: false }; publicationRefresh.start(false)', page.ctx);
+    await (vm.runInContext('publicationRefresh.refresh()', page.ctx) as Promise<void>);
+    const body = page.el('deskNext').children[0]!.children.find((node) => node.className === 'desk-next-body')!;
+    const [title, chips, meta] = body.children;
+    expect(title!.textContent).toBe('Bukarest');
+    expect(meta!.textContent).toMatch(/^Romania · Europe · Last edited \d{1,2} \w{3} 2026, \d{2}:\d{2}$/);
+    expect(meta!.textContent).not.toContain('europe');
+    expect(chipFacts(chips!)).toEqual([
+      { code: 'DE', className: 'lang-chip', name: 'German: primary language' },
+      { code: 'EN', className: 'lang-chip is-omitted', name: 'English: not requested for publication' },
+    ]);
+    vm.runInContext('publicationRefresh.stop()', page.ctx);
+  });
+
+  it('shows exactly the chips the Posts row shows for the same story', async () => {
+    const desk = loadPage('public/index.html', {
+      fetch: async (url: string) => Response.json(url === '/posts' ? [{ ...draft, secondaryStatus: 'empty' }] : { record: 'missing' }),
+    }, ['public/posts-filter.js', 'public/desk.js']);
+    vm.runInContext('isAdmin = false; authenticatedContext = { isAdmin: false }; publicationRefresh.start(false)', desk.ctx);
+    await (vm.runInContext('publicationRefresh.refresh()', desk.ctx) as Promise<void>);
+    const deskChips = desk.el('deskNext').children[0]!.children.find((node) => node.className === 'desk-next-body')!.children[1]!;
+    const posts = loadPosts({ PostsFilter: realPostsFilter() });
+    (vm.runInContext('renderRows', posts.ctx) as (rows: unknown[]) => void)([{ ...draft, secondaryStatus: 'empty' }]);
+    const rowChips = posts.el('postsList').children[0]!.children.find((td) => td.className === 'col-languages')!.children[0]!;
+    expect(chipFacts(deskChips)).toEqual(chipFacts(rowChips));
+    expect(chipFacts(deskChips)[1]).toEqual({ code: 'EN', className: 'lang-chip is-missing', name: 'English body not started' });
+    vm.runInContext('publicationRefresh.stop()', desk.ctx);
+  });
+});
+
 it.each(['posts', 'desk', 'settings'] as const)('keeps fresh %s facts when optional build history stalls', async (surface) => {
   vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
   try {
@@ -4045,7 +4675,8 @@ it.each([true, false])('Desk rebuild remains an explicit admin action and refres
   if (admin) {
     await (vm.runInContext('publicationRefresh.refresh()', page.ctx) as Promise<void>);
     expect(requests.filter(({ method }) => method !== 'GET')).toEqual([{ url: '/rebuild', method: 'POST' }]);
-    expect(page.el('deskRebuildOutcome').textContent).toContain('failed before a release was promoted');
+    expect(page.el('deskRebuildOutcome').textContent).toContain('The rebuild failed, so the live site was not updated');
+    expect(page.el('deskRebuildOutcome').textContent).toContain('Nothing is live yet.');
     expect(page.el('deskPublicationSummary').textContent).toContain('No live release');
     expect(page.el('deskRebuild').disabled).toBe(false);
   } else expect(requests).toEqual([]);

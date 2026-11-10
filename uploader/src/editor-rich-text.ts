@@ -20,8 +20,6 @@ export interface RichEditorCopy {
   galleryLabel: string;
   editGallery: string;
   imageUnavailable: string;
-  linkPrompt: string;
-  linkInvalid: string;
   galleryChecking: string;
   galleryLookupFailed: string;
   galleryRetry: string;
@@ -54,6 +52,8 @@ export interface RichEditorOptions {
   onChange: (markdown: string) => void;
   onSelection?: () => void;
   onEditGallery?: (sourceStart: number) => void;
+  /** Asks for the link address: the current one prefilled; `''` removes the link, `null` cancels. */
+  askLink?: (current: string) => Promise<string | null>;
 }
 export interface MarkdownSelection { from: number; to: number }
 export interface RichEditor {
@@ -62,7 +62,8 @@ export interface RichEditor {
   refreshImageMetadata(): void;
   focus(): void;
   destroy(): void;
-  command(name: string): boolean;
+  /** Formatting commands apply at once; `link` first asks for the address and resolves when applied. */
+  command(name: string): boolean | Promise<boolean>;
   getSelection(): MarkdownSelection;
   setSelection(selection: MarkdownSelection): void;
   isActive(name: string): boolean;
@@ -466,6 +467,20 @@ export function createRichEditor(options: RichEditorOptions): RichEditor {
   }
   suppress = false;
 
+  // The host supplies the dialog that asks for a link address (the admin's own,
+  // never the browser's prompt); without one the link command does nothing.
+  // One transaction either way, so a single undo reverts it; the selection is
+  // the editor's own and survives the dialog's focus.
+  async function link(): Promise<boolean> {
+    if (!options.askLink) return false;
+    const href = await options.askLink(String(editor.getAttributes('link').href ?? ''));
+    if (href === null) return false;
+    const chain = editor.chain().focus().extendMarkRange('link');
+    if (href === '') return chain.unsetLink().run();
+    if (!safeLink(href)) return false;
+    return chain.setLink({ href }).run();
+  }
+
   return {
     getMarkdown() { return model.render(editor.state.doc).markdown; },
     setMarkdown(markdown) {
@@ -508,13 +523,7 @@ export function createRichEditor(options: RichEditorOptions): RichEditor {
         case 'bullets': return chain.toggleBulletList().run();
         case 'numbers': return chain.toggleOrderedList().run();
         case 'code': return chain.toggleCodeBlock().run();
-        case 'link': {
-          const href = window.prompt(options.copy.linkPrompt, String(editor.getAttributes('link').href ?? ''));
-          if (href === null) return false;
-          if (href === '') return chain.extendMarkRange('link').unsetLink().run();
-          if (!safeLink(href)) { window.alert(options.copy.linkInvalid); return false; }
-          return chain.extendMarkRange('link').setLink({ href }).run();
-        }
+        case 'link': return link();
         default: return false;
       }
     },
@@ -528,5 +537,5 @@ export function createRichEditor(options: RichEditorOptions): RichEditor {
 }
 
 if (typeof window !== 'undefined') {
-  Object.assign(window, { RichTextEditor: { create: createRichEditor } });
+  Object.assign(window, { RichTextEditor: { create: createRichEditor, safeLink } });
 }

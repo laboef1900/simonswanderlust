@@ -1,68 +1,7 @@
-/* Journey editor: the story editor's command bar and locale tabs, one locale
-   panel at a time with its words beside its hero photo. */
-.journey-commandbar {
-  position: sticky;
-  top: 0;
-  z-index: 40;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 0.375rem 0.75rem;
-  padding: 0.625rem 0 0.5rem;
-  margin-bottom: 1.25rem;
-  border-bottom: 1px solid var(--line);
-  background: var(--surface);
-}
-.journey-commandbar__nav { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; min-width: 0; }
-.journey-commandbar__nav > .action-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  min-height: 2rem;
-  padding: 0.25rem 0.5rem;
-  border: 1px solid transparent;
-  border-radius: var(--control-radius);
-  color: var(--muted);
-  font-size: 0.8125rem;
-  font-weight: 500;
-  text-decoration: none;
-  white-space: nowrap;
-  transition: background-color 150ms ease, color 150ms ease;
-}
-.journey-commandbar__nav > .action-link::before {
-  content: '←';
-  font-size: 0.9em;
-  line-height: 1;
-}
-.journey-commandbar__nav > .action-link:hover {
-  background-color: var(--studio-accent-soft);
-  color: var(--ink);
-}
-.journey-commandbar__actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 0.375rem; }
-.journey-commandbar__actions > button {
-  min-height: 2rem;
-  padding: 0.25rem 0.75rem;
-  font-size: 0.8125rem;
-}
-#journeySave {
-  border-color: var(--line-control);
-  background-color: var(--surface);
-  color: var(--ink);
-  font-weight: 600;
-}
-#journeySave:where(:not(:disabled)):hover {
-  border-color: var(--studio-accent);
-  background-color: var(--studio-accent-soft);
-  color: var(--ink);
-}
-#journeyDelete {
-  margin-left: 0.25rem;
-}
+/* Journey editor: the shared editor command bar (admin.css .commandbar) and
+   locale tabs, one locale panel at a time with its words beside its hero photo. */
+#journeyDelete { margin-left: 0.25rem; }
 .journey-locale__hero .form-actions button { min-height: var(--control-h-sm); padding: 0.25rem 0.625rem; font-size: 0.75rem; }
-.journey-commandbar__status { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; }
-.journey-commandbar__status p { margin: 0; font-size: 0.8125rem; }
-.journey-commandbar__status p:empty { display: none; }
-#journeyStatus { font-weight: 600; }
 #journeyError { white-space: pre-wrap; }
 
 .journey-locale {
@@ -77,7 +16,7 @@
 .journey-locale__text > .check-field:first-child { margin-top: 0; }
 .journey-locale textarea { min-height: 10rem; }
 .journey-locale__hero .section-label { margin-top: 0; }
-.journey-hero { display: block; width: 100%; aspect-ratio: 3 / 2; height: auto; object-fit: cover; margin-bottom: 0.75rem; border-radius: 0.5rem; background: var(--canvas); }
+.journey-hero { display: block; width: 100%; aspect-ratio: 3 / 2; height: auto; object-fit: cover; margin-bottom: 0.75rem; border-radius: var(--radius-lg); background: var(--canvas); }
 .journey-focus { display: grid; grid-template-columns: 1fr 1fr; gap: 0 1rem; }
 
 .journey-members-section { margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid var(--line); }
@@ -88,8 +27,6 @@
 #journeyStory { flex: 1; min-width: 0; max-width: 36rem; }
 
 @media (max-width: 52rem) {
-  .journey-commandbar { grid-template-columns: minmax(0, 1fr); }
-  .journey-commandbar__actions { justify-content: flex-start; }
   .journey-locale { grid-template-columns: minmax(0, 1fr); }
   .journey-locale__hero { margin-top: 1.5rem; }
 }

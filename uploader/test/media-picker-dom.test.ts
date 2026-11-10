@@ -7,7 +7,7 @@ import { normalizeGalleryFences, type ImageMeta } from '../src/body-content.js';
 import { editorDocument } from './editor-dom-harness.js';
 import { browserScript, galleryCodecBindings } from './gallery-browser-module.js';
 
-const scripts = ['media-api', 'picker-selection', 'media-picker', 'gallery-library', 'gallery-fence']
+const scripts = ['media-api', 'admin-ui', 'picker-selection', 'media-picker', 'gallery-library', 'gallery-fence']
   .map((name) => browserScript(name + '.js'));
 const copy = Object.fromEntries(Object.entries(ui.en)
   .filter(([key]) => key.startsWith('editor.chrome.'))
@@ -133,7 +133,9 @@ function openPicker(store: MediaStore, options: PageOptions = {}) {
     if (!element) throw new Error('Missing picker element: ' + selector);
     return element;
   };
+  // The fixed footer holds only the decision; paging sits with the results.
   const buttons = required('.admin-modal__foot').querySelectorAll('button');
+  const pagerButtons = required('.media-picker__pager').querySelectorAll('button');
   const rows = () => dialog.querySelectorAll('.picker-strip__item');
   /** The caption textarea of each strip row, in gallery order. */
   const captionFields = () => rows().map((row) => {
@@ -144,9 +146,10 @@ function openPicker(store: MediaStore, options: PageOptions = {}) {
   });
   return {
     dom, dialog, trigger, picked, pickedOptions, methods, required, galleryFence, rows, captionFields,
-    next: buttons[1]!, prev: buttons[0]!, cancel: buttons[2]!, choose: buttons[3]!,
+    next: pagerButtons[1]!, prev: pagerButtons[0]!, cancel: buttons[0]!, choose: buttons[1]!,
     reopen,
-    pageLabel: () => required('.admin-modal__foot').querySelector('span')!.textContent,
+    pageLabel: () => required('.media-picker__pager').querySelector('span')!.textContent,
+    footerLabels: () => buttons.map((button) => button.textContent),
     pressEnter() {
       // Model the native button default action without refocusing the pager.
       // The harness does not blur on disabled: tests also assert it never becomes disabled.
@@ -362,7 +365,7 @@ describe('media picker keyboard pagination', () => {
       expect(page.next.getAttribute('aria-disabled')).toBe('true');
       expect(page.dom.document.activeElement).toBe(page.next);
       await page.settle();
-      expect(page.pageLabel()).toBe('Page ' + destination);
+      expect(page.pageLabel()).toBe('Page ' + destination + ' of 3');
       expect(page.dom.document.activeElement).toBe(page.next);
       expect(page.next.disabled).toBe(false);
       expect(page.next.getAttribute('aria-disabled')).toBe(destination === 3 ? 'true' : 'false');
@@ -377,7 +380,7 @@ describe('media picker keyboard pagination', () => {
       expect(page.prev.disabled).toBe(false);
       expect(page.prev.getAttribute('aria-disabled')).toBe('true');
       await page.settle();
-      expect(page.pageLabel()).toBe('Page ' + destination);
+      expect(page.pageLabel()).toBe('Page ' + destination + ' of 3');
       expect(page.dom.document.activeElement).toBe(page.prev);
       expect(page.prev.disabled).toBe(false);
     }
@@ -409,7 +412,7 @@ describe('media picker keyboard pagination', () => {
     page.prev.click();
     await page.settle();
     expect(requests).toEqual([1, 2]);
-    expect(page.pageLabel()).toBe('Page 2');
+    expect(page.pageLabel()).toBe('Page 2 of 3');
     expect(page.required('.media-grid').getAttribute('aria-busy')).toBe('true');
     expect(page.prev.getAttribute('aria-disabled')).toBe('true');
     expect(page.next.getAttribute('aria-disabled')).toBe('true');
@@ -423,7 +426,7 @@ describe('media picker keyboard pagination', () => {
     page.pressEnter();
     await page.settle();
     expect(requests).toEqual([1, 2, 3]);
-    expect(page.pageLabel()).toBe('Page 3');
+    expect(page.pageLabel()).toBe('Page 3 of 3');
     expect(page.dom.document.activeElement).toBe(page.next);
   });
 
@@ -452,7 +455,7 @@ describe('media picker keyboard pagination', () => {
     page.prev.focus();
     page.pressEnter();
     await page.settle();
-    expect(page.pageLabel()).toBe('Page 1');
+    expect(page.pageLabel()).toBe('Page 1 of 3');
     expect(page.titles()).toHaveLength(40);
     expect(page.dom.document.activeElement).toBe(page.prev);
     expect(requests).toEqual([1, 2, 1]);
@@ -473,7 +476,7 @@ describe('media picker keyboard pagination', () => {
     }
     await page.settle();
     expect(requests).toEqual([1]);
-    expect(page.pageLabel()).toBe('Page 1');
+    expect(page.pageLabel()).toBe(''); // nothing to page through
     expect(page.required('.media-picker__empty').textContent).toBe(copy.pickerPhotosEmpty);
   });
 
@@ -494,7 +497,7 @@ describe('media picker keyboard pagination', () => {
     target.focus();
     pending.resolve(nextResponse!);
     await page.settle();
-    expect(page.pageLabel()).toBe('Page 2');
+    expect(page.pageLabel()).toBe('Page 2 of 3');
     expect(page.dom.document.activeElement).toBe(target);
   });
 
@@ -520,7 +523,7 @@ describe('media picker keyboard pagination', () => {
     else pending.reject(new Error('stale page failure'));
     await page.settle();
     expect(page.titles()).toEqual(['Photo 80']);
-    expect(page.pageLabel()).toBe('Page 1');
+    expect(page.pageLabel()).toBe('Page 1 of 1');
     expect(page.prev.getAttribute('aria-disabled')).toBe('true');
     expect(page.next.getAttribute('aria-disabled')).toBe('true');
     expect(page.required('.media-grid').getAttribute('aria-busy')).toBe('false');
@@ -552,7 +555,7 @@ describe('media picker keyboard pagination', () => {
     await page.settle();
     expect(page.dialog.isConnected).toBe(false);
     expect(page.dom.document.querySelector('dialog')).toBe(reopened);
-    expect(reopened.querySelector('.admin-modal__foot')!.querySelector('span')!.textContent).toBe('Page 1');
+    expect(reopened.querySelector('.media-picker__pager')!.querySelector('span')!.textContent).toBe('Page 1 of 3');
     expect(page.dom.document.activeElement).toBe(search);
     expect(page.picked).toEqual([]);
   });
@@ -805,5 +808,54 @@ describe('gallery-local caption controls in the picker', () => {
     expect(page.captions()).toEqual(['Edited as a placeholder', 'Copied harbour']);
     page.choose.click();
     expect(confirmed(page)).toEqual({ visible: true, overrides: { [athens]: 'Edited as a placeholder' } });
+  });
+});
+
+describe('media picker dialog shape', () => {
+  it('keeps only Cancel and the primary action in the footer, labels the search and counts photos', async () => {
+    const single = openPicker(await seededStore());
+    await single.settle();
+    expect(single.footerLabels()).toEqual(['Cancel', 'Use this photo']);
+    // Paging sits with the results it pages, as a sentence.
+    expect(single.pageLabel()).toBe('Page 1 of 1');
+    expect(single.required('.media-picker__pager').querySelectorAll('button').map((button) => button.textContent)).toEqual(['Previous', 'Next']);
+    const label = single.required('.media-picker__search');
+    expect(label.tagName).toBe('LABEL');
+    expect(label.querySelector('span')!.textContent).toBe('Search');
+    expect(label.querySelector('input')).toBe(single.required('input'));
+    expect(single.required('[role="status"]').textContent).toBe('5 photos');
+    single.cancel.click();
+
+    const gallery = openPicker(await seededStore(), { multiple: true });
+    await gallery.settle();
+    expect(gallery.footerLabels()).toEqual(['Cancel', 'Insert gallery']);
+    // The body between head and foot holds the folders, the results and the strip.
+    const body = gallery.required('.media-picker__body');
+    expect(body.querySelector('.media-picker__browse')).not.toBeNull();
+    expect(body.querySelector('.picker-strip')).not.toBeNull();
+    expect(gallery.required('.admin-modal__foot').querySelector('.picker-strip')).toBeNull();
+  });
+
+  it('draws the reorder and remove controls as icons that keep their accessible names', async () => {
+    const page = openPicker(await seededStore(), { multiple: true });
+    await page.settle();
+    page.cell('Athens market').click();
+    page.cell('Quito market').click();
+    const [first, second] = page.rows();
+    expect(first!.querySelector('[data-act="up"]')!.getAttribute('aria-label')).toBe('Move Athens market earlier');
+    expect(first!.querySelector('[data-act="down"]')!.getAttribute('aria-label')).toBe('Move Athens market later');
+    expect(first!.querySelector('[data-act="remove"]')!.getAttribute('aria-label')).toBe('Remove Athens market from the gallery');
+    for (const act of ['up', 'down', 'remove']) {
+      const button = second!.querySelector('[data-act="' + act + '"]')!;
+      const svg = button.querySelector('svg');
+      expect(svg).not.toBeNull();
+      expect(svg!.getAttribute('aria-hidden')).toBe('true');
+      expect(svg!.getAttribute('viewBox')).toBe('0 0 24 24');
+      expect(svg!.querySelectorAll('path').length).toBeGreaterThan(0);
+      expect(button.textContent).toBe(''); // no glyph: the name comes from aria-label alone
+    }
+    expect(page.required('[aria-live]').textContent).toContain('2 photos');
+    second!.querySelector('[data-act="up"]')!.click();
+    expect(page.rows()[0]!.querySelector('.picker-strip__name')!.textContent).toBe('Quito market');
   });
 });

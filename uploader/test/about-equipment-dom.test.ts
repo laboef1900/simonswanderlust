@@ -7,6 +7,7 @@ import vm from 'node:vm';
 import { describe, expect, it } from 'vitest';
 import { editorDocument } from './editor-dom-harness.js';
 import { browserScript, galleryCodecBindings } from './gallery-browser-module.js';
+import { markdownEditorDouble } from './page-editor-double.js';
 import { idleBuildState } from './build-fixture.js';
 import { TEST_TRUST } from './trusted-proxy-fixture.js';
 import { ui } from '../../site/src/i18n/ui.js';
@@ -59,14 +60,10 @@ async function editor(options: { key?: string; prepare?: boolean; locales?: Lang
   let confirmed = true;
   const unload: ((event: { defaultPrevented: boolean; returnValue?: string; preventDefault(): void }) => void)[] = [];
   const storage = new Map<string, string>();
-  class EasyMDE {
-    private body = '';
-    codemirror = { getInputField: () => dom.document.createElement('textarea'), on() {}, refresh() {},
-      getValue: () => this.body, getLine: (line: number) => this.body.split('\n')[line] ?? '' };
-    value(value?: string) { if (value !== undefined) this.body = value; return this.body; }
-  }
   const context: Record<string, unknown> = {
-    document: dom.document, URLSearchParams, EasyMDE, EditorCopy: { en: copy, de: chrome('de') }, BuildCopy: buildCopy,
+    document: dom.document, URLSearchParams, EasyMDE: markdownEditorDouble({ document: dom.document }), EditorCopy: { en: copy, de: chrome('de') }, BuildCopy: buildCopy,
+    EditorGalleryCopy: { en: Object.fromEntries(Object.entries(ui.en).filter(([key]) => key.startsWith('editor.gallery.')).map(([key, value]) => [key.slice('editor.gallery.'.length), value])) },
+    EditorGalleryImageOrigin: 'https://journal.test', navigator: { platform: 'MacIntel' }, matchMedia: () => ({ matches: false, addEventListener() {} }),
     crypto: webcrypto, structuredClone, AbortController,
     location: { search: '?key=' + key + (options.prepare ? '&prepareLocale=en' : ''), pathname: '/admin/about.html', origin: 'https://journal.test', href: '' },
     localStorage: {
@@ -75,7 +72,7 @@ async function editor(options: { key?: string; prepare?: boolean; locales?: Lang
     },
     setTimeout: () => 0, clearTimeout: () => {},
     addEventListener: (type: string, callback: (typeof unload)[number]) => { if (type === 'beforeunload') unload.push(callback); },
-    Auth: { ensureAuthed: async () => ({ userId: options.userId ?? owner, isAdmin: true }), renderHeader() {} },
+    Auth: { ensureAuthed: async () => ({ userId: options.userId ?? owner, isAdmin: true }), renderHeader() {}, setPageTitle() {} },
     AdminConfirm: { ask: async (question: { title: string; body: string }) => { questions.push(question); return confirmed; } },
     fetch: async (url: string, init: RequestInit = {}) => {
       requests.push({ url, init });
@@ -87,7 +84,7 @@ async function editor(options: { key?: string; prepare?: boolean; locales?: Lang
   context.window = context;
   vm.createContext(context);
   Object.assign(context, galleryCodecBindings);
-  for (const file of ['build-reporting.js', 'draft-guard.js', 'language.js', 'tabs.js', 'pages-ui.js', 'about-equipment.js', 'gallery-fence.js', 'gallery-metadata-warnings.js', 'write-recovery.js']) {
+  for (const file of ['admin-ui.js', 'build-reporting.js', 'draft-guard.js', 'language.js', 'tabs.js', 'editor-rich-bridge.js', 'manuscript-bar.js', 'media-api.js', 'gallery-library.js', 'posts-filter.js', 'pages-ui.js', 'about-equipment.js', 'gallery-fence.js', 'gallery-metadata-warnings.js', 'write-recovery.js']) {
     vm.runInContext(browserScript(file), context);
   }
   const start = html.lastIndexOf('<script type="module">');
@@ -137,7 +134,7 @@ describe('About editor equipment line (#514)', () => {
     expect(h.el('deGearSection').hidden).toBe(false);
     expect(h.el('deGear').value).toBe('Leica Q2 · Notizbuch');
     expect(h.el('enGear').value).toBe('Leica Q2 · notebook');
-    expect(h.el('deGearLabel').textContent).toBe(fill(copy.aboutGearLabel!, { language: copy.identityGerman! }));
+    expect(h.el('deGearLabel').textContent).toBe(fill(copy.aboutGearLabel!, { code: 'DE' }));
     expect(h.el('deGear').getAttribute('aria-describedby')).toBe('deGearHelp deGearCount deGearError');
     expect(h.el('deGearCount').textContent).toBe(fill(copy.aboutGearCount!, { count: 20, max: 200 }));
     h.type('enGear', 'Unsaved English line');
@@ -293,7 +290,7 @@ describe('About editor equipment line (#514)', () => {
     const h = await editor({ language: 'de', route: stubbed().route });
     const german = chrome('de');
     expect(h.el('deGearHeading').textContent).toBe(german.identityAboutGear);
-    expect(h.el('enGearLabel').textContent).toBe(fill(german.aboutGearLabel!, { language: german.identityEnglish! }));
+    expect(h.el('enGearLabel').textContent).toBe(fill(german.aboutGearLabel!, { code: 'EN' }));
     expect(h.el('deGearSave').textContent).toBe(german.aboutGearSave);
     expect(h.el('deGearTiming').textContent).toBe(german.aboutGearTiming);
   });

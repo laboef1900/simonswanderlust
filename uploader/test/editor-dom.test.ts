@@ -524,6 +524,7 @@ async function loadEditor(options: EditorOptions = {}) {
   ctx.window = ctx;
   ctx.languageFixture = { primary: 'de', locales: ['de', 'en'], ...options.language, lockedAt: null, updatedAt: '2026-10-27T00:00:00.000Z' };
   vm.createContext(ctx);
+  vm.runInContext(readFileSync('public/admin-ui.js', 'utf8'), ctx, { filename: 'admin-ui.js' });
   vm.runInContext(readFileSync('public/build-reporting.js', 'utf8'), ctx);
   vm.runInContext(readFileSync('public/publication-state.js', 'utf8'), ctx);
   vm.runInContext(readFileSync('public/publication-refresh.js', 'utf8'), ctx);
@@ -533,6 +534,7 @@ async function loadEditor(options: EditorOptions = {}) {
   vm.runInContext(readFileSync('public/draft-guard.js', 'utf8'), ctx, { filename: 'draft-guard.js' });
   vm.runInContext(readFileSync('public/write-recovery.js', 'utf8'), ctx, { filename: 'write-recovery.js' });
   vm.runInContext(readFileSync('public/editor-rich-bridge.js', 'utf8'), ctx, { filename: 'editor-rich-bridge.js' });
+  vm.runInContext(readFileSync('public/manuscript-bar.js', 'utf8'), ctx, { filename: 'manuscript-bar.js' });
   const safety = ctx.DraftGuard as {
     createDraftGuard(options: { resource: string; collect: () => unknown; onChange?: (dirty: boolean) => void }): {
       markDirty(): void; redirectToLogin(): void;
@@ -595,6 +597,21 @@ function storedComparison(h: { document: { querySelector(selector: string): Elem
   const compare = required(panel, 'details');
   return { compare, status: required(panel, '[role="status"]'), useStored: required(compare, 'button') };
 }
+/** The gallery check's status line for a locale: under its manuscript bar, in the manuscript's status area. */
+function galleryCheckStatus(h: { el(id: string): Element }, locale: 'de' | 'en') {
+  return required(h.el('tab-' + locale), '.editor-gallery__analysis');
+}
+/** The page's own date/count formatter (admin-ui.js), as the vm context loaded it. */
+interface AdminFormatApi { date(value: unknown): string; dateTime(value: unknown): string; count(n: number, singular: string, plural?: string): string }
+const adminFormat: AdminFormatApi = (() => {
+  const context: Record<string, unknown> = {};
+  context.window = context;
+  vm.createContext(context);
+  vm.runInContext(readFileSync('public/admin-ui.js', 'utf8'), context);
+  const api = context.AdminFormat;
+  if (!api || typeof api !== 'object' || !('dateTime' in api)) throw new Error('admin-ui.js exposed no AdminFormat');
+  return api as AdminFormatApi;
+})();
 
 describe('story journey membership', () => {
   it('shows only the current claimant as a read-only escaped link, without altering the story payload', async () => {
@@ -713,6 +730,96 @@ describe('editor language modes and translation coverage', () => {
     expect(h.el('enIncluded').disabled).toBe(true);
     expect(h.el('enCoverageHelp').textContent).toContain('cannot be omitted');
     expect(h.el('slugFieldEn').disabled).toBe(true);
+  });
+
+  it('carries each locale’s state on its tab chip and follows typing and the publish checkbox', async () => {
+    const pair = fullPair();
+    pair.en = { ...pair.en, title: '', bodyMarkdown: '' };
+    const h = await loadEditor({ isAdmin: true, search: '?tk=tk1',
+      fetch: async (url) => response(url === '/posts/tk1' ? pair : url.endsWith('/revisions') ? [] : { images: [] }),
+    });
+    await settle();
+    await settle();
+    const chipOf = (locale: 'de' | 'en') => required(h.el('tabbtn-' + locale), '.lang-code');
+    const stateOf = (locale: 'de' | 'en') => h.el('tabbtn-' + locale).querySelector('.lang-state')?.textContent ?? '';
+    // DE has text: a plain chip, nothing added to the tab's name.
+    expect(chipOf('de').classList.contains('lang-chip')).toBe(true);
+    expect(chipOf('de').classList.contains('is-missing')).toBe(false);
+    expect(stateOf('de')).toBe('');
+    // EN has neither title nor body yet.
+    expect(chipOf('en').classList.contains('is-missing')).toBe(true);
+    expect(stateOf('en')).toContain(ui.en['editor.chrome.languageBodyEmpty'].replace('{language}', 'English'));
+    expect(h.el('tabbtn-en').title).toBe(ui.en['editor.chrome.languageBodyEmpty'].replace('{language}', 'English'));
+    // A title alone makes it available…
+    h.el('enTitle').value = 'Bucharest';
+    h.el('enTitle').fire('input');
+    expect(chipOf('en').classList.contains('is-missing')).toBe(false);
+    expect(chipOf('en').classList.contains('is-omitted')).toBe(false);
+    expect(stateOf('en')).toBe('');
+    // …and so does body text once the title is cleared again.
+    h.el('enTitle').value = '';
+    h.el('enTitle').fire('input');
+    expect(chipOf('en').classList.contains('is-missing')).toBe(true);
+    h.editors[1]!.value('## Started in English');
+    expect(chipOf('en').classList.contains('is-missing')).toBe(false);
+    // Unticking "Publish this story in English" marks it omitted, with the Posts list's wording.
+    h.el('enIncluded').checked = false;
+    h.el('enIncluded').fire('change');
+    expect(chipOf('en').classList.contains('is-omitted')).toBe(true);
+    expect(stateOf('en')).toContain(ui.en['editor.chrome.languageOmittedLabel'].replace('{language}', 'English'));
+    h.el('enIncluded').checked = true;
+    h.el('enIncluded').fire('change');
+    expect(chipOf('en').classList.contains('is-omitted')).toBe(false);
+    expect(stateOf('en')).toBe('');
+  });
+
+  it('refuses to save without a primary-language title at the field, sending nothing', async () => {
+    const h = await loadEditor({ isAdmin: true, fetch: async () => { throw new Error('nothing may be sent'); } });
+    await settle();
+    h.el('tabbtn-en').click();
+    h.el('enTitle').value = 'Only an English title';
+    h.el('enTitle').fire('input');
+    expect(await h.api.doSaveDraft()).toBe(false);
+    expect(h.requests.filter(({ options }) => options.method === 'POST' || options.method === 'PUT')).toEqual([]);
+    // The German tab opens, the title field is marked and described, and focus is on it.
+    expect(h.el('tab-de').hidden).toBe(false);
+    expect(h.el('deTitle').getAttribute('aria-invalid')).toBe('true');
+    const message = ui.en['editor.chrome.titleRequired'].replace('{language}', 'German');
+    expect(h.el('deTitleError').textContent).toBe(message);
+    expect(h.el('deTitleError').hidden).toBe(false);
+    expect(h.el('deTitle').getAttribute('aria-describedby')).toContain('deTitleError');
+    expect(h.document.activeElement).toBe(h.el('deTitle'));
+    expect(h.el('actionError').textContent).toBe('');
+    // Typing a title clears the mark.
+    h.el('deTitle').value = 'Bukarest';
+    h.el('deTitle').fire('input');
+    expect(h.el('deTitle').hasAttribute('aria-invalid')).toBe(false);
+    expect(h.el('deTitleError').hidden).toBe(true);
+  });
+
+  it('names the story in the browser tab once it is loaded, saved or restored', async () => {
+    const title = () => vm.runInContext('document.title', h.ctx) as string;
+    const posts = memoryPostStore();
+    await posts.upsertDraft(fullPair());
+    const h = await loadEditor({ isAdmin: true, search: '?tk=tk1', fetch: async (url, init) => {
+      if (url === '/posts/tk1' && init?.method === 'PUT') {
+        const payload = JSON.parse(String(init.body)) as PostPair & { updatedAt: string };
+        return response(await posts.upsertDraft(payload, new Date(payload.updatedAt)));
+      }
+      if (url === '/posts/tk1') return response(await posts.get('tk1'));
+      return response(url.endsWith('/revisions') ? [] : { images: [] });
+    } });
+    await settle();
+    await settle();
+    expect(title()).toMatch(/^Bukarest · /);
+    h.el('deTitle').value = 'Bukarest im Herbst';
+    h.el('deTitle').fire('input');
+    expect(title()).toMatch(/^Bukarest · /);
+    expect(await h.api.doSaveDraft()).toBe(true);
+    expect(title()).toMatch(/^Bukarest im Herbst · /);
+    const fresh = await loadEditor({ isAdmin: true });
+    await settle();
+    expect(vm.runInContext('document.title', fresh.ctx)).toMatch(/^New post · /);
   });
 });
 
@@ -1401,8 +1508,8 @@ describe('acknowledged publication survives failed rebuilds', () => {
     expect(h.api.buildPayload().updatedAt).toBe(token);
     expect(h.el('slugFieldDe').disabled).toBe(true);
     expect(h.el('slugFieldEn').disabled).toBe(false);
-    expect(h.el('actionStatus').textContent).toContain('Publish saved in the CMS');
-    expect(h.el('actionStatus').textContent).toContain('No live release yet');
+    expect(h.el('actionStatus').textContent).toContain(ui.en['admin.build.publish']);
+    expect(h.el('actionStatus').textContent).toContain(ui.en['admin.build.noLive']);
     expect(h.el('actionStatus').textContent).not.toContain('SECRET');
     expect(h.el('actionStatus').querySelector('a')?.href).toBe('/admin/settings.html#site');
     h.el('unpublishBtn').click();
@@ -1410,7 +1517,7 @@ describe('acknowledged publication survives failed rebuilds', () => {
     expect(h.api.buildPayload().updatedAt).toBe(token);
     expect(h.el('slugFieldDe').disabled).toBe(true);
     expect(h.el('slugFieldEn').disabled).toBe(false);
-    expect(h.el('actionStatus').textContent).toContain('Unpublish saved');
+    expect(h.el('actionStatus').textContent).toContain(ui.en['admin.build.unpublish'].replace('{title}', String(h.el('deTitle').value)));
     expect(await h.api.doSaveDraft()).toBe(true);
     expect(writes).toBe(2);
   });
@@ -1467,7 +1574,7 @@ describe('acknowledged publication survives failed rebuilds', () => {
     h.el('unpublishBtn').click();
     for (let i = 0; i < 8; i++) await settle();
     expect(h.api.buildPayload().updatedAt).toBe(otherWriter === 'before' ? loaded : committed);
-    expect(h.el('actionStatus').textContent).toContain('Unpublish saved');
+    expect(h.el('actionStatus').textContent).toContain(ui.en['admin.build.unpublish'].replace('{title}', String(h.el('deTitle').value)));
     h.el('deTitle').value = 'My edit';
     h.el('deTitle').fire('input');
     expect(await h.api.doSaveDraft()).toBe(otherWriter === 'none');
@@ -2904,7 +3011,9 @@ describe('inline gallery editing', () => {
     await settleAll();
     expect(h.document.querySelectorAll('.editor-gallery')).toEqual([]);
     for (const locale of ['de', 'en'] as const) {
-      const status = h.el(locale + 'GalleryView').parentElement!;
+      // The message sits in the manuscript's status line under the bar, never among the toolbar's buttons.
+      const status = galleryCheckStatus(h, locale);
+      expect(h.el(locale + 'ManuscriptBar').contains(status)).toBe(false);
       expect(status.textContent).toContain(ui.en['editor.gallery.analysisFailed']);
       expect(status.querySelectorAll('button').some((button) =>
         !button.hidden && button.textContent === ui.en['editor.gallery.retry'])).toBe(true);
@@ -3326,7 +3435,7 @@ describe('inline gallery editing', () => {
     expect(h.api.buildPayload()).toEqual(before);
     expect(h.dirtyCalls()).toBe(dirty);
     expect(h.editors[0]!.undoHistory).toEqual([]);
-    const status = h.el('deGalleryView').parentElement!;
+    const status = galleryCheckStatus(h, 'de');
     expect(status.textContent).toContain(ui.en['editor.gallery.analysisFailed']);
     expect(status.querySelectorAll('button').some((button) =>
       !button.hidden && button.textContent === ui.en['editor.gallery.retry'])).toBe(true);
@@ -4113,7 +4222,10 @@ describe('inline upload snapshot adoption', () => {
     expect(requests).toHaveLength(1);
     expect(requests[0]).toMatchObject({ ownerId: EDITOR_OWNER, fields: { key: 'trips/bukarest/hero' } });
     expect(h.api.buildPayload().de.heroImage.src).toBe('https://img/newer-library-choice');
-    expect(h.el('deHeroStatus').textContent).toContain(landed.src);
+    // The photo is named by its library key in the status, never by a raw URL.
+    expect(h.el('deHeroStatus').textContent).toContain(ui.en['editor.chrome.uploadNotApplied']);
+    expect(required(h.el('deHeroStatus'), 'code').textContent).toBe(landed.key);
+    expect(h.el('deHeroStatus').textContent).not.toContain(landed.src);
   });
   it('preserves alt and framing edits made while a title-image upload is unresolved', async () => {
     const pending = Promise.withResolvers<typeof landed>();
@@ -4225,7 +4337,7 @@ describe('publication projection refresh in the real editor DOM', () => {
     expect(h.el('publicationState').textContent).toBe('Draft in the CMS — still on the live site');
     expect(h.el('unpublishBtn').hidden).toBe(true);
     expect(h.api.buildPayload().updatedAt).toBe(committed);
-    expect(h.el('actionStatus').textContent).toContain('Publish saved in the CMS');
+    expect(h.el('actionStatus').textContent).toContain(ui.en['admin.build.publish']);
     vm.runInContext('publicationRefresh.stop()', h.ctx);
   });
 
@@ -4420,7 +4532,7 @@ describe('revision restore protects unsaved bilingual work (#390)', () => {
     const h = await loadEditor({ confirm, fetch: async (url) => {
       if (url === '/posts/tk1') return response({ ...fullPair(), updatedAt: loadedAt });
       if (url === '/posts/tk1/revisions') return response([
-        { id: revision.id, savedAt: revision.savedAt, titleDe: revision.snapshot.de.title, status: 'draft' },
+        { id: revision.id, savedAt: revision.savedAt, title: revision.snapshot.de.title, status: 'draft' },
       ]);
       if (url === '/posts/tk1/revisions/' + revision.id) return response(revision);
       if (url.endsWith('/alt-audit')) return response({ images: [] });
@@ -4444,7 +4556,7 @@ describe('revision restore protects unsaved bilingual work (#390)', () => {
       await settle();
       expect(h.prompts).toHaveLength(1);
       expect(h.prompts[0]!.body).toContain(revision.snapshot.de.title);
-      expect(h.prompts[0]!.body).toContain(new Date(revision.savedAt).toLocaleString());
+      expect(h.prompts[0]!.body).toContain(adminFormat.dateTime(revision.savedAt));
       expect(h.api.buildPayload()).toEqual(before);
       expect(h.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveUnsaved']);
       expect(h.el('revisionsCard').open).toBe(true);
@@ -4482,6 +4594,9 @@ describe('revision restore protects unsaved bilingual work (#390)', () => {
   it('loads a clean form without a prompt and leaves the restored content unsaved', async () => {
     const h = await open(false);
     expect(h.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveSaved']);
+    // Revision rows and the restore status use the admin's one moment format.
+    const when = adminFormat.dateTime(revision.savedAt);
+    expect(required(h.el('revisionsList'), 'li').textContent).toContain(when + ' — ' + revision.snapshot.de.title);
     required(h.el('revisionsList'), 'button').click();
     await settle();
     expect(h.prompts).toEqual([]);
@@ -4490,6 +4605,7 @@ describe('revision restore protects unsaved bilingual work (#390)', () => {
       updatedAt: loadedAt,
     });
     expect(h.el('draftSaveState').textContent).toBe(ui.en['editor.chrome.saveUnsaved']);
+    expect(h.el('actionStatus').textContent).toContain(when);
     expect(h.requests.every(({ options }) => !options.method || options.method === 'GET')).toBe(true);
   });
 });
@@ -4574,7 +4690,7 @@ describe('restoring a local draft keeps the version it was edited against (#345)
     return pair;
   };
   const basedOn = (baseUpdatedAt: unknown) => ({ baseUpdatedAt: baseUpdatedAt as string | null });
-  const restorePrompt = copy['editor.chrome.restoreBody'].replace('{time}', new Date('2026-10-01T12:00:00Z').toLocaleString());
+  const restorePrompt = copy['editor.chrome.restoreBody'].replace('{time}', adminFormat.dateTime('2026-10-01T12:00:00Z'));
   // Accept the restore; the editor then probes the stored version on its own.
   const open = async (server: VersionedServer, payload: unknown, recovery: Partial<StashRecovery> | null) => await loadEditor({
     isAdmin: true, search: '?tk=tk1', fetch: server.fetch,
@@ -4614,6 +4730,88 @@ describe('restoring a local draft keeps the version it was edited against (#345)
     expect(server.stored().de.title).toBe('Bukarest');
     expect(comparison.compare.hidden).toBe(false);
     expect(h.el('deTitle').value).toBe('Stashed DE edit');
+  });
+
+  it('names the fields that differ between the restored draft and the stored version, in words', async () => {
+    const server = versionedServer(serverV2());
+    const stash = stashOf();
+    stash.en.excerpt = 'A new English summary written offline.';
+    stash.shared.stops = [...stash.shared.stops!, { name: 'Brașov', lat: 45.65, lng: 25.6 }];
+    const h = await open(server, stash, basedOn(V1));
+    await settle();
+    const panel = h.document.querySelector('.write-recovery')!;
+    // The comparison stays the section's first disclosure; the raw JSON moved under Technical details.
+    const compare = required(panel, 'details');
+    expect(compare.hidden).toBe(false);
+    expect(compare.querySelector('h3')).toBeNull();
+    const choices = required(compare, '.actions');
+    expect(choices.querySelectorAll('button').map((button) => button.textContent)).toEqual([
+      copy['editor.chrome.writeUseStored'], copy['editor.chrome.writeRebase'], copy['editor.chrome.writeKeepEditing'],
+    ]);
+    const table = required(compare, 'table');
+    expect(table.hidden).toBe(false);
+    expect(required(table, 'caption').textContent).toBe(copy['editor.chrome.writeCompareCaption']);
+    expect(required(table, 'thead').querySelectorAll('th').map((cell) => cell.textContent))
+      .toEqual([copy['editor.chrome.writeCompareField'], copy['editor.chrome.writeCompareMine'], copy['editor.chrome.writeCompareStored']]);
+    const rows = required(table, 'tbody').querySelectorAll('tr').map((row) => row.children.map((cell) => cell.textContent));
+    expect(rows).toEqual([
+      ['Title (DE)', 'Stashed DE edit', 'Bukarest'],
+      ['Title (EN)', 'Bucharest', 'Newer EN saved elsewhere'],
+      ['Excerpt (EN)', 'A new English summary written offline.', 'x'],
+      ['Stops', '2 stops', '1 stop'],
+    ]);
+    // Choices come before the table; the technical JSON comes after it and still carries both versions.
+    const order = compare.children.map((child) => child.tagName);
+    expect(order.indexOf('DIV')).toBeLessThan(order.indexOf('TABLE'));
+    expect(order.indexOf('TABLE')).toBeLessThan(order.lastIndexOf('DETAILS'));
+    const technical = required(compare, 'details');
+    expect(required(technical, 'summary').textContent).toBe(copy['editor.chrome.writeTechnical']);
+    const json = technical.querySelectorAll('pre').map((pre) => pre.textContent).join('\n');
+    expect(json).toContain('Stashed DE edit');
+    expect(json).toContain('Newer EN saved elsewhere');
+    // Resolving the difference in the form drops the row on the next keystroke.
+    h.el('enTitle').value = 'Newer EN saved elsewhere';
+    h.el('enTitle').fire('input');
+    expect(required(table, 'tbody').querySelectorAll('tr').map((row) => row.children[0]!.textContent))
+      .toEqual(['Title (DE)', 'Excerpt (EN)', 'Stops']);
+  });
+
+  // The server fills a draft's NOT-NULL shared columns (draftWithDefaults: XX,
+  // europe, the save day, 0/0) while the local payload omits blanks. Those are
+  // nobody's edits, so they never count as differences.
+  const titleOnly = (title: string, shared: Partial<PostPair['shared']>): Stored => {
+    const pair = { ...fullPair(), shared: { ...fullPair().shared, ...shared }, updatedAt: V2 };
+    for (const lang of ['de', 'en'] as const) {
+      // Text fields blank; the fixture hero stays on both sides (PostLocale requires one) and is not compared.
+      pair[lang] = { ...pair[lang], slug: '', title: lang === 'de' ? title : '', excerpt: '', country: '', bodyMarkdown: '', images: {}, keyFacts: undefined };
+    }
+    return pair;
+  };
+  const blankShared: Partial<PostPair['shared']> = { date: undefined, countryCode: undefined, region: undefined, coordinates: undefined, stops: undefined, route: undefined };
+  const placeholders: Partial<PostPair['shared']> = { ...blankShared, date: '2026-11-10', countryCode: 'XX', region: 'europe', coordinates: { lat: 0, lng: 0 } };
+  const rowsOf = (h: { document: { querySelector(selector: string): Element | null } }) =>
+    required(required(h.document.querySelector('.write-recovery')!, 'table'), 'tbody').querySelectorAll('tr').map((row) => row.children.map((cell) => cell.textContent));
+
+  it('lists only the authors’ own changes when both versions are title-only drafts', async () => {
+    const server = versionedServer(titleOnly('Stored title', placeholders));
+    const stash = titleOnly('My local title', blankShared);
+    const h = await open(server, { ...stash, updatedAt: undefined }, basedOn(V1));
+    await settle();
+    expect(storedComparison(h).compare.hidden).toBe(false);
+    expect(rowsOf(h)).toEqual([['Title (DE)', 'My local title', 'Stored title']]);
+  });
+
+  it('still shows a date, region or location another writer really entered', async () => {
+    const server = versionedServer(titleOnly('Stored title', { ...blankShared, date: '2026-10-03', countryCode: 'RO', region: 'europe', coordinates: { lat: 44.4, lng: 26.1 } }));
+    const stash = titleOnly('My local title', blankShared);
+    const h = await open(server, { ...stash, updatedAt: undefined }, basedOn(V1));
+    await settle();
+    expect(rowsOf(h)).toEqual([
+      ['Title (DE)', 'My local title', 'Stored title'],
+      ['Date', '', '3 Oct 2026'],
+      ['Region', '', 'Europe'],
+      ['Coordinates', '', '44.4, 26.1'],
+    ]);
   });
 
   it.each([V1, null])('revision restore cannot refresh a restored stash base of %s', async (base) => {

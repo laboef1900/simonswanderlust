@@ -633,7 +633,8 @@ describe('memoryPostStore revisions', () => {
 
 describe('post validation', () => {
   it('draft requires only a DE title and valid slugs; an empty slug is unset, not invalid', () => {
-    expect(() => validateDraft(pair({ de: { ...pair().de, title: '' } }))).toThrow(PostError);
+    // Shown to the author by other clients: a sentence, not a lowercase code.
+    expect(() => validateDraft(pair({ de: { ...pair().de, title: '' } }))).toThrow('A German title is required to start a draft.');
     expect(() => validateDraft(pair({ de: { ...pair().de, slug: 'Bad Slug' } }))).toThrow(PostError);
     expect(() => validateDraft(pair({ en: { ...pair().en, slug: ' ' } }))).toThrow(PostError);
     expect(() => validateDraft(pair({ en: { ...pair().en, slug: '' } }))).not.toThrow();

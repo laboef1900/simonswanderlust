@@ -13,7 +13,7 @@ afterEach(() => {
 });
 
 // The Desk loads build-reporting.js before onboarding.js; failed-build wording comes from it.
-const sources = ['build-reporting.js', 'desk.js', 'language.js', 'admin-confirm.js', 'onboarding.js'].map((name) => readFileSync('public/' + name, 'utf8'));
+const sources = ['admin-ui.js', 'build-reporting.js', 'desk.js', 'language.js', 'admin-confirm.js', 'onboarding.js'].map((name) => readFileSync('public/' + name, 'utf8'));
 type StepState = 'done' | 'todo' | 'in_progress' | 'attention';
 type View = { status: 'retired' } | {
   status: 'open' | 'dismissed'; complete: boolean;
@@ -88,7 +88,8 @@ async function page(options: {
     dom.flushDialogEvents();
     await settle();
   };
-  return { document, get, action, click, answer, requests, controller, dom, root: get('#checklist'), opener: get('#opener') };
+  const format = context.AdminFormat as { dateTime(value: string): string };
+  return { document, get, action, click, answer, requests, controller, dom, format, root: get('#checklist'), opener: get('#opener') };
 }
 
 describe('Desk onboarding interactions', () => {
@@ -743,10 +744,13 @@ describe('Optional Desk language configuration', () => {
     expect(h.requests.filter((request) => request.method !== 'GET')).toHaveLength(1);
   });
 
-  it('renders seeded publication history read-only and directs secondary activation to Settings', async () => {
+  it('renders seeded publication history read-only with the lock dated like every other admin date, and directs secondary activation to Settings', async () => {
     const h = await page({ initial: { ...view(), language: { ...modes[0]!, lockedAt: '2026-10-29T00:00:00.000Z' } } });
     expect(h.root.querySelector('input')).toBeNull();
     expect(h.root.querySelector('[data-onboarding-action="language-save"]')).toBeNull();
+    const locked = h.get('.onboarding-language').querySelectorAll('p').find((line) => line.textContent.startsWith('Locked since'));
+    expect(locked?.textContent).toContain(h.format.dateTime('2026-10-29T00:00:00.000Z'));
+    expect(locked?.textContent).not.toContain('2026-10-29T');
     expect(h.get('.onboarding-language').querySelector('a')?.href).toBe('/admin/settings.html#language');
     expect(h.requests.map((request) => request.method)).toEqual(['GET']);
   });

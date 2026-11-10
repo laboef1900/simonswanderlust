@@ -3,7 +3,7 @@
   const { text, el, request } = JourneysUI;
   const $ = id => document.getElementById(id);
   let id = new URLSearchParams(location.search).get('id');
-  let saved = null, language, session, stories = [], draft, busy = false, activeLocale = null;
+  let saved = null, language, session, stories = [], draft, busy = false, activeLocale = null, tabs = null;
   const automatic = { de: false, en: false };
   const controls = {};
   const guard = DraftGuard.createDraftGuard({ resource: id ? 'journey:' + id : 'journey:new',
@@ -12,7 +12,8 @@
     const value = structuredClone(draft);
     for (const locale of language.locales) {
       const c = controls[locale]; if (!c) continue;
-      Object.assign(value[locale], { title: c.title.value, slug: c.slug.value, intro: c.intro.value, omitted: c.omitted.checked });
+      // The stored field stays `omitted`; the author's checkbox says the opposite: publish in this language.
+      Object.assign(value[locale], { title: c.title.value, slug: c.slug.value, intro: c.intro.value, omitted: !c.included.checked });
       if (value[locale].heroImage) {
         value[locale].heroImage.alt = c.alt.value;
         // Preserve absent focus exactly until the author changes a focus control.
@@ -28,7 +29,8 @@
   function showError(error) { $('journeyError').hidden = false; $('journeyError').textContent = error.outcomeUnknown ? BuildReporting.text('unknown') : error.message || text('Failed'); $('journeyError').focus(); }
   function dirty() { guard.markDirty(); }
   function field(parent, locale, name, copy, kind = 'input') {
-    const label = el('label', text(copy)); const input = el(kind); input.id = 'journey-' + locale + '-' + name; label.htmlFor = input.id; parent.append(label, input); return input;
+    // A per-locale field names its locale by code, as in the story and page editors.
+    const label = el('label', text(copy, { code: locale.toUpperCase() })); const input = el(kind); input.id = 'journey-' + locale + '-' + name; label.setAttribute('for', input.id); parent.append(label, input); return input;
   }
   function heroPreview(locale) {
     const hero = draft[locale].heroImage, c = controls[locale];
@@ -55,7 +57,18 @@
       list.append(tab);
     }
     list.hidden = language.locales.length === 1;
-    Tabs.wire(list, { onChange(name) { activeLocale = name; } });
+    tabs = Tabs.wire(list, { onChange(name) { activeLocale = name; } });
+  }
+  function showLocale(locale) { tabs.select(locale); activeLocale = locale; }
+  // The chip inside each tab carries that locale's state (DESIGN.md, "Locale tabs"):
+  // not requested for publication, no title yet, or available.
+  function syncTabStates() {
+    for (const locale of language.locales) {
+      const c = controls[locale], tab = $('journey-tab-' + locale); if (!c || !tab) continue;
+      const state = !c.included.checked ? 'omitted' : !c.title.value.trim() ? 'missing' : 'available';
+      SiteLanguage.tabState(tab, state, state === 'available' ? ''
+        : SiteLanguage.text(state === 'omitted' ? 'OmittedLabel' : 'TitleEmpty', { language: SiteLanguage.names[locale] }));
+    }
   }
   function renderLocales() {
     $('journeyLocales').replaceChildren();
@@ -67,16 +80,20 @@
       const words = el('div', undefined, 'journey-locale__text'), picture = el('div', undefined, 'journey-locale__hero');
       section.append(words, picture);
       const c = controls[locale] = {};
-      c.omitted = el('input'); c.omitted.type = 'checkbox'; c.omitted.id = 'journey-' + locale + '-omitted'; c.omitted.checked = value.omitted;
-      c.omitted.disabled = locale === language.primary || !!saved?.[locale].publishedAt;
-      const omit = el('label', undefined, 'check-field'); omit.append(c.omitted, document.createTextNode(text('Omit'))); words.append(omit);
+      // One polarity in every editor: checked means this language is published (the story editor's wording).
+      c.included = el('input'); c.included.type = 'checkbox'; c.included.id = 'journey-' + locale + '-included'; c.included.checked = !value.omitted;
+      c.included.disabled = locale === language.primary || !!saved?.[locale].publishedAt;
+      const include = el('label', undefined, 'check-field'); include.append(c.included, document.createTextNode(text('Include', { language: SiteLanguage.names[locale] }))); words.append(include);
       c.title = field(words, locale, 'title', 'Name'); c.title.maxLength = 200; c.title.value = value.title;
       c.slug = field(words, locale, 'slug', 'Slug'); c.slug.maxLength = 100; c.slug.value = value.slug; c.slug.readOnly = !!saved?.[locale].publishedAt;
       words.append(el('p', text('Locked'), 'muted'));
-      c.title.addEventListener('input', () => { if (automatic[locale] && !c.slug.readOnly) c.slug.value = c.title.value.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 100); });
+      c.title.addEventListener('input', () => {
+        AdminField.valid(c.title);
+        if (automatic[locale] && !c.slug.readOnly) c.slug.value = c.title.value.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 100);
+      });
       c.slug.addEventListener('input', () => { automatic[locale] = c.slug.value === ''; });
       c.intro = field(words, locale, 'intro', 'Intro', 'textarea'); c.intro.maxLength = 2000; c.intro.value = value.intro;
-      picture.append(el('h3', text('Hero'), 'section-label')); c.preview = el('img', undefined, 'journey-hero'); picture.append(c.preview);
+      picture.append(el('h3', text('Hero', { code: locale.toUpperCase() }), 'section-label')); c.preview = el('img', undefined, 'journey-hero'); picture.append(c.preview);
       const actions = el('div', undefined, 'form-actions'); const choose = el('button', text('Choose'), 'btn-secondary'); choose.type = 'button';
       c.remove = el('button', text('Remove'), 'btn-remove'); c.remove.type = 'button'; actions.append(choose, c.remove); picture.append(actions);
       c.heroFields = el('div', undefined, 'journey-hero-fields'); picture.append(c.heroFields);
@@ -90,6 +107,7 @@
       c.remove.addEventListener('click', () => { draft = collect(); draft[locale].heroImage = null; heroPreview(locale); dirty(); choose.focus(); });
       $('journeyLocales').append(section); heroPreview(locale);
     }
+    syncTabStates();
   }
   function showHeading() { $('journeyHeading').textContent = text(id ? 'Edit' : 'New'); Auth.setPageTitle(text(id ? 'Edit' : 'New')); }
   function storyTitle(key) { return stories.find(story => story.translationKey === key)?.title || key; }
@@ -124,7 +142,17 @@
   function syncActions() {
     $('journeyPublish').hidden = !session?.isAdmin || !id; $('journeyDelete').hidden = !session?.isAdmin || !id;
     $('journeyUnpublish').hidden = !session?.isAdmin || saved?.status !== 'published';
-    for (const locale of language.locales) { controls[locale].slug.readOnly = !!saved?.[locale].publishedAt; controls[locale].omitted.disabled = locale === language.primary || !!saved?.[locale].publishedAt; }
+    for (const locale of language.locales) { controls[locale].slug.readOnly = !!saved?.[locale].publishedAt; controls[locale].included.disabled = locale === language.primary || !!saved?.[locale].publishedAt; }
+  }
+  // No untitled journeys: the primary language's title is the journey's name everywhere.
+  // Checked before the form is disabled for the request, so the field can take focus.
+  function requireTitle() {
+    const primary = language.primary, field = controls[primary]?.title;
+    if (!field) return true;
+    if (field.value.trim()) { AdminField.valid(field); return true; }
+    showLocale(primary);
+    AdminField.invalid(field, text('TitleRequired', { language: SiteLanguage.names[primary] }));
+    return false;
   }
   async function save() {
     const base = id && typeof saved?.updatedAt === 'string' ? new Date(saved.updatedAt) : null;
@@ -133,7 +161,8 @@
     const changed = language.locales.filter(locale => saved?.[locale].slug && saved[locale].slug !== payload[locale].slug);
     if (changed.length) {
       const paths = changed.map(locale => location.origin + JourneysUI.path(language, locale, saved[locale].slug) + '\n' + location.origin + JourneysUI.path(language, locale, payload[locale].slug)).join('\n\n');
-      confirmSlugChange = await AdminConfirm.ask({ title: text('Rename'), body: text('RenameScope', { paths }), confirmLabel: text('Save') }); if (!confirmSlugChange) return;
+      // A changed URL is a loss (the old address stops working), so the confirmation is the destructive kind.
+      confirmSlugChange = await AdminConfirm.ask({ title: text('Rename'), body: text('RenameScope', { paths }), confirmLabel: text('Save'), danger: true }); if (!confirmSlugChange) return;
     }
     const generation = guard.snapshot();
     const result = await request(id ? '/' + id : '', { method: id ? 'PUT' : 'POST', body: JSON.stringify({ ...payload, ...(id ? { baseUpdatedAt: saved.updatedAt, confirmSlugChange } : {}) }) }, guard);
@@ -144,23 +173,28 @@
     if (guard.isDirty()) throw new Error(text('SaveFirst'));
     const generation = guard.snapshot(), baseUpdatedAt = saved.updatedAt;
     const title = saved[language.primary].title || text('New');
-    if (!await AdminConfirm.ask({ title: text(action), body: text(action + 'Scope', { title, count: saved.members.length }), confirmLabel: text(action), danger: action !== 'Publish' })) return;
+    if (!await AdminConfirm.ask({ title: text(action), body: text(action + 'Scope', { title, count: saved.members.length }), confirmLabel: text(action), danger: action !== 'Publish', tone: 'publish' })) return;
     const deleting = action === 'Delete';
     const result = await request('/' + id + (deleting ? '' : '/' + action.toLowerCase()), { method: deleting ? 'DELETE' : 'POST', ...(action === 'Publish' ? { body: JSON.stringify({ baseUpdatedAt: saved.updatedAt }) } : {}) }, guard);
-    if (deleting) id = null;
-    else {
-      saved = result.saved;
-      if (guard.snapshot() === generation) {
-        // The concurrency token and the working copy must describe the same version.
-        draft = workingCopy(saved);
-        for (const locale of ['de', 'en']) automatic[locale] = !draft[locale].slug;
-        renderLocales(); renderMembers();
-      } else {
-        // Keep newer local inputs on their old base; saving must conflict until reload.
-        saved.updatedAt = baseUpdatedAt;
-      }
-      syncActions();
+    if (deleting) {
+      // The journey is gone: its outcome is shown by the list this editor returns to.
+      // Nothing is dirty here (a lifecycle action requires a saved form), so the unload guard stays quiet.
+      id = null;
+      AdminFlash.set(BuildReporting.describeOutcome('delete', result, { title }));
+      location.href = '/admin/journeys.html';
+      return;
     }
+    saved = result.saved;
+    if (guard.snapshot() === generation) {
+      // The concurrency token and the working copy must describe the same version.
+      draft = workingCopy(saved);
+      for (const locale of ['de', 'en']) automatic[locale] = !draft[locale].slug;
+      renderLocales(); renderMembers();
+    } else {
+      // Keep newer local inputs on their old base; saving must conflict until reload.
+      saved.updatedAt = baseUpdatedAt;
+    }
+    syncActions();
     BuildReporting.renderOutcome($('journeyStatus'), action.toLowerCase(), result, { title });
   }
   async function operate(fn) {
@@ -171,14 +205,14 @@
     finally {
       busy = false; $('journeyFields').disabled = !draft || (!id && !!saved);
       if ($('journeyError').hidden) {
-        if ($('journeyStatus').textContent === text('Busy')) $('journeyStatus').textContent = text(guard.isDirty() ? 'Dirty' : saved?.status === 'published' ? 'Published' : 'Draft');
+        if ($('journeyStatus').textContent === text('Busy')) $('journeyStatus').textContent = !id && saved ? '' : text(guard.isDirty() ? 'Dirty' : saved?.status === 'published' ? 'Published' : 'Draft');
         if ((!id && saved) || !opener || opener.disabled) $('journeyStatus').focus();
         else opener.focus();
       }
     }
   }
-  $('journeyForm').addEventListener('input', dirty); $('journeyForm').addEventListener('change', dirty);
-  $('journeyForm').addEventListener('submit', event => { event.preventDefault(); void operate(save); });
+  $('journeyForm').addEventListener('input', () => { dirty(); syncTabStates(); }); $('journeyForm').addEventListener('change', () => { dirty(); syncTabStates(); });
+  $('journeyForm').addEventListener('submit', event => { event.preventDefault(); if (busy || !draft || !requireTitle()) return; void operate(save); });
   for (const action of ['Publish', 'Unpublish', 'Delete']) $('journey' + action).addEventListener('click', () => operate(() => lifecycle(action)));
   $('journeyAdd').addEventListener('click', () => { const key = $('journeyStory').value; if (!key || draft.members.includes(key) || draft.members.length >= 50) return; draft.members.push(key); renderMembers(key, 'Remove'); dirty(); });
   (async () => {

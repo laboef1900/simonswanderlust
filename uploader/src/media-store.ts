@@ -88,6 +88,8 @@ export interface MediaDescriptions {
 export interface MediaQuery {
   folder?: string; recursive?: boolean;
   q?: string; tag?: string; status?: MediaStatus;
+  /** `'missing'`: photos whose DE and EN alt text are both blank (no non-whitespace character). */
+  alt?: 'missing';
   sort?: 'uploaded' | 'taken' | 'title' | 'key';
   order?: 'asc' | 'desc';
   page?: number; pageSize?: number;
@@ -294,6 +296,8 @@ function applyQuery(rows: MemRow[], q: MediaQuery): MemRow[] {
     }
     if (q.status && r.status !== q.status) return false;
     if (q.tag && !r.tags.includes(q.tag)) return false;
+    // Mirrors the SQL `!~ '\S'` in pgMediaStore.where(): blank means no non-whitespace character.
+    if (q.alt === 'missing' && (/\S/.test(r.alt.de) || /\S/.test(r.alt.en))) return false;
     if (needle) {
       const hay = [r.key, r.title, r.alt.de, r.alt.en, r.caption.de, r.caption.en, ...r.tags]
         .join(' ').toLowerCase();
@@ -585,6 +589,8 @@ export function pgMediaStore(pool: DbPool, opts: MediaStoreOptions): MediaStore 
     }
     if (q.status) { values.push(q.status); clauses.push(`status = $${values.length}`); }
     if (q.tag) { values.push(q.tag); clauses.push(`$${values.length} = ANY(tags)`); }
+    // No non-whitespace character in either alt column; a constant pattern, nothing user-supplied.
+    if (q.alt === 'missing') clauses.push(`alt_de !~ '\\S' AND alt_en !~ '\\S'`);
     if (q.q !== undefined && String(q.q).trim() !== '') {
       values.push(likePattern(q.q));
       const i = values.length;

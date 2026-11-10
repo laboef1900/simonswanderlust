@@ -39,6 +39,7 @@ async function page(options: { primary?: 'de' | 'en'; locales?: ('de' | 'en')[];
     },
   };
   context.window = context; vm.createContext(context);
+  vm.runInContext(readFileSync('public/admin-ui.js', 'utf8'), context);
   vm.runInContext(readFileSync('public/build-reporting.js', 'utf8'), context);
   vm.runInContext(readFileSync('public/publication-refresh.js', 'utf8'), context);
   vm.runInContext(readFileSync('public/settings-drafts.js', 'utf8'), context);
@@ -70,23 +71,64 @@ async function page(options: { primary?: 'de' | 'en'; locales?: ('de' | 'en')[];
   return { el, edit, submit, requests, confirms, document, initial, lifecycle };
 }
 describe('owner-usable navigation settings', () => {
-  it('summarizes effective locale labels and keeps an edited row expanded after reordering', async () => {
+  it('discloses a row through its Edit link button, keeps the edited row expanded after reordering, and labels fields with the locale code', async () => {
     const h = await page();
-    const details = h.el('nav-header-0-details');
-    expect(details.open).toBe(false);
-    expect(details.querySelector('summary')?.textContent).toContain('DE: Reiseberichte');
-    expect(details.querySelector('summary')?.textContent).toContain('EN: Stories');
-    details.open = true;
-    details.fire('toggle');
+    const editor = h.el('nav-header-0-editor');
+    const edit = h.el('nav-header-0-edit');
+    expect(editor.hidden).toBe(true);
+    expect(edit.tagName).toBe('BUTTON');
+    expect(edit.textContent).toBe(copy.settingsNavigationEdit);
+    expect(edit.getAttribute('aria-expanded')).toBe('false');
+    expect(edit.getAttribute('aria-controls')).toBe('nav-header-0-editor');
+    // Edit link sits first in the same action group as Move up / Move down / Remove link.
+    const actions = edit.parentElement!;
+    expect(actions.children.map((button) => button.id)).toEqual(['nav-header-0-edit', 'nav-header-0-up', 'nav-header-0-down', 'nav-header-0-remove']);
+    expect(actions.children.map((button) => button.tagName)).toEqual(['BUTTON', 'BUTTON', 'BUTTON', 'BUTTON']);
+    expect(h.el('nav-header-0-link').querySelector('summary')).toBeNull();
+    const head = h.el('nav-header-0-link').children[0]!;
+    expect(head.textContent).toContain('DE: Reiseberichte');
+    expect(head.textContent).toContain('EN: Stories');
+    edit.click();
+    expect(editor.hidden).toBe(false);
+    expect(edit.getAttribute('aria-expanded')).toBe('true');
+    expect(h.document.querySelector('label[for="nav-header-0-label-de"]')!.textContent).toBe(copy.navigationLabel + ' (DE)');
+    expect(h.document.querySelector('label[for="nav-header-0-label-en"]')!.textContent).toBe(copy.navigationLabel + ' (EN)');
     h.edit('nav-header-0-label-de', '<img src=x> Mein Text');
-    expect(details.querySelector('summary')?.textContent).toContain('<img src=x> Mein Text');
-    expect(details.querySelector('img')).toBeNull();
+    expect(head.textContent).toContain('<img src=x> Mein Text');
+    expect(h.el('nav-header-0-link').querySelector('img')).toBeNull();
+    h.el('nav-header-0-down').focus();
     h.el('nav-header-0-down').click();
     await settle();
-    expect(h.el('nav-header-1-details').open).toBe(true);
+    expect(h.el('nav-header-1-editor').hidden).toBe(false);
+    expect(h.el('nav-header-1-edit').getAttribute('aria-expanded')).toBe('true');
+    expect(h.el('nav-header-0-editor').hidden).toBe(true);
     expect(h.el('nav-header-1-label-de').value).toBe('<img src=x> Mein Text');
+    // Keyboard focus follows the moved row's control.
+    expect(h.document.activeElement).toBe(h.el('nav-header-1-down'));
+    h.el('nav-header-1-edit').click();
+    expect(h.el('nav-header-1-editor').hidden).toBe(true);
     await h.submit();
     expect(h.el('settingsDraftBar').hidden).toBe(true);
+  });
+
+  it('names the save as one joined command and returns focus to it after saving', async () => {
+    const pending = Promise.withResolvers<Response>();
+    const h = await page({ save: () => pending.promise });
+    expect(h.el('navigationSave').textContent).toBe('Save navigation & rebuild');
+    expect(copy.navigationSave).toBe('Save navigation & rebuild');
+    h.edit('nav-header-0-label-de', 'Berichte');
+    h.el('navigationSave').focus();
+    h.el('navigationForm').fire('submit');
+    await settle();
+    expect(h.el('navigationSave').disabled).toBe(true);
+    // A disabled control cannot hold focus: the browser drops it to <body>.
+    h.document.body!.focus();
+    pending.resolve(Response.json({ saved: { ...h.initial, config: { ...h.initial.config }, updatedAt: '2026-01-02T00:00:00.000Z' }, build: successfulBuild }));
+    await settle();
+    expect(h.el('navigationSave').disabled).toBe(false);
+    // The outcome line takes focus so it is read out; it is never left on <body>.
+    expect(h.document.activeElement).toBe(h.el('navigationStatus'));
+    expect(h.el('navigationStatus').textContent).toContain(ui.en['admin.build.navigation']);
   });
 
   it.each(['de', 'en'] as const)('shows only enabled %s fields and preserves ordered edits through save', async (primary) => {
@@ -100,7 +142,7 @@ describe('owner-usable navigation settings', () => {
     await h.submit();
     const sent = JSON.parse(h.requests.find((request) => request.method === 'PUT')!.body!);
     expect(sent.config.header[1].label).toEqual({ [primary]: '<img src=x onerror=alert(1)>' });
-    expect(h.el('navigationStatus').textContent).toContain(release);
+    expect(h.el('navigationStatus').textContent).toContain(ui.en['admin.build.navigation']);
     expect(h.el('navigationStatus').querySelector('a')).toBeNull();
   });
   it('authors legal page links, marks unpublished targets and enforces slot capacity', async () => {
@@ -140,7 +182,8 @@ describe('owner-usable navigation settings', () => {
     h.el('navigationRebuild').click(); await settle();
     expect(h.requests.filter((request) => request.method === 'PUT')).toHaveLength(1);
     expect(h.requests.filter((request) => request.url === '/rebuild')).toHaveLength(1);
-    expect(h.el('navigationStatus').textContent).toContain(release);
+    // The saved navigation is live after the retried rebuild; the date is the viewer's.
+    expect(h.el('navigationStatus').textContent).toContain(ui.en['admin.build.liveThis'].replace(/ \(built \{builtAt\}\)\.$/, ''));
     h.edit('nav-header-0-label-de', 'Next'); await h.submit();
     expect(JSON.parse(h.requests.filter((request) => request.method === 'PUT')[1]!.body!).updatedAt).toBe('2026-01-03T00:00:00.000Z');
     // Every build-triggering mutation suspends the shared publication refresh (#317), like identity/language.
@@ -150,7 +193,7 @@ describe('owner-usable navigation settings', () => {
     const h = await page({ confirm: false, save: () => Promise.reject(new Error('network lost')) });
     h.edit('nav-header-0-label-de', 'Retained'); await h.submit();
     expect(h.el('navigationStatus').textContent).not.toBe('');
-    expect(h.el('navigationStatus').textContent).not.toContain(release);
+    expect(h.el('navigationStatus').textContent).not.toContain(ui.en['admin.build.navigation']);
     expect(h.el('navigationStatus').querySelector('a')).toBeNull();
     expect(h.el('navigationSave').disabled).toBe(true);
     await h.submit(); expect(h.requests.filter(request => request.method === 'PUT')).toHaveLength(1);

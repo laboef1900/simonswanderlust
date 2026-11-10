@@ -70,7 +70,36 @@
       locale_published: 'LocalePublished' })[body.code];
     return key ? text(key) : body.error;
   }
-  const api = { get, config, accept, publicPath, tabs, error, text, localize,
+  // The one DE/EN indicator (DESIGN.md, "Language chips"): on list rows and
+  // inside every locale tab. `state` is 'available', 'missing' (nothing
+  // written), 'omitted' (not requested for publication) or 'unknown'; `name`
+  // is the sentence a screen reader hears and the tooltip shows.
+  const CHIP_STATE = { available: '', missing: ' is-missing', omitted: ' is-omitted', unknown: ' is-unknown' };
+  function chip(locale, state, name) {
+    const element = document.createElement('span');
+    element.className = 'lang-chip' + (CHIP_STATE[state] ?? '');
+    element.setAttribute('role', 'img');
+    element.setAttribute('aria-label', name);
+    element.title = name;
+    element.textContent = locale.toUpperCase();
+    return element;
+  }
+  // A locale tab's code is its chip. The drawn state is decorative there; the
+  // sentence joins the tab's accessible name through a visually hidden suffix.
+  function tabState(tab, state, name) {
+    const code = tab.querySelector('.lang-code');
+    if (code) code.className = 'lang-code lang-chip' + (CHIP_STATE[state] ?? '');
+    let note = tab.querySelector('.lang-state');
+    if (!note) {
+      note = document.createElement('span');
+      note.className = 'lang-state visually-hidden';
+      tab.appendChild(note);
+    }
+    const shown = state && state !== 'available';
+    note.textContent = shown ? ' — ' + name : '';
+    tab.title = shown ? name : '';
+  }
+  const api = { get, config, accept, publicPath, tabs, error, text, localize, chip, tabState,
     get names() { return { de: text('German'), en: text('English') }; } };
   root.SiteLanguage = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

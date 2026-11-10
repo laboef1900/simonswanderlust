@@ -8,7 +8,7 @@ import { memoryJourneyStore } from '../src/journeys.js';
 import { memoryPostStore } from '../src/posts.js';
 import { memoryMediaStore } from '../src/media-store.js';
 import { idleBuildState } from './build-fixture.js';
-import { editorDocument, EditorEvent } from './editor-dom-harness.js';
+import { editorDocument, EditorEvent, type EditorElement } from './editor-dom-harness.js';
 import { ui } from '../../site/src/i18n/ui.js';
 const stamp = '2026-10-29T00:00:00.000Z';
 const id = '11111111-2222-4333-8444-555555555555';
@@ -60,10 +60,11 @@ async function editor(options: { admin?: boolean; published?: boolean; single?: 
   const el = (id: string) => { const node = dom.document.getElementById(id); if (!node) throw new Error(id); return node; };
   const locale = (name: string) => ({ slug: name + '-journey', title: name + ' journey', intro: name + ' intro', heroImage: { src: 'https://images.test/hero', width: 640, height: 480, alt: name + ' alt', format: 'jpeg', focus: { x: 12, y: 83 } }, omitted: name === 'en' && !!options.single, publishedAt: options.published && name === 'de' ? stamp : null });
   const row = { id, status: options.published ? 'published' : 'draft', updatedAt: options.updatedAt ?? stamp, de: locale('de'), en: locale('en'), members: ['a', 'b', 'c'], hasUnpublishedChanges: false };
-  const requests: { url: string; init: RequestInit }[] = [], questions: { title: string; body: string }[] = [];
+  const requests: { url: string; init: RequestInit }[] = [], questions: { title: string; body: string; danger?: boolean }[] = [];
   let failure: { status: number; body: object } | null = null, confirmed = true;
   let picker: { onPick: (item: object) => void } | undefined;
   const storage = options.storage ?? new Map<string, string>();
+  const session = new Map<string, string>();
   const events = new EventTarget();
   const response = (body: unknown, status = 200) => ({ status, ok: status >= 200 && status < 300, json: async () => structuredClone(body) });
   const context: Record<string, unknown> = {
@@ -72,7 +73,7 @@ async function editor(options: { admin?: boolean; published?: boolean; single?: 
     history: { replaceState() {} }, setTimeout: () => 1, clearTimeout() {},
     addEventListener: events.addEventListener.bind(events),
     localStorage: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key), key: (i: number) => [...storage.keys()][i], get length() { return storage.size; } },
-    sessionStorage: { getItem: () => null, setItem() {} },
+    sessionStorage: { getItem: (key: string) => session.get(key) ?? null, setItem: (key: string, value: string) => session.set(key, value), removeItem: (key: string) => session.delete(key) },
     Auth: { ensureAuthed: async () => ({ isAdmin: options.admin !== false, userId: options.userId ?? owner }), renderHeader() {}, setPageTitle() {} },
     AdminConfirm: { ask: async (question: { title: string; body: string }) => { questions.push(question); return confirmed; } },
     MediaPicker: { open: (value: { onPick: (item: object) => void }) => { picker = value; } },
@@ -91,7 +92,7 @@ async function editor(options: { admin?: boolean; published?: boolean; single?: 
     },
   };
   context.window = context; vm.createContext(context);
-  for (const file of ['language.js', 'tabs.js', 'draft-guard.js', 'build-reporting.js', 'journeys-ui.js', 'journey-editor.js']) vm.runInContext(readFileSync('public/' + file, 'utf8'), context);
+  for (const file of ['admin-ui.js', 'language.js', 'tabs.js', 'draft-guard.js', 'build-reporting.js', 'journeys-ui.js', 'journey-editor.js']) vm.runInContext(readFileSync('public/' + file, 'utf8'), context);
   await settle();
   if (options.fetch) await vi.waitFor(() => expect(el('journeyFields').disabled).toBe(false));
   const submit = async () => {
@@ -100,6 +101,8 @@ async function editor(options: { admin?: boolean; published?: boolean; single?: 
   };
   const edit = (id: string, value: string) => { el(id).value = value; el(id).dispatchEvent(new EditorEvent('input', { bubbles: true })); };
   return { dom, el, context, requests, questions, row, storage, submit, edit,
+    /** What the Journeys list would show after this editor navigated away. */
+    flash: () => vm.runInContext('AdminFlash.take()', context) as string,
     hide() { events.dispatchEvent(new Event('pagehide')); },
     confirm(value: boolean) { confirmed = value; }, fail(status: number, body: object) { failure = { status, body }; },
     recover() { failure = null; },
@@ -142,6 +145,8 @@ describe('journey authoring DOM', () => {
     h.el('journeyUnpublish').click(); await settle(); expect(h.el('journey-de-slug').readOnly).toBe(true);
     h.edit('journey-en-slug', 'new-journey'); await h.submit();
     expect(h.questions.at(-1)!.body).toContain('https://journal.test/en/journeys/en-journey/'); expect(h.questions.at(-1)!.body).toContain('https://journal.test/en/journeys/new-journey/');
+    // A URL change is a loss, so its confirmation is the destructive kind (filled red, focus on Cancel).
+    expect(h.questions.at(-1)!.danger).toBe(true);
     expect(JSON.parse(String(h.requests.find(request => request.init.method === 'PUT')!.init.body)).confirmSlugChange).toBe(true);
   });
   it('preserves another tab’s stored intro, heroes and membership after stale Unpublish then Save', async () => {
@@ -198,20 +203,25 @@ describe('journey authoring DOM', () => {
     expect(JSON.parse(String(puts[1]!.init.body)).baseUpdatedAt).toBe(stamp);
     expect(h.storage.size).toBe(0);
   });
-  it.each([true, false])('keeps acknowledged deletion visible and non-repeatable (failed build=%s)', async (failed) => {
+  it.each([true, false])('returns to the Journeys list after a deletion with its outcome, repeating nothing (failed build=%s)', async (failed) => {
     const h = await editor({ published: true });
     h.fail(200, { saved: h.row, deleted: true, build: failed ? failedBuild : successfulBuild });
     h.el('journeyDelete').focus(); h.el('journeyDelete').click(); await settle();
-    const outcome = h.el('journeyStatus').textContent;
-    expect(outcome).not.toBe(''); expect(outcome).not.toContain('PRIVATE');
+    expect(h.requests.filter(request => request.init.method === 'DELETE')).toHaveLength(1);
+    expect(h.context.location).toMatchObject({ href: '/admin/journeys.html' });
     expect(h.el('journeyFields').disabled).toBe(true);
-    expect(h.dom.document.activeElement).toBe(h.el('journeyStatus'));
-    expect(h.context.location).toMatchObject({ href: '' });
-    if (failed) expect(h.el('journeyStatus').querySelector('a')?.href).toBe('/admin/settings.html#site');
+    expect(h.el('journeyError').hidden).toBe(true);
+    // The list shows the outcome once; the sentence never carries the server's private detail.
+    const outcome = h.flash();
+    expect(outcome).toContain(ui.en['admin.build.delete'].replace('{title}', 'de journey'));
+    // A failed rebuild names the failure; a successful one says the live site no longer shows the journey (built <date>).
+    const liveWithout = ui.en['admin.build.liveWithout'];
+    expect(outcome).toContain(failed ? ui.en['admin.build.failure.build_failed'] : liveWithout.slice(0, liveWithout.indexOf('{builtAt}')));
+    expect(outcome).not.toContain('PRIVATE');
+    expect(h.flash()).toBe('');
     h.el('journeyDelete').click(); await h.submit(); await settle();
     expect(h.requests.filter(request => request.init.method === 'DELETE')).toHaveLength(1);
     expect(h.requests.some(request => request.init.method === 'PUT')).toBe(false);
-    expect(h.el('journeyStatus').textContent).toBe(outcome);
   });
   it('confirms deletion scope and cancellation restores focus with no request', async () => {
     const h = await editor(); h.confirm(false); h.el('journeyDelete').focus(); h.el('journeyDelete').click(); await settle();
@@ -296,21 +306,103 @@ describe('journey authoring DOM', () => {
     expect(restored.el('journey-de-title').value).toBe('After creation');
     expect(storage.has(siblingKey)).toBe(true);
   });
+  it('names the locale by its code in every per-locale field label', async () => {
+    const h = await editor();
+    const label = (id: string) => h.dom.document.querySelector(`label[for="${id}"]`)!.textContent;
+    expect(label('journey-de-title')).toBe(ui.en['editor.chrome.journeyName'].replace('{code}', 'DE'));
+    expect(label('journey-en-title')).toBe(ui.en['editor.chrome.journeyName'].replace('{code}', 'EN'));
+    expect(label('journey-en-slug')).toBe(ui.en['editor.chrome.journeySlug'].replace('{code}', 'EN'));
+    expect(label('journey-de-intro')).toBe(ui.en['editor.chrome.journeyIntro'].replace('{code}', 'DE'));
+  });
+  it('asks “Publish this journey in English” and sends the stored omitted flag inverted, through save, reload and a local draft', async () => {
+    const h = await editor();
+    const box = h.el('journey-en-included');
+    expect(box.closest('label')!.textContent).toContain(ui.en['editor.chrome.journeyInclude'].replace('{language}', ui.en['editor.chrome.languageEnglish']));
+    expect(box.checked).toBe(true);
+    expect(h.el('journey-de-included').checked).toBe(true); expect(h.el('journey-de-included').disabled).toBe(true);
+    box.checked = false; box.dispatchEvent(new EditorEvent('change', { bubbles: true }));
+    await h.submit();
+    const payload = JSON.parse(String(h.requests.find(request => request.init.method === 'PUT')!.init.body));
+    expect(payload.en.omitted).toBe(true); expect(payload.de.omitted).toBe(false);
+    h.hide(); expect(h.storage.size).toBe(0);
+    // Stored as omitted, the translation loads with its box unchecked; a local draft restores the same way.
+    const storage = new Map<string, string>();
+    const stored = await editor({ storage, fetch: async (url, init) => url === '/journey-admin/' + id && !init.method
+      ? { status: 200, ok: true, json: async () => ({ ...h.row, en: { ...h.row.en, omitted: true } }) }
+      : { status: 200, ok: true, json: async () => url === '/posts' ? [] : { primary: 'de', locales: ['de', 'en'], updatedAt: stamp, lockedAt: null } } });
+    expect(stored.el('journey-en-included').checked).toBe(false);
+    stored.el('journey-en-included').checked = true; stored.el('journey-en-included').dispatchEvent(new EditorEvent('change', { bubbles: true })); stored.hide();
+    expect(storage.size).toBe(1);
+    expect(JSON.parse([...storage.values()][0]!).payload.en.omitted).toBe(false);
+    const restored = await editor({ storage, fetch: async (url, init) => url === '/journey-admin/' + id && !init.method
+      ? { status: 200, ok: true, json: async () => ({ ...h.row, en: { ...h.row.en, omitted: true } }) }
+      : { status: 200, ok: true, json: async () => url === '/posts' ? [] : { primary: 'de', locales: ['de', 'en'], updatedAt: stamp, lockedAt: null } } });
+    expect(restored.el('journey-en-included').checked).toBe(true);
+  });
+  it('refuses to create an untitled journey: no request, the German title field marked and focused', async () => {
+    const h = await editor({ fresh: true });
+    h.el('journey-tab-en').click();
+    expect(h.el('journey-panel-de').hidden).toBe(true);
+    await h.submit();
+    expect(h.requests.some(request => request.init.method === 'POST' && request.url === '/journey-admin')).toBe(false);
+    expect(h.el('journey-panel-de').hidden).toBe(false);
+    const field = h.el('journey-de-title');
+    expect(field.getAttribute('aria-invalid')).toBe('true');
+    expect(h.el('journey-de-titleError').textContent).toBe(ui.en['editor.chrome.journeyTitleRequired'].replace('{language}', ui.en['editor.chrome.languageGerman']));
+    expect(field.getAttribute('aria-describedby')).toContain('journey-de-titleError');
+    expect(h.dom.document.activeElement).toBe(field);
+    expect(h.el('journeyFields').disabled).toBe(false);
+    expect(h.el('journeyError').hidden).toBe(true);
+    h.edit('journey-de-title', 'Named at last');
+    expect(field.getAttribute('aria-invalid')).toBeNull();
+    expect(h.el('journey-de-titleError').hidden).toBe(true);
+    await h.submit();
+    expect(JSON.parse(String(h.requests.find(request => request.init.method === 'POST' && request.url === '/journey-admin')!.init.body)).de.title).toBe('Named at last');
+  });
+  it('carries each locale’s state in its tab chip: not requested, no title yet, available', async () => {
+    const h = await editor({ fresh: true });
+    const english = ui.en['editor.chrome.languageEnglish'];
+    const noTitle = ui.en['editor.chrome.languageTitleEmpty'].replace('{language}', english);
+    const notRequested = ui.en['editor.chrome.languageOmittedLabel'].replace('{language}', english);
+    const tab = h.el('journey-tab-en');
+    expect(tab.textContent).toContain(noTitle); expect(tab.getAttribute('title')).toBe(noTitle);
+    expect(h.el('journey-tab-de').textContent).toContain(ui.en['editor.chrome.languageTitleEmpty'].replace('{language}', ui.en['editor.chrome.languageGerman']));
+    h.edit('journey-en-title', 'Coast to coast');
+    expect(tab.textContent).not.toContain(noTitle); expect(tab.getAttribute('title')).toBeFalsy();
+    h.el('journey-en-included').checked = false; h.el('journey-en-included').dispatchEvent(new EditorEvent('change', { bubbles: true }));
+    expect(tab.textContent).toContain(notRequested); expect(tab.getAttribute('title')).toBe(notRequested);
+    // A stored journey reports its chips on load too.
+    const loaded = await editor({ single: false });
+    expect(loaded.el('journey-tab-en').textContent).not.toContain(english + ':');
+  });
 });
 
 describe('journey catalogue DOM', () => {
-  it.each([true, false])('renders truthful dormant/empty state and escaped titles (populated=%s)', async (populated) => {
+  interface ListedJourney { id: string; titles: { de: string; en: string }; omitted: { de: boolean; en: boolean }; status: string; hasUnpublishedChanges: boolean; memberCount: number; live: { de: boolean; en: boolean } }
+  async function catalogue(journeys: ListedJourney[], options: { language?: { primary: 'de' | 'en'; locales: ('de' | 'en')[] }; flash?: string } = {}) {
     const html = readFileSync('public/journeys.html', 'utf8'); const dom = editorDocument(html);
+    const stored = new Map<string, string>(options.flash ? [['admin.flash', options.flash]] : []);
     const context: Record<string, unknown> = {
       document: dom.document, EditorCopy: copy,
       Auth: { ensureAuthed: async () => ({ isAdmin: false }), renderHeader() {}, setPageTitle() {} },
-      SiteLanguage: { get: async () => ({ primary: 'en', locales: ['en'] }) },
-      fetch: async () => ({ ok: true, status: 200, json: async () => ({ journeys: populated ? [{ id, titles: { de: 'Retained German', en: '<img src=x>' }, status: 'published', hasUnpublishedChanges: true, memberCount: 3, live: { de: false, en: false } }] : [] }) }),
+      sessionStorage: { getItem: (key: string) => stored.get(key) ?? null, setItem: (key: string, value: string) => { stored.set(key, value); }, removeItem: (key: string) => { stored.delete(key); } },
+      fetch: async () => ({ ok: true, status: 200, json: async () => ({ journeys }) }),
     };
     context.window = context; vm.createContext(context);
-    vm.runInContext(readFileSync('public/journeys-ui.js', 'utf8'), context);
+    for (const file of ['language.js', 'admin-ui.js', 'journeys-ui.js']) vm.runInContext(readFileSync('public/' + file, 'utf8'), context);
+    const language = options.language ?? { primary: 'en', locales: ['en'] };
+    vm.runInContext(`SiteLanguage.get = async () => SiteLanguage.accept(${JSON.stringify({ ...language, lockedAt: null, updatedAt: stamp })})`, context);
     vm.runInContext(html.slice(html.lastIndexOf('<script>') + 8, html.lastIndexOf('</script>')), context); await settle();
-    const list = dom.document.getElementById('journeyList')!;
+    return { dom, list: dom.document.getElementById('journeyList')!, notice: dom.document.getElementById('journeyNotice')!, stored };
+  }
+  const journey = (overrides: Partial<ListedJourney> = {}): ListedJourney => ({
+    id, titles: { de: 'Retained German', en: '<img src=x>' }, omitted: { de: false, en: false }, status: 'published', hasUnpublishedChanges: true, memberCount: 3, live: { de: false, en: false }, ...overrides,
+  });
+  const chipsOf = (root: EditorElement) =>
+    root.querySelectorAll('.lang-chip').map((chip) => ({ code: chip.textContent, className: chip.className, name: chip.getAttribute('aria-label') }));
+
+  it.each([true, false])('renders truthful dormant/empty state and escaped titles (populated=%s)', async (populated) => {
+    const { dom, list, notice } = await catalogue(populated ? [journey()] : []);
     expect(list.querySelector('img')).toBeNull();
     if (populated) {
       expect(list.textContent).toContain('<img src=x>'); expect(list.textContent).toContain('Unpublished changes'); expect(list.textContent).toContain('Not live in EN');
@@ -320,12 +412,46 @@ describe('journey catalogue DOM', () => {
       search.value = 'Retained German';
       search.fire('input');
       expect(list.querySelector('section')?.hidden).toBe(true);
-      expect(dom.document.getElementById('journeyNotice')?.textContent).toBe(ui.en['editor.chrome.journeyNoResults']);
+      expect(notice.textContent).toBe(ui.en['editor.chrome.journeyNoResults']);
       search.value = '  <IMG SRC=X>  ';
       search.fire('input');
       expect(list.querySelector('section')?.hidden).toBe(false);
-      expect(dom.document.getElementById('journeyNotice')?.textContent).toBe('');
+      expect(notice.textContent).toBe('');
       expect(list.textContent).toContain(ui.en['editor.chrome.journeyStoryCount'].replace('{count}', '3'));
-    } else expect(dom.document.getElementById('journeyNotice')?.textContent).toBe(ui.en['editor.chrome.journeyEmpty']);
+    } else expect(notice.textContent).toBe(ui.en['editor.chrome.journeyEmpty']);
+  });
+
+  it('offers Edit named after the journey, not "Edit journey"', async () => {
+    const { list } = await catalogue([journey({ titles: { de: 'Balkan', en: 'Balkans' } })], { language: { primary: 'de', locales: ['de', 'en'] } });
+    const edit = list.querySelectorAll('a').at(-1)!;
+    expect(edit.textContent).toBe('Edit');
+    expect(edit.getAttribute('aria-label')).toBe('Edit Balkan');
+    expect(edit.href).toBe('/admin/journey-editor.html?id=' + id);
+  });
+
+  it('shows one language chip per enabled locale: written, omitted, or still without a title', async () => {
+    const rows = [
+      journey({ id: '11111111-2222-4333-8444-000000000001', titles: { de: 'Beides', en: 'Both' } }),
+      journey({ id: '11111111-2222-4333-8444-000000000002', titles: { de: 'Nur Deutsch', en: 'Kept, not requested' }, omitted: { de: false, en: true }, status: 'draft', live: { de: false, en: false } }),
+      journey({ id: '11111111-2222-4333-8444-000000000003', titles: { de: 'Noch ohne Englisch', en: '' }, status: 'draft' }),
+    ];
+    const { list } = await catalogue(rows, { language: { primary: 'de', locales: ['de', 'en'] } });
+    const sections = list.querySelectorAll('section');
+    expect(sections.map((section) => chipsOf(section))).toEqual([
+      [{ code: 'DE', className: 'lang-chip', name: 'German: title set' }, { code: 'EN', className: 'lang-chip', name: 'English: title set' }],
+      [{ code: 'DE', className: 'lang-chip', name: 'German: title set' }, { code: 'EN', className: 'lang-chip is-omitted', name: 'English: not requested for publication' }],
+      [{ code: 'DE', className: 'lang-chip', name: 'German: title set' }, { code: 'EN', className: 'lang-chip is-missing', name: 'English: no title yet' }],
+    ]);
+    // The secondary title still reads beside its chip; a missing one shows nothing but the chip.
+    expect(sections[0]!.textContent).toContain('Both');
+    expect(sections[1]!.textContent).toContain('Kept, not requested');
+    expect(sections[2]!.querySelectorAll('.journey-row__locale')[0]!.textContent).toBe('EN');
+  });
+
+  it('shows a message carried over from the journey editor once in its status line, then forgets it', async () => {
+    const { notice, stored } = await catalogue([], { flash: 'Deleted “Balkan”. The site was not rebuilt.' });
+    expect(notice.getAttribute('role')).toBe('status');
+    expect(notice.textContent).toBe('Deleted “Balkan”. The site was not rebuilt. ' + ui.en['editor.chrome.journeyEmpty']);
+    expect(stored.has('admin.flash')).toBe(false);
   });
 });

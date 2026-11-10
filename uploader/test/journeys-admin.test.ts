@@ -142,6 +142,18 @@ describe('journey admin boundary and ownership', () => {
     expect((await f.app.inject({ method: 'DELETE', url: '/journey-admin/' + row.id, cookies: f.cookies.admin })).statusCode).toBe(404);
     expect(f.build).toHaveBeenCalledTimes(published ? 1 : 0);
   });
+  it('lists each journey with its per-locale omission so the catalogue can tell an omitted translation from a written one', async () => {
+    const f = await fixture();
+    const bilingual = await f.journeys.create(f.draft);
+    const germanOnly = await f.journeys.create({ ...structuredClone(f.draft), de: { ...structuredClone(f.draft.de), slug: 'nur-deutsch' },
+      en: { ...structuredClone(f.draft.en), title: 'Kept but not requested', slug: 'kept', omitted: true }, members: [] });
+    const listed = await f.app.inject({ method: 'GET', url: '/journey-admin', cookies: f.cookies.author });
+    expect(listed.statusCode).toBe(200);
+    interface ListedJourney { id: string; titles: { de: string; en: string }; omitted: { de: boolean; en: boolean } }
+    const { journeys: rows } = listed.json<{ journeys: ListedJourney[] }>();
+    expect(rows.find((row) => row.id === bilingual.id)).toMatchObject({ omitted: { de: false, en: false } });
+    expect(rows.find((row) => row.id === germanOnly.id)).toMatchObject({ titles: { en: 'Kept but not requested' }, omitted: { de: false, en: true } });
+  });
   it('fences every mutating route and quiesces an admitted rebuild', async () => {
     const f = await fixture(); const row = await f.journeys.create(f.draft);
     const barrier = Promise.withResolvers<BuildOutcome>(); f.build.mockImplementation(() => barrier.promise);

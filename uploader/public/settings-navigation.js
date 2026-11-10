@@ -29,9 +29,11 @@ window.SettingsNavigation = (function () {
       if (className) node.className = className;
       return node;
     }
+    /** A label that names a language appends its code: "Label (DE)". */
+    const localized = (label, locale) => label + ' (' + locale.toUpperCase() + ')';
     function control(parent, id, label, value, choices) {
       const group = element('div');
-      const caption = element('label', label); caption.htmlFor = id;
+      const caption = element('label', label); caption.setAttribute('for', id);
       const field = element(choices ? 'select' : 'input'); field.id = id;
       if (choices) for (const [key, text] of Object.entries(choices)) {
         const option = element('option', text); option.value = key; field.append(option);
@@ -52,17 +54,22 @@ window.SettingsNavigation = (function () {
         config[slot].forEach((item, index) => {
           const id = 'nav-' + slot + '-' + index;
           const row = element('li');
-          const details = element('details', undefined, 'navigation-link');
-          details.id = id + '-details';
-          details.open = expanded.has(item) || Boolean(focusId && focusId.startsWith(id + '-'));
-          details.addEventListener('toggle', () => { if (details.open) expanded.add(item); else expanded.delete(item); });
-          const summary = element('summary');
+          // The row header is text; the one disclosure control is the Edit link
+          // button in the action group, which owns the editor's expanded state.
+          const link = element('div', undefined, 'navigation-link');
+          link.id = id + '-link';
+          const head = element('div', undefined, 'navigation-link-head');
           const title = element('span', undefined, 'navigation-link-title');
           const labels = element('span', undefined, 'navigation-link-labels');
-          const editHint = element('span', copy.settingsNavigationEdit, 'navigation-link-edit');
-          summary.append(title, labels, editHint);
-          details.append(summary);
+          head.append(title, labels);
           const editor = element('div', undefined, 'navigation-fields');
+          editor.id = id + '-editor';
+          // Focus headed into one of the editor's fields opens it; focus on a row action does not.
+          const inEditor = Boolean(focusId && focusId.startsWith(id + '-') && !['edit', 'up', 'down', 'remove'].includes(focusId.slice(id.length + 1)));
+          const open = expanded.has(item) || inEditor;
+          editor.hidden = !open;
+          link.classList.toggle('is-open', open);
+          link.append(head, editor);
           const refreshSummary = () => {
             title.textContent = targets[item.target] || item.href?.[locales[0]] || copy.settingsNavigationNew;
             labels.textContent = locales.map((locale) => {
@@ -77,6 +84,7 @@ window.SettingsNavigation = (function () {
             config[slot][index] = kind.value === 'builtin' || kind.value === 'page'
               ? { kind: kind.value, target: kind.value === 'page' ? 'about' : 'home', label: item.label || {} }
               : { kind: kind.value, href: item.href || {}, label: item.label || {} };
+            expanded.add(config[slot][index]);
             dirty = true; draft.mark(); paint(id + '-kind');
           });
           if (item.kind === 'builtin' || item.kind === 'page') {
@@ -88,12 +96,12 @@ window.SettingsNavigation = (function () {
           for (const locale of locales) {
             const localeLabel = locale === 'de' ? copy.identityGerman : copy.identityEnglish;
             const fields = element('div', undefined, 'settings-field-pair');
-            const label = control(fields, id + '-label-' + locale, copy.navigationLabel + ' · ' + localeLabel, item.label?.[locale]);
+            const label = control(fields, id + '-label-' + locale, localized(copy.navigationLabel, locale), item.label?.[locale]);
             label.addEventListener('input', () => {
               item.label ||= {}; if (label.value) item.label[locale] = label.value; else delete item.label[locale]; dirty = true; refreshNotice(); refreshSummary();
             });
             if (item.kind === 'path' || item.kind === 'external') {
-              const href = control(fields, id + '-href-' + locale, copy.navigationHref + ' · ' + localeLabel, item.href[locale]);
+              const href = control(fields, id + '-href-' + locale, localized(copy.navigationHref, locale), item.href[locale]);
               href.addEventListener('input', () => { if (href.value) item.href[locale] = href.value; else delete item.href[locale]; dirty = true; refreshNotice(); refreshSummary(); });
             }
             editor.append(fields);
@@ -111,9 +119,21 @@ window.SettingsNavigation = (function () {
             }
             refreshNotice();
           }
-          details.append(editor);
-          row.append(details);
+          row.append(link);
           const actions = element('div', undefined, 'form-actions');
+          const edit = element('button', copy.settingsNavigationEdit, 'btn-secondary');
+          edit.type = 'button'; edit.id = id + '-edit';
+          edit.setAttribute('aria-expanded', open ? 'true' : 'false');
+          edit.setAttribute('aria-controls', editor.id);
+          edit.setAttribute('aria-label', copy.settingsNavigationEdit + ' · ' + names[slot] + ' · ' + (index + 1));
+          edit.addEventListener('click', () => {
+            const show = editor.hidden;
+            editor.hidden = !show;
+            link.classList.toggle('is-open', show);
+            edit.setAttribute('aria-expanded', show ? 'true' : 'false');
+            if (show) expanded.add(item); else expanded.delete(item);
+          });
+          actions.append(edit);
           for (const [action, text] of [['up', copy.identityMoveUp], ['down', copy.identityMoveDown], ['remove', copy.identityRemoveLink]]) {
             const button = element('button', text, action === 'remove' ? 'btn-remove' : 'btn-secondary');
             button.type = 'button'; button.id = id + '-' + action;
@@ -127,7 +147,9 @@ window.SettingsNavigation = (function () {
               } else {
                 const next = index + (action === 'up' ? -1 : 1);
                 [config[slot][index], config[slot][next]] = [config[slot][next], config[slot][index]];
-                dirty = true; draft.mark(); paint('nav-' + slot + '-' + next + '-kind');
+                // The moved row keeps its expanded editor and the pressed control's focus.
+                const edge = action === 'up' && next === 0 ? 'down' : action === 'down' && next === config[slot].length - 1 ? 'up' : action;
+                dirty = true; draft.mark(); paint('nav-' + slot + '-' + next + '-' + edge);
               }
             });
             actions.append(button);
@@ -139,7 +161,8 @@ window.SettingsNavigation = (function () {
         add.setAttribute('aria-label', copy.navigationAdd + ' · ' + names[slot]);
         add.addEventListener('click', () => {
           if (busy || config[slot].length >= max) return;
-          config[slot].push({ kind: 'builtin', target: 'home' }); dirty = true; draft.mark();
+          const item = { kind: 'builtin', target: 'home' };
+          config[slot].push(item); expanded.add(item); dirty = true; draft.mark();
           paint('nav-' + slot + '-' + (config[slot].length - 1) + '-kind');
         });
         section.append(list, add); root.append(section);
@@ -147,6 +170,7 @@ window.SettingsNavigation = (function () {
       if (focusId) $(focusId)?.focus();
     }
     async function load() {
+      const restore = AdminFocus.hold($('navigationReload'));
       lock(true); status(copy.navigationLoading);
       try {
         const responses = await Promise.all([fetch('/settings/navigation', { cache: 'no-store' }), fetch('/pages', { cache: 'no-store' })]);
@@ -158,7 +182,7 @@ window.SettingsNavigation = (function () {
         for (const link of data.socialLinks) social.append(element('li', link.label + ' — ' + link.url));
         dirty = conflicted = false; paint(); draft.clean(); status('');
       } catch { status(copy.navigationLoadFailed, true); }
-      finally { lock(false); }
+      finally { lock(false); restore(); }
     }
     $('navigationReload').addEventListener('click', async () => {
       if (busy || dirty && !await AdminConfirm.ask({ title: copy.navigationReload, body: copy.navigationReloadConfirm, confirmLabel: copy.navigationReload })) return;
@@ -166,6 +190,7 @@ window.SettingsNavigation = (function () {
     });
     $('navigationForm').addEventListener('submit', async (event) => {
       event.preventDefault(); if (busy || conflicted || !config) return;
+      const restore = AdminFocus.hold($('navigationSave'));
       lock(true); publication.beginAction(); status(copy.navigationSaving);
       try {
         const response = await fetch('/settings/navigation', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ config, updatedAt }) });
@@ -178,10 +203,11 @@ window.SettingsNavigation = (function () {
         else if (response.status === 400) status(copy.navigationInvalid, true);
         else { conflicted = true; status(BuildReporting.text('unknown'), true); }
       } catch { conflicted = true; status(BuildReporting.text('unknown'), true); }
-      finally { lock(false); publication.endAction(); }
+      finally { lock(false); publication.endAction(); restore($('navigationStatus')); }
     });
     $('navigationRebuild').addEventListener('click', async () => {
-      if (busy || !await AdminConfirm.ask({ title: copy.identityRebuild, body: copy.navigationRebuildConfirm, confirmLabel: copy.identityRebuild })) return;
+      if (busy || !await AdminConfirm.ask({ title: copy.identityRebuild, body: copy.navigationRebuildConfirm, confirmLabel: copy.identityRebuild, tone: 'publish' })) return;
+      const restore = AdminFocus.hold($('navigationRebuild'));
       lock(true); publication.beginAction(); status(copy.identityRebuilding);
       try {
         const response = await fetch('/rebuild', { method: 'POST' });
@@ -190,7 +216,7 @@ window.SettingsNavigation = (function () {
         if (response.ok) { BuildReporting.renderOutcome($('navigationStatus'), 'rebuild', result); $('navigationStatus').focus(); }
         else status(BuildReporting.text('unknown'), true);
       } catch { status(BuildReporting.text('unknown'), true); }
-      finally { lock(false); publication.endAction(); }
+      finally { lock(false); publication.endAction(); restore($('navigationStatus')); }
     });
     return load();
   }

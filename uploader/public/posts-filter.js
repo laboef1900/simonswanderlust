@@ -158,11 +158,39 @@ window.PostsFilter = (function () {
       Number(o.order && o.order !== 'desc');
   }
 
+  // The secondary locale's chip, from the list row's `secondaryStatus`
+  // (PostListRow in src/posts.ts). Anything else — including a status this
+  // client does not know — is shown as unknown rather than guessed.
+  var SECONDARY_CHIPS = {
+    omitted: { state: 'omitted', copy: 'OmittedLabel' },
+    empty: { state: 'missing', copy: 'BodyEmpty' },
+    started: { state: 'available', copy: 'BodyStarted' },
+  };
+
+  /**
+   * One language chip per enabled locale for a story, shared by the Posts
+   * row and the Desk's draft card (DESIGN.md, "Language chips"). `lang` is
+   * the SiteLanguage config. Each entry carries the chip `state`
+   * ('available' | 'missing' | 'omitted' | 'unknown') and `copy`, the
+   * SiteLanguage text key of its accessible name ("{language} body not
+   * started", "{language}: not requested for publication", …).
+   */
+  function languageStates(post, lang) {
+    return lang.locales.map(function (locale) {
+      var chip = locale === lang.primary
+        ? { state: 'available', copy: 'PrimaryLabel' }
+        : (Object.prototype.hasOwnProperty.call(SECONDARY_CHIPS, post.secondaryStatus)
+          ? SECONDARY_CHIPS[post.secondaryStatus] : { state: 'unknown', copy: 'BodyUnknown' });
+      return { locale: locale, state: chip.state, copy: chip.copy };
+    });
+  }
+
   return {
     REGIONS: REGIONS,
     apply: apply,
     countries: countries,
     extraFilterCount: extraFilterCount,
+    languageStates: languageStates,
     fromSearch: fromSearch,
     thumbUrl: thumbUrl,
     toSearch: toSearch,

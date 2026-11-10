@@ -70,6 +70,7 @@ async function page(options: {
   };
   context.window = context;
   vm.createContext(context);
+  vm.runInContext(readFileSync('public/admin-ui.js', 'utf8'), context);
   vm.runInContext(readFileSync('public/build-reporting.js', 'utf8'), context);
   vm.runInContext(readFileSync('public/settings-drafts.js', 'utf8'), context);
   vm.runInContext(source, context);
@@ -90,7 +91,10 @@ async function page(options: {
     events.dispatchEvent(event);
     return event.defaultPrevented;
   };
-  return { el, edit, submit, choose, click, requests, confirms, document, lifecycle, leave };
+  /** The inline error line AdminField placed directly under a field. */
+  const errorOf = (id: string) => h.document.getElementById(id + 'Error');
+  const h = { el, edit, submit, choose, click, requests, confirms, document, lifecycle, leave, errorOf };
+  return h;
 }
 
 describe('Site identity settings form', () => {
@@ -144,15 +148,16 @@ describe('Site identity settings form', () => {
   });
 
   it.each([
-    ['identitySiteName', 80],
-    ['identityAuthorName', 80],
-    ['identity-tagline-de', 160],
-    ['identity-aboutRole-en', 80],
-    ['identity-aboutGear-de', 200],
-    ['identity-studioDescriptor-en', 80],
-    ['identity-link-label-0', 40],
-  ] as const)('preserves Unicode at the normalized boundary and refuses excess: %s', async (id, limit) => {
+    ['identitySiteName', 80, copy.identitySiteName],
+    ['identityAuthorName', 80, copy.identityAuthorName],
+    ['identity-tagline-de', 160, copy.identityTagline + ' (DE)'],
+    ['identity-aboutRole-en', 80, copy.identityAboutRole + ' (EN)'],
+    ['identity-aboutGear-de', 200, copy.identityAboutGear + ' (DE)'],
+    ['identity-studioDescriptor-en', 80, copy.identityStudioDescriptor + ' (EN)'],
+    ['identity-link-label-0', 40, copy.identitySocialLabel],
+  ] as const)('preserves Unicode at the normalized boundary and refuses excess with the limit under the field: %s', async (id, limit, label) => {
     const h = await page();
+    expect(h.document.querySelector('label[for="' + id + '"]')!.textContent).toBe(label);
     const valid = '  ' + 'e\u0301'.repeat(limit - 1) + '\u{1D11E}' + '  ';
     h.edit(id, valid);
     await h.submit();
@@ -163,8 +168,49 @@ describe('Site identity settings form', () => {
     await h.submit();
     expect(h.requests).toHaveLength(2);
     expect(h.el(id).value).toBe(excess);
-    expect(h.el('identityStatus').textContent).toContain(copy.identityInvalid);
+    // The reason sits under the field with the real limit; one refused field needs no summary.
+    expect(h.errorOf(id)!.hidden).toBe(false);
+    expect(h.errorOf(id)!.textContent).toBe(label + ' can be at most ' + limit + ' characters (currently ' + (limit + 1) + ').');
+    expect(h.el(id).getAttribute('aria-invalid')).toBe('true');
+    expect(h.el(id).getAttribute('aria-describedby')).toContain(id + 'Error');
+    expect(h.el('identityStatus').textContent).toBe('');
     expect(h.document.activeElement).toBe(h.el(id));
+    // Typing again clears the mark until the next save.
+    h.edit(id, valid);
+    expect(h.el(id).hasAttribute('aria-invalid')).toBe(false);
+    expect(h.errorOf(id)!.hidden).toBe(true);
+  });
+
+  it('marks every refused field, summarises the count once, and focuses the first', async () => {
+    const h = await page();
+    h.edit('identityAuthorName', 'x'.repeat(81));
+    h.edit('identity-tagline-en', 'y'.repeat(161));
+    h.edit('identityCanonicalOrigin', 'not a domain');
+    await h.submit();
+    expect(h.requests).toHaveLength(1);
+    expect(h.lifecycle).toEqual([]);
+    expect(h.errorOf('identityAuthorName')!.textContent).toContain('at most 80 characters (currently 81)');
+    expect(h.errorOf('identityCanonicalOrigin')!.textContent).toBe(copy.identityCanonicalInvalid);
+    expect(h.errorOf('identity-tagline-en')!.textContent).toContain('at most 160 characters (currently 161)');
+    expect(h.el('identityStatus').textContent).toBe(ui.en['editor.chrome.identityInvalidFields'].replace('{count}', '3'));
+    expect(h.document.activeElement).toBe(h.el('identityAuthorName'));
+  });
+
+  it('returns focus to Save once a save has finished', async () => {
+    const pending = Promise.withResolvers<Response>();
+    const h = await page({ route: () => pending.promise });
+    h.edit('identitySiteName', 'Renamed');
+    h.el('identitySave').focus();
+    h.el('identityForm').fire('submit');
+    await settle();
+    expect(h.el('identitySave').disabled).toBe(true);
+    // A disabled control cannot hold focus: the browser drops it to <body>.
+    h.document.body!.focus();
+    pending.resolve(Response.json({ revision: 8 }));
+    await settle();
+    expect(h.el('identitySave').disabled).toBe(false);
+    expect(h.document.activeElement).toBe(h.el('identitySave'));
+    expect(h.el('identityStatus').textContent).toBe(copy.identitySaved);
   });
 
   it('keeps hostile identity text as input values and social order through move/save', async () => {
@@ -252,8 +298,8 @@ describe('Site identity settings form', () => {
     expect(h.requests[1]).toEqual({ url: '/rebuild', method: 'POST', body: undefined });
     expect(h.confirms).toHaveLength(1);
     expect(h.el('identitySiteName').value).toBe('Not saved');
-    expect(h.el('identityStatus').textContent).toContain('Release 1793000000000-1-0001 was promoted');
-    expect(h.el('identityStatus').textContent).toContain('No live release yet');
+    expect(h.el('identityStatus').textContent).toContain(ui.en['admin.build.built']);
+    expect(h.el('identityStatus').textContent).toContain(ui.en['admin.build.noLive']);
     expect(h.requests).toHaveLength(2); // the shared Settings refresh owns status reads
   });
 
@@ -363,7 +409,8 @@ describe('Site identity settings form', () => {
     await h.submit();
     expect(h.requests).toHaveLength(1);
     expect(h.el('identityCanonicalOrigin').value).toBe('not a domain');
-    expect(h.el('identityStatus').textContent).toContain(copy.identityInvalid);
+    expect(h.errorOf('identityCanonicalOrigin')!.textContent).toBe(copy.identityCanonicalInvalid);
+    expect(h.el('identityCanonicalOrigin').getAttribute('aria-invalid')).toBe('true');
     expect(h.document.activeElement).toBe(h.el('identityCanonicalOrigin'));
   });
 
@@ -379,6 +426,13 @@ describe('Site identity settings form', () => {
     expect(h.el('identitySiteName').value).toBe('Keep this name');
     expect(h.el('identityDomainNotice').hidden).toBe(true);
     expect(h.el('identityFields').disabled).toBe(false);
+    if (status === 400) {
+      // The server named the field; its refusal sits under that field, not in the status line.
+      expect(h.errorOf('identityCanonicalOrigin')!.textContent).toBe(ui.en['editor.chrome.identityRefusedField'].replace('{label}', ui.en['editor.chrome.identityCanonicalOrigin']));
+      expect(h.el('identityCanonicalOrigin').getAttribute('aria-invalid')).toBe('true');
+      expect(h.document.activeElement).toBe(h.el('identityCanonicalOrigin'));
+      expect(h.el('identityStatus').textContent).toBe('');
+    }
   });
 
   it('blocks both asset actions after a text-save conflict without losing the chosen file', async () => {

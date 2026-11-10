@@ -6,15 +6,34 @@
 // the blog's lightbox.
 //
 // Same rules as media-browser.js: textContent only, `innerHTML` solely for
-// `= ''`, one state object and one render().
+// `= ''`, one state object and one render(). The reorder icons are built with
+// createElementNS from constant path data, never from markup strings.
 window.MediaPicker = (function () {
   var api = window.MediaApi;
+  var SVG_NS = 'http://www.w3.org/2000/svg';
+  // The admin's stroke icons (24×24, 2px round strokes — see .editor-icon-remove).
+  var ICON_UP = ['m18 15-6-6-6 6'];
+  var ICON_DOWN = ['m6 9 6 6 6-6'];
+  var ICON_REMOVE = ['M18 6 6 18', 'm6 6 12 12'];
 
   function el(tag, className, text) {
     var node = document.createElement(tag);
     if (className) node.className = className;
     if (text !== undefined && text !== null) node.textContent = String(text);
     return node;
+  }
+
+  /** A decorative stroke icon; the button's aria-label carries the name. */
+  function icon(paths) {
+    var svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('aria-hidden', 'true');
+    paths.forEach(function (d) {
+      var path = document.createElementNS(SVG_NS, 'path');
+      path.setAttribute('d', d);
+      svg.appendChild(path);
+    });
+    return svg;
   }
 
   /**
@@ -86,6 +105,8 @@ window.MediaPicker = (function () {
     var dialog = document.createElement('dialog');
     dialog.className = 'admin-modal media-picker';
 
+    // Fixed head and foot, one scrolling body between them: Cancel and the
+    // primary action never leave the screen, whatever the strip and grid hold.
     var head = el('div', 'admin-modal__head');
     var heading = el('h2', null, multiple ? 'Choose photos' : 'Choose a photo');
     heading.id = 'mediaPickerTitle';
@@ -96,9 +117,11 @@ window.MediaPicker = (function () {
     count.setAttribute('role', 'status');
     count.setAttribute('aria-atomic', 'true');
     dialog.appendChild(head);
+    var body = el('div', 'media-picker__body');
+    dialog.appendChild(body);
 
     var browse = el('div', 'media-picker__browse');
-    dialog.appendChild(browse);
+    body.appendChild(browse);
     var folderPanel = el('details', 'media-picker__folders');
     folderPanel.open = !compact.matches;
     var folderSummary = el('summary', null, copy.pickerFolders);
@@ -168,13 +191,25 @@ window.MediaPicker = (function () {
       }
     }
 
+    // A visible label, like the Media page's search field.
+    var searchField = el('label', 'filter-field media-picker__search');
+    searchField.appendChild(el('span', null, 'Search'));
     var search = document.createElement('input');
-    search.className = 'media-picker__search';
     search.type = 'search';
-    search.placeholder = 'Search key, title, alt or caption';
-    search.setAttribute('aria-label', 'Search the media library');
+    search.placeholder = 'Key, title, alt or caption';
+    search.setAttribute('autocomplete', 'off');
     search.setAttribute('aria-describedby', folderCurrent.id);
-    results.appendChild(search);
+    searchField.appendChild(search);
+    results.appendChild(searchField);
+
+    // Paging sits with the results it pages, not among the dialog's actions.
+    var pagerRow = el('div', 'media-picker__pager');
+    var prev = el('button', 'btn-secondary', 'Previous');
+    var pager = el('span', 'muted');
+    var next = el('button', 'btn-secondary', 'Next');
+    [prev, next].forEach(function (b) { b.type = 'button'; });
+    pagerRow.append(prev, pager, next);
+    results.appendChild(pagerRow);
 
     var grid = el('div', 'media-grid');
     grid.setAttribute('role', 'listbox');
@@ -248,7 +283,7 @@ window.MediaPicker = (function () {
       stripList = el('ol', 'picker-strip__list');
       stripList.setAttribute('aria-label', 'Selected photos, in gallery order');
       strip.appendChild(stripList);
-      dialog.appendChild(strip);
+      body.appendChild(strip);
     }
 
     /**
@@ -294,7 +329,7 @@ window.MediaPicker = (function () {
       var offscreen = picked.unresolved();
       var summary = total === 0
         ? ''
-        : total + ' photo(s)'
+        : window.AdminFormat.count(total, 'photo')
           + (offscreen ? ' — ' + offscreen + ' not in this view, still in the gallery' : '');
       var media = state.resolving ? copy.pickerMediaChecking
         : state.resolveFailed ? copy.pickerMediaFailed.replace('{count}', String(state.resolveFailed)) : '';
@@ -327,24 +362,27 @@ window.MediaPicker = (function () {
           li.appendChild(el('span', 'picker-strip__pending', 'in gallery'));
         }
 
-        var up = el('button', 'btn-secondary', '↑');
+        var up = el('button', 'btn-secondary');
         up.type = 'button';
         up.dataset.act = 'up';
         up.disabled = i === 0;
         up.setAttribute('aria-label', 'Move ' + label + ' earlier');
+        up.appendChild(icon(ICON_UP));
         up.addEventListener('click', function () { move(i, i - 1); });
 
-        var down = el('button', 'btn-secondary', '↓');
+        var down = el('button', 'btn-secondary');
         down.type = 'button';
         down.dataset.act = 'down';
         down.disabled = i === picked.size() - 1;
         down.setAttribute('aria-label', 'Move ' + label + ' later');
+        down.appendChild(icon(ICON_DOWN));
         down.addEventListener('click', function () { move(i, i + 1); });
 
-        var drop = el('button', 'btn-remove', '×');
+        var drop = el('button', 'btn-remove');
         drop.type = 'button';
         drop.dataset.act = 'remove';
         drop.setAttribute('aria-label', 'Remove ' + label + ' from the gallery');
+        drop.appendChild(icon(ICON_REMOVE));
         drop.addEventListener('click', function () {
           picked.remove(i);
           announce = 'Removed ' + label + '.';
@@ -401,14 +439,11 @@ window.MediaPicker = (function () {
       }
     }
 
+    // Only the decision lives in the fixed footer.
     var foot = el('div', 'admin-modal__foot');
-    var pager = el('span', 'muted');
-    foot.appendChild(pager);
-    var prev = el('button', 'btn-secondary', 'Previous');
-    var next = el('button', 'btn-secondary', 'Next');
     var cancel = el('button', 'btn-secondary', 'Cancel');
     var choose = el('button', null, o.confirmLabel || (multiple ? 'Insert gallery' : 'Use this photo'));
-    [prev, next, cancel, choose].forEach(function (b) { b.type = 'button'; foot.appendChild(b); });
+    [cancel, choose].forEach(function (b) { b.type = 'button'; foot.appendChild(b); });
     dialog.appendChild(foot);
     document.body.appendChild(dialog);
 
@@ -424,8 +459,12 @@ window.MediaPicker = (function () {
       renderFolderSelection();
       grid.innerHTML = '';
       grid.setAttribute('aria-busy', state.loading ? 'true' : 'false');
-      count.textContent = state.loading ? copy.pickerPhotosLoading : state.failed ? '' : state.total + ' photo(s)';
-      pager.textContent = 'Page ' + state.page;
+      count.textContent = state.loading ? copy.pickerPhotosLoading : state.failed ? '' : window.AdminFormat.count(state.total, 'photo');
+      // Like the Media page: the page count comes from the last listing and is
+      // kept while the next page loads, so the label never flickers to nothing.
+      pager.textContent = state.total
+        ? 'Page ' + state.page + ' of ' + Math.max(1, Math.ceil(state.total / state.pageSize))
+        : '';
       // Keep pager buttons focusable while busy AND at the first/last page.
       // Native disabled would drop keyboard focus; click guards enforce these states.
       prev.setAttribute('aria-disabled', state.loading || state.page <= 1 ? 'true' : 'false');
@@ -516,7 +555,6 @@ window.MediaPicker = (function () {
       state.loading = true;
       state.failed = false;
       state.items = [];
-      state.total = 0;
       render();
       try {
         // Only `ready` photos are offered: one still encoding has no variants,
@@ -539,6 +577,8 @@ window.MediaPicker = (function () {
         if (state.closed || !loads.isCurrent(ticket)) return;
         state.loading = false;
         state.failed = true;
+        // Nothing is known about this view now; the pager must not offer a page past it.
+        state.total = 0;
         render();
       }
     }

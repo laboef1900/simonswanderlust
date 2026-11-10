@@ -43,6 +43,7 @@ export function registerJourneyAdmin(app: FastifyInstance, opts: Options): void 
       for (const locale of mode.locales) live[locale] = !!journey.publishedSnapshot.locales[locale] && visible.some(locales => locales.includes(locale));
     }
     return { id: journey.id, titles: { de: journey.de.title, en: journey.en.title }, slugs: { de: journey.de.slug, en: journey.en.slug },
+      omitted: { de: journey.de.omitted, en: journey.en.omitted },
       status: journey.status, hasUnpublishedChanges: journey.hasUnpublishedChanges, memberCount: journey.members.length, live, updatedAt: journey.updatedAt };
   }
   function working(journey: StoredJourney) {

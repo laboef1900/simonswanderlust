@@ -67,8 +67,9 @@
     let candidateEpoch = 0;
     applyCopy();
     const msg = (key) => copy[key] || key;
-    function say(key) {
-      const text = key ? msg(key) : '';
+    function say(key, values) {
+      let text = key ? msg(key) : '';
+      for (const [name, value] of Object.entries(values || {})) text = text.replace('{' + name + '}', value);
       if (dialog.open) status.textContent = text;
       else {
         feedback.textContent = [text, cleanupUnconfirmed ? msg('cancelPending') : ''].filter(Boolean).join(' ');
@@ -220,12 +221,12 @@
       try {
         const result = geometryApi.trimGeometry(preview.geometry, selection);
         const stats = geometryApi.geometryStats(result.geometry);
-        $('gpxKept').textContent = msg('kept').replace('{count}', String(stats.points));
-        $('gpxRemoved').textContent = msg('removed').replace('{count}', String(Math.max(0, preview.counts.points - stats.points)));
+        $('gpxKept').textContent = msg('kept').replace('{points}', AdminFormat.count(stats.points, 'point'));
+        $('gpxRemoved').textContent = msg('removed').replace('{points}', AdminFormat.count(Math.max(0, preview.counts.points - stats.points), 'point'));
         return { valid: result.geometry.segments.length > 0, result, stats };
       } catch (_) {
-        $('gpxKept').textContent = msg('kept').replace('{count}', '0');
-        $('gpxRemoved').textContent = msg('removed').replace('{count}', String(preview.counts.points));
+        $('gpxKept').textContent = msg('kept').replace('{points}', AdminFormat.count(0, 'point'));
+        $('gpxRemoved').textContent = msg('removed').replace('{points}', AdminFormat.count(preview.counts.points, 'point'));
         return { valid: false };
       }
     }
@@ -280,7 +281,8 @@
       $('gpxMap').setAttribute('aria-label', host.mapCopy.routeLabel);
       await Promise.all([geometry(), publicTrack()]);
       if (expectedEpoch !== epoch) return;
-      $('gpxCounts').textContent = msg('counts').replace('{points}', String(data.counts.points)).replace('{segments}', String(data.counts.segments)).replace('{waypoints}', String(data.counts.waypoints));
+      // A measurement line: each term pluralised, set in mono by editor-gpx.css.
+      $('gpxCounts').textContent = [AdminFormat.count(data.counts.points, 'point'), AdminFormat.count(data.counts.segments, 'segment'), AdminFormat.count(data.counts.waypoints, 'waypoint')].join(' · ');
       $('gpxReplaceConfirm').checked = false;
       $('gpxStart').value = '0'; $('gpxEnd').value = '0'; $('gpxStartDistance').value = '0'; $('gpxEndDistance').value = '0';
       const segmentList = $('gpxSegments');
@@ -290,7 +292,7 @@
         label.className = 'gpx-segment';
         const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.value = String(index);
         checkbox.addEventListener('change', () => { selection.removedSegments = [...segmentList.querySelectorAll('input:checked')].map((el) => Number(el.value)); recalculate(); });
-        const text = document.createElement('span'); text.textContent = msg('segment').replace('{index}', String(index + 1)).replace('{count}', String(segment.points.length));
+        const text = document.createElement('span'); text.textContent = msg('segment').replace('{index}', String(index + 1)).replace('{points}', AdminFormat.count(segment.points.length, 'point'));
         label.append(checkbox, text); segmentList.append(label);
       });
       const points = data.geometry.segments.reduce((n, s) => n + s.points.length, 0);
@@ -334,7 +336,7 @@
         const data = await request('/gpx/imports', { method: 'POST', body: form, signal: controller.signal });
         if (myEpoch !== epoch) { cancelImport(data.importId); return; }
         await showPreview(data, myEpoch);
-        if (myEpoch === epoch) say('importSuccess');
+        if (myEpoch === epoch) say('importSuccess', { file: selected.name });
       } catch (e) { if (myEpoch === epoch && !e.handled && e.name !== 'AbortError') fail(errorKey(e)); }
       finally { if (myEpoch === epoch) { controller = null; setBusy(false); } }
     }
