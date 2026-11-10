@@ -1389,7 +1389,7 @@ selected root before rolling forward. Dependency-owned dump compatibility limits
 
 ### Image originals & incremental archives
 
-- **Originals** — every image write path (`/upload`, the CLI uploader, and WordPress re-hosting)
+- **Originals** — every image write path (`/upload`, the `npm run upload` CLI, and WordPress re-hosting)
   persists the untouched upload as `{key}-orig.<ext>` next to the AVIF/WebP variants, so
   `/data/images` is a complete media archive: a DB restore alone can't bring photos back, and
   without originals the lossy variants would be the only server-side copy of every photo.

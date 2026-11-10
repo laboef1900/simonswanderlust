@@ -9,7 +9,7 @@ placeholder secrets. Replace all of them.
 
 > **Image name.** Releases from 0.18.1 on are published as
 > `ghcr.io/laboef1900/wanderlust-studio`; set `IMAGE_TAG` to a version listed on the
-> [releases](https://github.com/laboef1900/simonswanderlust/releases) page, or
+> [releases](https://github.com/laboef1900/wanderlust-studio/releases) page, or
 > [build the image locally](#build-the-image-locally). Releases under the old name
 > (`simonswanderlust-app`, up to 0.17.1) are not aliased to the new one.
 
@@ -56,7 +56,7 @@ and [NOTICE](../NOTICE).
 Run these on the server as a user that may run `docker` and `sudo`.
 
 ```bash
-git clone https://github.com/laboef1900/simonswanderlust.git wanderlust-studio
+git clone https://github.com/laboef1900/wanderlust-studio.git
 cd wanderlust-studio
 git checkout v<version>          # the release you install; omit only for a local source build
 cp uploader/.env.example .env
