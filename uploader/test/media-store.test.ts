@@ -188,6 +188,22 @@ describe('memoryMediaStore', () => {
     expect((await s.list({ q: 'sunris' })).items.map((i) => i.key)).toEqual(['k1']);
   });
 
+  it('alt: missing keeps only photos whose alt text is blank in both languages', async () => {
+    const s = store();
+    await add(s, 'none');
+    // Whitespace-only text describes nothing: it counts as missing.
+    await add(s, 'blank', { alt: { de: '  ', en: ' ' } });
+    await add(s, 'de-only', { alt: { de: 'Fjord im Morgenlicht', en: '' } });
+    await add(s, 'en-only', { alt: { de: '', en: 'Fjord at dawn' } });
+    await add(s, 'both', { alt: { de: 'Fjord', en: 'Fjord' } });
+    await add(s, 'encoding', { status: 'processing' });
+    expect((await s.list({ alt: 'missing' })).items.map((i) => i.key).sort()).toEqual(['blank', 'encoding', 'none']);
+    // Combined with the other filters, the way GET /media counts ready photos.
+    expect((await s.list({ alt: 'missing', status: 'ready' })).total).toBe(2);
+    expect((await s.list({ alt: 'missing', q: 'blank' })).items.map((i) => i.key)).toEqual(['blank']);
+    expect((await s.list({})).total).toBe(6);
+  });
+
   it('paginates and reports the unpaginated total', async () => {
     const s = store();
     for (let i = 0; i < 5; i++) await add(s, `k${i}`);

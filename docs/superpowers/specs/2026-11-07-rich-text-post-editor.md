@@ -15,6 +15,9 @@ preservation regressions and explicit source-mode recovery on initialization fai
 Approver: repository owner in this conversation. Review at the next rich-text engine
 major upgrade; the rest of the admin remains vanilla JavaScript.
 
+Extended to the page editor on 2026-11-10 (same bundle, no new dependency); the waiver
+record is in the [consistency review spec](2026-11-10-admin-consistency-review-fixes.md).
+
 ## Design
 
 Operate mode, extending Editorial desk. One white document canvas, quiet sticky formatting tools, unboxed title and rendered editable prose, and the existing collapsible Story details column. Keep desktop and phone controls keyboard accessible; preserve the existing focus-managed phone drawer, locale tabs, review disclosure and save feedback. Inter and existing steel-blue/neutral tokens remain authoritative. No public-site redesign.

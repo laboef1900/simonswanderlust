@@ -19,7 +19,7 @@ Full security model: `SECURITY.md`. These patterns MUST be preserved when changi
 
 ### 1. API and Configuration (secure by default)
 
-- **Authentication** — All mutating uploader endpoints require a valid session (HttpOnly cookie;
+- **Authentication** — All mutating app endpoints require a valid session (HttpOnly cookie;
   username/password accounts in Postgres). The only exceptions are `POST /login`, first-run
   `POST /setup` (guarded by a zero-users check, a setup lock, and the login rate limiter), and
   the public `GET`/`POST /comments` (#206: no session preHandler by design, Origin equality,

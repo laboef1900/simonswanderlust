@@ -26,6 +26,7 @@ interface Api {
   fromSearch(search: string, countries: string[]): Record<string, string>;
   thumbUrl(post: { heroSrc?: unknown; heroWidth?: unknown; heroFormat?: unknown }): string | null;
   toSearch(opts: Record<string, string>): string;
+  languageStates(post: { secondaryStatus?: unknown }, lang: { primary: 'de' | 'en'; locales: ('de' | 'en')[] }): { locale: string; state: string; copy: string }[];
 }
 
 function load(): Api {
@@ -236,4 +237,36 @@ it('filters only observed newer drafts, including pending translation coverage, 
     post({ translationKey: 'deleted', status: 'published', publication: { availability: 'missing' } }),
   ];
   expect(api.apply(rows, { status: 'unpublished' }).map((row) => row.translationKey)).toEqual(['pending-secondary']);
+});
+
+// One function decides every language chip (Posts rows and the Desk card):
+// the primary locale is always available; the secondary's state comes from
+// the list row's secondaryStatus, and a locale not requested for publication
+// is told apart from one that is simply not written yet.
+describe('PostsFilter.languageStates', () => {
+  const api = load();
+  const bilingual = { primary: 'de' as const, locales: ['de', 'en'] as ('de' | 'en')[] };
+
+  it.each([
+    ['started', 'available', 'BodyStarted'],
+    ['empty', 'missing', 'BodyEmpty'],
+    ['omitted', 'omitted', 'OmittedLabel'],
+    [undefined, 'unknown', 'BodyUnknown'],
+    ['surprise', 'unknown', 'BodyUnknown'],
+  ])('maps secondaryStatus %s to the %s chip', (secondaryStatus, state, copy) => {
+    expect(api.languageStates({ secondaryStatus }, bilingual)).toEqual([
+      { locale: 'de', state: 'available', copy: 'PrimaryLabel' },
+      { locale: 'en', state, copy },
+    ]);
+  });
+
+  it('follows the enabled locales in primary order and shows nothing for a disabled one', () => {
+    expect(api.languageStates({ secondaryStatus: 'empty' }, { primary: 'en', locales: ['en', 'de'] })).toEqual([
+      { locale: 'en', state: 'available', copy: 'PrimaryLabel' },
+      { locale: 'de', state: 'missing', copy: 'BodyEmpty' },
+    ]);
+    expect(api.languageStates({ secondaryStatus: 'none' }, { primary: 'en', locales: ['en'] })).toEqual([
+      { locale: 'en', state: 'available', copy: 'PrimaryLabel' },
+    ]);
+  });
 });

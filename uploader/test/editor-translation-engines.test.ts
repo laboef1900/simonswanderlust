@@ -270,4 +270,28 @@ describe('atomic translation across real CodeMirror and ProseMirror engines', ()
     h.bridge.sourceTransaction(() => { Object.assign(images, before); }, () => {});
     expect(h.window.document.querySelector('.rich-text-image img')?.getAttribute('src')).toBe(src + '-640.webp');
   });
+
+  // The page editor has no rendered-gallery toggle: the bridge must mount and
+  // switch modes without one instead of being handed a detached button.
+  it('creates and switches modes without a gallery view toggle', async () => {
+    const h = await mount({ markdown: 'A page body' });
+    // The mount's own bridge owns these elements; hand them over to a fresh one.
+    bridges.splice(bridges.indexOf(h.bridge), 1);
+    h.bridge.destroy();
+    const bridge = h.window.eval(`EditorRichBridge.create({ mde, element: document.getElementById('rich'),
+      source: document.getElementById('source'), error: document.getElementById('error'),
+      visualButton: document.getElementById('visual'), markdownButton: document.getElementById('markdown'),
+      formatButtons: [], locale: 'en', imageOrigin: location.origin, images: () => ({}),
+      copy: ${JSON.stringify(Object.fromEntries(Object.entries(ui.en).filter(([key]) => key.startsWith('editor.chrome.')).map(([key, value]) => [key.slice('editor.chrome.'.length), value])))},
+      galleryCopy: ${JSON.stringify(Object.fromEntries(Object.entries(ui.en).filter(([key]) => key.startsWith('editor.gallery.')).map(([key, value]) => [key.slice('editor.gallery.'.length), value])))} })`) as Bridge & { isVisual(): boolean };
+    bridges.push(bridge);
+    expect(bridge.isVisual()).toBe(true);
+    expect(h.window.document.getElementById('error')?.hasAttribute('hidden')).toBe(true);
+    bridge.setMode('markdown');
+    expect(bridge.isVisual()).toBe(false);
+    expect(h.window.document.getElementById('markdown')?.getAttribute('aria-pressed')).toBe('true');
+    bridge.setMode('visual');
+    expect(bridge.isVisual()).toBe(true);
+    expect(h.cm.getValue()).toBe('A page body');
+  });
 });

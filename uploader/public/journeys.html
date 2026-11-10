@@ -9,33 +9,48 @@
   <p id="journeyError" class="err" role="alert" hidden></p>
   <div id="journeyList" class="journey-list"></div>
 </main>
-<script src="/admin/editor-image-copy.js"></script><script src="/admin/auth.js"></script><script src="/admin/language.js"></script><script src="/admin/journeys-ui.js"></script>
+<script src="/admin/editor-image-copy.js"></script><script src="/admin/auth.js"></script><script src="/admin/language.js"></script><script src="/admin/admin-ui.js"></script><script src="/admin/journeys-ui.js"></script>
 <script>
 (async () => {
   const { text, el } = JourneysUI; JourneysUI.localize(document); Auth.setPageTitle(text('Title'));
+  // One chip per enabled locale (DESIGN.md, "Language chips"): a titled locale
+  // that is requested for publication is available; one the author left out
+  // is omitted; one without a title is missing.
+  const CHIP_COPY = { available: 'TitleSet', omitted: 'OmittedLabel', missing: 'TitleEmpty' };
+  function chip(journey, locale) {
+    const state = journey.omitted[locale] ? 'omitted' : journey.titles[locale] ? 'available' : 'missing';
+    return SiteLanguage.chip(locale, state, SiteLanguage.text(CHIP_COPY[state], { language: SiteLanguage.names[locale] }));
+  }
   try {
     const session = await Auth.ensureAuthed(); if (!session) return; Auth.renderHeader(session);
+    // The journey editor returns here after deleting its journey, with the outcome.
+    const flash = AdminFlash.take();
     const [result, language] = await Promise.all([JourneysUI.request(''), SiteLanguage.get()]);
     const notice = document.getElementById('journeyNotice');
     const list = document.getElementById('journeyList');
     const search = document.getElementById('journeySearch');
     const records = [];
-    notice.textContent = result.journeys.length ? '' : text('Empty');
+    notice.textContent = [flash, result.journeys.length ? '' : text('Empty')].filter(Boolean).join(' ');
     document.getElementById('journeyFilters').hidden = !result.journeys.length;
     for (const journey of result.journeys) {
       const row = el('section', undefined, 'journey-row');
       const description = el('div', undefined, 'journey-row__description');
       const heading = el('h2', undefined, 'journey-row__title');
-      const link = el('a', journey.titles[language.primary] || text('New'));
+      const title = journey.titles[language.primary] || text('New');
+      const link = el('a', title);
       link.href = '/admin/journey-editor.html?id=' + encodeURIComponent(journey.id);
-      heading.append(link);
+      heading.append(chip(journey, language.primary), link);
       description.append(heading);
-      for (const locale of language.locales) {
-        if (locale !== language.primary && journey.titles[locale]) {
-          const translation = el('p', locale.toUpperCase() + ' · ' + journey.titles[locale], 'muted');
-          translation.lang = locale;
-          description.append(translation);
+      const secondary = language.locales.filter((locale) => locale !== language.primary);
+      if (secondary.length) {
+        const translations = el('p', undefined, 'muted journey-row__locales');
+        for (const locale of secondary) {
+          const item = el('span', undefined, 'journey-row__locale');
+          item.append(chip(journey, locale));
+          if (journey.titles[locale]) { const translated = el('span', journey.titles[locale]); translated.lang = locale; item.append(translated); }
+          translations.append(item);
         }
+        description.append(translations);
       }
       const state = el('div', undefined, 'journey-row__state');
       state.append(el('span', text(journey.status === 'published' ? 'Published' : 'Draft'),
@@ -46,6 +61,7 @@
       }
       const edit = el('a', text('Edit'), 'action-link');
       edit.href = link.href;
+      edit.setAttribute('aria-label', text('EditNamed', { title }));
       row.append(description, state, el('p', text('StoryCount', { count: journey.memberCount }), 'journey-row__count'), edit);
       list.append(row);
       records.push({ row, title: language.locales.map(locale => journey.titles[locale] || '').join(' ').toLocaleLowerCase() });

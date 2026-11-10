@@ -142,7 +142,7 @@ ENV NODE_ENV=production \
 # `licenses` is pinned there too because GitHub detects the SPDX id as `AGPL-3.0`.
 LABEL org.opencontainers.image.title="Wanderlust Studio" \
       org.opencontainers.image.licenses="AGPL-3.0-only" \
-      org.opencontainers.image.source="https://github.com/laboef1900/simonswanderlust"
+      org.opencontainers.image.source="https://github.com/laboef1900/wanderlust-studio"
 # uid 1000 = the DHI default user / `node` in node:26-slim. The site tree must
 # be writable: astro writes .build-tmp/ and .astro/ during runtime builds.
 COPY --from=uploader-build --chown=1000:1000 /app/uploader /app/uploader

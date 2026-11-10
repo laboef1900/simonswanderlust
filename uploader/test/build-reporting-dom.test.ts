@@ -21,45 +21,60 @@ interface Reporting {
   renderOutcome(root: EditorElement, action: string, body: unknown, values?: Record<string, unknown>): void;
   renderStatus(root: EditorElement, status: unknown): void;
 }
+interface Format { dateTime(value: unknown): string }
+const fill = (text: string, values: Record<string, unknown>) => text.replace(/\{(\w+)\}/g, (_, name: string) => String(values[name]));
 function harness(locale: 'de' | 'en' = 'en') {
   const dom = editorDocument('<html><body><p id="status"></p></body></html>');
   const document = Object.assign(dom.document, { documentElement: { lang: locale } });
   const context: Record<string, unknown> = { document, BuildCopy: buildCopy };
   context.window = context;
   vm.createContext(context);
+  // Every admin page loads admin-ui.js before build-reporting.js formats a moment through it.
+  vm.runInContext(readFileSync('public/admin-ui.js', 'utf8'), context);
   vm.runInContext(readFileSync('public/build-reporting.js', 'utf8'), context);
-  return { root: document.getElementById('status')!, api: context.BuildReporting as Reporting };
+  return { root: document.getElementById('status')!, api: context.BuildReporting as Reporting, format: context.AdminFormat as Format, copy: ui[locale] };
 }
 
 // The same renderer is used by every action consumer. Exercise independent facts,
 // not incidental sentence punctuation, and never trust error/message strings.
 describe.each(['de', 'en'] as const)('shared %s build evidence renderer', (locale) => {
-  it.each(['publish', 'unpublish', 'delete', 'bulk', 'page', 'language', 'rebuild'])('%s names persistence separately from promotion and live observation', (action) => {
-    const { root, api } = harness(locale);
+  it.each(['publish', 'unpublish', 'delete', 'bulk', 'page', 'language', 'rebuild'])('%s names the acknowledgement, what the live site does now and the build moment — never a release id', (action) => {
+    const { root, api, format, copy } = harness(locale);
     const values = { title: '<img src=x>', action: 'Publish', n: 2, m: 1 };
+    const builtAt = format.dateTime(1793000000000);
+    expect(builtAt).toMatch(/^\d{1,2} \w{3} 2026, \d{2}:\d{2}$/);
     for (const ok of [true, false]) {
       for (const observed of [release, null, undefined]) {
         const build = { ok, attemptId: release, release: ok ? release : undefined, code: 'build_failed', error: 'SECRET', liveRelease: observed };
         api.renderOutcome(root, action, action === 'rebuild' ? build : { build }, values);
-        expect(root.textContent).not.toContain('SECRET');
+        const text = root.textContent;
+        expect(text).not.toContain('SECRET');
+        expect(text).not.toContain(release);
         expect(root.querySelector('img')).toBeNull();
-        if (action !== 'rebuild') expect(root.textContent).toContain('CMS');
-        if (ok) expect(root.textContent).toContain(release);
-        else {
-          expect(root.textContent).toContain(ui[locale]['admin.build.failure.build_failed']);
+        if (action !== 'rebuild') expect(text.startsWith(fill(copy[`admin.build.${action}` as keyof typeof copy], values))).toBe(true);
+        if (ok && observed === release) {
+          const key = action === 'unpublish' || action === 'delete' ? 'admin.build.liveWithout' : 'admin.build.liveThis';
+          expect(text).toContain(fill(copy[key], { builtAt }));
+          expect(text).not.toContain(copy['admin.build.built']);
+        } else if (ok) {
+          expect(text).toContain(copy['admin.build.built']);
+        } else {
+          expect(text).toContain(fill(copy[action === 'rebuild' ? 'admin.build.failedRebuild' : 'admin.build.failedChange'], { error: copy['admin.build.failure.build_failed'] }));
           expect(root.querySelector('a')?.href).toBe('/admin/settings.html#site');
+          if (observed === release) expect(text).toContain(fill(copy['admin.build.live'], { stampedAt: builtAt }));
         }
-        if (observed === null) expect(root.textContent).toContain(ui[locale]['admin.build.noLive']);
-        if (observed === undefined) expect(root.textContent).toContain(ui[locale]['admin.build.liveUnavailable']);
+        if (observed === null) expect(text).toContain(copy['admin.build.noLive']);
+        if (observed === undefined) expect(text).toContain(copy['admin.build.liveUnavailable']);
       }
     }
   });
 
   it.each(['delete', 'bulk', 'page', 'language'])('%s without a build does not invent a live outcome', (action) => {
-    const { root, api } = harness(locale);
-    api.renderOutcome(root, action, {}, { title: 'Draft', action: 'Delete', n: 1, m: 2 });
-    expect(root.textContent).toContain('CMS');
-    expect(root.textContent).toContain(ui[locale]['admin.build.noBuild']);
+    const { root, api, copy } = harness(locale);
+    const values = { title: 'Draft', action: 'Delete', n: 1, m: 2 };
+    api.renderOutcome(root, action, {}, values);
+    expect(root.textContent.startsWith(fill(copy[action === 'delete' ? 'admin.build.deleteDraft' : `admin.build.${action}` as keyof typeof copy], values))).toBe(true);
+    expect(root.textContent).toContain(copy['admin.build.noBuild']);
     expect(root.querySelector('a')).toBeNull();
   });
 
@@ -96,17 +111,40 @@ describe.each(['de', 'en'] as const)('shared %s build evidence renderer', (local
     expect(root.querySelector('a')).toBeNull();
   });
 
-  it('keeps interrupted history, running ownership and live evidence independent', () => {
-    const { root, api } = harness(locale);
+  it('keeps interrupted history, running ownership and live evidence independent, each moment in the one date format', () => {
+    const { root, api, format } = harness(locale);
     api.renderStatus(root, { record: 'not_persisted', live,
       running: { attemptId: release, startedAt, queued: true, owner: 'unverified' },
       last: { ...last, result: 'interrupted', finishedAt: null, failure: null, beforeBoot: true },
     });
     for (const key of ['queued', 'unverified', 'notPersisted', 'beforeBoot'] as const) expect(root.textContent).toContain(ui[locale][`admin.build.${key}`]);
     expect(root.textContent).toContain(locale === 'de' ? 'Ergebnis ist unbekannt' : 'result is unknown');
-    expect(root.textContent).toContain(locale === 'de' ? 'beobachtet' : 'observed serving');
+    const moment = format.dateTime(startedAt);
+    expect(root.textContent).toContain(fill(ui[locale]['admin.build.running'], { startedAt: moment }));
+    expect(root.textContent).toContain(fill(ui[locale]['admin.build.live'], { stampedAt: moment }));
+    expect(root.textContent).not.toContain(release);
+    expect(root.textContent).not.toMatch(/\d{1,2}\/\d{1,2}\/\d{4}|\d{4}-\d{2}-\d{2}T/);
     expect(root.querySelector('a')?.href).toBe('/admin/settings.html#site');
   });
+});
+
+it('reads as plain outcomes in English: what was done, what the live site does now, when it was built', () => {
+  const { root, api, format } = harness('en');
+  const builtAt = format.dateTime(1793000000000);
+  api.renderOutcome(root, 'publish', { build: { ok: true, attemptId: release, release, liveRelease: release } });
+  expect(root.textContent).toBe(`Published. The live site is serving this version (built ${builtAt}).`);
+  api.renderOutcome(root, 'unpublish', { build: { ok: true, attemptId: release, release, liveRelease: release } }, { title: 'Bukarest' });
+  expect(root.textContent).toBe(`Unpublished “Bukarest”. The live site no longer shows it (built ${builtAt}).`);
+  api.renderOutcome(root, 'delete', {}, { title: 'Bukarest' });
+  expect(root.textContent).toBe('Deleted draft “Bukarest”. The site was not rebuilt.');
+  api.renderOutcome(root, 'publish', { build: { ok: false, code: 'no_space', liveRelease: release } });
+  // The sentence first; the recovery link follows it as its own element.
+  expect(root.textContent).toBe(`Published. The live site was not updated because the rebuild failed: ${ui.en['admin.build.failure.no_space']} The live site is serving the version built ${builtAt}. ${ui.en['admin.build.retry']}`);
+  expect(root.querySelector('a')?.textContent).toBe(ui.en['admin.build.retry']);
+  api.renderOutcome(root, 'publish', { build: { ok: 'pending' } });
+  expect(root.textContent).toBe(`Published. ${ui.en['admin.build.unknown']}`);
+  api.renderStatus(root, { record: 'ok', running: { attemptId: release, startedAt, queued: false, owner: 'this_process' }, last: null, live: null });
+  expect(root.textContent).toBe(`Rebuild in progress since ${builtAt}. Nothing is live yet.`);
 });
 
 async function settle() { for (let i = 0; i < 60; i++) await Promise.resolve(); }

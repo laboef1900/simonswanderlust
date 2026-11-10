@@ -17,6 +17,7 @@ import type { ChangedDescriptions } from '../src/media-store.js';
 // precedent as editor-dom.test.ts. The model itself is stubbed at the
 // AltSuggest/LLM seam; media-ai.js and media-ai-dialog.js run for real.
 const apiSrc = readFileSync('public/media-api.js', 'utf8');
+const adminUiSrc = readFileSync('public/admin-ui.js', 'utf8');
 const aiSrc = readFileSync('public/media-ai.js', 'utf8');
 const dialogSrc = readFileSync('public/media-ai-dialog.js', 'utf8');
 const browserSrc = readFileSync('public/media-browser.js', 'utf8');
@@ -25,6 +26,8 @@ const refreshSrc = readFileSync('public/publication-refresh.js', 'utf8');
 const markup = readFileSync('public/media.html', 'utf8');
 const pageIds = [...markup.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]!);
 const checkedIds = new Set([...markup.matchAll(/<input[^>]*\bid="([^"]+)"[^>]*\bchecked\b/g)].map((m) => m[1]!));
+const hiddenIds = new Set([...markup.matchAll(/<[a-z]+\b[^>]*\bid="([^"]+)"[^>]*\bhidden\b/g)].map((m) => m[1]!));
+const POLL_MS = 3000;
 
 type Listener = (ev: Record<string, unknown>) => void;
 
@@ -34,7 +37,7 @@ class FakeNode {
   href = '';
   private text = '';
   get textContent(): string { return this.text + this.children.map(child => child.textContent).join(''); }
-  set textContent(value: string) { this.text = value; this.children = []; }
+  set textContent(value: string) { this.text = value; this.detachChildren(); }
   private inputValue = '';
   get value(): string { return this.inputValue; }
   set value(value: string) {
@@ -51,31 +54,51 @@ class FakeNode {
   style: Record<string, string> = {};
   attrs: Record<string, string> = {};
   children: FakeNode[] = [];
+  parent: FakeNode | null = null;
+  /** Page roots stand in for the document; everything else is connected through a parent. */
+  root = false;
   listeners: Record<string, Listener[]> = {};
   constructor(public tagName: string, private focusState?: { activeElement: FakeNode | null }) {}
+  get isConnected(): boolean { return this.root || (this.parent?.isConnected ?? false); }
   get innerHTML(): string { return ''; }
   set innerHTML(v: string) {
     if (v !== '') return;
+    this.detachChildren();
+  }
+  private detachChildren(): void {
     if (this.focusState && this.children.some((child) => child.contains(this.focusState!.activeElement))) {
       this.focusState.activeElement = null;
     }
+    for (const child of this.children) child.parent = null;
     this.children = [];
   }
   get firstElementChild(): FakeNode | null { return this.children[0] ?? null; }
-  appendChild(c: FakeNode): FakeNode { this.children.push(c); return c; }
+  appendChild(c: FakeNode): FakeNode { c.remove(); c.parent = this; this.children.push(c); return c; }
   append(...nodes: FakeNode[]): void { nodes.forEach(node => this.appendChild(node)); }
   contains(node: FakeNode | null): boolean { return node === this || this.children.some(child => child.contains(node)); }
   adjacent: FakeNode[] = [];
-  insertAdjacentElement(_position: string, node: FakeNode): FakeNode { this.adjacent.push(node); return node; }
-  remove(): void {}
+  insertAdjacentElement(_position: string, node: FakeNode): FakeNode { node.remove(); node.parent = this; this.adjacent.push(node); return node; }
+  remove(): void {
+    if (!this.parent) return;
+    if (this.focusState && this.contains(this.focusState.activeElement)) this.focusState.activeElement = null;
+    this.parent.children = this.parent.children.filter((child) => child !== this);
+    this.parent.adjacent = this.parent.adjacent.filter((child) => child !== this);
+    this.parent = null;
+  }
   focused = false;
-  focus(): void { this.focused = true; if (this.focusState) this.focusState.activeElement = this; }
+  focus(): void {
+    // Like the real DOM: a disabled or detached control cannot take focus.
+    if (this.disabled || !this.isConnected) return;
+    this.focused = true;
+    if (this.focusState) this.focusState.activeElement = this;
+  }
   scrollIntoView(): void {}
   click(): void { this.dispatch('click'); }
   showModal(): void { this.open = true; }
   close(): void { this.open = false; this.dispatch('close'); }
   setAttribute(k: string, v: string): void { this.attrs[k] = v; }
   getAttribute(k: string): string | null { return this.attrs[k] ?? null; }
+  removeAttribute(k: string): void { delete this.attrs[k]; }
   classList = { add() {}, remove() {}, toggle() {}, contains() { return false; } };
   addEventListener(type: string, fn: Listener): void { (this.listeners[type] ??= []).push(fn); }
   dispatch(type: string, ev: Record<string, unknown> = {}): void {
@@ -93,6 +116,7 @@ class FakeNode {
     walk(this);
     return out;
   }
+  querySelector(sel: string): FakeNode | null { return this.querySelectorAll(sel)[0] ?? null; }
   find(id: string): FakeNode | null {
     if (this.id === id) return this;
     for (const c of this.children) { const hit = c.find(id); if (hit) return hit; }
@@ -140,6 +164,9 @@ type Describe = (url: string, signal: AbortSignal) => Promise<Details>;
 type Timer = { id: number; fn: () => void; ms: number; cleared: boolean };
 const UPLOAD_WATCHDOG_MS = 120000;
 
+/** What the page asked through AdminConfirm.prompt, with its validator to probe. */
+interface Prompt { title: string; label: string; value?: string; confirmLabel: string; validate?: (text: string) => string }
+
 interface Page {
   el(id: string): FakeNode;
   activeElement(): FakeNode | null;
@@ -154,20 +181,27 @@ interface Page {
   described: string[];
   confirms: string[];
   confirmAnswer: { value: boolean };
+  prompts: Prompt[];
+  promptAnswer: { value: string | null };
+  /** The query string the page last wrote with history.replaceState ('' when none). */
+  urlState(): string;
   flush(): Promise<void>;
   focus(): void;
   visibility(hidden: boolean): void;
   lifecycle(type: 'pagehide' | 'pageshow', persisted: boolean): void;
 }
 
-function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' | 'en'; folders?: string[]; prompt?: string; xhr?: new () => object; mobile?: boolean;
+function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' | 'en'; folders?: string[]; prompt?: string | null; xhr?: new () => object; mobile?: boolean;
+  search?: string;
   request?: (url: string, init?: { method?: string; body?: string }) => Promise<unknown> | undefined } = {}): Page {
   const focusState = { activeElement: null as FakeNode | null };
   const roots = new Map<string, FakeNode>();
   for (const id of pageIds) {
     const n = new FakeNode('div', focusState);
     n.id = id;
+    n.root = true;
     n.checked = checkedIds.has(id);
+    n.hidden = hiddenIds.has(id);
     roots.set(id, n);
   }
   const getElementById = (id: string): FakeNode | null => {
@@ -189,6 +223,9 @@ function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' 
   const deletions: string[] = [];
   const rows = new Map<string, Item>();
   const described: string[] = [];
+  const prompts: Prompt[] = [];
+  const promptAnswer = { value: opts.prompt === undefined ? null : opts.prompt };
+  const urlWrites: string[] = [];
   const confirms: string[] = [];
   const confirmAnswer = { value: false };
   const ok = (body: unknown) => Promise.resolve({ status: 200, ok: true, json: async () => body });
@@ -237,20 +274,26 @@ function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' 
       createElement: (tag: string) => new FakeNode(tag, focusState),
       createTextNode: (text: string) => Object.assign(new FakeNode('#text', focusState), { textContent: text }),
     },
-    location: { href: '', origin: 'https://app.example', protocol: 'https:' },
+    location: { href: '', origin: 'https://app.example', protocol: 'https:', pathname: '/admin/media.html', search: opts.search ?? '' },
+    history: { replaceState: (_state: unknown, _title: string, url: string) => { urlWrites.push(url); } },
     fetch,
-    URL, AbortController, AbortSignal,
+    URL, URLSearchParams, AbortController, AbortSignal,
     crypto: webcrypto,
     addEventListener: windowEvents.addEventListener.bind(windowEvents),
     removeEventListener() {},
     setTimeout: (fn: () => void, ms = 0) => { const id = ++timerSeq; timers.push({ id, fn, ms, cleared: false }); return id; },
     clearTimeout: (id: number) => { const t = timers.find((timer) => timer.id === id); if (t) t.cleared = true; },
-    confirm: (msg: string) => { confirms.push(msg); return confirmAnswer.value; },
     matchMedia: () => ({ matches: !!opts.mobile }),
     AdminConfirm: {
       ask: async (opts: { body: string }) => { confirms.push(opts.body); return confirmAnswer.value; },
+      // The in-page prompt: resolves to the (valid) answer, or null for Cancel — as the real one does.
+      prompt: async (o: Prompt) => {
+        prompts.push(o);
+        const text = promptAnswer.value === null ? null : promptAnswer.value.trim();
+        if (text === null || !text || (o.validate && o.validate(text))) return null;
+        return text;
+      },
     },
-    prompt: () => opts.prompt ?? null,
     console,
     FormData: class {
       fields = new Map<string, unknown>();
@@ -303,14 +346,17 @@ function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' 
   };
   ctx.window = ctx;
   vm.createContext(ctx);
+  // The page's own load order: shared presentation helpers before every module that formats.
   vm.runInContext(apiSrc, ctx);
+  vm.runInContext(adminUiSrc, ctx);
   vm.runInContext(aiSrc, ctx);
   vm.runInContext(dialogSrc, ctx);
   vm.runInContext(refreshSrc, ctx);
   vm.runInContext(impactSrc, ctx);
   vm.runInContext(browserSrc, ctx);
   const flush = async (): Promise<void> => { for (let i = 0; i < 20; i++) await setImmediate(); };
-  return { el, activeElement: () => focusState.activeElement, win: ctx, timers, listRequests, uploadRequests, patches, deletions, rows, described, confirms, confirmAnswer, flush,
+  return { el, activeElement: () => focusState.activeElement, win: ctx, timers, listRequests, uploadRequests, patches, deletions, rows, described, confirms, confirmAnswer, prompts, promptAnswer, flush,
+    urlState: () => { const last = urlWrites.at(-1) ?? ''; return last.includes('?') ? last.slice(last.indexOf('?')) : ''; },
     focus: () => windowEvents.dispatch('focus'),
     lifecycle: (type, persisted) => windowEvents.dispatch(type, { persisted }),
     visibility: (hidden) => {
@@ -402,10 +448,12 @@ describe('media detail navigation', () => {
     page.el('detail').dispatch('input');
     page.confirmAnswer.value = false;
     page.el('detailBack').click();
+    await page.flush();
     expect(page.el('detail').hidden).toBe(false);
     expect(page.el('dTitle').value).toBe('Unsaved photo title');
     page.confirmAnswer.value = true;
     page.el('detailBack').click();
+    await page.flush();
     expect(page.el('detail').hidden).toBe(true);
     expect(page.activeElement()?.dataset.key).toBe('two');
     expect(page.patches).toEqual([]);
@@ -764,6 +812,7 @@ describe('media-browser detail panel', () => {
     // … accepting it moves on to B, and B's panel starts clean.
     page.confirmAnswer.value = true;
     grid[1]!.dispatch('click');
+    await page.flush();
     expect(page.el('detail').dataset.key).toBe('b');
     expect(page.el('dAltDe').value).toBe('alt-b');
     expect(page.el('dUnsaved').hidden).toBe(true);
@@ -922,6 +971,7 @@ describe('media-browser AI suggestion in the detail panel', () => {
     // Another photo drops them; coming back does not resurrect them.
     page.confirmAnswer.value = true;
     page.el('grid').querySelectorAll('.media-cell')[1]!.dispatch('click');
+    await page.flush();
     expect(page.el('dAltEnHint').hidden).toBe(true);
     page.el('grid').querySelectorAll('.media-cell')[0]!.dispatch('click');
     expect(page.el('dAltEnHint').hidden).toBe(true);
@@ -1177,7 +1227,7 @@ describe('media-browser pagination', () => {
     expect(page.el('nextPage').disabled).toBe(true);
     expect(page.el('bulkTools').hidden).toBe(true);
     expect(page.el('detail').dataset.key).toBeUndefined();
-    expect(page.el('out').textContent).toBe('Deleted.');
+    expect(page.el('out').textContent).toBe('Photo deleted.');
     expect(page.listRequests).toHaveLength(0);
   });
 
@@ -1284,10 +1334,10 @@ describe('media-browser search', () => {
     // … and answers AFTER it. The stale response must not paint.
     newer!.resolve({ items: [item('norway/1')], total: 1 });
     await page.flush();
-    expect(page.el('out').textContent).toBe('1 photo(s)');
+    expect(page.el('out').textContent).toBe('1 photo');
     older!.resolve({ items: [item('x/1'), item('x/2'), item('x/3')], total: 3 });
     await page.flush();
-    expect(page.el('out').textContent).toBe('1 photo(s)');
+    expect(page.el('out').textContent).toBe('1 photo');
     expect(page.el('grid').querySelectorAll('.media-cell')).toHaveLength(1);
   });
 });
@@ -1692,12 +1742,14 @@ describe('media conditional save recovery in real consumers', () => {
       if (init?.method === 'PATCH' && ++writes === 1) return pending.promise;
     } });
     await open(page, item('a'), [item('b')]);
-    const choose = (key: string) => page.el('grid').querySelectorAll('.media-cell')
-      .find(cell => cell.dataset.key === key)!.dispatch('click');
+    const choose = async (key: string) => {
+      page.el('grid').querySelectorAll('.media-cell').find(cell => cell.dataset.key === key)!.dispatch('click');
+      await page.flush();
+    };
     change(page, 'dTitle', 'Submitted');
     page.el('dSave').click(); await page.flush();
     page.confirmAnswer.value = true;
-    choose('b'); choose('a');
+    await choose('b'); await choose('a');
     const pendingDisabled = page.el('dSave').disabled;
     if (edited) change(page, 'dCapDe', 'Reopened caption');
     const acknowledged = { ...item('a'), title: 'Submitted', conditionalVersion: 1 };
@@ -1722,12 +1774,14 @@ describe('media conditional save recovery in real consumers', () => {
       if (init?.method === 'PATCH' && ++writes === 1) return pending.promise;
     } });
     await open(page, item('a'), [item('b')]);
-    const choose = (key: string) => page.el('grid').querySelectorAll('.media-cell')
-      .find(cell => cell.dataset.key === key)!.dispatch('click');
+    const choose = async (key: string) => {
+      page.el('grid').querySelectorAll('.media-cell').find(cell => cell.dataset.key === key)!.dispatch('click');
+      await page.flush();
+    };
     change(page, 'dTitle', 'Discarded submission');
     page.el('dSave').click(); await page.flush();
     page.confirmAnswer.value = true;
-    choose('b'); choose('a');
+    await choose('b'); await choose('a');
     change(page, 'dCapDe', 'Reopened caption');
     const current = { ...item('a'), title: 'Stored elsewhere' };
     page.rows.set('a', current);
@@ -2310,7 +2364,7 @@ describe('Media publication impact and bounded refresh', () => {
     expect(page.el('dImpact').textContent).toContain('DE: pending against the live release — alt text: yes, caption: no.');
     expect(page.el('dUnsaved').hidden).toBe(!unknown);
     if (unknown) expect(page.el('dCompare').textContent).toContain('Save outcome unknown');
-    else expect(page.el('out').textContent).toContain('Photo details saved.');
+    else expect(page.el('out').textContent).toContain(ui.en['editor.chrome.mediaConditionalSaved']);
   });
 
   it('refreshes only projections while dirty, preserving base expectations and last save result', async () => {
@@ -2327,7 +2381,7 @@ describe('Media publication impact and bounded refresh', () => {
     expect(page.patches).toEqual([]);
     page.el('dSave').click(); await page.flush();
     expect(page.patches[0]?.body).toMatchObject({ conditional: { patch: { alt: { de: 'local' } }, expect: { alt: { de: 'base' } } } });
-    expect(page.el('out').textContent).toContain('Photo details saved.');
+    expect(page.el('out').textContent).toContain(ui.en['editor.chrome.mediaConditionalSaved']);
   });
 
   it('discards reads superseded by selection and save; deadline marks unavailable without clearing dirty text', async () => {
@@ -2360,5 +2414,432 @@ describe('Media publication impact and bounded refresh', () => {
     expect(page.patches).toHaveLength(1);
     page.visibility(true);
     expect(page.timers.filter((timer) => timer.ms === 30000 && !timer.cleared)).toHaveLength(0);
+  });
+});
+
+/** Runs the pending encoding-poll round (the 3 s timer) and lets it settle. */
+async function runPoll(page: Page): Promise<void> {
+  const due = page.timers.filter((timer) => timer.ms === POLL_MS && !timer.cleared);
+  expect(due).toHaveLength(1);
+  due[0]!.cleared = true;
+  due[0]!.fn();
+  await page.flush();
+}
+const pollPending = (page: Page): number => page.timers.filter((timer) => timer.ms === POLL_MS && !timer.cleared).length;
+const badges = (page: Page): string[] => page.el('grid').querySelectorAll('.media-cell').map((cell) => cell.querySelectorAll('.media-cell__badge').map((badge) => badge.textContent).join(''));
+const processing = (key: string): Item => ({ ...item(key), status: 'processing', thumbSrc: '' });
+const reply = (body: unknown, status = 200) => Promise.resolve({ status, ok: status >= 200 && status < 300, json: async () => body });
+
+describe('media-browser encoding poll', () => {
+  async function listed(page: Page, items: Item[]): Promise<void> {
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items, total: items.length });
+    await page.flush();
+  }
+
+  it('updates a processing tile to ready in place, keeps selection and focus, and announces it once', async () => {
+    const page = loadPage();
+    await listed(page, [processing('a'), item('b')]);
+    expect(badges(page)).toEqual(['processing', '']);
+    expect(pollPending(page)).toBe(1);
+    page.el('grid').querySelectorAll('.media-cell')[1]!.click(); // selecting rebuilds the grid once
+    const cells = page.el('grid').querySelectorAll('.media-cell');
+    cells[1]!.focus();
+    page.rows.set('a', item('a'));
+    await runPoll(page);
+    const after = page.el('grid').querySelectorAll('.media-cell');
+    expect(after[0]).toBe(cells[0]); // the tile itself stays; only its content changed
+    expect(badges(page)).toEqual(['', '']);
+    expect(after[0]!.querySelectorAll('img')).toHaveLength(1);
+    expect(page.el('out').textContent).toBe('1 photo ready.');
+    expect(page.el('grid').querySelectorAll('.is-selected').map((cell) => cell.dataset.key)).toEqual(['b']);
+    expect(page.activeElement()).toBe(after[1]);
+    expect(page.el('detail').dataset.key).toBe('b');
+    expect(page.listRequests).toHaveLength(0);
+    // Nothing is processing any more: no further round is scheduled.
+    expect(pollPending(page)).toBe(0);
+  });
+
+  it('counts ready and failed photos in one announcement and keeps polling while any is still encoding', async () => {
+    const page = loadPage();
+    await listed(page, [processing('a'), processing('b'), processing('c')]);
+    page.rows.set('a', item('a'));
+    page.rows.set('b', { ...processing('b'), status: 'failed', error: 'decode_failed' } as Item);
+    page.rows.set('c', processing('c'));
+    await runPoll(page);
+    expect(badges(page)).toEqual(['', 'failed: decode_failed', 'processing']);
+    expect(page.el('out').textContent).toBe('1 photo ready, 1 failed.');
+    expect(pollPending(page)).toBe(1);
+    page.rows.set('c', item('c'));
+    await runPoll(page);
+    expect(badges(page)).toEqual(['', 'failed: decode_failed', '']);
+    expect(page.el('out').textContent).toBe('1 photo ready.');
+    expect(pollPending(page)).toBe(0);
+  });
+
+  it('pauses while the tab is hidden, resumes when it returns, and a failed read says nothing', async () => {
+    let fail = true;
+    const page = loadPage({ request: (url) => url === '/media/items/a' && fail ? reply({ error: 'unavailable' }, 503) : undefined });
+    await listed(page, [processing('a')]);
+    const before = page.el('out').textContent;
+    page.visibility(true);
+    expect(pollPending(page)).toBe(0);
+    page.visibility(false);
+    expect(pollPending(page)).toBe(1);
+    await runPoll(page);
+    expect(page.el('out').textContent).toBe(before);
+    expect(badges(page)).toEqual(['processing']);
+    expect(pollPending(page)).toBe(1);
+    fail = false;
+    page.rows.set('a', item('a'));
+    await runPoll(page);
+    expect(badges(page)).toEqual(['']);
+    expect(page.el('out').textContent).toBe('1 photo ready.');
+  });
+
+  it('starts polling when an upload has been transferred and the grid lists it as processing', async () => {
+    const page = loadPage();
+    await listed(page, [item('existing')]);
+    expect(pollPending(page)).toBe(0);
+    page.el('dropZone').dispatch('drop', { dataTransfer: { files: [{ name: 'new.jpg' }] } });
+    page.uploadRequests[0]!.resolve({ key: 'new', status: 'processing' });
+    await page.flush();
+    runTimers(page.timers);
+    page.listRequests.shift()!.resolve({ items: [processing('new'), item('existing')], total: 2 });
+    await page.flush();
+    expect(pollPending(page)).toBe(1);
+  });
+
+  it('enables Delete in the open panel without touching what the author is typing', async () => {
+    const page = loadPage();
+    await listed(page, [processing('a')]);
+    page.el('grid').querySelectorAll('.media-cell')[0]!.click();
+    expect(page.el('dDelete').disabled).toBe(true);
+    expect(page.el('detail').find('deleteNote')).not.toBeNull();
+    expect(page.el('dSuggest').disabled).toBe(true);
+    page.el('dAltDe').value = 'Typed while encoding';
+    page.el('detail').dispatch('input');
+    page.el('dAltDe').focus();
+    page.rows.set('a', item('a'));
+    await runPoll(page);
+    expect(page.el('dDelete').disabled).toBe(false);
+    expect(page.el('detail').find('deleteNote')).toBeNull();
+    expect(page.el('dSuggest').disabled).toBe(false);
+    expect(page.el('dAltDe').value).toBe('Typed while encoding');
+    expect(page.el('dUnsaved').hidden).toBe(false);
+    expect(page.activeElement()).toBe(page.el('dAltDe'));
+    expect(page.el('detail').querySelectorAll('.media-detail__preview')[0]!.querySelectorAll('img')).toHaveLength(1);
+  });
+
+  it('rebuilds a clean, unfocused panel so Retry encoding appears for a failed photo', async () => {
+    const page = loadPage();
+    await listed(page, [processing('a')]);
+    page.el('grid').querySelectorAll('.media-cell')[0]!.click();
+    page.el('grid').querySelectorAll('.media-cell')[0]!.focus();
+    expect(page.el('detail').find('dRetry')).toBeNull();
+    page.rows.set('a', { ...processing('a'), status: 'failed', error: 'decode_failed' } as Item);
+    await runPoll(page);
+    expect(page.el('dRetry')).toBeDefined();
+    expect(page.el('dDelete').disabled).toBe(false);
+    expect(page.el('out').textContent).toBe('1 photo failed.');
+  });
+});
+
+describe('media-browser alt text count and filter', () => {
+  it('says how many ready photos have no alt text, filters to them and back, and shows the active filter', async () => {
+    const page = loadPage();
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [item('a'), item('b')], total: 2, altMissing: 12 });
+    await page.flush();
+    expect(page.el('grid').textContent).not.toContain('No alt text');
+    expect(page.el('altMissingLine').hidden).toBe(false);
+    expect(page.el('altMissingText').textContent).toBe('12 ready photos in this view have no alt text.');
+    expect(page.el('altMissingAction').textContent).toBe('Show only these');
+    expect(page.el('fExtra').hidden).toBe(true);
+
+    page.el('altMissingAction').click();
+    await page.flush();
+    const filtered = page.listRequests.shift()!;
+    expect(new URL(filtered.url, 'https://app.example').searchParams.get('alt')).toBe('missing');
+    expect(page.el('fAlt').value).toBe('missing');
+    expect(page.el('fExtra').hidden).toBe(false);
+    expect(page.el('fMore').getAttribute('aria-expanded')).toBe('true');
+    filtered.resolve({ items: [item('a')], total: 1, altMissing: 12 });
+    await page.flush();
+    expect(page.el('altMissingText').textContent).toBe('Showing photos without alt text.');
+    expect(page.el('altMissingAction').textContent).toBe('Show all photos in this view');
+
+    page.el('altMissingAction').click();
+    await page.flush();
+    const all = page.listRequests.shift()!;
+    expect(new URL(all.url, 'https://app.example').searchParams.get('alt')).toBeNull();
+    expect(page.el('fAlt').value).toBe('');
+    all.resolve({ items: [item('a'), item('b')], total: 2, altMissing: 1 });
+    await page.flush();
+    expect(page.el('altMissingText').textContent).toBe('1 ready photo in this view has no alt text.');
+
+    // The select under More filters is the same filter.
+    page.el('fAlt').value = 'missing';
+    page.el('fAlt').dispatch('change');
+    await page.flush();
+    expect(new URL(page.listRequests.shift()!.url, 'https://app.example').searchParams.get('alt')).toBe('missing');
+  });
+
+  it.each([
+    ['a count of 0', { altMissing: 0 }],
+    ['no count at all (a server from before the field existed)', {}],
+  ])('shows nothing with %s', async (_label, extra) => {
+    const page = loadPage();
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [item('a')], total: 1, ...extra });
+    await page.flush();
+    expect(page.el('altMissingLine').hidden).toBe(true);
+    expect(page.el('altMissingText').textContent).toBe('');
+  });
+});
+
+describe('media-browser folder prompts', () => {
+  it('creates a folder through the in-page prompt, then opens it and says so', async () => {
+    let folders: string[] = [];
+    const page = loadPage({ prompt: 'Iceland', request: (url, init) => {
+      if (url !== '/media/folders') return;
+      if (init?.method === 'POST') {
+        expect(JSON.parse(init.body ?? '{}')).toEqual({ path: 'Iceland' });
+        folders = ['Iceland'];
+        return reply({ ok: true, folders });
+      }
+      return reply(folders);
+    } });
+    await page.flush(); page.listRequests.shift()!.resolve({ items: [], total: 0 }); await page.flush();
+    page.el('newFolder').click(); await page.flush();
+    expect(page.prompts).toHaveLength(1);
+    expect(page.prompts[0]).toMatchObject({ title: 'New folder', label: 'Folder name', confirmLabel: 'Create folder' });
+    expect(page.prompts[0]!.validate!('a/b')).toBe('A folder name cannot contain a slash. Create one level at a time.');
+    expect(page.prompts[0]!.validate!('Iceland')).toBe('');
+    const listing = page.listRequests.shift()!;
+    expect(new URL(listing.url, 'https://app.example').searchParams.get('folder')).toBe('Iceland');
+    listing.resolve({ items: [], total: 0 });
+    await page.flush();
+    expect(page.el('out').textContent).toBe('Folder created.');
+    expect(page.el('folderTree').querySelectorAll('.is-current').map((button) => button.textContent)).toEqual(['Iceland']);
+    expect(page.el('out').adjacent).toHaveLength(0); // no recovery panel for an acknowledged create
+  });
+
+  it('creates nothing when the prompt is cancelled or refuses the name', async () => {
+    let creates = 0;
+    const page = loadPage({ prompt: null, request: (url, init) => {
+      if (url === '/media/folders' && init?.method === 'POST') { creates++; return reply({ ok: true, folders: [] }); }
+      return undefined;
+    } });
+    await page.flush(); page.listRequests.shift()!.resolve({ items: [], total: 0 }); await page.flush();
+    page.el('newFolder').click(); await page.flush();
+    page.promptAnswer.value = 'bad/name';
+    page.el('newFolder').click(); await page.flush();
+    expect(page.prompts).toHaveLength(2);
+    expect(creates).toBe(0);
+    expect(page.listRequests).toHaveLength(0);
+  });
+
+  it('renames the current folder through the prompt, keeping its parent, and counts the moved photos', async () => {
+    let renamed: unknown;
+    const page = loadPage({ folders: ['Trips', 'Trips/North'], prompt: 'South', request: (url, init) => {
+      if (url === '/media/folders' && init?.method === 'PATCH') { renamed = JSON.parse(init.body ?? '{}'); return reply({ ok: true, moved: 3, folders: ['Trips', 'Trips/South'] }); }
+      return undefined;
+    } });
+    await page.flush(); page.listRequests.shift()!.resolve({ items: [], total: 0 }); await page.flush();
+    page.el('folderTree').querySelectorAll('.folder-btn').find((button) => button.textContent === 'North')!.click();
+    await page.flush(); page.listRequests.shift()!.resolve({ items: [], total: 0 }); await page.flush();
+    page.el('renameFolder').click(); await page.flush();
+    expect(page.prompts[0]).toMatchObject({ title: 'Rename folder', label: 'Folder name', value: 'North', confirmLabel: 'Rename folder' });
+    expect(page.prompts[0]!.validate!('Nor%th')).toBe('A folder name can contain only letters, digits, spaces, hyphens, underscores and dots.');
+    expect(renamed).toEqual({ from: 'Trips/North', to: 'Trips/South' });
+    const listing = page.listRequests.shift()!;
+    expect(new URL(listing.url, 'https://app.example').searchParams.get('folder')).toBe('Trips/South');
+    listing.resolve({ items: [], total: 0 });
+    await page.flush();
+    expect(page.el('out').textContent).toBe('Folder renamed (3 photos moved).');
+  });
+
+  it('moves focus to the folder that becomes current after deleting one', async () => {
+    let folders = ['Trips', 'Trips/North'];
+    const page = loadPage({ request: (url, init) => {
+      if (url !== '/media/folders') return;
+      if (init?.method === 'DELETE') { folders = ['Trips']; return reply({ ok: true }); }
+      return reply(folders);
+    } });
+    await page.flush(); page.listRequests.shift()!.resolve({ items: [], total: 0 }); await page.flush();
+    page.el('folderTree').querySelectorAll('.folder-btn').find((button) => button.textContent === 'North')!.click();
+    await page.flush(); page.listRequests.shift()!.resolve({ items: [], total: 0 }); await page.flush();
+    page.confirmAnswer.value = true;
+    page.el('deleteFolder').focus();
+    page.el('deleteFolder').click(); await page.flush();
+    page.listRequests.shift()!.resolve({ items: [], total: 0 }); await page.flush();
+    expect(page.el('out').textContent).toBe('Folder deleted.');
+    const current = page.activeElement();
+    expect(current?.textContent).toBe('Trips');
+    expect(current?.getAttribute('aria-current')).toBe('true');
+  });
+});
+
+describe('media-browser unsaved details guard', () => {
+  it('asks in page with the photo\'s title, and cancelling keeps the edits', async () => {
+    const page = loadPage();
+    const named = { ...item('library/2025/sea-lion'), title: 'Sea lion asleep' };
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items: [named, item('b')], total: 2 });
+    await page.flush();
+    const cells = page.el('grid').querySelectorAll('.media-cell');
+    cells[0]!.click();
+    page.el('dAltDe').value = 'Dozing on the lava';
+    page.el('detail').dispatch('input');
+    page.confirmAnswer.value = false;
+    cells[1]!.click();
+    await page.flush();
+    expect(page.confirms).toHaveLength(1);
+    expect(page.confirms[0]).toContain('"Sea lion asleep"');
+    expect(page.confirms[0]).not.toContain('library/2025');
+    expect(page.el('detail').dataset.key).toBe('library/2025/sea-lion');
+    expect(page.el('dAltDe').value).toBe('Dozing on the lava');
+    expect(page.el('dUnsaved').hidden).toBe(false);
+  });
+});
+
+describe('media-browser upload rejections', () => {
+  function xhrAnswering(status: number, body: unknown) {
+    return class {
+      status = 0;
+      responseText = '';
+      onload = (): void => {};
+      upload = { onprogress: (): void => {} };
+      open(): void {}
+      abort(): void {}
+      send(): void { this.status = status; this.responseText = JSON.stringify(body); this.onload(); }
+    };
+  }
+
+  it('words a file the server cannot read as a sentence and never offers to send it again', async () => {
+    const page = loadPage({ xhr: xhrAnswering(400, { error: 'invalid key or image' }) });
+    await page.flush(); page.listRequests.shift()!.resolve({ items: [], total: 0 }); await page.flush();
+    page.el('dropZone').dispatch('drop', { dataTransfer: { files: [{ name: 'scan.jpg', type: 'image/jpeg', size: 1000 }] } });
+    await page.flush();
+    const queue = page.el('uploadQueue');
+    expect(queue.querySelectorAll('.upload-row__state').map((node) => node.textContent)).toEqual([ui.en['editor.chrome.uploadRejectedUnreadable']]);
+    expect(queue.textContent).toContain(ui.en['editor.chrome.uploadRejectedCount'].replace('{count}', '1'));
+    expect(queue.textContent).not.toContain('invalid key or image');
+    const buttons = queue.querySelectorAll('button').map((button) => button.textContent);
+    expect(buttons.some((label) => label.startsWith(ui.en['editor.chrome.uploadRetry']))).toBe(false);
+    expect(buttons).toContain('Clear finished');
+    queue.querySelectorAll('button').find((button) => button.textContent === 'Clear finished')!.click();
+    await page.flush();
+    expect(page.el('uploadQueue').hidden).toBe(true);
+    expect(page.uploadRequests).toHaveLength(0); // the custom XHR answered directly; nothing was resent
+  });
+
+  it('keeps a definite non-file failure retryable and reads it as a sentence', async () => {
+    const page = loadPage({ xhr: xhrAnswering(409, { error: 'upload id reused', code: 'upload_id_reused' }) });
+    await page.flush(); page.listRequests.shift()!.resolve({ items: [], total: 0 }); await page.flush();
+    page.el('dropZone').dispatch('drop', { dataTransfer: { files: [{ name: 'again.jpg', type: 'image/jpeg', size: 1000 }] } });
+    await page.flush();
+    const queue = page.el('uploadQueue');
+    expect(queue.querySelectorAll('.upload-row__state').map((node) => node.textContent)).toEqual(['Could not upload: Upload id reused.']);
+    expect(queue.querySelectorAll('button').map((button) => button.textContent)).toContain(ui.en['editor.chrome.uploadRetry'] + ' (1)');
+  });
+});
+
+describe('media-browser focus after actions', () => {
+  async function open(page: Page, items: Item[]): Promise<void> {
+    for (const row of items) page.rows.set(row.key, row);
+    await page.flush();
+    page.listRequests.shift()!.resolve({ items, total: items.length });
+    await page.flush();
+  }
+  async function deletePhoto(page: Page, index: number): Promise<void> {
+    page.el('grid').querySelectorAll('.media-cell')[index]!.click();
+    page.confirmAnswer.value = true;
+    page.el('dDelete').focus();
+    page.el('dDelete').click();
+    await page.flush();
+    const remaining = [...page.rows.values()];
+    page.listRequests.shift()!.resolve({ items: remaining, total: remaining.length });
+    await page.flush();
+  }
+
+  it('lands on the next tile after a delete, then the previous one, then the empty state\'s upload action', async () => {
+    const page = loadPage();
+    await open(page, [item('a'), item('b'), item('c')]);
+    await deletePhoto(page, 1);
+    expect(page.el('out').textContent).toBe('Photo deleted.');
+    expect(page.activeElement()?.dataset.key).toBe('c');
+    await deletePhoto(page, 1);
+    expect(page.activeElement()?.dataset.key).toBe('a');
+    await deletePhoto(page, 0);
+    expect(page.el('mediaEmpty').hidden).toBe(false);
+    expect(page.activeElement()).toBe(page.el('emptyChoosePhotos'));
+  });
+
+  it('keeps focus on Save details after saving and says so', async () => {
+    const page = loadPage();
+    await open(page, [item('a')]);
+    page.el('grid').querySelectorAll('.media-cell')[0]!.click();
+    page.el('dTitle').value = 'Named';
+    page.el('detail').dispatch('input');
+    page.el('dSave').focus();
+    page.el('dSave').click();
+    await page.flush();
+    expect(page.patches).toHaveLength(1);
+    expect(page.el('out').textContent).toBe('Details saved.');
+    expect(page.activeElement()).toBe(page.el('dSave'));
+    expect(page.el('dSave').disabled).toBe(false);
+  });
+
+  it('continues from the selection\'s anchor after Clear selection', async () => {
+    const page = loadPage();
+    await open(page, [item('a'), item('b'), item('c')]);
+    const cells = page.el('grid').querySelectorAll('.media-cell');
+    cells[1]!.click();
+    page.el('grid').querySelectorAll('.media-cell')[2]!.dispatch('click', { ctrlKey: true });
+    expect(page.el('bulkTools').hidden).toBe(false);
+    page.el('clearSelection').focus();
+    page.el('clearSelection').click();
+    expect(page.el('bulkTools').hidden).toBe(true);
+    expect(page.activeElement()?.dataset.key).toBe('c');
+  });
+});
+
+describe('media-browser URL state', () => {
+  it('restores the folder and the alt filter from the URL and keeps them there', async () => {
+    const page = loadPage({ search: '?folder=Trips%2FNorth&alt=missing', folders: ['Trips', 'Trips/North'] });
+    await page.flush();
+    const first = page.listRequests.shift()!;
+    const params = new URL(first.url, 'https://app.example').searchParams;
+    expect(params.get('folder')).toBe('Trips/North');
+    expect(params.get('alt')).toBe('missing');
+    expect(page.el('fAlt').value).toBe('missing');
+    expect(page.el('fExtra').hidden).toBe(false);
+    first.resolve({ items: [], total: 0, altMissing: 0 });
+    await page.flush();
+    expect(page.el('folderTree').querySelectorAll('.is-current').map((button) => button.textContent)).toEqual(['North']);
+    expect(page.urlState()).toBe('?folder=Trips%2FNorth&alt=missing');
+
+    page.el('folderTree').querySelectorAll('.folder-btn').find((button) => button.textContent === 'All photos')!.click();
+    await page.flush();
+    expect(page.urlState()).toBe('?alt=missing');
+    page.listRequests.shift()!.resolve({ items: [], total: 0, altMissing: 0 });
+    await page.flush();
+    page.el('fAlt').value = '';
+    page.el('fAlt').dispatch('change');
+    await page.flush();
+    expect(page.urlState()).toBe('');
+  });
+
+  it('falls back to All photos when the folder in the URL no longer exists', async () => {
+    const page = loadPage({ search: '?folder=Gone', folders: ['Trips'] });
+    await page.flush();
+    const first = page.listRequests.shift()!;
+    expect(new URL(first.url, 'https://app.example').searchParams.get('folder')).toBe('');
+    expect(page.urlState()).toBe('');
+    first.resolve({ items: [], total: 0 });
+    await page.flush();
+    expect(page.el('folderTree').querySelectorAll('.is-current').map((button) => button.textContent)).toEqual(['All photos']);
   });
 });

@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
 import { ui } from '../../site/src/i18n/ui.js';
 import { loadPublicationState, publication, type LiveObservation } from './publication-client-fixture.js';
 
@@ -57,6 +59,16 @@ describe('publication vocabulary — first matching rule wins', () => {
     expect(api.qualifiers(p, status)).toContain('result unknown');
     expect(api.label(p)).toContain('requires a site rebuild');
     expect(api.label(p, true)).not.toContain('requires a site rebuild');
+  });
+  it('writes the failed-build moment in the one date format, never a locale default', () => {
+    // Every admin page loads admin-ui.js, which publication-state.js formats through.
+    const browser: Record<string, unknown> = {};
+    vm.runInNewContext(readFileSync('public/admin-ui.js', 'utf8'), { window: browser, document: {} });
+    const withFormat = loadPublicationState({ AdminFormat: browser.AdminFormat });
+    const p = { ...publication(), live: { de: 'not-live', en: 'not-live' } };
+    const text = withFormat.qualifiers(p, { running: null, last: { result: 'failed', finishedAt: '2026-11-10T12:43:00.000Z' } });
+    expect(text).toMatch(/^Last site build failed at \d{1,2} Nov 2026, \d{2}:\d{2} — see Desk\.$/);
+    expect(text).not.toMatch(/\d{1,2}\/\d{1,2}\/\d{4}|T12:43/);
   });
   it('treats absent and unknown summary counts as unavailable, not zero', () => {
     expect(api.summary({ availability: 'available', release: 'unknown', posts: null, galleryDescriptions: null })).toContain('counts are unavailable');

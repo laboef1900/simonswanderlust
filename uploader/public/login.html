@@ -54,6 +54,17 @@
       }
       function setStatus(msg) { $('out').textContent = msg || ''; }
       function showErr(msg) { const el = $('err'); el.textContent = msg; el.hidden = !msg; }
+      // The server answers with short lowercase codes; the author reads a sentence.
+      function refusal(status, error) {
+        const text = typeof error === 'string' ? error : '';
+        if (status === 401) return 'The username or password is incorrect.';
+        if (status === 429) return 'Too many failed attempts. This account is locked for a while; try again later.';
+        if (text.startsWith('username')) return 'Use 1–64 letters, digits, “.”, “_” or “-” for the username.';
+        if (text.startsWith('password')) return 'Use a password of 12 to 1024 characters.';
+        const detail = text.trim();
+        return 'Could not ' + (needsSetup ? 'create the account' : 'sign in')
+          + (detail ? ': ' + detail.charAt(0).toUpperCase() + detail.slice(1).replace(/\.?$/, '.') : '. Check your username and password.');
+      }
       $('login-form').addEventListener('submit', async (event) => {
         event.preventDefault();
         showErr('');
@@ -69,7 +80,7 @@
           if (res.ok) { location.href = nextPath; return; }
           const r = await res.json().catch(() => ({}));
           setStatus('');
-          showErr(r.error || 'Sign-in failed. Check your username and password.');
+          showErr(refusal(res.status, r.error));
         } catch (e) {
           setStatus('');
           showErr('Could not reach the server. Check your connection and try again.');

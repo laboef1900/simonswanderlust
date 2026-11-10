@@ -1,7 +1,7 @@
 .gpx-route__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.375rem; }
 .gpx-route__caption { margin-top: 1rem; }
 .gpx-route__caption .notice-warn { margin-top: .5rem; }
-.gpx-dialog { width: min(74rem, calc(100vw - 2rem)); max-width: none; max-height: min(92dvh, 58rem); padding: 0; border: 1px solid var(--line-strong); border-radius: .75rem; color: var(--ink); background: var(--surface); box-shadow: 0 24px 48px -12px rgb(20 42 66 / 28%); }
+.gpx-dialog { width: min(74rem, calc(100vw - 2rem)); max-width: none; max-height: min(92dvh, 58rem); padding: 0; border: 1px solid var(--line-strong); border-radius: var(--radius-xl); color: var(--ink); background: var(--surface); box-shadow: 0 24px 48px -12px rgb(20 42 66 / 28%); }
 .gpx-dialog[open] { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; }
 .gpx-dialog::backdrop { background: rgb(20 42 66 / 45%); }
 .gpx-dialog__header, .gpx-dialog__footer { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem 1.25rem; background: var(--canvas); }
@@ -14,6 +14,8 @@
 .gpx-map { width: 100%; height: clamp(15rem, 32vh, 22rem); background-color: var(--canvas); border: 1px solid var(--line-strong); border-radius: var(--control-radius); }
 .gpx-preview { width: 100%; display: grid; justify-items: start; gap: .75rem; }
 .gpx-preview > p { margin: 0; }
+/* Counts of points, segments and waypoints are measurements (DESIGN.md "Dates and counts"). */
+#gpxCounts, #gpxKept, #gpxRemoved { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .gpx-preview[hidden], .gpx-dialog [hidden] { display: none !important; }
 .gpx-trim { display: grid; grid-template-columns: repeat(2, minmax(8rem, 1fr)); gap: .5rem .75rem; align-items: end; }
 .gpx-trim label { grid-row: 1; }

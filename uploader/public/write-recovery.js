@@ -15,7 +15,7 @@ window.WriteRecovery = (function () {
     let status = '';
     const copy = options.copy;
     const box = document.createElement('section');
-    box.className = 'write-recovery';
+    box.className = 'write-recovery notice-warn';
     box.hidden = true;
     const message = document.createElement('p');
     message.setAttribute('role', 'status');
@@ -28,12 +28,13 @@ window.WriteRecovery = (function () {
     const login = document.createElement('a');
     login.href = '/login?next=' + encodeURIComponent(location.pathname + location.search);
     login.target = '_blank'; login.rel = 'noopener'; login.textContent = copy.uploadSignIn;
+    // The comparison: the three choices first, then the fields that differ in
+    // words, and the raw JSON one disclosure further down for anyone who needs it.
     const compare = document.createElement('details');
+    compare.className = 'help-details';
     const heading = document.createElement('summary'); heading.textContent = copy.writeCompare;
-    const localHeading = document.createElement('h3'); localHeading.textContent = copy.writeLocal;
-    const local = document.createElement('pre');
-    const storedHeading = document.createElement('h3'); storedHeading.textContent = copy.writeStored;
-    const stored = document.createElement('pre');
+    const choices = document.createElement('div');
+    choices.className = 'actions';
     const useStored = document.createElement('button');
     useStored.type = 'button'; useStored.className = 'btn-secondary'; useStored.textContent = copy.writeUseStored;
     const useMine = document.createElement('button');
@@ -42,12 +43,40 @@ window.WriteRecovery = (function () {
     keepEditing.type = 'button'; keepEditing.className = 'btn-secondary'; keepEditing.textContent = copy.writeKeepEditing;
     const latest = document.createElement('a');
     latest.target = '_blank'; latest.rel = 'noopener'; latest.textContent = copy.writeLatest;
-    compare.append(heading, localHeading, local, storedHeading, stored, latest, useStored, useMine, keepEditing);
+    choices.append(useStored, useMine, keepEditing, latest);
+    const attemptsNote = document.createElement('p');
+    attemptsNote.hidden = true;
+    const table = document.createElement('table');
+    table.className = 'write-recovery__fields';
+    table.hidden = true;
+    const caption = document.createElement('caption'); caption.textContent = copy.writeCompareCaption;
+    const head = document.createElement('thead');
+    const headRow = document.createElement('tr');
+    for (const text of [copy.writeCompareField, copy.writeCompareMine, copy.writeCompareStored]) {
+      const cell = document.createElement('th');
+      cell.setAttribute('scope', 'col'); cell.textContent = text;
+      headRow.appendChild(cell);
+    }
+    head.appendChild(headRow);
+    const rows = document.createElement('tbody');
+    table.append(caption, head, rows);
+    const same = document.createElement('p');
+    same.hidden = true; same.textContent = copy.writeCompareSame;
+    const technical = document.createElement('details');
+    technical.className = 'help-details';
+    const technicalHeading = document.createElement('summary'); technicalHeading.textContent = copy.writeTechnical;
+    const localHeading = document.createElement('p'); localHeading.textContent = copy.writeLocal;
+    const local = document.createElement('pre');
+    const storedHeading = document.createElement('p'); storedHeading.textContent = copy.writeStored;
+    const stored = document.createElement('pre');
+    technical.append(technicalHeading, localHeading, local, storedHeading, stored);
+    // Without a `describe` reading there is nothing to tabulate: choices, then the JSON.
+    compare.append(heading, choices, attemptsNote, ...(typeof options.describe === 'function' ? [table, same] : []), technical);
     controls.append(check, login, resume);
     box.append(message, controls, compare);
     document.querySelector('main').prepend(box);
     const offline = document.createElement('p');
-    offline.className = 'write-connectivity';
+    offline.className = 'write-connectivity notice-warn';
     offline.setAttribute('role', 'status');
     offline.textContent = copy.writeOffline;
     document.querySelector('main').prepend(offline);
@@ -57,19 +86,79 @@ window.WriteRecovery = (function () {
     window.addEventListener('online', renderConnectivity);
     window.addEventListener('offline', renderConnectivity);
     renderConnectivity();
+    // `describe(version)` is the host's reading of one version as labelled
+    // fields; the same reading of both versions makes equal fields fall away.
+    const LONG = 200;
+    const WINDOW = 120;
+    function fields(list) {
+      const map = new Map();
+      for (const row of Array.isArray(list) ? list : []) {
+        if (row && typeof row.label === 'string') map.set(row.label, row.value === null || row.value === undefined ? '' : String(row.value));
+      }
+      return map;
+    }
+    function differences() {
+      if (typeof options.describe !== 'function') return null;
+      const mine = fields(options.describe(options.collect()));
+      const theirs = fields(options.describe(comparison));
+      const changed = [];
+      for (const [label, value] of mine) {
+        const other = theirs.get(label);
+        if (other !== undefined && other !== value) changed.push({ label, mine: value, theirs: other });
+      }
+      return changed;
+    }
+    // A long value (a body) shows only its first differing line, cut to a
+    // window around the first differing character, plus its length.
+    function clip(line, at) {
+      if (line.length <= WINDOW) return line;
+      const start = Math.max(0, Math.min(at - 40, line.length - WINDOW));
+      return (start ? '…' : '') + line.slice(start, start + WINDOW) + (start + WINDOW < line.length ? '…' : '');
+    }
+    function differingLine(value, other) {
+      const lines = value.split('\n');
+      const others = other.split('\n');
+      let index = 0;
+      while (index < lines.length && index < others.length && lines[index] === others[index]) index++;
+      const line = lines[index] || '';
+      const counterpart = others[index] || '';
+      let at = 0;
+      while (at < line.length && at < counterpart.length && line[at] === counterpart[at]) at++;
+      return clip(line, at);
+    }
+    function shown(value, other) {
+      if (value.length <= LONG && other.length <= LONG) return value;
+      return differingLine(value, other) + ' (' + AdminFormat.count(value.length, 'character') + ')';
+    }
+    function renderComparison() {
+      latest.href = options.kind === 'pages'
+        ? '/admin/about.html?key=' + encodeURIComponent(resource()) + '#revisionsCard'
+        : '/admin/editor.html?tk=' + encodeURIComponent(resource()) + '#revisionsCard';
+      attemptsNote.hidden = !attempts.length;
+      attemptsNote.textContent = !attempts.length ? ''
+        : attempts.length === 1 ? copy.writeAttemptsOne : copy.writeAttemptsMany.replace('{count}', String(attempts.length));
+      const changed = differences();
+      table.hidden = !changed || !changed.length;
+      same.hidden = !changed || changed.length > 0;
+      rows.replaceChildren(...(changed || []).map((row) => {
+        const tr = document.createElement('tr');
+        const label = document.createElement('th');
+        label.setAttribute('scope', 'row'); label.textContent = row.label;
+        const mine = document.createElement('td'); mine.textContent = shown(row.mine, row.theirs);
+        const theirs = document.createElement('td'); theirs.textContent = shown(row.theirs, row.mine);
+        tr.append(label, mine, theirs);
+        return tr;
+      }));
+      local.textContent = JSON.stringify({ current: options.collect(), attempts }, null, 2);
+      stored.textContent = JSON.stringify(comparison, null, 2);
+    }
     function render() {
       box.hidden = !status && !paused && !comparison;
       message.textContent = paused ? copy.writeOwnerChanged : status;
       check.hidden = !owner || !resource(); check.disabled = busy || paused;
       login.hidden = !paused; resume.hidden = !paused; resume.disabled = busy;
       compare.hidden = !comparison;
-      if (comparison) {
-        latest.href = options.kind === 'pages'
-          ? '/admin/about.html?key=' + encodeURIComponent(resource()) + '#revisionsCard'
-          : '/admin/editor.html?tk=' + encodeURIComponent(resource()) + '#revisionsCard';
-        local.textContent = JSON.stringify({ current: options.collect(), attempts }, null, 2);
-        stored.textContent = JSON.stringify(comparison, null, 2);
-      }
+      if (comparison) renderComparison();
     }
     document.querySelector('main').addEventListener('input', () => { if (comparison) render(); });
     function initialize(userId) {

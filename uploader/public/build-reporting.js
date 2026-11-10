@@ -7,19 +7,32 @@ window.BuildReporting = (function () {
     return BuildCopy[locale][key].replace(/\{(\w+)\}/g, (match, name) => String(values[name] ?? match));
   }
   function failure(code) { return text('failure.' + (codes.includes(code) ? code : 'internal')); }
+  // A release id is "<ms>-<pid>-<seq>", a live observation { release, stampedAt }:
+  // either names the moment the version was built, which is all the author
+  // needs to read about it.
+  function builtAt(value) {
+    const stamp = typeof value === 'string' ? (value ? Number(value.split('-')[0]) : NaN) : Date.parse(value?.stampedAt);
+    return Number.isFinite(stamp) ? AdminFormat.dateTime(stamp) : '';
+  }
   function live(value) {
     if (value === null) return text('noLive');
-    if (!value) return text('liveUnavailable');
-    const stamp = typeof value === 'string' ? Number(value.split('-')[0]) : Date.parse(value.stampedAt);
-    return Number.isFinite(stamp) ? text('live', { stampedAt: new Date(stamp).toLocaleString() }) : text('liveUnavailable');
+    const at = value ? builtAt(value) : '';
+    return at ? text('live', { stampedAt: at }) : text('liveUnavailable');
   }
   function describeOutcome(action, body = {}, values = {}) {
     const build = action === 'rebuild' ? body : body.build;
     const prefix = action === 'rebuild' ? '' : text(action === 'delete' && !build ? 'deleteDraft' : action, values);
     if (!build) return [prefix, text('noBuild')].filter(Boolean).join(' ');
     if (typeof build.ok !== 'boolean') return [prefix, text('unknown')].filter(Boolean).join(' ');
-    return [prefix, build.ok ? text('promoted', { release: build.release })
-      : text(action === 'rebuild' ? 'failedRebuild' : 'failedChange', { error: failure(build.code) }), live(build.liveRelease)].filter(Boolean).join(' ');
+    if (!build.ok) {
+      return [prefix, text(action === 'rebuild' ? 'failedRebuild' : 'failedChange', { error: failure(build.code) }), live(build.liveRelease)].filter(Boolean).join(' ');
+    }
+    // The usual case: the version just built is the one the live site serves.
+    const at = builtAt(build.release);
+    const serving = at && build.liveRelease === build.release
+      ? text(action === 'unpublish' || action === 'delete' ? 'liveWithout' : 'liveThis', { builtAt: at })
+      : text('built') + ' ' + live(build.liveRelease);
+    return [prefix, serving].filter(Boolean).join(' ');
   }
   function recovery(root, code) {
     const link = document.createElement('a');
@@ -38,14 +51,14 @@ window.BuildReporting = (function () {
     const parts = [];
     const running = status.running, last = status.last;
     if (running) {
-      parts.push(text('running', { startedAt: new Date(running.startedAt).toLocaleString() }));
+      parts.push(text('running', { startedAt: AdminFormat.dateTime(running.startedAt) }));
       if (running.queued) parts.push(text('queued'));
       if (running.owner === 'unverified') parts.push(text('unverified'));
     }
     if (last) {
       parts.push(text(last.result, {
-        startedAt: new Date(last.startedAt).toLocaleString(),
-        finishedAt: new Date(last.finishedAt).toLocaleString(), error: failure(last.failure?.code),
+        startedAt: AdminFormat.dateTime(last.startedAt),
+        finishedAt: AdminFormat.dateTime(last.finishedAt), error: failure(last.failure?.code),
       }));
       if (last.beforeBoot) parts.push(text('beforeBoot'));
     }

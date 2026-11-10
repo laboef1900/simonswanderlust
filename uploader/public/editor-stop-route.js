@@ -191,7 +191,7 @@
       if (missing.length) return setStatus(copy.profileMissing);
       if (!route) return setStatus(copy.stateNone);
       setStatus(fresh
-        ? fill(copy.stateFresh, { time: new Date(route.computedAt).toLocaleString() })
+        ? fill(copy.stateFresh, { time: AdminFormat.dateTime(route.computedAt) })
         : copy.stateStale);
     }
 

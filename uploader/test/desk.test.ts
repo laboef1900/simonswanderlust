@@ -23,8 +23,6 @@ interface Api {
   encodeCount(stats: { pending?: number; running?: number } | null): number | null;
   releaseState(health: unknown): boolean | null;
   releaseFromResponse(response: { status: number; ok: boolean; json(): Promise<unknown> }): Promise<boolean>;
-  secondaryBodyLabel(status: string, lang: { primary: 'de' | 'en'; locales: string[] }): string;
-  formatUpdatedAt(value: unknown, locales?: string | string[]): string;
   resilientLoader<T>(load: () => Promise<T>, view: SectionView<T>): () => Promise<void>;
 }
 
@@ -35,7 +33,6 @@ function load(locale: 'de' | 'en' = 'en'): Api {
   };
   ctx.window = ctx;
   vm.createContext(ctx);
-  vm.runInContext(readFileSync('public/language.js', 'utf8'), ctx);
   vm.runInContext(src, ctx);
   // VM exports lose their static browser type.
   const api = ctx.Desk as Api;
@@ -150,22 +147,6 @@ describe('Desk status interpretation', () => {
       ok: false,
       json: async () => ({ error: 'internal server error' }),
     })).rejects.toThrow();
-  });
-
-  it('names the secondary language without treating omitted or disabled content as missing', () => {
-    const de = { primary: 'de' as const, locales: ['de', 'en'] };
-    const en = { primary: 'en' as const, locales: ['en', 'de'] };
-    expect(api.secondaryBodyLabel('started', de)).toBe('English body started');
-    expect(api.secondaryBodyLabel('empty', de)).toBe('English body not started');
-    expect(api.secondaryBodyLabel('empty', en)).toBe('German body not started');
-    expect(api.secondaryBodyLabel('omitted', en)).toBe('');
-    expect(api.secondaryBodyLabel('none', { primary: 'en', locales: ['en'] })).toBe('');
-  });
-
-  it('formats a valid last-edit time and omits an invalid one', () => {
-    expect(api.formatUpdatedAt('2026-09-19T10:30:00.000Z', 'en-GB')).not.toBe('');
-    expect(api.formatUpdatedAt('not-a-date', 'en-GB')).toBe('');
-    expect(api.formatUpdatedAt(null, 'en-GB')).toBe('');
   });
 });
 

@@ -12,7 +12,7 @@ No separate image service or build server to run.
 
 **[Start your travel journal](#quick-start-full-stack-docker)** ·
 [Explore the authoring workflow](docs/authoring-workflow.md) ·
-[Browse releases](https://github.com/laboef1900/simonswanderlust/releases)
+[Browse releases](https://github.com/laboef1900/wanderlust-studio/releases)
 
 ## More journey. Less publishing machinery.
 
@@ -121,7 +121,7 @@ features shipped in their release.
 
 **Image name:** releases from **v0.18.1** on are published as
 `ghcr.io/laboef1900/wanderlust-studio` (see the
-[releases](https://github.com/laboef1900/simonswanderlust/releases)). Releases up to
+[releases](https://github.com/laboef1900/wanderlust-studio/releases)). Releases up to
 v0.17.1 remain at `ghcr.io/laboef1900/simonswanderlust-app`; they are not copied or
 aliased to the new package, so a saved `IMAGE_TAG=0.17.1` does not resolve under the new
 name. Existing installations upgrade deliberately, following the
@@ -220,7 +220,7 @@ npm run dev
 ```
 
 Set `DATABASE_URL` for the site process. Both `npm run build` and `npx astro check` load
-content from Postgres. Site unit tests run with `npm test` without a database; uploader
+content from Postgres. Site unit tests run with `npm test` without a database; `uploader/`
 integration tests need a separate `TEST_DATABASE_URL`.
 
 ## Software, contributions and content rights
@@ -298,6 +298,25 @@ limitations, then check correspondence and delivery in the final rebuilt release
 <summary>Maintainers: releases and upgrade notes</summary>
 
 ### Cutting a release
+
+**v0.21.3 — Admin Studio UI/UX overhaul and repository rename** (linux/amd64 and linux/arm64,
+`ghcr.io/laboef1900/wanderlust-studio:0.21.3`). Changes since v0.21.2 (PRs #562, #563):
+
+- **Admin Studio UI/UX overhaul** (#563): shared `admin-ui.js` / `manuscript-bar.js` modules,
+  consistency review fixes across admin pages (spec:
+  `docs/superpowers/specs/2026-11-10-admin-consistency-review-fixes.md`), and updated
+  `DESIGN.md` / `PRODUCT.md` conventions.
+- **Media alt-text filter** (#563): `GET /media?alt=missing` lists ready photos with no DE/EN alt
+  text, and the response carries an `altMissing` count for the Media page.
+- **Repository rename** (#562): repository is now `laboef1900/wanderlust-studio`; legacy
+  uploader naming and pre-rebuild research memos removed from docs.
+
+Upgrade notes for v0.21.2 → v0.21.3 (the [release recovery checklist](ARCHITECTURE.md#release-recovery-checklist)):
+
+- **Image and deployment:** apply this release's image tag (`0.21.3`).
+- **Compose, `.env`, and schema:** no Compose changes, no `.env` changes, no schema migrations, and no
+  dump-format changes (writer stays v15); no site rebuild required.
+- **Rollback to v0.21.2:** fully supported by reverting the image tag.
 
 **v0.21.2 — backend UI proportions and design consistency** (linux/amd64 and linux/arm64,
 `ghcr.io/laboef1900/wanderlust-studio:0.21.2`). Changes since v0.21.1 (PRs #558, #559):

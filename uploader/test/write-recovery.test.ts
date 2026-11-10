@@ -19,10 +19,12 @@ function storage() {
     getItem: (key: string) => map.get(key) ?? null, setItem: (key: string, value: string) => { map.set(key, value); }, removeItem: (key: string) => { map.delete(key); } };
 }
 const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
-function fixture(options: { owner?: string; kind?: 'posts' | 'pages'; resource?: string; storage?: ReturnType<typeof storage> } = {}) {
+type Payload = { de: Record<string, string>; en: Record<string, string> };
+type Describe = (version: Payload) => { label: string; value: string }[];
+function fixture(options: { owner?: string; kind?: 'posts' | 'pages'; resource?: string; storage?: ReturnType<typeof storage>; describe?: Describe } = {}) {
   const owner = options.owner ?? randomUUID(); const kind = options.kind ?? 'posts';
   let resource = options.resource ?? ''; let base: string | null = resource ? '2026-10-01T00:00:00.000Z' : null;
-  let payload = { de: { title: 'Local' }, en: { title: 'English' } };
+  let payload: Payload = { de: { title: 'Local' }, en: { title: 'English' } };
   const local = options.storage ?? storage(); const dom = editorDocument('<main></main>');
   const calls: { url: string; init?: RequestInit }[] = [];
   let handle: (url: string, init?: RequestInit) => Promise<Response> = async () => response({}, 404);
@@ -31,6 +33,7 @@ function fixture(options: { owner?: string; kind?: 'posts' | 'pages'; resource?:
     location: { pathname: '/admin/editor.html', search: '', href: '' }, addEventListener: dom.document.addEventListener,
     fetch: (url: string, init?: RequestInit) => { calls.push({ url, init }); return handle(url, init); } };
   context.window = context; vm.createContext(context);
+  vm.runInContext(readFileSync('public/admin-ui.js', 'utf8'), context);
   vm.runInContext(readFileSync('public/draft-guard.js', 'utf8'), context);
   vm.runInContext(readFileSync('public/write-recovery.js', 'utf8'), context);
   let recovery: Recovery;
@@ -44,10 +47,12 @@ function fixture(options: { owner?: string; kind?: 'posts' | 'pages'; resource?:
     collect: () => payload, restoreBase: (value: string | null) => { base = value; }, error() {},
     adopt: async (saved: { translationKey?: string; updatedAt: string }) => { adoptions.push(saved); resource = saved.translationKey ?? resource; base = saved.updatedAt; },
     useStored: async () => {},
+    ...(options.describe ? { describe: options.describe } : {}),
   });
   recovery.initialize(owner);
   return { owner, recovery, guard, local, calls, adoptions, dom, context,
     handle: (fn: typeof handle) => { handle = fn; }, edit: (title: string) => { payload = { ...payload, de: { title } }; guard.markDirty(); },
+    setPayload: (value: Payload) => { payload = value; guard.markDirty(); },
     save: () => recovery.save(payload, guard.snapshot()), setBase: (value: string | null) => { base = value; } };
 }
 
@@ -177,7 +182,60 @@ describe('write outcome reconciliation', () => {
     const comparison = f.dom.document.querySelector('details')!;
     expect(comparison.hidden).toBe(false);
     expect(comparison.textContent).toContain('Local unsaved'); expect(comparison.textContent).toContain('Another writer');
+    // Without a `describe` reading there is no field table: the choices and
+    // the technical JSON (both versions) are what the author gets.
+    expect(comparison.querySelector('table')).toBeNull();
+    expect(comparison.querySelectorAll('button').map(button => button.textContent)).toEqual(['writeUseStored', 'writeRebase', 'writeKeepEditing']);
+    expect(comparison.querySelector('details')!.querySelectorAll('pre')).toHaveLength(2);
     expect(await f.save()).toBe(false); expect(f.calls).toHaveLength(2);
+  });
+  it('compares the stored version field by field, in words, with the choices first and the JSON last', async () => {
+    const localBody = ['Erster Absatz bleibt gleich.', 'Wir fuhren nach Brașov und blieben zwei Nächte. ' + 'x'.repeat(220), 'Schluss.'].join('\n');
+    const storedBody = ['Erster Absatz bleibt gleich.', 'Wir fuhren nach Kronstadt und blieben zwei Nächte. ' + 'x'.repeat(220), 'Schluss.'].join('\n');
+    const describe: Describe = (version) => [
+      { label: 'Title (DE)', value: version.de?.title ?? '' },
+      { label: 'Body (DE)', value: version.de?.body ?? '' },
+      { label: 'Title (EN)', value: version.en?.title ?? '' },
+    ];
+    const f = fixture({ resource: randomUUID(), describe });
+    f.setPayload({ de: { title: 'Local', body: localBody }, en: { title: 'English' } });
+    f.handle(async (_url, init) => init?.method === 'PUT' ? response({ code: 'conflict' }, 409)
+      : response({ translationKey: f.recovery.exportState().attempts[0]!.resource, ownerUserId: f.owner, lastSaveId: null,
+        updatedAt: '2026-10-03T00:00:00.000Z', de: { title: 'Another writer', body: storedBody }, en: { title: 'English' } }));
+    expect(await f.save()).toBe(false);
+    const section = f.dom.document.querySelector('.write-recovery')!;
+    const comparison = section.querySelector('details')!;
+    expect(comparison.hidden).toBe(false);
+    // Order inside the disclosure: summary, the three choices, the table, then Technical details.
+    const parts = comparison.children.map(child => child.tagName + (child.classList.contains('actions') ? '.actions' : ''));
+    expect(parts.indexOf('DIV.actions')).toBeLessThan(parts.indexOf('TABLE'));
+    expect(parts.indexOf('TABLE')).toBeLessThan(parts.lastIndexOf('DETAILS'));
+    expect(comparison.querySelector('.actions')!.querySelectorAll('button').map(button => button.textContent))
+      .toEqual(['writeUseStored', 'writeRebase', 'writeKeepEditing']);
+    // The unresolved save attempt is said in words above the table.
+    expect(comparison.querySelector('p')!.textContent).toBe('writeAttemptsOne');
+    // Only the fields that differ, as Yours / Stored; the equal EN title is not listed.
+    const table = comparison.querySelector('table')!;
+    expect(table.hidden).toBe(false);
+    expect(table.querySelector('thead')!.querySelectorAll('th').map(cell => cell.textContent)).toEqual(['writeCompareField', 'writeCompareMine', 'writeCompareStored']);
+    const rows = table.querySelector('tbody')!.querySelectorAll('tr').map(row => row.children.map(cell => cell.textContent));
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toEqual(['Title (DE)', 'Local', 'Another writer']);
+    // A long body shows its first differing line on each side, never the whole text.
+    expect(rows[1]![0]).toBe('Body (DE)');
+    expect(rows[1]![1]).toContain('Brașov'); expect(rows[1]![1]).not.toContain('Kronstadt');
+    expect(rows[1]![2]).toContain('Kronstadt'); expect(rows[1]![2]).not.toContain('Brașov');
+    expect(rows[1]![1]).toContain('(' + localBody.length + ' characters)');
+    expect(rows[1]![2]).toContain('(' + storedBody.length + ' characters)');
+    expect(rows[1]![1]).not.toContain('Schluss.'); expect(rows[1]![1]).not.toContain('Erster Absatz');
+    // The raw JSON of both versions stays available under Technical details.
+    const technical = comparison.querySelector('details')!;
+    expect(technical.querySelector('summary')!.textContent).toBe('writeTechnical');
+    expect(technical.querySelectorAll('pre').map(pre => pre.textContent).join('\n')).toContain(JSON.stringify(storedBody));
+    // A later edit re-reads the fields: once the titles agree, that row disappears.
+    f.setPayload({ de: { title: 'Another writer', body: localBody }, en: { title: 'English' } });
+    f.dom.document.querySelector('main')!.fire('input');
+    expect(table.querySelector('tbody')!.querySelectorAll('tr').map(row => row.children[0]!.textContent)).toEqual(['Body (DE)']);
   });
   it('sends explicit null for initial generic-page preparation and never borrows a loaded base on restore', async () => {
     const f = fixture({ kind: 'pages', resource: 'about' }); f.setBase(null); f.edit('First page');

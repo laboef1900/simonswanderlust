@@ -11,7 +11,7 @@
       <h1>Posts</h1>
       <p class="lede" data-language-copy="PostIntro"></p>
       <div class="cms-page-actions">
-        <button id="exportAll" type="button" class="btn-secondary" title="Writes every post as an MDX file to the server's backup directory">Export MDX backup</button>
+        <button id="exportAll" type="button" class="btn-secondary" title="Writes every story as an MDX file to the server's backup directory">Export MDX backup</button>
         <a id="newPost" href="/admin/editor.html" class="btn-new">New post</a>
       </div>
     </header>
@@ -45,8 +45,10 @@
               </select>
             </label>
           </div>
-          <button type="button" id="fMore" class="btn-link filter-reset" aria-expanded="false" aria-controls="fExtra">More filters</button>
-          <button id="fReset" class="btn-link filter-reset" type="button">Clear filters</button>
+          <div class="posts-filters-actions">
+            <button type="button" id="fMore" class="btn-link filter-reset" aria-expanded="false" aria-controls="fExtra">More filters</button>
+            <button id="fReset" class="btn-link filter-reset" type="button">Clear filters</button>
+          </div>
           <div class="posts-filters-extra" id="fExtra" hidden>
             <label class="filter-field">
               <span>Region</span>
@@ -83,14 +85,14 @@
           <button id="bulkDelete" type="button" class="btn-remove">Delete</button>
         </div>
 
-        <p id="loadMsg" class="muted" role="status">Loading posts…</p>
+        <p id="loadMsg" class="muted" role="status">Loading stories…</p>
         <button id="retryLoad" type="button" class="btn-secondary" hidden>Retry</button>
         <table id="postsTable" class="posts-table" role="table" hidden>
           <thead role="rowgroup">
             <tr role="row">
               <th class="col-select" scope="col" role="columnheader">
                 <label id="selectAllControl" class="post-select-all">
-                  <input id="selectAll" type="checkbox" aria-label="Select all visible posts" />
+                  <input id="selectAll" type="checkbox" aria-label="Select all visible stories" />
                   <span>Select visible</span>
                 </label>
               </th>
@@ -115,6 +117,7 @@
     <script src="/admin/gpx-copy.js"></script>
     <script src="/admin/auth.js"></script>
     <script src="/admin/language.js"></script>
+    <script src="/admin/admin-ui.js"></script>
     <script src="/admin/admin-confirm.js"></script>
     <script src="/admin/posts-filter.js"></script>
     <script>
@@ -233,8 +236,8 @@
         $('fMore').textContent = (expanded ? 'Fewer filters' : 'More filters') +
           (activeExtra ? ' (' + activeExtra + ' active)' : '');
         $('resultsCount').textContent = allPosts.length
-          ? posts.length + ' of ' + allPosts.length + (allPosts.length === 1 ? ' post' : ' posts')
-          : '0 posts';
+          ? posts.length + ' of ' + AdminFormat.count(allPosts.length, 'story', 'stories')
+          : '0 stories';
       }
 
       function resetFilters() {
@@ -243,6 +246,11 @@
         $('fSearch').focus();
       }
 
+      // Unpublish and Delete rebuild the site at once (the server promotes the
+      // new release before it answers), so the confirmations say so rather
+      // than deferring the change to "the next build".
+      const REBUILDS_NOW = ' removed from the live site now (the site rebuilds; this can take several minutes)';
+
       // Every action below disables its trigger while the request is in flight
       // and re-enables it in `finally`: a dropped connection used to reject the
       // await, leaving "Deleting…" on screen and the buttons dead until reload.
@@ -250,8 +258,8 @@
         if (listStale || listMutating) return;
         const title = p.title || '(untitled)';
         const ok = await AdminConfirm.ask({
-          title: 'Unpublish this trip?',
-          body: '"' + title + '"' + slugSuffix(p) + ' will leave the live site on the next build and revert to a draft.',
+          title: 'Unpublish this story?',
+          body: '“' + title + '”' + slugSuffix(p) + ' is' + REBUILDS_NOW + ' and returns to your drafts.',
           confirmLabel: 'Unpublish',
           danger: true,
         });
@@ -282,15 +290,18 @@
         }
       }
 
+      // Focus after the row is gone is renderRows' job: the row the author was
+      // on hands focus to the next row's Edit link, else the previous row's,
+      // else New post.
       async function deletePost(p, btn) {
         if (listStale || listMutating) return;
         const title = p.title || '(untitled)';
-        const warning = p.status === 'published'
-          ? '\n\nThis post is PUBLISHED — it will be removed from the live site on the next build.'
-          : '';
+        // One sentence says what goes, and — for a published story — that the
+        // live site changes now.
+        const scope = p.status === 'published' ? ' is deleted and' + REBUILDS_NOW + '.' : ' is deleted.';
         const ok = await AdminConfirm.ask({
-          title: 'Delete this trip?',
-          body: '"' + title + '"' + slugSuffix(p) + '?' + warning + '\n\n' + GpxCopy.en.deleteScope + '\n\nThis cannot be undone.',
+          title: 'Delete this story?',
+          body: '“' + title + '”' + slugSuffix(p) + scope + '\n\n' + GpxCopy.en.deleteScope + '\n\nThis cannot be undone.',
           confirmLabel: 'Delete',
           danger: true,
         });
@@ -309,8 +320,8 @@
           acceptMutation(p.translationKey, body.publication);
           const msg = describeOutcome('delete', body, { title }) + (body.cleanupPending ? ' ' + GpxCopy.en.cleanupPending : '');
           $('out').textContent = msg;
-          // Pass the outcome so load() does not clobber it with "N post(s) loaded."
-          // — a failed rebuild (body.build.ok === false) must stay visible to the admin.
+          // Pass the outcome so load() does not clobber it — a failed rebuild
+          // (body.build.ok === false) must stay visible to the admin.
           await load(msg);
           if (body.build?.ok === false) BuildReporting.recovery($('out'), body.build.code);
         } catch (e) {
@@ -363,11 +374,11 @@
         }).length;
         if (action === 'delete') {
           const warning = live > 0
-            ? '\n\n' + live + ' selected ' + (live === 1 ? 'story is' : 'stories are') + ' PUBLISHED and will be removed from the live site.'
+            ? '\n\n' + (live === 1 ? '1 selected story is published and is' : live + ' selected stories are published and are') + REBUILDS_NOW + '.'
             : '';
           return AdminConfirm.ask({
-            title: 'Delete ' + keys.length + ' selected ' + (keys.length === 1 ? 'story?' : 'stories?'),
-            body: 'This CANNOT be undone.' + warning + storyList + '\n\n' + GpxCopy.en.deleteScope + '\n\nType DELETE to confirm:',
+            title: 'Delete ' + AdminFormat.count(keys.length, 'selected story', 'selected stories') + '?',
+            body: 'This cannot be undone.' + warning + storyList + '\n\n' + GpxCopy.en.deleteScope,
             confirmLabel: 'Delete',
             danger: true,
             typed: 'DELETE',
@@ -376,10 +387,10 @@
         const verb = action === 'publish' ? 'Publish' : 'Unpublish';
         const liveNote = PublicationState.text('selection', { n: live });
         return AdminConfirm.ask({
-          title: verb + ' ' + keys.length + ' selected ' + (keys.length === 1 ? 'story?' : 'stories?'),
+          title: verb + ' ' + AdminFormat.count(keys.length, 'selected story', 'selected stories') + '?',
           body: liveNote + storyList,
           confirmLabel: verb,
-          danger: action === 'unpublish',
+          danger: action === 'unpublish', tone: 'publish',
         });
       }
 
@@ -399,6 +410,23 @@
         return msg;
       }
 
+      const BULK_TRIGGERS = { publish: 'bulkPublish', unpublish: 'bulkUnpublish', delete: 'bulkDelete' };
+      const BULK_PROGRESS = { publish: 'Publishing', unpublish: 'Unpublishing', delete: 'Deleting' };
+
+      // The bulk bar hides once the selection is done, taking the trigger's
+      // focus with it. Taken before the request: the rows as the author sees
+      // them, so focus can move to the first acted-on story's Edit link, else
+      // the row after the removed ones, else the one before, else New post.
+      function rowsAround(keys) {
+        const removed = new Set(keys);
+        const order = visiblePosts().map((post) => post.translationKey);
+        const first = order.findIndex((key) => removed.has(key));
+        return {
+          after: order.slice(first + 1).filter((key) => !removed.has(key)),
+          before: order.slice(0, Math.max(first, 0)).reverse().filter((key) => !removed.has(key)),
+        };
+      }
+
       async function runBulk(action) {
         if (listStale || listMutating) return;
         // Snapshot before the async confirmation: filter or checkbox changes
@@ -406,13 +434,15 @@
         const keys = Object.freeze([...selected]);
         const baseLanguageUpdatedAt = SiteLanguage.config().updatedAt;
         if (keys.length === 0) return;
+        const restoreFocus = AdminFocus.hold($(BULK_TRIGGERS[action]));
         if (!(await confirmBulk(action, keys))) return;
+        const around = rowsAround(keys);
         listMutating = true;
         publicationRefresh.beginAction();
         render();
         const buttons = [$('bulkPublish'), $('bulkUnpublish'), $('bulkDelete')];
         buttons.forEach((b) => { b.disabled = true; });
-        $('out').textContent = 'Running ' + action + ' on ' + keys.length + ' post(s)…';
+        $('out').textContent = BULK_PROGRESS[action] + ' ' + AdminFormat.count(keys.length, 'story', 'stories') + '…';
         try {
           const res = await fetch('/posts/bulk', {
             method: 'POST',
@@ -445,6 +475,8 @@
           listMutating = false;
           publicationRefresh.endAction();
           render();
+          const links = (list) => list.map((key) => rowEditLinks.get(key));
+          restoreFocus(...links(keys), ...links(around.after), ...links(around.before), $('newPost'));
         }
       }
 
@@ -483,11 +515,20 @@
       // Items are joined by a real " · " separator span, so the line reads
       // correctly as plain text (copy, screen readers, no CSS) — not by gap alone.
       function tripMeta(p) {
-        const items = [p.country, p.date].filter((v) => typeof v === 'string' && v).map((text) => {
-          const span = document.createElement('span');
-          span.textContent = text;
-          return span;
-        });
+        const items = [];
+        if (typeof p.country === 'string' && p.country) {
+          const country = document.createElement('span');
+          country.textContent = p.country;
+          items.push(country);
+        }
+        const date = AdminFormat.date(p.date);
+        if (date) {
+          // A measurement, so it is set in mono like every date in a list row.
+          const when = document.createElement('span');
+          when.className = 'post-trip-date';
+          when.textContent = date;
+          items.push(when);
+        }
         if (p.secondaryStatus === 'empty' && SiteLanguage.config().locales.length > 1) {
           const hint = document.createElement('span');
           hint.className = 'post-locale-state';
@@ -509,17 +550,8 @@
         return meta;
       }
 
-      function languageBadge(code, name, state) {
-        const badge = document.createElement('span');
-        badge.className = 'post-language' + (state ? ' is-' + state : '');
-        // role="img" makes the spoken name the honest state, not just "EN".
-        badge.setAttribute('role', 'img');
-        badge.setAttribute('aria-label', name);
-        badge.title = name;
-        badge.textContent = code;
-        return badge;
-      }
-
+      // One chip per enabled locale, the same ones the Desk's draft card shows:
+      // the state comes from PostsFilter.languageStates, the chip from SiteLanguage.
       function languagesCell(p) {
         const td = document.createElement('td');
         td.className = 'col-languages';
@@ -527,11 +559,8 @@
         td.setAttribute('data-label', copy.postsLanguages);
         const wrap = document.createElement('div');
         wrap.className = 'post-languages';
-        const lang = SiteLanguage.config();
-        for (const locale of lang.locales) {
-          const primary = locale === lang.primary;
-          const key = primary ? 'PrimaryLabel' : ({ omitted: 'OmittedLabel', empty: 'BodyEmpty', started: 'BodyStarted' }[p.secondaryStatus] || 'BodyUnknown');
-          wrap.appendChild(languageBadge(locale.toUpperCase(), SiteLanguage.text(key, { language: SiteLanguage.names[locale] }), !primary && p.secondaryStatus === 'empty' ? 'missing' : ''));
+        for (const { locale, state, copy: name } of PostsFilter.languageStates(p, SiteLanguage.config())) {
+          wrap.appendChild(SiteLanguage.chip(locale, state, SiteLanguage.text(name, { language: SiteLanguage.names[locale] })));
         }
         td.appendChild(wrap);
         return td;
@@ -561,11 +590,19 @@
         if (openMoreActions && !openMoreActions.contains(event.target)) openMoreActions.open = false;
       });
 
+      // Story key → its row's Edit link, from the latest render: the control a
+      // row hands focus to when another row goes away.
+      let rowEditLinks = new Map();
+
       function renderRows(posts) {
         const tbody = $('postsList');
         const active = document.activeElement;
         const focusedPost = tbody.contains(active) ? active.dataset.postKey : undefined;
         const focusedControl = tbody.contains(active) ? active.dataset.postControl : undefined;
+        // The rows as the author last saw them. A focused row that has gone —
+        // deleted here or elsewhere, or no longer matching — hands focus to the
+        // next row's Edit link, else the previous row's, never to <body>.
+        const lastOrder = Array.from(tbody.querySelectorAll('.post-title-link')).map((link) => link.dataset.postKey);
         let expandedPost, nextFocus, matchingTitle;
         for (const menu of tbody.querySelectorAll('.post-more')) {
           if (menu.open) expandedPost = menu.dataset.postKey;
@@ -577,6 +614,15 @@
           control.dataset.postControl = role;
           if (key === focusedPost && role === focusedControl && !control.disabled) nextFocus = control;
         }
+        function neighbourEdit() {
+          const at = lastOrder.indexOf(focusedPost);
+          const after = lastOrder.slice(at + 1).find((key) => rowEditLinks.has(key));
+          const before = lastOrder.slice(0, Math.max(at, 0)).reverse().find((key) => rowEditLinks.has(key));
+          // A control that was not a row (the empty state's Clear filters)
+          // hands over to the first row the refresh brought.
+          return rowEditLinks.get(after) || rowEditLinks.get(before) || rowEditLinks.values().next().value || null;
+        }
+        rowEditLinks = new Map();
         tbody.innerHTML = '';
         openMoreActions = null;
         if (!posts.length) {
@@ -588,8 +634,8 @@
           td.className = 'posts-empty';
           const message = document.createElement('p');
           message.textContent = allPosts.length
-            ? 'No posts match these filters.'
-            : 'No posts yet.';
+            ? 'No stories match these filters.'
+            : 'No stories yet.';
           td.appendChild(message);
           let emptyAction;
           if (allPosts.length) {
@@ -606,14 +652,15 @@
             const create = document.createElement('a');
             create.href = editorHref();
             create.className = 'action-link';
-            create.textContent = 'Create a new post';
+            create.textContent = 'Create a new story';
             identify(create, '', 'new');
-            emptyAction = create;
+            // The last story is gone: the New post command takes the focus.
+            emptyAction = $('newPost');
             td.appendChild(create);
           }
           tr.appendChild(td);
           tbody.appendChild(tr);
-          if (focusedControl) emptyAction.focus({ preventScroll: !!nextFocus });
+          if (focusedControl) emptyAction.focus();
           return;
         }
         for (const p of posts) {
@@ -632,7 +679,7 @@
             cb.type = 'checkbox';
             cb.checked = selected.has(p.translationKey);
             cb.disabled = controlsUnavailable;
-            cb.setAttribute('aria-label', 'Select ' + (p.title || 'untitled post'));
+            cb.setAttribute('aria-label', 'Select ' + (p.title || 'untitled story'));
             identify(cb, p.translationKey, 'select');
             cb.addEventListener('change', () => {
               if (cb.checked) selected.add(p.translationKey); else selected.delete(p.translationKey);
@@ -653,7 +700,7 @@
           const titleLink = document.createElement('a');
           titleLink.href = editorHref(p.translationKey);
           titleLink.className = 'post-title-link';
-          titleLink.setAttribute('aria-label', 'Edit ' + (p.title || 'untitled post'));
+          titleLink.setAttribute('aria-label', 'Edit ' + (p.title || 'untitled story'));
           titleLink.textContent = p.title || '(untitled)';
           identify(titleLink, p.translationKey, 'title');
           if (p.translationKey === focusedPost) matchingTitle = titleLink;
@@ -687,9 +734,7 @@
           tdUpdated.className = 'col-updated posts-date';
           tdUpdated.setAttribute('role', 'cell');
           tdUpdated.setAttribute('data-label', 'Updated');
-          if (p.updatedAt) {
-            tdUpdated.textContent = new Date(p.updatedAt).toLocaleDateString('en-GB', { year: 'numeric', month: 'short', day: 'numeric' });
-          }
+          tdUpdated.textContent = AdminFormat.date(p.updatedAt);
           tr.appendChild(tdUpdated);
 
           const tdActions = document.createElement('td');
@@ -702,24 +747,38 @@
           editLink.href = editorHref(p.translationKey);
           editLink.textContent = 'Edit';
           editLink.className = 'action-link';
-          editLink.setAttribute('aria-label', 'Edit ' + (p.title || 'untitled post'));
+          editLink.setAttribute('aria-label', 'Edit ' + (p.title || 'untitled story'));
           identify(editLink, p.translationKey, 'edit');
+          rowEditLinks.set(p.translationKey, editLink);
           actions.appendChild(editLink);
 
           // Unpublish and Delete are admin-only, so an author's row offers Edit
-          // alone rather than an empty menu.
+          // alone. A published story has both and gets the More actions menu;
+          // a draft has only Delete, which sits in the row as a plain button —
+          // never a menu with one item.
           if (me && me.isAdmin) {
-            const more = document.createElement('details');
-            more.className = 'post-more';
-            more.dataset.postKey = p.translationKey;
-            const summary = document.createElement('summary');
-            summary.textContent = 'More actions';
-            summary.setAttribute('aria-label', 'More actions for ' + (p.title || 'untitled post'));
-            identify(summary, p.translationKey, 'more');
-            more.appendChild(summary);
-            const moreActions = document.createElement('div');
-            moreActions.className = 'post-more-actions';
-            if (p.publication?.availability === 'available' && p.publication.status === 'published') {
+            const published = p.publication?.availability === 'available' && p.publication.status === 'published';
+            const delBtn = document.createElement('button');
+            delBtn.type = 'button';
+            delBtn.textContent = 'Delete';
+            delBtn.className = 'btn-remove';
+            delBtn.setAttribute('aria-label', 'Delete ' + (p.title || 'untitled story'));
+            delBtn.disabled = controlsUnavailable;
+            identify(delBtn, p.translationKey, 'delete');
+            delBtn.addEventListener('click', () => deletePost(p, delBtn));
+            if (!published) {
+              actions.appendChild(delBtn);
+            } else {
+              const more = document.createElement('details');
+              more.className = 'post-more';
+              more.dataset.postKey = p.translationKey;
+              const summary = document.createElement('summary');
+              summary.textContent = 'More actions';
+              summary.setAttribute('aria-label', 'More actions for ' + (p.title || 'untitled story'));
+              identify(summary, p.translationKey, 'more');
+              more.appendChild(summary);
+              const moreActions = document.createElement('div');
+              moreActions.className = 'post-more-actions';
               const unpubBtn = document.createElement('button');
               unpubBtn.type = 'button';
               unpubBtn.textContent = 'Unpublish';
@@ -728,29 +787,25 @@
               identify(unpubBtn, p.translationKey, 'unpublish');
               unpubBtn.addEventListener('click', () => unpublishPost(p, unpubBtn));
               moreActions.appendChild(unpubBtn);
+              moreActions.appendChild(delBtn);
+              more.appendChild(moreActions);
+              wirePostDisclosure(more, summary);
+              if (expandedPost === p.translationKey) {
+                more.open = true;
+                openMoreActions = more;
+              }
+              actions.appendChild(more);
             }
-            const delBtn = document.createElement('button');
-            delBtn.type = 'button';
-            delBtn.textContent = 'Delete';
-            delBtn.className = 'btn-remove';
-            delBtn.disabled = controlsUnavailable;
-            identify(delBtn, p.translationKey, 'delete');
-            delBtn.addEventListener('click', () => deletePost(p, delBtn));
-            moreActions.appendChild(delBtn);
-            more.appendChild(moreActions);
-            wirePostDisclosure(more, summary);
-            if (expandedPost === p.translationKey) {
-              more.open = true;
-              openMoreActions = more;
-            }
-            actions.appendChild(more);
           }
           tdActions.appendChild(actions);
           tr.appendChild(tdActions);
 
           tbody.appendChild(tr);
         }
-        if (focusedControl) (nextFocus || matchingTitle || $('fSearch')).focus({ preventScroll: !!nextFocus });
+        if (focusedControl) {
+          const target = nextFocus || matchingTitle || neighbourEdit() || $('newPost');
+          target.focus({ preventScroll: !!nextFocus });
+        }
       }
 
       function syncSelectAll() {
@@ -911,6 +966,7 @@
 
       $('exportAll').addEventListener('click', async () => {
         const btn = $('exportAll');
+        const restoreFocus = AdminFocus.hold(btn);
         btn.disabled = true;
         $('out').textContent = 'Exporting…';
         try {
@@ -918,12 +974,13 @@
           if (res.status === 401) { location.href = '/login'; return; }
           const body = await res.json().catch(() => ({}));
           $('out').textContent = res.ok
-            ? 'Exported ' + body.count + ' MDX file(s) to the configured server backup directory.'
-            : 'Export failed: ' + (body.error || res.status);
+            ? 'Exported ' + AdminFormat.count(body.count, 'MDX file') + ' to the configured server backup directory.'
+            : 'Could not export: ' + (body.error || res.status) + '.';
         } catch (e) {
-          $('out').textContent = 'Export failed: ' + e;
+          $('out').textContent = 'Could not export: the connection failed.';
         } finally {
           btn.disabled = false;
+          restoreFocus();
         }
       });
 
@@ -931,6 +988,9 @@
         me = await Auth.ensureAuthed();
         if (!me) return;
         Auth.renderHeader(me);
+        // An editor that just deleted its story returns here with the outcome.
+        const flash = AdminFlash.take();
+        if (flash) $('out').textContent = flash;
         publicationRefresh.start();
       })();
     </script>

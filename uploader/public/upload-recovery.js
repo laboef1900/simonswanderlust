@@ -47,8 +47,15 @@
       check.disabled = checkingOwner || item.state === 'checking' || item.state === 'uploading';
       if (item.state === 'done') { end(item.result); return; }
       if (item.state === 'gone') { status.textContent = copy.uploadGone; end(null); return; }
+      if (item.state === 'rejected') {
+        // The server refused the file itself; sending it again can never succeed.
+        status.textContent = item.error === 'too_large'
+          ? copy.uploadRejectedTooLarge.replace('{max}', root.MediaApi.formatBytes(root.MediaApi.MAX_UPLOAD_BYTES))
+          : copy.uploadRejectedUnreadable;
+        end(null); return;
+      }
       if (item.state === 'failed' || item.state === 'needs-auth') {
-        status.textContent = item.state === 'needs-auth' ? copy.uploadNeedsAuth : item.error;
+        status.textContent = item.state === 'needs-auth' ? copy.uploadNeedsAuth : root.MediaApi.queueState(item);
         end(null); return;
       }
       status.textContent = item.state === 'uploading' ? copy.uploadSending

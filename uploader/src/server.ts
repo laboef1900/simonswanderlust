@@ -600,6 +600,8 @@ export function buildServer(cfg: ServerConfig): AppServer {
   };
 
   // Paginated, filtered listing plus usage refs for the visible page only.
+  // `altMissing` counts the ready photos in the same view (folder, search, tag)
+  // that still have no alt text, so the Media page can offer "Show only these".
   app.get('/media', { preHandler: requireAuth }, async (req, reply) => {
     const q = (req.query ?? {}) as Record<string, string | undefined>;
     const query: MediaQuery = {
@@ -608,14 +610,21 @@ export function buildServer(cfg: ServerConfig): AppServer {
       ...(q.q !== undefined ? { q: q.q } : {}),
       ...(q.tag ? { tag: q.tag } : {}),
       ...(q.status ? { status: q.status as MediaStatus } : {}),
+      // "missing" is the only alt filter; any other value is ignored.
+      ...(q.alt === 'missing' ? { alt: 'missing' as const } : {}),
       ...(q.sort ? { sort: q.sort as MediaQuery['sort'] } : {}),
       ...(q.order ? { order: q.order as MediaQuery['order'] } : {}),
       ...(q.page ? { page: Number(q.page) } : {}),
       ...(q.pageSize ? { pageSize: Number(q.pageSize) } : {}),
     };
     let result;
+    let altMissing = 0;
     try {
       result = await cfg.media.list(query);
+      // A status filter other than ready excludes every photo the count describes.
+      if (!query.status || query.status === 'ready') {
+        altMissing = (await cfg.media.list({ ...query, status: 'ready', alt: 'missing', page: 1, pageSize: 1 })).total;
+      }
     } catch (e) {
       return mediaError(e, reply);
     }
@@ -623,6 +632,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     const isAdmin = Boolean(req.authUser?.isAdmin);
     return reply.send({
       total: result.total,
+      altMissing,
       items: result.items.map((m) => ({
         ...serializeMedia(m, isAdmin),
         usedIn: imageUsage(m.src, corpus.posts, corpus.pages, corpus.journeys),

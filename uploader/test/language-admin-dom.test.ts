@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { browserScript, galleryCodecBindings } from './gallery-browser-module.js';
 import { editorDocument } from './editor-dom-harness.js';
+import { markdownEditorDouble } from './page-editor-double.js';
 import { ui } from '../../site/src/i18n/ui.js';
 
 const editorCopy = { en: Object.fromEntries(Object.entries(ui.en).filter(([key]) => key.startsWith('editor.chrome.')).map(([key, value]) => [key.slice('editor.chrome.'.length), value])) };
@@ -46,7 +47,7 @@ function settings(initial = state('de', ['de'])) {
   context.EditorCopy = editorCopy;
   context.BuildCopy = buildCopy;
   vm.createContext(context);
-  for (const file of ['build-reporting.js', 'language.js', 'settings-drafts.js', 'settings-language.js']) vm.runInContext(readFileSync('public/' + file, 'utf8'), context);
+  for (const file of ['admin-ui.js', 'build-reporting.js', 'language.js', 'settings-drafts.js', 'settings-language.js']) vm.runInContext(readFileSync('public/' + file, 'utf8'), context);
   // The VM boundary loses the type of this production entry point.
   const controller = context.SettingsLanguage as { init(publication: { beginAction(): void; endAction(): void }): Promise<void> };
   return { el, requests, questions, context, lifecycle,
@@ -58,10 +59,13 @@ function settings(initial = state('de', ['de'])) {
 }
 
 describe('Language Settings', () => {
-  it('does not offer a save or issue a rebuild for an unchanged published language mode', async () => {
+  it('does not offer a save or issue a rebuild for an unchanged published language mode, and dates the lock like every other admin date', async () => {
     const h = settings(state('de', ['de', 'en'], stamp));
     await h.init();
     expect(h.el('saveLanguage').disabled).toBe(true);
+    const format = h.context.AdminFormat as { dateTime(value: string): string };
+    expect(h.el('languageLock').textContent).toBe(ui.en['editor.chrome.languageLocked'].replace('{date}', format.dateTime(stamp)));
+    expect(h.el('languageLock').textContent).not.toContain('2026-10-27T');
     await h.submit();
     expect(h.requests.filter(({ init }) => init.method === 'PUT')).toEqual([]);
     expect(h.questions).toEqual([]);
@@ -107,8 +111,8 @@ describe('Language Settings', () => {
     h.answer({ ...state('de', ['de', 'en']), build: { ok: false, code: 'build_failed', error: 'SECRET', liveRelease: null } }, 200);
     await h.submit();
     expect(h.el('prepareLanguage').hidden).toBe(true);
-    expect(h.el('languageStatus').textContent).toContain('Language setting saved in the CMS');
-    expect(h.el('languageStatus').textContent).toContain('No live release yet');
+    expect(h.el('languageStatus').textContent).toContain(ui.en['admin.build.language']);
+    expect(h.el('languageStatus').textContent).toContain(ui.en['admin.build.noLive']);
     expect(h.el('languageStatus').textContent).not.toContain('SECRET');
     expect(h.el('languageStatus').textContent).toContain('Rebuild site now');
     expect(h.requests.filter(({ init }) => init.method === 'PUT')).toHaveLength(1);
@@ -181,19 +185,14 @@ async function about(primary: Locale, prepareLocale?: Locale, route?: (url: stri
   const requests: { url: string; init: RequestInit }[] = [];
   const owner = '11111111-1111-4111-8111-111111111111';
   const cleaned: unknown[] = [];
-  class EasyMDE {
-    private text = '';
-    codemirror = {
-      getInputField: () => dom.document.createElement('textarea'), on() {}, refresh() {},
-      getValue: () => this.text, getLine: (line: number) => this.text.split('\n')[line] ?? '',
-    };
-    value(value?: string) { if (value !== undefined) this.text = value; return this.text; }
-  }
   const context: Record<string, unknown> = {
-    document: dom.document, URLSearchParams, EasyMDE, crypto: webcrypto, structuredClone, AbortController,
+    document: dom.document, URLSearchParams, EasyMDE: markdownEditorDouble({ document: dom.document }), crypto: webcrypto, structuredClone, AbortController,
+    navigator: { platform: 'MacIntel' }, matchMedia: () => ({ matches: false, addEventListener() {} }),
+    EditorGalleryCopy: { en: Object.fromEntries(Object.entries(ui.en).filter(([key]) => key.startsWith('editor.gallery.')).map(([key, value]) => [key.slice('editor.gallery.'.length), value])) },
+    EditorGalleryImageOrigin: 'https://journal.test',
     setTimeout: () => 0, clearTimeout() {}, addEventListener: dom.document.addEventListener,
     location: { origin: 'https://journal.test', pathname: '/admin/about.html', search: prepareLocale ? '?prepareLocale=' + prepareLocale : '' },
-    Auth: { ensureAuthed: async () => ({ userId: owner, isAdmin: true }), renderHeader() {} },
+    Auth: { ensureAuthed: async () => ({ userId: owner, isAdmin: true }), renderHeader() {}, setPageTitle() {} },
     AdminConfirm: { ask: async () => true },
     DraftGuard: { createDraftGuard: () => ({
       initialize: () => true, stashNow() {}, isDirty: () => false, freshContext() {},
@@ -222,7 +221,7 @@ async function about(primary: Locale, prepareLocale?: Locale, route?: (url: stri
   context.BuildCopy = buildCopy;
   vm.createContext(context);
   Object.assign(context, galleryCodecBindings);
-  for (const file of ['build-reporting.js', 'language.js', 'tabs.js', 'pages-ui.js', 'about-equipment.js', 'write-recovery.js', 'gallery-fence.js', 'gallery-metadata-warnings.js']) vm.runInContext(browserScript(file), context);
+  for (const file of ['admin-ui.js', 'build-reporting.js', 'language.js', 'tabs.js', 'editor-rich-bridge.js', 'manuscript-bar.js', 'media-api.js', 'gallery-library.js', 'posts-filter.js', 'pages-ui.js', 'about-equipment.js', 'write-recovery.js', 'gallery-fence.js', 'gallery-metadata-warnings.js']) vm.runInContext(browserScript(file), context);
   // The page script is a module (it imports the gallery fence); run its body.
   const start = html.lastIndexOf('<script type="module">');
   vm.runInContext(html.slice(html.indexOf("'use strict'", start), html.lastIndexOf('</script>')), context);
@@ -251,7 +250,7 @@ describe('About inactive translation preparation', () => {
     });
     expect(payload[primary]).toBeUndefined();
     expect(h.el('preparationNotice').textContent).toContain('not public');
-    expect(h.el('actionStatus').textContent).toContain('Saved in the CMS');
+    expect(h.el('actionStatus').textContent).toContain(ui.en['admin.build.page']);
     expect(h.requests.some(({ url, init }) => url === '/language' && init.method === 'PUT')).toBe(false);
   });
 
@@ -264,8 +263,8 @@ describe('About inactive translation preparation', () => {
     await settle();
     const payload = JSON.parse(String(h.requests.find(({ init }) => init.method === 'PUT')!.init.body));
     expect(payload).toEqual({ updatedAt: stamp, [primary]: h.page[primary], expectedOwnerId: expect.any(String), saveId: expect.any(String) });
-    expect(h.el('actionStatus').textContent).toContain('Saved in the CMS');
-    expect(h.el('actionStatus').textContent).toContain('Live release status is unavailable');
+    expect(h.el('actionStatus').textContent).toContain(ui.en['admin.build.page']);
+    expect(h.el('actionStatus').textContent).toContain(ui.en['admin.build.liveUnavailable']);
     expect(h.el('actionStatus').textContent).not.toContain('Live:');
   });
 
@@ -308,8 +307,8 @@ describe('About acknowledged save and failed rebuild', () => {
     await settle();
     expect(h.cleaned.at(-1)).toEqual({ title: 'Submitted' });
     expect(h.el('enTitle').value).toBe('Newer local edit');
-    expect(h.el('actionStatus').textContent).toContain('Saved in the CMS');
-    expect(h.el('actionStatus').textContent).toContain('No live release yet');
+    expect(h.el('actionStatus').textContent).toContain(ui.en['admin.build.page']);
+    expect(h.el('actionStatus').textContent).toContain(ui.en['admin.build.noLive']);
     expect(h.el('actionStatus').textContent).not.toContain('SECRET');
     h.el('saveBtn').click();
     await settle();

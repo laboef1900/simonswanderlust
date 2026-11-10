@@ -8,8 +8,8 @@
   </head>
   <body>
     <header class="cms-page-meta">
-      <h1>WordPress Import</h1>
-      <p class="lede">Import posts from a WordPress export (.xml) as drafts. Published posts are never changed.</p>
+      <h1>Import from WordPress</h1>
+      <p class="lede">Import stories from a WordPress export (.xml) as drafts. Published stories are never changed.</p>
     </header>
 
     <main>
@@ -35,7 +35,7 @@
           <summary>How importing works</summary>
           <ul>
             <li>Photos download one at a time, paced so the old site does not block the import; a large export takes a while.</li>
-            <li>Replacing drafts discards edits to country, region, coordinates, key facts, alt text and body. Use it after changing a post in WordPress and exporting again.</li>
+            <li>Replacing drafts discards edits to country, region, coordinates, key facts, alt text and body. Use it after changing a story in WordPress and exporting again.</li>
             <li>A resumed import re-downloads only the photos that are still missing and keeps the edits you made in between.</li>
             <li>Only one import can run at a time.</li>
           </ul>
@@ -47,11 +47,11 @@
         <progress id="progressBar" max="1" value="0" aria-labelledby="progressText"></progress>
         <p id="progressText" role="status" aria-live="polite"></p>
       </div>
-      <div id="results" style="display:none">
+      <div id="results" hidden>
         <p id="counts"></p>
-        <p id="importInterrupted" class="notice-warn" role="status" style="display:none"></p>
-        <p id="importPartial" class="notice-warn" role="status" style="display:none"></p>
-        <p id="importRejected" class="notice-warn" role="alert" style="display:none"></p>
+        <p id="importInterrupted" class="notice-warn" role="status" hidden></p>
+        <p id="importPartial" class="notice-warn" role="status" hidden></p>
+        <p id="importRejected" class="notice-warn" role="alert" hidden></p>
         <ul id="warnings"></ul>
         <p><a href="/admin/posts.html">Go to Posts to review drafts</a></p>
       </div>
@@ -59,6 +59,7 @@
 
     <script src="/admin/editor-image-copy.js"></script>
     <script src="/admin/auth.js"></script>
+    <script src="/admin/admin-ui.js"></script>
     <script src="/admin/admin-confirm.js"></script>
     <script>
       const $ = (id) => document.getElementById(id);
@@ -67,18 +68,31 @@
       // Whether the job THIS page started asked for a rebuild (issue #126);
       // null until the author submits — a job found on page load is unknown.
       let overwrite = null;
+      // Returns focus to Import once the job this page started has finished
+      // (the button is disabled for the whole run).
+      let restoreImportFocus = null;
+
+      /** "Could not start the import: Another import is running." — never a bare lowercase server string. */
+      function failure(action, detail) {
+        const text = typeof detail === 'string' && detail.trim() ? detail.trim() : '';
+        return 'Could not ' + action + (text ? ': ' + text.charAt(0).toUpperCase() + text.slice(1).replace(/\.?$/, '.') : '.');
+      }
 
       function setBusy(busy) {
         $('importBtn').disabled = busy;
         $('wxr').disabled = busy;
         $('overwriteDrafts').disabled = busy;
+        if (!busy && restoreImportFocus) {
+          restoreImportFocus();
+          restoreImportFocus = null;
+        }
       }
 
       function hideResults() {
-        $('results').style.display = 'none';
+        $('results').hidden = true;
         for (const id of ['importInterrupted', 'importPartial', 'importRejected']) {
           $(id).textContent = '';
-          $(id).style.display = 'none';
+          $(id).hidden = true;
         }
       }
 
@@ -93,14 +107,14 @@
         $('progressText').textContent =
           'Photos ' + done + ' of ' + p.images.planned
           + (p.images.failed ? ' (' + p.images.failed + ' failed)' : '')
-          + '  ·  Posts ' + p.groups.done + ' of ' + p.groups.total;
+          + '  ·  Stories ' + p.groups.done + ' of ' + p.groups.total;
         $('progress').hidden = false;
       }
 
       function renderSummary(data) {
-        // The photo tally stays alongside the post counts: the failure this page
+        // The photo tally stays alongside the story counts: the failure this page
         // exists to make visible is a photo that silently kept its original
-        // WordPress URL, which the post counts alone report as a clean success.
+        // WordPress URL, which the story counts alone report as a clean success.
         const img = data.images || { total: 0, hosted: 0, failed: 0 };
         // issue #100: the old single "skipped" conflated "already published"
         // (a success — nothing to do) with "rejected" (an import-boundary
@@ -126,9 +140,9 @@
         const partial = $('importPartial');
         if (img.failed > 0) {
           partial.textContent =
-            img.failed + ' photo(s) could not be downloaded and still point at the old site. '
+            AdminFormat.count(img.failed, 'photo') + ' could not be downloaded and still point at the old site. '
             + 'Run the import again to retry just those — nothing already downloaded is fetched twice.';
-          partial.style.display = '';
+          partial.hidden = false;
         }
 
         // Rejected groups are the security signal — an unsafe slug is the
@@ -136,8 +150,8 @@
         // the warning list; the same treatment #85 gave un-hosted photos.
         const rej = $('importRejected');
         if (rejected > 0) {
-          rej.textContent = EditorCopy.en.languageImportRejected.replace('{count}', String(rejected));
-          rej.style.display = '';
+          rej.textContent = EditorCopy.en.languageImportRejected.replace('{groups}', AdminFormat.count(rejected, 'story group'));
+          rej.hidden = false;
         }
 
         // render warnings (XSS-safe: createElement + textContent only)
@@ -163,7 +177,7 @@
         if (job.status === 'done' && job.summary) {
           const missing = renderSummary(job.summary);
           $('out').textContent = missing ? 'Finished with missing photos.' : 'Done.';
-          $('results').style.display = '';
+          $('results').hidden = false;
           return;
         }
         if (job.status === 'interrupted') {
@@ -173,13 +187,13 @@
           note.textContent =
             'The server restarted while this import was running — it got to '
             + (p.images.hosted + p.images.failed) + ' of ' + p.images.planned + ' photos and '
-            + p.groups.done + ' of ' + p.groups.total + ' posts. Run the import again to resume; '
+            + p.groups.done + ' of ' + p.groups.total + ' stories. Run the import again to resume; '
             + 'nothing already downloaded is fetched twice.';
-          note.style.display = '';
-          $('results').style.display = '';
+          note.hidden = false;
+          $('results').hidden = false;
           return;
         }
-        $('out').textContent = 'Import failed: ' + (job.error || 'unknown error');
+        $('out').textContent = failure('finish the import', job.error);
       }
 
       async function fetchStatus() {
@@ -203,7 +217,7 @@
           if (!job) return;
           if (job.status === 'running') {
             setBusy(true);
-            $('out').textContent = 'Running… started ' + new Date(job.startedAt).toLocaleTimeString();
+            $('out').textContent = 'Running… started ' + AdminFormat.dateTime(job.startedAt) + '.';
             renderProgress(job);
             pollTimer = setTimeout(tick, POLL_MS);
             return;
@@ -214,17 +228,18 @@
         void tick();
       }
 
+      $('wxr').addEventListener('change', () => AdminField.valid($('wxr')));
       $('importBtn').addEventListener('click', async () => {
         const file = $('wxr').files[0];
-        if (!file) { $('out').textContent = 'Please select a .xml file first.'; return; }
+        if (!file) { AdminField.invalid($('wxr'), 'Choose a WordPress export (.xml) first.'); return; }
 
         // Destructive and opt-in (issue #126): name the scope before sending,
-        // the same confirm() the posts list and media library use.
+        // in the same in-page confirmation the Posts list and Media use.
         const overwriteRequested = $('overwriteDrafts').checked;
         if (overwriteRequested) {
           const ok = await AdminConfirm.ask({
             title: 'Replace existing drafts?',
-            body: 'Those drafts are rebuilt from the export: country, region, coordinates, key facts, alt text and body edits you made to them are discarded. Published posts are never touched.\n\nEach replaced draft keeps a revision you can restore from the editor.',
+            body: 'Those drafts are rebuilt from the export: country, region, coordinates, key facts, alt text and body edits you made to them are discarded. Published stories are never touched.\n\nEach replaced draft keeps a revision you can restore from the editor.',
             confirmLabel: 'Replace drafts',
             danger: true,
           });
@@ -232,6 +247,7 @@
         }
         overwrite = overwriteRequested;
 
+        restoreImportFocus = AdminFocus.hold($('importBtn'));
         setBusy(true);
         $('out').textContent = 'Uploading and checking the export…';
         hideResults();
@@ -245,7 +261,7 @@
         try {
           res = await fetch('/import', { method: 'POST', body: form });
         } catch (e) {
-          $('out').textContent = 'Request failed: ' + e;
+          $('out').textContent = 'Could not reach the server. Check your connection and try again.';
           setBusy(false);
           return;
         }
@@ -254,7 +270,7 @@
 
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
-          $('out').textContent = 'Import failed (' + res.status + '): ' + (body.error || 'unknown error');
+          $('out').textContent = failure('start the import', body.error);
           // 409: someone else's import is running — show it instead of a dead end.
           if (res.status === 409) { watch(); return; }
           setBusy(false);

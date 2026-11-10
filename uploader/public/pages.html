@@ -1,20 +1,36 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title></title><link rel="stylesheet" href="/admin/admin.css"></head><body>
-<header class="cms-page-meta"><h1 data-pages-copy="Title"></h1></header>
+<header class="cms-page-meta"><h1 data-pages-copy="Title"></h1><p class="lede" data-pages-copy="Intro"></p></header>
 <main><p id="pagesNotice" class="muted" role="status" data-pages-copy="Loading"></p>
 <p id="pagesError" class="err" role="alert" hidden></p>
-<p id="pagesOutcome" role="status"></p>
+<p id="pagesOutcome" role="status" tabindex="-1"></p>
 <a id="languageSettingsLink" href="/admin/settings.html#language" data-language-copy="Back" hidden></a>
 <div id="pagesList"></div></main>
 <script src="/admin/editor-image-copy.js"></script><script src="/admin/build-reporting.js"></script><script src="/admin/auth.js"></script>
-<script src="/admin/language.js"></script><script src="/admin/admin-confirm.js"></script><script src="/admin/pages-ui.js"></script>
+<script src="/admin/language.js"></script><script src="/admin/admin-ui.js"></script><script src="/admin/admin-confirm.js"></script><script src="/admin/pages-ui.js"></script>
 <script>
 'use strict';
-PagesUI.localize(document); SiteLanguage.localize(document); document.title = PagesUI.text('Title');
+PagesUI.localize(document); SiteLanguage.localize(document); Auth.setPageTitle(PagesUI.text('Title'));
 const prepareLocale = new URLSearchParams(location.search).get('prepareLocale');
 const errorEl = document.getElementById('pagesError');
 function showError(error) { errorEl.hidden = false; errorEl.textContent = error.message; }
+// One chip per enabled locale, followed by that locale's heading: the chip
+// says whether the heading exists, the text says what it is.
+function localeTitles(page, locales) {
+  const titles = document.createElement('p'); titles.className = 'pages-row__titles';
+  for (const locale of locales) {
+    const title = page.locales[locale].title;
+    const item = document.createElement('span'); item.className = 'pages-row__locale';
+    item.append(SiteLanguage.chip(locale, title ? 'available' : 'missing', SiteLanguage.text(title ? 'HeadingSet' : 'HeadingEmpty', { language: SiteLanguage.names[locale] })));
+    const heading = document.createElement('span'); heading.textContent = title || PagesUI.text('None'); heading.lang = locale;
+    item.append(heading); titles.append(item);
+  }
+  return titles;
+}
+// Page kind → the row's primary action from the latest render. A deleted page
+// keeps its row (now "Not created yet"), so Delete hands focus to its Create.
+const primaryActions = new Map();
 async function loadPages() {
   const { pages, language } = await PagesUI.request('');
   if (prepareLocale && (!['de', 'en'].includes(prepareLocale) || language.locales.includes(prepareLocale))) throw new Error(SiteLanguage.text('PrepInvalid'));
@@ -25,41 +41,48 @@ async function loadPages() {
   for (const page of pages) {
     if (prepareLocale && !page.known) continue;
     const section = document.createElement('section'); section.className = 'pages-row';
-    const title = document.createElement('h2'); title.className = 'pages-row__kind'; title.textContent = PagesUI.kind(page.key);
+    const kind = document.createElement('div'); kind.className = 'pages-row__kind';
+    const title = document.createElement('h2'); title.className = 'pages-row__name'; title.textContent = PagesUI.kind(page.key); kind.append(title);
+    if (!page.deletable) { const fixed = document.createElement('p'); fixed.className = 'muted pages-row__fixed'; fixed.textContent = PagesUI.text('Fixed'); kind.append(fixed); }
     const state = document.createElement('p');
     const published = page.known && page.exists && page.status === 'published';
     state.className = page.known && page.exists ? 'pages-row__state status-pill ' + (published ? 'published' : 'draft') : 'pages-row__state muted';
     state.textContent = !page.known ? PagesUI.text('Unknown') : !page.exists ? PagesUI.text('Missing') : PagesUI.text(published ? 'Published' : 'Draft');
-    const titles = document.createElement('p'); titles.className = 'pages-row__titles';
-    titles.textContent = (prepareLocale ? [prepareLocale] : language.locales).map((locale) => locale.toUpperCase() + ': ' + (page.locales[locale].title || PagesUI.text('None'))).join(' · ');
+    // A page that does not exist yet has nothing to say per language.
+    const titles = page.exists ? localeTitles(page, prepareLocale ? [prepareLocale] : language.locales) : document.createElement('p');
+    titles.className = 'pages-row__titles';
     const actions = document.createElement('div'); actions.className = 'pages-row__actions';
     if (page.known) {
       const edit = document.createElement('a'); edit.className = 'action-link';
       edit.href = '/admin/about.html?key=' + encodeURIComponent(page.key) + (prepareLocale ? '&prepareLocale=' + prepareLocale : '');
-      edit.textContent = PagesUI.text(page.exists ? 'Edit' : 'Create'); actions.append(edit);
+      edit.textContent = PagesUI.text(page.exists ? 'Edit' : 'Create'); edit.setAttribute('aria-label', edit.textContent + ' ' + PagesUI.kind(page.key)); actions.append(edit);
+      primaryActions.set(page.key, edit);
     }
     if (page.exists && page.deletable && !prepareLocale) {
       const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'btn-remove'; remove.textContent = PagesUI.text('Delete');
+      remove.setAttribute('aria-label', PagesUI.text('Delete') + ' ' + PagesUI.kind(page.key));
       remove.addEventListener('click', async () => {
+        const restoreFocus = AdminFocus.hold(remove);
         remove.disabled = true; errorEl.hidden = true;
-        let cancelled = false;
         try {
           const result = await PagesUI.remove(page.key);
           if (result) {
             BuildReporting.renderOutcome(document.getElementById('pagesOutcome'), 'delete', result, { title: PagesUI.kind(page.key) });
             await loadPages();
-          } else cancelled = true;
+          }
         } catch (error) { showError(error); }
-        finally { remove.disabled = false; if (cancelled) remove.focus(); }
+        finally { remove.disabled = false; restoreFocus(primaryActions.get(page.key), document.getElementById('pagesOutcome')); }
       }); actions.append(remove);
     }
-    if (!page.deletable) { const fixed = document.createElement('p'); fixed.className = 'muted pages-row__fixed'; fixed.textContent = PagesUI.text('Fixed'); actions.append(fixed); }
-    section.append(title, state, titles, actions); list.append(section);
+    section.append(kind, state, titles, actions); list.append(section);
   }
 }
 (async () => {
   const session = await Auth.ensureAuthed({ admin: true }); if (!session) return;
   Auth.renderHeader(session);
+  // The page editor returns here after deleting its page, with the outcome.
+  const flash = AdminFlash.take();
+  if (flash) document.getElementById('pagesOutcome').textContent = flash;
   try { await loadPages(); } catch (error) { showError(error); document.getElementById('pagesNotice').textContent = ''; }
 })();
 </script></body></html>

@@ -185,7 +185,7 @@ export class EditorElement {
   querySelector(selector: string) { return this.querySelectorAll(selector)[0] ?? null; }
   getClientRects() { return this.closest('[hidden]') ? [] : [{}]; }
   get offsetParent(): EditorElement | null { return this.closest('[hidden]') ? null : this.parentElement; }
-  focus() { if (!this.disabled && !this.closest('[hidden]')) this.state.activeElement = this; }
+  focus() { if (!this.disabled && !this.closest('[hidden]') && !this.closest('dialog:not([open])')) this.state.activeElement = this; }
   scrollIntoView() {}
   setSelectionRange(start: number, end: number) { this.selectionStart = start; this.selectionEnd = end; }
   addEventListener(type: string, callback: (event: EditorEvent) => void) {
@@ -219,6 +219,9 @@ export class EditorElement {
   close() {
     if (!this.open) return;
     this.open = false;
+    // A closed dialog is not rendered: whatever it held loses focus, and the
+    // opener gets it back only if it can still take it (not disabled or gone).
+    if (this.state.activeElement && this.contains(this.state.activeElement)) this.state.activeElement = null;
     this.previousFocus?.focus();
     this.state.closeEvents.push(() => this.dispatchEvent(new EditorEvent('close')));
   }
@@ -272,6 +275,8 @@ export function editorDocument(markup: string) {
       removeEventListener: root.removeEventListener.bind(root),
       dispatchEvent: root.dispatchEvent.bind(root),
       createElement: (tag: string) => { const element = new EditorElement(tag.toUpperCase(), state); created.push(element); return element; },
+      // SVG icons: the element keeps its tag like any other; no namespace semantics are modelled.
+      createElementNS: (_namespace: string, tag: string) => { const element = new EditorElement(tag.toUpperCase(), state); created.push(element); return element; },
       createTextNode: (text: string) => { const element = new EditorElement('#TEXT', state); element.textContent = text; return element; },
     },
     created,

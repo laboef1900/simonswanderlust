@@ -1110,14 +1110,32 @@ and the `<dialog>`s appended to `<body>` share one set:
 | Active navigation / New post | `--studio-accent` | `#416486` |
 | Active navigation surface | `--studio-accent-soft` | `#eaf0f6` |
 | Live-site mutation / destructive | `--red` / `--red-hover` | `#d23b30` / `#ac2a21` |
-| Control height (small) | `--control-h` (`--control-h-sm`) | `2.25rem` (`1.875rem`); both `2.75rem` on coarse pointers |
+| Control height (small) | `--control-h` (`--control-h-sm`) | `2.25rem` (`1.875rem`); both `2.75rem` on coarse pointers, except command bars (below) |
 | Focus ring | `--focus-ring` | `2px solid var(--studio-accent)` |
+| Corner radius | `--radius-sm` / `--control-radius` / `--radius-lg` / `--radius-xl` | `0.25rem` / `0.375rem` / `0.5rem` / `0.75rem` |
+| Status badge pairs | `--status-ok-*` / `--status-idle-*` / `--status-warn-*` (`-bg`, `-ink`) | Live / Draft / needs-attention pills and chips |
+| Stacking | `--z-raised` … `--z-skip` | one ordered scale; no literal `z-index` outside it |
+
+**Command bars keep one compact height (owner decision, 2026-11-10).** The command bar of
+the story, journey and page editor — back link, locale tabs, Save draft, Publish, preview,
+More actions, Details — is `2rem` (32px) on every pointer, touch included. The masthead's
+menu button is `2.25rem` and the editor's live re-check icon `1.625rem`. These do not take
+the coarse-pointer `2.75rem`; every other control does. WCAG 2.1 AA has no target-size
+criterion (2.5.5 is AAA), so the accessibility commitment in `PRODUCT.md` is unaffected.
 
 **One control vocabulary.** Every page uses the same primitives; page CSS only places them.
 
 - **Labels** sit above their field in the body face (13px, 600, ink) — the old mono
   uppercase labels are gone from the admin. A checkbox sits beside its label
-  (`.check-field`), and its help text indents under the label.
+  (`.check-field`), and its help text indents under the label. A label that names a
+  language appends the code in parentheses — Excerpt (DE), Permalink (EN), Tagline (DE) —
+  never the language name; only the locale tabs spell the language out.
+- **Story details section titles are the one uppercase register** (owner decision,
+  2026-11-10). Every section title in the inspector — Hero image, Key facts, Title image,
+  Expedition details, Route along stops, GPX route, Taxonomy, Revisions — and the locale
+  heading above them is uppercase, 13px/700, tracked 0.05em, in the body face. The status
+  line under a title ("1 Oct 2026 · RO · Europe · 1 stop", "Missing date") stays sentence
+  case.
 - **Inputs, selects and textareas** share one height, `--line-control` border, 6px radius
   and accent focus ring. Selects draw their own chevron so they match inputs exactly. File
   inputs use a quiet outlined picker button, not a filled mono one.
@@ -1126,12 +1144,54 @@ and the `<dialog>`s appended to `<body>` share one set:
   (Test connection, Insert image, Review story, Cancel); `.btn-remove` is outlined red for
   destructive row actions (a destructive *confirm* in the dialog is filled red);
   `.btn-primary` / `.btn-publish` / `.btn-primary-publish` are the filled red Publish and
-  Rebuild. `.btn-new` is the accent command link (New post, New trip). Form actions sit in
-  one `.form-actions` row, primary first; dense rows (bulk bars, folder actions,
-  revisions, comment moderation) use the small height.
+  Rebuild. `.btn-new` is the accent command link (New post, New journey). Form actions sit
+  in one `.form-actions` row, primary first; dense rows (bulk bars, folder actions,
+  revisions, comment moderation) use the small height. In an editor command bar **Save
+  draft** is the outlined `.commandbar__save` and Publish the one filled action; a page
+  that is already live shows the red **Save & rebuild** instead, because that save is a
+  live-site mutation.
+- **Red means the live site or a loss.** A confirmation's action button is filled red only
+  for a live-site mutation (Publish, Rebuild, a save that rebuilds) or a destructive action;
+  every other confirmation (Restore a local draft, Reload saved values, Discard form edits)
+  uses the navy primary. A destructive confirmation opens with focus on **Cancel**, so
+  Enter never deletes; a typed confirmation focuses its field. No admin flow uses the
+  browser's own `prompt()` or `confirm()`.
+- **Errors** are one inline pattern: a red `.field-error` sentence directly under the
+  field it concerns, the field marked `aria-invalid` and described by it, focus moved to
+  the field. The sentence names the problem and the limit or remedy ("Site name can be at
+  most 60 characters"). Messages that concern no single field use the page's `.err` line.
+  Server refusals are shown as sentences, never as raw lowercase codes.
+- **Dates and counts** have one format: `10 Nov 2026` for a date and `10 Nov 2026, 08:43`
+  for a moment (`AdminFormat.date` / `.dateTime`), in lists, status lines, confirmations
+  and prompts alike; counts pluralise ("1 photo", "3 photos"). Measurements — coordinates,
+  dates in fields, pixel sizes, country codes, keys, slugs' site prefix — are set in mono.
+- **One object, one word.** A blog entry is a **story** in every sentence the author
+  reads (the navigation and its list keep the name **Posts**, and **New post** stays the
+  command). Destroying something is **Delete**; **Remove** is only for taking an item out
+  of a list that keeps existing elsewhere (a link from navigation, a story from a journey,
+  a photo from a gallery).
 - **Confirmations** require fresh consent for each opening. Escape, Cancel, and a
   result-less `close()` never reuse an earlier acceptance; a typed confirmation also
   requires the current prompt's exact token.
+- **Outcomes** are two plain sentences in the page's status line: what was done, then what
+  the live site does now with the build moment ("Published. The live site is serving this
+  version (built 10 Nov 2026, 08:43)."). No release ids or pipeline words reach the author.
+  **Published** is what the author asked for; **Live** is what the site was last observed
+  serving. A page that navigates away after a delete carries its outcome to the list
+  (`AdminFlash`), where it is shown once.
+- **Focus after an action** never falls to the page. A save, moderation or rebuild returns
+  it to the control that started it (`AdminFocus.hold`). A row that leaves a list hands it
+  to the next row's first action, else the previous row's, else the list's create command
+  (Posts, Comments, Users, Media tiles); a deleted page hands it to that row's **Create**.
+  The phone drawer is focusable the moment it opens.
+- **Row actions** are direct buttons; a **More actions** menu exists only where a row has
+  two or more secondary actions (a published story), never for one (a draft's **Delete**).
+  A repeating row uses one control kind: Navigation rows are **Edit link** (a disclosure
+  button with `aria-expanded`), Move up, Move down, **Remove link**. In-page jumps
+  (Site & backups) are `.action-link`s, not buttons.
+- **Conflicts** compare field by field — Field / Yours / Stored, differing fields only,
+  the resolving actions first — and keep the raw evidence under **Technical details**.
+  Values the server filled in for an empty draft are not differences.
 - **Sections** inside the white workspace are flat: stacked `.card`s divide by a hairline
   (`--line`), never as cards inside the workspace card. A `fieldset` only groups controls
   for disabling and naming and never draws a box. Simple form pages (Users, Import)
@@ -1149,15 +1209,28 @@ and the `<dialog>`s appended to `<body>` share one set:
 - **Advisories** that never block anything (the editor's alt-text review before a publish)
   use the neutral `.notice-info`; `.notice-warn` is for results with a consequence (a live
   story missing alt text, backups off, an incomplete import).
-- **Locale tabs** are one segmented control in the story, journey and generalized page
-  editor, labelled in each language's own name (Deutsch, English).
+- **Locale tabs** are one segmented control in the story, journey and page editor,
+  labelled in each language's own name (Deutsch, English). The code beside the name is a
+  language chip that carries that locale's state, so the pair reads at a glance without
+  opening the other tab.
+- **Language chips** (`.lang-chip`) are the one DE/EN indicator, on Posts rows, Pages rows,
+  Journeys rows and inside every locale tab. Four states, each with a non-colour cue and an
+  accessible name: available (solid), missing — nothing written yet (dashed, amber),
+  omitted — written or not, but not requested for publication (dashed, struck through,
+  muted) and unknown (dotted). The choice itself is one checkbox with one polarity in both
+  editors: **Publish this story in English** / **Publish this journey in English**.
   The **Pages** catalogue replaces About in the admin sidebar, using flat compact
-  rows like Posts — kind, a Draft/Published status pill (or "Not created yet"), the
-  enabled-locale titles and right-aligned **Edit**/**Create** action links — not new
-  card chrome. The incumbent About
-  editor hosts each page kind: title/status above, lifecycle controls in the title
-  row, and title/slug/body within the existing locale panel. About hides inapplicable
-  slug/delete/unpublish controls. A never-public locale's slug stays editable.
+  rows like Posts — kind, a Draft/Published status pill (or "Not created yet"), language
+  chips with the enabled-locale titles and right-aligned **Edit**/**Create** actions — not
+  new card chrome.
+  The **page editor** follows the story editor (owner decision, 2026-11-10): a command bar
+  with **Back to Pages** and the locale tabs on the left, Save draft / Publish / Preview
+  saved version / Unpublish / Delete page on the right and the status beneath, then heading,
+  slug and the same Visual / Markdown manuscript with the same toolbar and Photo tray as a
+  story. Pages have no Gallery picker: a gallery block already in a page renders in Visual
+  mode and is edited in Markdown. The page heading stays visible above the bar, as on a
+  journey. About hides
+  inapplicable slug/delete/unpublish controls. A never-public locale's slug stays editable.
   About ends each enabled locale panel with a hairline-divided **Equipment** section
   (the identity equipment line, #514): label, code-point counter, inline error, its own
   navy **Save equipment**, and a timing note that saving never rebuilds. Conflicts keep
@@ -1172,7 +1245,8 @@ and the `<dialog>`s appended to `<body>` share one set:
   time with title, slug and intro beside the hero photo. Alt text and framing appear only
   once a hero is chosen. The heading reads **New journey** until the first save.
 - The **journey catalogue** uses flat, compact rows: primary-locale title, enabled secondary
-  titles, publication state, unpublished changes, story count and **Edit journey**. Dormant
+  titles with their language chips, publication state, unpublished changes, story count and
+  **Edit** (named "Edit <title>" for assistive technology, as on Posts and Pages). Dormant
   published locales stay explicit. Title search searches enabled locales only, ignores case
   and surrounding whitespace, and distinguishes no matches from an empty catalogue.
   Below 68rem the description spans the row, with state/count beside the edit action.
@@ -1389,8 +1463,11 @@ and the `<dialog>`s appended to `<body>` share one set:
   like a saved edit.
 - **Media leads with the photograph.** The library grid uses larger tiles (≥10.5rem, two
   columns on a phone) captioned with the photo's title; a photo without one shows its file
-  name set back in muted, one-line type, and a ready photo with no alt text in any locale
-  carries a quiet **No alt text** tag. With no detail selected the grid takes the inspector's
+  name set back in muted, one-line type. Tiles carry no alt-text tag (owner decision,
+  2026-11-10): above the grid one line counts the ready photos in the current view that
+  have no alt text in any locale and offers **Show only these**, which sets the **Alt text**
+  filter (under More filters) to Missing; with the filter on, the line offers the way
+  back. With no detail selected the grid takes the inspector's
   space; selection guidance and keyboard shortcuts live under Folders. The detail panel
   (20rem) has a quiet **Photo details / Back to photos** header, then the photo itself,
   camera · date · pixel size and the key in mono, then fields; lens and file sizes

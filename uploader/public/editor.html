@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Post Editor</title>
+    <title>New post</title>
     <link rel="stylesheet" href="/admin/admin.css" />
     <link rel="stylesheet" href="/admin/editor-gpx.css" />
     <link rel="stylesheet" href="/admin/editor-stop-route.css" />
@@ -18,7 +18,7 @@
     <main>
       <div class="editor-commandbar" id="editorCommandbar">
         <div class="editor-commandbar__nav">
-          <a id="backToPosts" href="/admin/posts.html" class="action-link">Back to Posts</a>
+          <a id="backToPosts" href="/admin/posts.html" class="action-link commandbar__back">Back to Posts</a>
           <div class="lang-switch-bar" role="tablist" aria-label="Post language">
             <button type="button" class="tab-btn active" role="tab" id="tabbtn-de" aria-selected="true" aria-controls="tab-de" data-tab="de">
               Deutsch <span class="lang-code" aria-hidden="true">DE</span>
@@ -31,7 +31,7 @@
         </div>
 
         <div class="editor-commandbar__actions">
-          <button id="saveDraft" type="button">Save draft</button>
+          <button id="saveDraft" type="button" class="commandbar__save">Save draft</button>
           <button id="publishBtn" type="button" class="btn-primary-publish" hidden>Publish</button>
           <!-- Preview is a daily writing action, so it sits in the bar, not the menu.
                Its accessible name keeps the full "not the live site" warning. -->
@@ -105,17 +105,17 @@
 
           <section id="tab-de" class="locale-tab" role="tabpanel" aria-labelledby="tabbtn-de">
             <div class="editor-card editor-writing-surface__title">
-              <label for="deTitle">Article title (Deutsch)</label>
+              <label for="deTitle">Article title (DE)</label>
               <textarea id="deTitle" rows="1" class="editor-title-input"></textarea>
             </div>
 
             <div class="editor-card editor-writing-surface__body">
-              <h2 class="editor-card-title">Story (Deutsch)</h2>
+              <h2 class="editor-card-title">Story (DE)</h2>
               <!-- The bar pins under the command bar, so formatting and photos
                    stay at hand anywhere in a long story; inserts go in at the
                    cursor. A roving toolbar: one Tab stop, arrow keys inside. -->
               <div class="manuscript-tools" data-locale="de">
-                <div class="manuscript-bar" id="deManuscriptBar" role="toolbar" aria-label="Story tools (Deutsch)">
+                <div class="manuscript-bar" id="deManuscriptBar" role="toolbar" aria-label="Story tools (DE)">
                   <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="deFormatToggle" aria-expanded="false" aria-controls="deFormatPanel" hidden></button>
                   <div class="manuscript-format" id="deFormatPanel">
                   <div class="manuscript-bar__group">
@@ -142,14 +142,14 @@
                   </div>
                 </div>
                 <p id="deBodyImgStatus" class="muted manuscript-tools__status" role="status"></p>
-                <div class="manuscript-photo" id="dePhotoPanel" role="group" aria-label="Insert a photo (Deutsch)" hidden>
+                <div class="manuscript-photo" id="dePhotoPanel" role="group" aria-label="Insert a photo (DE)" hidden>
                   <div class="manuscript-photo__fields">
                     <div>
                       <label for="deBodyImgFile">Photo file</label>
                       <input id="deBodyImgFile" type="file" accept="image/*" class="hero-file-input" />
                     </div>
                     <div>
-                      <label for="deBodyImgAlt">Alt text (Deutsch)</label>
+                      <label for="deBodyImgAlt">Alt text (DE)</label>
                       <input id="deBodyImgAlt" type="text" placeholder="Describe the photo in German" />
                     </div>
                   </div>
@@ -172,14 +172,14 @@
 
           <section id="tab-en" class="locale-tab" role="tabpanel" aria-labelledby="tabbtn-en" hidden>
             <div class="editor-card editor-writing-surface__title">
-              <label for="enTitle">Article title (English)</label>
+              <label for="enTitle">Article title (EN)</label>
               <textarea id="enTitle" rows="1" class="editor-title-input"></textarea>
             </div>
 
             <div class="editor-card editor-writing-surface__body">
-              <h2 class="editor-card-title">Story (English)</h2>
+              <h2 class="editor-card-title">Story (EN)</h2>
               <div class="manuscript-tools" data-locale="en">
-                <div class="manuscript-bar" id="enManuscriptBar" role="toolbar" aria-label="Story tools (English)">
+                <div class="manuscript-bar" id="enManuscriptBar" role="toolbar" aria-label="Story tools (EN)">
                   <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="enFormatToggle" aria-expanded="false" aria-controls="enFormatPanel" hidden></button>
                   <div class="manuscript-format" id="enFormatPanel">
                   <div class="manuscript-bar__group">
@@ -206,14 +206,14 @@
                   </div>
                 </div>
                 <p id="enBodyImgStatus" class="muted manuscript-tools__status" role="status"></p>
-                <div class="manuscript-photo" id="enPhotoPanel" role="group" aria-label="Insert a photo (English)" hidden>
+                <div class="manuscript-photo" id="enPhotoPanel" role="group" aria-label="Insert a photo (EN)" hidden>
                   <div class="manuscript-photo__fields">
                     <div>
                       <label for="enBodyImgFile">Photo file</label>
                       <input id="enBodyImgFile" type="file" accept="image/*" class="hero-file-input" />
                     </div>
                     <div>
-                      <label for="enBodyImgAlt">Alt text (English)</label>
+                      <label for="enBodyImgAlt">Alt text (EN)</label>
                       <input id="enBodyImgAlt" type="text" placeholder="Describe the photo in English" />
                     </div>
                   </div>
@@ -320,15 +320,15 @@
               </div>
             </details>
             <div class="editor-inspector-group" id="deStoryDetails">
-              <label for="deExcerpt">Excerpt / summary (DE)</label>
+              <label for="deExcerpt">Excerpt (DE)</label>
               <textarea id="deExcerpt" class="editor-autofit" rows="3" placeholder="Eine kurze Zusammenfassung des Reiseberichts…"></textarea>
               <p class="muted editor-field-help" id="deExcerptHelp"></p>
               <div id="deExcerptAssist"></div>
-              <label for="deCountry">Country (Deutsch)</label>
+              <label for="deCountry">Country (DE)</label>
               <input id="deCountry" type="text" placeholder="z. B. Griechenland" aria-describedby="deCountryHelp" />
               <p class="muted editor-field-help" id="deCountryHelp"></p>
 
-              <label for="slugFieldDe">DE permalink</label>
+              <label for="slugFieldDe">Permalink (DE)</label>
               <div class="slug-preview">
                 <span class="slug-base" id="slugBaseDe"></span>
                 <input id="slugFieldDe" type="text" placeholder="derived-from-de-title" />
@@ -399,15 +399,15 @@
               </div>
             </details>
             <div class="editor-inspector-group" id="enStoryDetails">
-              <label for="enExcerpt">Excerpt / summary (EN)</label>
-              <textarea id="enExcerpt" class="editor-autofit" rows="3" placeholder="A short summary of the trip report…"></textarea>
+              <label for="enExcerpt">Excerpt (EN)</label>
+              <textarea id="enExcerpt" class="editor-autofit" rows="3" placeholder="A short summary of the story…"></textarea>
               <p class="muted editor-field-help" id="enExcerptHelp"></p>
               <div id="enExcerptAssist"></div>
-              <label for="enCountry">Country (English)</label>
+              <label for="enCountry">Country (EN)</label>
               <input id="enCountry" type="text" placeholder="e.g. Greece" aria-describedby="enCountryHelp" />
               <p class="muted editor-field-help" id="enCountryHelp"></p>
 
-              <label for="slugFieldEn">EN permalink</label>
+              <label for="slugFieldEn">Permalink (EN)</label>
               <div class="slug-preview">
                 <span class="slug-base" id="slugBaseEn"></span>
                 <input id="slugFieldEn" type="text" placeholder="derived-from-en-title" />
@@ -430,7 +430,7 @@
             <summary class="editor-card-title">
               <span class="editor-section-title">Expedition details<span class="editor-section-summary" id="expeditionSummary"></span></span>
             </summary>
-            <label for="fmDate">Trip date</label>
+            <label for="fmDate">Date</label>
             <input id="fmDate" type="date" />
 
             <div class="form-row-2">
@@ -478,7 +478,7 @@
 
             <label class="check-field" for="fmCommentsEnabled">
               <input type="checkbox" id="fmCommentsEnabled" checked aria-describedby="fmCommentsHint" />
-              Allow comments on this trip
+              Allow comments on this story
             </label>
             <p class="muted" id="fmCommentsHint">
               Comments appear only when an admin has also switched them on in Settings. Saved with the draft; no rebuild.
@@ -667,7 +667,7 @@
       </div>
       <footer class="gpx-dialog__footer">
         <button id="gpxDiscard" type="button" class="btn-secondary"></button>
-        <button id="gpxAttach" type="button" class="btn-primary-publish" disabled></button>
+        <button id="gpxAttach" type="button" disabled></button>
       </footer>
     </dialog>
 
@@ -680,12 +680,14 @@
     <script src="/admin/publication-refresh.js"></script>
     <script src="/admin/auth.js"></script>
     <script src="/admin/language.js"></script>
+    <script src="/admin/admin-ui.js"></script>
     <script src="/admin/admin-confirm.js"></script>
     <script src="/admin/draft-guard.js"></script>
     <script src="/admin/write-recovery.js"></script>
     <script src="/admin/vendor/easymde.min.js"></script>
     <script src="/admin/vendor/editor-rich-text.js"></script>
     <script src="/admin/editor-rich-bridge.js"></script>
+    <script src="/admin/manuscript-bar.js"></script>
     <script src="/admin/llm.js"></script>
     <script src="/admin/alt-suggest.js"></script>
     <script src="/admin/media-api.js"></script>
@@ -850,14 +852,58 @@
           renderDraftState();
         },
       });
+      // Unknown server refusals still read as sentences (DESIGN.md "Errors"):
+      // the server's own text after a colon, or its status in parentheses.
+      function refusal(action, body, status) {
+        const text = typeof body?.error === 'string' ? body.error.trim() : '';
+        if (text) return 'Could not ' + action + ': ' + text + (/[.!?]$/.test(text) ? '' : '.');
+        return 'Could not ' + action + (status ? ' (server status ' + status + ')' : '') + '.';
+      }
+      // The browser tab names the story; the hidden h1 keeps "New post"/"Edit post".
+      function syncPageTitle(title) {
+        Auth.setPageTitle((typeof title === 'string' && title.trim()) || 'New post');
+      }
+      // One reading of a version for the stored-version comparison: the same
+      // labelled fields for the local payload and the server's copy, so equal
+      // fields fall away and only differences are shown (WriteRecovery.describe).
+      function describeVersion(version) {
+        const rows = [];
+        for (const locale of language ? language.locales : []) {
+          const code = locale.toUpperCase();
+          const text = version?.[locale] || {};
+          rows.push({ label: 'Title (' + code + ')', value: text.title || '' });
+          rows.push({ label: 'Excerpt (' + code + ')', value: text.excerpt || '' });
+          rows.push({ label: 'Country (' + code + ')', value: text.country || '' });
+          rows.push({ label: 'Permalink (' + code + ')', value: text.slug || '' });
+          rows.push({ label: 'Body (' + code + ')', value: text.bodyMarkdown || '' });
+        }
+        rows.push(...describeShared(version?.shared || {}));
+        return rows;
+      }
+      // The server fills a draft's NOT-NULL shared columns with placeholders the
+      // author never typed (draftWithDefaults: country code XX, region europe,
+      // the save day, coordinates 0/0); the local payload simply omits blanks.
+      // Read both as empty, so only values an author entered can differ.
+      function describeShared(shared) {
+        const untouched = shared.countryCode === 'XX';
+        const point = shared.coordinates;
+        const located = point && Number.isFinite(point.lat) && Number.isFinite(point.lng) && !(point.lat === 0 && point.lng === 0);
+        return [
+          { label: 'Date', value: untouched ? '' : AdminFormat.date(shared.date) },
+          { label: 'Region', value: untouched && shared.region === 'europe' ? '' : AdminFormat.region(shared.region) },
+          { label: 'Coordinates', value: located ? point.lat + ', ' + point.lng : '' },
+          { label: 'Stops', value: Array.isArray(shared.stops) && shared.stops.length ? AdminFormat.count(shared.stops.length, 'stop') : '' },
+        ];
+      }
       writeRecovery = WriteRecovery.create({
-        kind: 'posts', guard, copy: editorCopy, anchor: $('actionError'),
+        kind: 'posts', guard, copy: editorCopy,
         // The command bar already announces saved/unsaved state; recovery is for problems.
         showSavedNotice: false,
         resourceId: () => currentTk || initialTk, base: () => loadedUpdatedAt,
         collect: () => recoveryDraft || buildPayload(),
+        describe: describeVersion,
         restoreBase: (value) => { loadedUpdatedAt = value; articleTranslation?.invalidate(); },
-        error: (body, status) => showErr(SiteLanguage.error(body) || (editorCopy.writeRefused + ' ' + status)),
+        error: (body, status) => showErr(SiteLanguage.error(body) || refusal('save', body, status)),
         adopt: async (body, attempt, acknowledgement) => {
           articleTranslation?.invalidate();
           // Gallery diagnostics ride only on this tab's own acknowledgement, never a probe.
@@ -878,6 +924,7 @@
           loadedSlugs.de = body.de?.slug || '';
           loadedSlugs.en = body.en?.slug || '';
           savedRequestedLocales = language.locales.filter((locale) => body[locale] && !body[locale].omitted);
+          syncPageTitle(body[language.primary]?.title);
           loadRevisions().catch(() => {});
           refreshAltAudit().catch(() => {});
           setStatus(isPublished ? editorCopy.saveLiveUnchanged : '');
@@ -1085,12 +1132,6 @@
       // ---- manuscript bar: formatting, photo, gallery ----
       // Both engines retain their selection while focus sits on the bar.
       // One Tab stop per bar; arrow keys, Home and End move inside it.
-      const FORMAT = {
-        bold: 'toggleBold', italic: 'toggleItalic', heading: 'toggleHeadingSmaller',
-        quote: 'toggleBlockquote', bullets: 'toggleUnorderedList', numbers: 'toggleOrderedList',
-        link: 'drawLink', code: 'toggleCodeBlock',
-      };
-      const FORMAT_KEYS = { bold: 'B', italic: 'I', link: 'K' };
       const mdeFor = (locale) => (locale === 'en' ? enMDE : deMDE);
       const galleryLibrary = GalleryLibrary.create({
         client: MediaApi.makeClient({ onUnauthed: () => guard.redirectToLogin() }),
@@ -1103,64 +1144,17 @@
       }
       function wireManuscriptBar(locale) {
         const bar = $(locale + 'ManuscriptBar');
-        const formatToggle = $(locale + 'FormatToggle');
-        const formatPanel = $(locale + 'FormatPanel');
-        formatToggle.textContent = editorCopy.formatTools;
-        const all = () => Array.from(bar.querySelectorAll('button'));
-        const usable = () => all().filter((button) => !button.hidden && !button.disabled
-          && (!formatPanel.hidden || !formatPanel.contains(button)));
-        const rove = (target) => all().forEach((button) => { button.tabIndex = button === target ? 0 : -1; });
-        function closeFormat(restoreFocus = false) {
-          if (!compactEditor.matches) return;
-          formatPanel.hidden = true;
-          formatToggle.setAttribute('aria-expanded', 'false');
-          if (formatPanel.querySelector('[tabindex="0"]') || restoreFocus) rove(formatToggle);
-          if (restoreFocus) formatToggle.focus({ preventScroll: true });
-        }
-        function adaptFormat() {
-          const focused = document.activeElement;
-          formatToggle.hidden = !compactEditor.matches;
-          formatPanel.hidden = compactEditor.matches;
-          formatToggle.setAttribute('aria-expanded', 'false');
-          const target = usable().includes(focused) ? focused : usable()[0];
-          rove(target);
-          if (bar.contains(focused)) target?.focus({ preventScroll: true });
-        }
-        compactEditor.addEventListener('change', adaptFormat);
-        adaptFormat();
-        formatToggle.addEventListener('click', () => {
-          if (!formatPanel.hidden) { closeFormat(true); return; }
-          closePhotoPanel(locale);
-          formatPanel.hidden = false;
-          formatToggle.setAttribute('aria-expanded', 'true');
-          formatPanel.querySelector('button').focus({ preventScroll: true });
+        // Roving focus, the phone Format tray and the formatting buttons are
+        // the shared toolbar (manuscript-bar.js); the page editor uses the same.
+        const tools = ManuscriptBar.wire({
+          bar, formatToggle: $(locale + 'FormatToggle'), formatPanel: $(locale + 'FormatPanel'),
+          compact: compactEditor, formatLabel: editorCopy.formatTools, codeLabel: editorCopy.codeBlock, shortcutLabel,
+          onOpenFormat: () => closePhotoPanel(locale),
+          isVisual: () => bodyEditors[locale].isVisual(),
+          command: (name) => bodyEditors[locale].command(name),
+          markdown: (action) => EasyMDE[action](mdeFor(locale)),
         });
-        bar.addEventListener('keydown', (event) => {
-          if (event.key === 'Escape' && compactEditor.matches && !formatPanel.hidden) {
-            event.preventDefault();
-            closeFormat(true);
-          }
-        });
-        bar.addEventListener('focusout', (event) => {
-          if (!bar.contains(event.relatedTarget)) closeFormat();
-        });
-        document.addEventListener('click', (event) => {
-          if (!bar.contains(event.target)) closeFormat();
-        });
-        bar.addEventListener('focusin', (event) => {
-          const button = event.target.closest('button');
-          if (button) rove(button);
-        });
-        bar.addEventListener('keydown', (event) => {
-          const list = usable();
-          const index = list.indexOf(document.activeElement);
-          const step = { ArrowRight: index + 1, ArrowLeft: index - 1, Home: 0, End: list.length - 1 }[event.key];
-          if (index < 0 || step === undefined) return;
-          event.preventDefault();
-          const target = list[(step + list.length) % list.length];
-          rove(target);
-          target.focus();
-        });
+        const closeFormat = tools.closeFormat;
         bodyEditors[locale] = EditorRichBridge.create({
           mde: mdeFor(locale), element: $(locale + 'RichBody'), source: $(locale + 'MarkdownBody'),
           error: $(locale + 'RichError'), visualButton: $(locale + 'VisualMode'), markdownButton: $(locale + 'MarkdownMode'),
@@ -1172,22 +1166,8 @@
             articleTranslation?.invalidate();
             closeFormat();
             closePhotoPanel(locale);
-            const list = usable();
-            rove(list.includes(document.activeElement) ? document.activeElement : list.find((button) => button.tabIndex === 0) || list[0]);
+            tools.settle();
           },
-        });
-        bar.querySelectorAll('[data-format]').forEach((button) => {
-          const name = button.dataset.format;
-          if (name === 'code') button.setAttribute('aria-label', editorCopy.codeBlock);
-          const label = button.getAttribute('aria-label');
-          const key = FORMAT_KEYS[name];
-          button.title = key ? label + ' (' + shortcutLabel(key) + ')' : label;
-          if (key) button.setAttribute('aria-keyshortcuts', 'Meta+' + key + ' Control+' + key);
-          button.addEventListener('click', () => {
-            if (bodyEditors[locale].isVisual()) bodyEditors[locale].command(name);
-            else EasyMDE[FORMAT[name]](mdeFor(locale));
-            closeFormat();
-          });
         });
         const toggle = $(locale + 'PhotoToggle');
         toggle.addEventListener('click', () => {
@@ -1288,6 +1268,8 @@
       const slugFieldFor = (locale) => $(locale === 'de' ? 'slugFieldDe' : 'slugFieldEn');
       for (const locale of ['de', 'en']) {
         $(locale + 'Title').addEventListener('input', () => {
+          // Typing answers the "give the story a title" refusal (AdminField).
+          if ($(locale + 'Title').hasAttribute('aria-invalid')) AdminField.valid($(locale + 'Title'));
           if (publishedLocales[locale] || !slugAuto[locale]) return;
           slugFieldFor(locale).value = slugify($(locale + 'Title').value);
         });
@@ -1557,10 +1539,20 @@
       }
 
       // ---- hero upload ----
+      // A photo's status is a sentence; its library key may follow in mono,
+      // never a raw URL (DESIGN.md "Jargon out").
+      function photoStatus(statusEl, sentence, key) {
+        statusEl.textContent = sentence;
+        if (typeof key === 'string' && key) {
+          const code = document.createElement('code');
+          code.textContent = key;
+          statusEl.append(' ', code);
+        }
+      }
       async function uploadHero(locale) {
         const slugFieldId = locale === 'de' ? 'slugFieldDe' : 'slugFieldEn';
         const slug = $(slugFieldId).value.trim();
-        if (!slug) { showErr('Set the ' + locale.toUpperCase() + ' slug before uploading a hero image.'); return; }
+        if (!slug) { showErr('Fill in Permalink (' + locale.toUpperCase() + ') before uploading a hero photo.'); return; }
         const fileInput = $(locale + 'HeroFile');
         const altInput = $(locale + 'HeroAlt');
         const statusEl = $(locale + 'HeroStatus');
@@ -1581,7 +1573,7 @@
           });
           if (!body || !writeRecovery.canAdopt(ownerId)) return;
           if ($(locale + 'HeroSrc').value !== previousSrc) {
-            statusEl.textContent = editorCopy.uploadNotApplied + ' ' + body.src;
+            photoStatus(statusEl, editorCopy.uploadNotApplied, body.key);
             return;
           }
 
@@ -1600,10 +1592,10 @@
           // and dimensions are final, but the variants land a few seconds later
           // and Publish refuses until they do. Say so rather than letting the
           // author wonder why the preview shows a broken image.
-          statusEl.textContent = 'Hero uploaded: ' + body.src
-            + (body.status === 'processing' ? ' — still processing (Publish waits for it)' : '');
+          photoStatus(statusEl, 'Hero photo uploaded.'
+            + (body.status === 'processing' ? ' It is still being processed; Publish waits for it.' : ''), body.key);
         } catch (e) {
-          statusEl.textContent = 'Upload failed: ' + e;
+          statusEl.textContent = refusal('upload the photo', { error: e && e.message });
         }
       }
 
@@ -1916,9 +1908,9 @@
             // drops a newly picked photo whose dimensions are unusable.
             const written = fence ? GalleryFence.parse(fence.slice(fence.indexOf('\n') + 1, fence.lastIndexOf('\n'))).lines.length : 0;
             status.textContent = !items.length
-              ? 'Gallery removed'
-              : (out.replaced ? 'Gallery updated: ' : 'Gallery inserted: ') + written + ' photo(s)'
-                + (written < items.length ? ` (${items.length - written} skipped — no usable dimensions)` : '');
+              ? 'Gallery removed.'
+              : (out.replaced ? 'Gallery updated: ' : 'Gallery inserted: ') + AdminFormat.count(written, 'photo') + '.'
+                + (written < items.length ? ' ' + AdminFormat.count(items.length - written, 'photo was', 'photos were') + ' skipped: no usable dimensions.' : '');
             } catch (error) { galleryFailure(locale, error, () => galleryFor(locale)); }
           },
         });
@@ -1964,7 +1956,7 @@
             HeroFocus.set(locale, 50, 50);
             HeroFocus.sync(locale);
             guard.markDirty();
-            $(locale + 'HeroStatus').textContent = 'Hero from library: ' + item.src;
+            photoStatus($(locale + 'HeroStatus'), 'Hero photo chosen from the library.', item.key);
           },
         });
       }
@@ -2012,8 +2004,8 @@
         } else {
           cm.replaceSelection(md);
         }
-        statusEl.textContent = (spot.relocated ? 'Inserted after the ``` block: ' : 'Inserted: ') + image.src
-          + (image.status === 'processing' ? ' — still processing (Publish waits for it)' : '');
+        photoStatus(statusEl, (spot.relocated ? 'Photo inserted after the code block.' : 'Photo inserted at the cursor.')
+          + (image.status === 'processing' ? ' It is still being processed; Publish waits for it.' : ''), image.key);
         return true;
       }
       // The panel has done its job: back to writing, right after the photo.
@@ -2025,7 +2017,7 @@
       async function uploadBodyImg(locale) {
         const slugFieldId = locale === 'de' ? 'slugFieldDe' : 'slugFieldEn';
         const slug = $(slugFieldId).value.trim();
-        if (!slug) { showErr('Set the ' + locale.toUpperCase() + ' slug before uploading a body image.'); return; }
+        if (!slug) { showErr('Fill in Permalink (' + locale.toUpperCase() + ') before uploading a photo.'); return; }
         const fileInput = $(locale + 'BodyImgFile');
         const altInput = $(locale + 'BodyImgAlt');
         const statusEl = $(locale + 'BodyImgStatus');
@@ -2051,7 +2043,7 @@
           if (altInput.value === alt) altInput.value = '';
           if (inserted) finishPhotoInsert(locale);
         } catch (e) {
-          statusEl.textContent = 'Upload failed: ' + e;
+          statusEl.textContent = refusal('upload the photo', { error: e && e.message });
         }
       }
 
@@ -2212,7 +2204,7 @@
       function tripGaps() {
         const missing = [];
         if (!$('fmDate').value.trim()) missing.push('date');
-        if ($('fmCountryCode').value.trim().length !== 2) missing.push('ISO');
+        if ($('fmCountryCode').value.trim().length !== 2) missing.push('country code');
         if (!$('fmRegion').value) missing.push('region');
         const lat = $('fmLat').value;
         const lng = $('fmLng').value;
@@ -2246,7 +2238,7 @@
         }
         const details = $('expeditionDetails');
         if (details) details.open = true;
-        const tripIds = { date: 'fmDate', ISO: 'fmCountryCode', region: 'fmRegion', coordinates: 'fmLat' };
+        const tripIds = { date: 'fmDate', 'country code': 'fmCountryCode', region: 'fmRegion', coordinates: 'fmLat' };
         inspectorApi.reveal($(tripIds[field] || 'fmDate'));
       }
       function chipPart(label, kind, miss) {
@@ -2268,11 +2260,11 @@
           chip.appendChild(chipPart(SiteLanguage.names[locale], locale, g[locale]));
           chip.appendChild(document.createTextNode(' · '));
         }
-        chip.appendChild(chipPart('Trip', 'trip', g.trip));
+        chip.appendChild(chipPart('Expedition details', 'trip', g.trip));
         chip.classList.toggle('is-incomplete', gapCount(g) > 0);
       }
       // The closed Expedition details still says what it holds, or what it
-      // lacks; the readiness chip's Trip link is the way in to a gap.
+      // lacks; the readiness chip's Expedition details link is the way in to a gap.
       function renderExpeditionSummary(gaps) {
         const summary = $('expeditionSummary');
         if (gaps.length) {
@@ -2281,25 +2273,34 @@
           return;
         }
         summary.classList.remove('is-incomplete');
-        const date = $('fmDate').value;
-        const parsed = date ? new Date(date + 'T00:00:00Z') : null;
-        const region = $('fmRegion').value;
-        const regionName = region
-          ? Array.from($('fmRegion').querySelectorAll('option')).find((option) => option.value === region)?.textContent.trim()
-          : '';
         const stops = $('stopsList').querySelectorAll('.stop-row').length;
         summary.textContent = [
-          parsed && !Number.isNaN(parsed.getTime())
-            ? parsed.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }) : '',
+          AdminFormat.date($('fmDate').value),
           $('fmCountryCode').value.trim().toUpperCase(),
-          regionName,
-          stops ? stops + (stops === 1 ? ' stop' : ' stops') : '',
+          AdminFormat.region($('fmRegion').value),
+          stops ? AdminFormat.count(stops, 'stop') : '',
         ].filter(Boolean).join(' · ');
       }
       // Adding or removing a stop is a click, not an input event.
       $('stopsContainer').addEventListener('click', () => renderExpeditionSummary(tripGaps()));
+      // Each locale tab's code is a chip with that locale's state (DESIGN.md
+      // "Language chips"): omitted (not requested for publication), missing
+      // (neither title nor body written yet) or available.
+      function syncLocaleTabs() {
+        if (!language) return;
+        for (const locale of language.locales) {
+          const tab = $('tabbtn-' + locale);
+          if (!tab) continue;
+          const name = SiteLanguage.names[locale];
+          const written = $(locale + 'Title').value.trim() || mdeFor(locale).value().trim();
+          const state = omitted[locale] ? 'omitted' : written ? 'available' : 'missing';
+          const key = state === 'omitted' ? 'OmittedLabel' : state === 'missing' ? 'BodyEmpty' : 'BodyStarted';
+          SiteLanguage.tabState(tab, state, SiteLanguage.text(key, { language: name }));
+        }
+      }
       function updateLocaleChip() {
         articleTranslation?.refresh();
+        syncLocaleTabs();
         const chip = $('localeChip');
         const mobileChip = $('mobileLocaleChip');
         if (!chip || !mobileChip) return;
@@ -2511,6 +2512,16 @@
           return false;
         }
         if (!gpxEditor.guardAction()) return false;
+        // The server would refuse a draft without a primary-language title; say
+        // so at the field instead of sending (DESIGN.md "Errors").
+        const titleField = $(language.primary + 'Title');
+        if (!titleField.value.trim()) {
+          tabsApi.select(language.primary);
+          activateLocale(language.primary);
+          inspectorApi.close();
+          AdminField.invalid(titleField, editorCopy.titleRequired.replace('{language}', SiteLanguage.names[language.primary]));
+          return false;
+        }
         const intent = await captureSaveIntent();
         if (!intent) return false;
         return enqueueWrite(() => saveDraftNow(intent));
@@ -2537,15 +2548,15 @@
           let ok;
           try {
             ok = await AdminConfirm.ask({
-              title: 'Change this post’s URL?',
-              body: 'This save changes the post\'s URL:\n\n' + lines.join('\n') + '\n\nIf the old slug is a live WordPress URL, links and search rankings break.',
+              title: 'Change this story’s URL?',
+              body: 'This save changes the story’s URL:\n\n' + lines.join('\n') + '\n\nIf the old slug is a live WordPress URL, links and search rankings break.',
               confirmLabel: 'Change URL',
               danger: true,
             });
           } finally { confirmingSave = false; }
           if (!ok) {
             setStatus('');
-            showErr('Not saved — the slug change was cancelled. Set the slug back to keep the URL.');
+            showErr('Not saved: the URL change was cancelled. Set the permalink back to keep the URL.');
             return false;
           }
           payload.confirmSlugChange = true;
@@ -2560,7 +2571,7 @@
         if (saved) {
           const savedMsg = guard.isDirty() ? editorCopy.saveNewer : isPublished ? editorCopy.saveLiveUnchanged : '';
           if (skipped || savedMsg) setStatus(skipped
-            ? savedMsg + ' Note: ' + skipped + ' incomplete stop row(s) were skipped (each needs a name, latitude and longitude).'
+            ? savedMsg + ' Note: ' + AdminFormat.count(skipped, 'incomplete stop was', 'incomplete stops were') + ' skipped: each needs a name, latitude and longitude.'
             : savedMsg);
         }
         return saved;
@@ -2613,7 +2624,7 @@
           body: titles.join(' / ') + '\n\n'
             + (urlBlock ? urlBlock + '\n\n' : '')
             + 'This rebuilds the public journal. It can take several minutes. The live pages stay unchanged until the rebuild finishes.',
-          confirmLabel: 'Publish',
+          confirmLabel: 'Publish', tone: 'publish',
         });
         if (!ok) return;
         const saved = await saveDraftNow(intent);
@@ -2639,7 +2650,7 @@
             if (res.status >= 500) { showErr(BuildReporting.text('unknown')); setStatus(''); return; }
             const examples = Array.isArray(body.foreignImages) && body.foreignImages.length
               ? ' Examples: ' + body.foreignImages.join(', ') : '';
-            showErr(gpxEditor.publishError(body.code || body.error) || (SiteLanguage.error(body) || ('Publish failed: ' + res.status)) + examples);
+            showErr(gpxEditor.publishError(body.code || body.error) || (SiteLanguage.error(body) || refusal('publish', body, res.status)) + examples);
             setStatus('');
             return;
           }
@@ -2684,8 +2695,8 @@
       });
       async function unpublishNow(title) {
         const ok = await AdminConfirm.ask({
-          title: 'Unpublish this trip?',
-          body: '"' + title + '" will leave the live site on the next build and revert to a draft.',
+          title: 'Unpublish this story?',
+          body: '"' + title + '" is removed from the live site now (the site rebuilds; this can take several minutes) and returns to your drafts.',
           confirmLabel: 'Unpublish',
           danger: true,
         });
@@ -2698,7 +2709,7 @@
           const res = await fetch('/posts/' + encodeURIComponent(currentTk) + '/unpublish', { method: 'POST' });
           if (res.status === 401) { guard.redirectToLogin(); return; }
           const body = await res.json().catch(() => ({}));
-          if (!res.ok) { showErr(res.status >= 500 ? BuildReporting.text('unknown') : (body.error || res.status)); setStatus(''); return; }
+          if (!res.ok) { showErr(res.status >= 500 ? BuildReporting.text('unknown') : refusal('unpublish', body, res.status)); setStatus(''); return; }
           if (body.unpublished !== true || !body.updatedAt) { showErr(BuildReporting.text('unknown')); setStatus(''); return; }
           // Unpublish is an emergency brake even from a stale tab. Advancing
           // its save token is safe only if no unseen edit preceded the brake.
@@ -2764,7 +2775,7 @@
         $(loc + 'HeroHeight').value = hero.height || '';
         $(loc + 'HeroFormat').value = hero.format || '';
         $(loc + 'HeroAlt').value = hero.alt || '';
-        $(loc + 'HeroStatus').textContent = hero.src ? 'Hero: ' + hero.src : '';
+        $(loc + 'HeroStatus').textContent = '';
         // A loaded story opens the picker only when it has no hero yet.
         $(loc + 'HeroReplace').open = !hero.src;
         // Same no-field-resurrection rule as the fields above: a payload with
@@ -2843,6 +2854,7 @@
         syncCoverage();
         countryCoords.reset();
         updateLocaleChip();
+        syncPageTitle($(language.primary + 'Title').value);
         for (const locale of ['de', 'en']) galleryEditors[locale]?.restoreAlts(post.galleryAlts?.[locale]);
         gpxEditor.syncCaption();
       }
@@ -2874,7 +2886,7 @@
             const res = await fetch('/posts/' + encodeURIComponent(tk), { cache: 'no-store', signal });
             if (res.status === 401) { guard.redirectToLogin(); return false; }
             if (!res.ok) {
-              showErr('Could not load post: ' + res.status);
+              showErr(refusal('load the story', null, res.status));
               setStatus('');
               return true;
             }
@@ -2887,7 +2899,7 @@
           }
           for (const locale of ['de', 'en']) publishedLocales[locale] = Boolean(post[locale]?.publishedAt);
         } catch (e) {
-          showErr('Could not load post: ' + e);
+          showErr(refusal('load the story', { error: e && e.message }));
           setStatus('');
           return true;
         }
@@ -2960,8 +2972,8 @@
           const li = document.createElement('li');
           li.className = 'revision-row';
           const label = document.createElement('span');
-          label.textContent = new Date(rev.savedAt).toLocaleString() + ' — '
-            + (rev.title || '(untitled)') + ' · ' + rev.status;
+          label.textContent = AdminFormat.dateTime(rev.savedAt) + ' — '
+            + (rev.title || editorCopy.revisionUntitled) + ' · ' + rev.status;
           const btn = document.createElement('button');
           btn.type = 'button';
           btn.className = 'btn-secondary';
@@ -2980,14 +2992,14 @@
         if (!gpxEditor.guardAction()) return;
         const res = await fetch('/posts/' + encodeURIComponent(currentTk) + '/revisions/' + encodeURIComponent(id));
         if (res.status === 401) { guard.redirectToLogin(); return; }
-        if (!res.ok) { showErr('Could not load revision: ' + res.status); return; }
+        if (!res.ok) { showErr(refusal('load the revision', null, res.status)); return; }
         const rev = await res.json();
         // Check after the fetch: edits made while it loads still need consent.
         if (guard.isDirty()) {
           const restore = await AdminConfirm.ask({
             title: editorCopy.revisionRestoreTitle,
             body: editorCopy.revisionRestoreBody
-              .replace('{time}', () => new Date(rev.savedAt).toLocaleString())
+              .replace('{time}', () => AdminFormat.dateTime(rev.savedAt))
               .replace('{title}', () => rev.snapshot.de?.title || rev.snapshot.en?.title || editorCopy.revisionUntitled),
             confirmLabel: editorCopy.revisionRestoreConfirm,
           });
@@ -3007,10 +3019,9 @@
         if (keptSlugDe !== null) $('slugFieldDe').value = keptSlugDe;
         if (keptSlugEn !== null) $('slugFieldEn').value = keptSlugEn;
         guard.markDirty();
-        setStatus('Restored the revision from ' + new Date(rev.savedAt).toLocaleString()
-          + ' into the editor'
-          + (isPublished ? ' (current slugs kept — the slug is locked after publish)' : '')
-          + ' — review it, then Save draft to keep it.');
+        setStatus('The revision from ' + AdminFormat.dateTime(rev.savedAt) + ' is in the editor'
+          + (isPublished ? ', with the live permalinks kept because a published story’s URL is locked' : '')
+          + '. Review it, then Save draft to keep it.');
         gpxEditor.revisionNotice();
       }
 
@@ -3094,6 +3105,7 @@
           const proceed = await loadPost(tk, { deferRouteRefresh: true });
           if (!proceed) return; // redirecting to /login
         } else {
+          syncPageTitle('');
           setStatus('New post. Fill in the fields and Save draft.');
         }
 
@@ -3104,7 +3116,7 @@
         if (stash && !guard.wasDismissed(stash)) {
           const restore = await AdminConfirm.ask({
             title: editorCopy.restoreTitle,
-            body: editorCopy.restoreBody.replace('{time}', new Date(stash.savedAt).toLocaleString()),
+            body: editorCopy.restoreBody.replace('{time}', AdminFormat.dateTime(stash.savedAt)),
             confirmLabel: editorCopy.restoreConfirm,
           });
           if (restore) {
