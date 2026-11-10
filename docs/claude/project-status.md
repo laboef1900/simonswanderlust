@@ -4,6 +4,16 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Implemented locally:** GitHub repository renamed `laboef1900/simonswanderlust` →
+  `laboef1900/wanderlust-studio` (2026-11-10, owner-requested); GitHub redirects old URLs.
+  Current references follow: `NOTICE` and the served legal pages' upstream link, the
+  Dockerfile `org.opencontainers.image.source` label, `check-image-legal.mjs`'s expected
+  repository, the `ci.yml` native/packaged owner guards (they would otherwise skip on the
+  renamed repository), and README/install links. The public domain `simonswanderlust.com`,
+  the `simonswanderlust-images` npm name (#291 decision), historical `simonswanderlust-app`
+  image references and dated records are unchanged. Owner checkout folder renamed to
+  `wanderlust-studio`; Compose already pins `COMPOSE_PROJECT_NAME`, so volumes are unchanged.
+
 - **Implemented locally:** backend UI proportion and consistency refinement
   (2026-11-09, owner-requested Impeccable critique follow-up). Reduced top masthead
   height from `4rem` (64px) to `3rem` (48px) with a proportional 26px brand mark and

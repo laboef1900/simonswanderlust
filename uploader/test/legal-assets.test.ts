@@ -54,7 +54,7 @@ describe('static legal distribution', () => {
       expect(html).toContain(`<html lang="${locale}">`);
       const hrefs = [...html.matchAll(/href="([^"]+)"/g)].map((match) => match[1]!);
       expect(hrefs).toContain('LICENSE.txt');
-      expect(hrefs).toContain('https://github.com/laboef1900/simonswanderlust');
+      expect(hrefs).toContain('https://github.com/laboef1900/wanderlust-studio');
       for (const href of hrefs.filter((href) => !href.startsWith('https:'))) expect((await readFile(join(out, href))).length).toBeGreaterThan(0);
     }
     // Regenerating must replace stale notices, not append duplicates/old terms.

@@ -12,7 +12,7 @@ No separate image service or build server to run.
 
 **[Start your travel journal](#quick-start-full-stack-docker)** ·
 [Explore the authoring workflow](docs/authoring-workflow.md) ·
-[Browse releases](https://github.com/laboef1900/simonswanderlust/releases)
+[Browse releases](https://github.com/laboef1900/wanderlust-studio/releases)
 
 ## More journey. Less publishing machinery.
 
@@ -121,7 +121,7 @@ features shipped in their release.
 
 **Image name:** releases from **v0.18.1** on are published as
 `ghcr.io/laboef1900/wanderlust-studio` (see the
-[releases](https://github.com/laboef1900/simonswanderlust/releases)). Releases up to
+[releases](https://github.com/laboef1900/wanderlust-studio/releases)). Releases up to
 v0.17.1 remain at `ghcr.io/laboef1900/simonswanderlust-app`; they are not copied or
 aliased to the new package, so a saved `IMAGE_TAG=0.17.1` does not resolve under the new
 name. Existing installations upgrade deliberately, following the

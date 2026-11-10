@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const REPOSITORY = 'laboef1900/simonswanderlust';
+const REPOSITORY = 'laboef1900/wanderlust-studio';
 const LICENSE_SHA256 = '0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0'; // GNU AGPL-3.0 primary text, spec §1
 const GLYPH_OFL_SHA256 = '7713cfc8e3c36d5ec4aa3d6cffe7500a1b3310f8a86d914b8ea09c2a9dee7c2d'; // basemaps-assets fonts/OFL.txt at the pinned revision
 const LEGAL_FILES = ['LICENSE.txt', 'NOTICE.txt', 'THIRD-PARTY-NOTICES.txt', 'notice-gaps.json', 'source-release.json',
