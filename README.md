@@ -299,6 +299,25 @@ limitations, then check correspondence and delivery in the final rebuilt release
 
 ### Cutting a release
 
+**v0.21.3 — Admin Studio UI/UX overhaul and repository rename** (linux/amd64 and linux/arm64,
+`ghcr.io/laboef1900/wanderlust-studio:0.21.3`). Changes since v0.21.2 (PRs #562, #563):
+
+- **Admin Studio UI/UX overhaul** (#563): shared `admin-ui.js` / `manuscript-bar.js` modules,
+  consistency review fixes across admin pages (spec:
+  `docs/superpowers/specs/2026-11-10-admin-consistency-review-fixes.md`), and updated
+  `DESIGN.md` / `PRODUCT.md` conventions.
+- **Media alt-text filter** (#563): `GET /media?alt=missing` lists ready photos with no DE/EN alt
+  text, and the response carries an `altMissing` count for the Media page.
+- **Repository rename** (#562): repository is now `laboef1900/wanderlust-studio`; legacy
+  uploader naming and pre-rebuild research memos removed from docs.
+
+Upgrade notes for v0.21.2 → v0.21.3 (the [release recovery checklist](ARCHITECTURE.md#release-recovery-checklist)):
+
+- **Image and deployment:** apply this release's image tag (`0.21.3`).
+- **Compose, `.env`, and schema:** no Compose changes, no `.env` changes, no schema migrations, and no
+  dump-format changes (writer stays v15); no site rebuild required.
+- **Rollback to v0.21.2:** fully supported by reverting the image tag.
+
 **v0.21.2 — backend UI proportions and design consistency** (linux/amd64 and linux/arm64,
 `ghcr.io/laboef1900/wanderlust-studio:0.21.2`). Changes since v0.21.1 (PRs #558, #559):
 
