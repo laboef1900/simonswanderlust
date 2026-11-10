@@ -1,6 +1,6 @@
-# simonswanderlust-images
+# Wanderlust Studio app (`uploader/`)
 
-Self-hosted image uploader **and admin CMS** for the Astro blog: uploads a photo and generates
+Self-hosted image service **and admin CMS** for the Astro blog: uploads a photo and generates
 responsive AVIF/WebP variants (or JPEG for JPG uploads when conversion is off), and hosts the in-admin editor, the media library and the WordPress
 import — and, since the single-app-container merge, **also serves the public blog itself**
 and runs its Astro builds in-process (no separate build server). How it fits the rest of the
@@ -95,7 +95,7 @@ Backup v7 preserves each media item's format and encoding profile.
 
 ```bash
 # 1. From the monorepo root (the docker-compose.yml lives there, not in uploader/),
-#    create your env file from the uploader's template:
+#    create your env file from the app's template:
 cp uploader/.env.example .env
 
 # 2. Set a strong Postgres password and the matching DATABASE_URL in .env:
@@ -205,7 +205,7 @@ npm install
 npm run build:native
 DATABASE_URL=postgres://images:YOUR_PASSWORD@127.0.0.1:5432/images \
   STORAGE_DIR=./data/images PUBLIC_BASE_URL=http://localhost:3000 npm start
-# -> "image uploader listening on :3000", open /login to create the first admin
+# -> "app listening on :3000", open /login to create the first admin
 ```
 
 For an isolated feature worktree, set absolute writable paths for `STORAGE_DIR`,

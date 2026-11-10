@@ -65,7 +65,7 @@ jobs:
   # tests are NOT DHI/container/deployment-mount qualification.
   native-owner:
     if: >-
-      github.repository == 'laboef1900/simonswanderlust' &&
+      github.repository == 'laboef1900/wanderlust-studio' &&
       github.event.repository.private == false &&
       (github.event_name != 'pull_request' ||
        github.event.pull_request.head.repo.full_name == github.repository)
@@ -125,7 +125,7 @@ jobs:
   # Named-volume evidence NEVER waives the deployment-mounted filesystem gate.
   packaged-owner:
     if: >-
-      github.repository == 'laboef1900/simonswanderlust' &&
+      github.repository == 'laboef1900/wanderlust-studio' &&
       github.event.repository.private == false &&
       ((github.event_name == 'pull_request' &&
         github.event.pull_request.head.repo.full_name == github.repository &&

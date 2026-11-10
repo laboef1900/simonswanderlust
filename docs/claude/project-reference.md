@@ -2,7 +2,7 @@
 
 Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root.
 
-## Content Pipeline and Uploader
+## Content Pipeline and App
 
 **Content pipeline (Phase A + B + single-app-container):** `trips` content is authored via the
 **in-admin editor** (`/admin/posts.html` + `/admin/editor.html`) and stored in **Postgres** — not
@@ -114,7 +114,7 @@ does not replace the target-VPS peer/header/two-external-network checks before D
 This repo uses the **superpowers** workflow: specs and phase plans live in `docs/superpowers/` and
 are the source of truth for what's in scope. Read the relevant plan before implementing.
 
-**Authoring a post?** See `docs/authoring-workflow.md` — how to upload photos via the uploader and
+**Authoring a post?** See `docs/authoring-workflow.md` — how to upload photos via the media library and
 write/publish via the in-admin editor (Postgres is the source of truth; MDX files are export-only
 backups).
 

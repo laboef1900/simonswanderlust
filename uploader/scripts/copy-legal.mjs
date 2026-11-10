@@ -45,7 +45,7 @@ for (const locale of ['de', 'en']) {
   const text = (key) => escapeHtml(ui[locale]['editor.chrome.' + key]);
   const links = [
     ['LICENSE.txt', 'licenseText'], ['NOTICE.txt', 'rightsNotice'],
-    ['https://github.com/laboef1900/simonswanderlust', 'upstreamSource'],
+    ['https://github.com/laboef1900/wanderlust-studio', 'upstreamSource'],
     ['THIRD-PARTY-NOTICES.txt', 'thirdPartyNotices'],
     ['third-party-inventory.json', 'dependencyInventory'],
     ['third-party-evidence.json', 'licenseEvidence'], ['notice-gaps.json', 'noticeGaps'],
