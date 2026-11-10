@@ -220,7 +220,7 @@ npm run dev
 ```
 
 Set `DATABASE_URL` for the site process. Both `npm run build` and `npx astro check` load
-content from Postgres. Site unit tests run with `npm test` without a database; uploader
+content from Postgres. Site unit tests run with `npm test` without a database; `uploader/`
 integration tests need a separate `TEST_DATABASE_URL`.
 
 ## Software, contributions and content rights

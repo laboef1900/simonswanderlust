@@ -441,7 +441,7 @@ ASVS L1 exception record: `docs/superpowers/specs/2026-09-14-comments-design.md`
 
 The owner-approved [four-mode contract](docs/superpowers/specs/2026-10-27-issue-283-language-mode-contract.md)
 (DE+EN DE-primary — simonswanderlust.com, byte-identical; DE+EN EN-primary; DE-only; EN-only)
-is implemented by #284 (uploader) and #285 (site). This section reconfirms the model above
+is implemented by #284 (app) and #285 (site). This section reconfirms the model above
 against it; nothing here adds an unauthenticated surface.
 
 - **Where the mode lives and who can touch it.** One Postgres singleton,

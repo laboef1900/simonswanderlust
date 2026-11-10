@@ -25,13 +25,13 @@ This repo is the **Astro 7 static-site rebuild** of the current WordPress + Elem
 
 - **Architecture:** One Astro 7 project under `site/`, **self-hosted via Docker** as a **single
   `app` container** (WordPress-style) alongside Postgres, wired in the root `docker-compose.yml`.
-  The uploader serves the blog itself, in addition to being the admin CMS and image service.
+  That app (`uploader/`) serves the blog itself, in addition to being the admin CMS and image service.
   UI is Astro components + Tailwind 4.
 - **Primary users:** One admin/author (the owner). Public readers consume only the static blog
   output; they never reach an authenticated surface.
 - **Risk level:** **Normal.** No third-party accounts, no payments. The only reader data is
   **reader comments** (a self-chosen display name + a plain-text body, submitted for
-  publication); no email is collected and no IP is persisted. Elevated where the uploader
+  publication); no email is collected and no IP is persisted. Elevated where the app
   touches remote fetches (WXR import), untrusted markup (body HTML), photo metadata (EXIF/GPS),
   and the **public comment routes** (`GET`/`POST /comments`, the one unauthenticated write
   surface besides `/login`/`/setup`).
@@ -118,7 +118,7 @@ exception merely to make a check pass. Record accepted exceptions in the relevan
    the translation dictionary; exact upgrade-only brand values live in `site-identity-legacy.ts`.
 8. **Strict Typing and Validation** — `tsconfig` extends `astro/tsconfigs/strict`. No `any`, no
    `@ts-ignore`, no `astro check` suppressions to force a pass. Fix the underlying type issue.
-   Validate untrusted data at every boundary (Zod for content; explicit checks on uploader payloads).
+   Validate untrusted data at every boundary (Zod for content; explicit checks on app request payloads).
 9. **Ask Before Assuming** — Ask when ambiguity would materially change behavior, architecture,
    safety, data, cost, or external side effects — especially where a request conflicts with the
    specs in `docs/superpowers/`. Otherwise make a conservative, clearly stated assumption.
