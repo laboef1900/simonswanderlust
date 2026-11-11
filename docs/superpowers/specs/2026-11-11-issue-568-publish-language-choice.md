@@ -160,7 +160,7 @@ Translation is **allowed** into or from an omitted secondary. Publication is a s
 publish-time choice, and applying a translation never saves or publishes (issue-550 rule kept).
 `EditorTranslation.eligible()` drops both `omitted` conditions; it still requires two enabled
 locales, both direction locales enabled and no blocking state. When the target is omitted the
-dialog shows `translationPrivateDraft` in `#translationDraftNote` (`.help`, hidden otherwise).
+dialog shows `translationPrivateDraft` in `#translationDraftNote` (a plain paragraph, hidden otherwise).
 `translationCoverage` is deleted; the remaining ineligible path (a blocking save/load state that
 arose after the trigger was enabled) shows the new `translationUnavailable`. The snapshot keeps
 `omitted`, so a publish confirmed mid-translation still invalidates the request and Undo, as any
@@ -287,12 +287,12 @@ is published (#568)`; **TR** is the ED suite `explicit article translation of th
 pair`. A ticked sub-item is implemented with its test written; the suites are run by the
 integration owner (AC9).
 
-- [ ] **AC1** No coverage checkbox on the secondary tab — ED: no `deIncluded`/`enIncluded`/
+- [x] **AC1** No coverage checkbox on the secondary tab — ED: no `deIncluded`/`enIncluded`/
   `*Coverage*` element exists in any mode; browser B1.
   - [x] ED — PD › `offers no publication checkbox in a language tab ($primary primary, $locales)`
     (all four modes).
-  - [ ] browser B1.
-- [ ] **AC2** Dialog lists each enabled language with title, exact URL, readiness; primary fixed;
+  - [x] browser B1 (no `[id$=Included],[id$=Coverage]` element on the editor page).
+- [x] **AC2** Dialog lists each enabled language with title, exact URL, readiness; primary fixed;
   published secondary locked; unpublished secondary toggleable — ED dialog-state tests in all four
   modes with exact URLs; browser B1, B4, B8.
   - [x] ED — PD › `lists both languages with title, live URL and readiness: the %s primary fixed,
@@ -300,48 +300,66 @@ integration owner (AC9).
     why (%s primary)`, `shows one row and no checkbox in a %s-only install, and publishes it`
     (DE-only, EN-only); ED › `locks only the locale with publication history, even after
     whole-story unpublish`.
-  - [ ] browser B1, B4, B8.
-- [ ] **AC3** Unchecked → only primary published, secondary private draft with content kept;
+  - [x] browser B1, B4, B6, B8 (screenshots: DE+EN DE-primary, published EN locked with its
+    explanation, DE-only one row, EN-primary with DE toggleable).
+- [x] **AC3** Unchecked → only primary published, secondary private draft with content kept;
   checked → both — ED payload/request tests; browser B1, B2 + DB check of `omitted`/`status`.
   - [x] ED — PD › `publishes only the %s primary when the secondary is unchecked, keeps that draft
     private, and publishes both once it is checked` (both primaries, against `memoryPostStore`).
-  - [ ] browser B1, B2 + DB check.
-- [ ] **AC4** Cancel → no save, no `omitted` change — ED (Cancel, Escape, gap jump, each after
+  - [x] browser B1 (`PUT` then `POST …/publish`; DB `de published/omitted f`, `en draft/omitted t`
+    with its body kept; `/testreise-568-eins/` 200, story absent from `/en/`), B2 (EN completed and
+    checked: both rows `published`, `/en/test-trip-568-one/` 200), B8 (EN-primary, DE unchecked:
+    `/english-first-568/` 200, DE row `draft/omitted t`, absent from `/de/`).
+- [x] **AC4** Cancel → no save, no `omitted` change — ED (Cancel, Escape, gap jump, each after
   firing `input` and `change` on a toggle: zero POST/PUT, payload, dirty state and stash
   unchanged); browser B3 + DB check.
   - [x] ED — PD › `changes and sends nothing on %s, even after a language was toggled` (cancel,
     escape, gap jump), `ends an open dialog like Cancel when the form it describes is replaced`.
-  - [ ] browser B3 + DB check.
-- [ ] **AC5** Gap checks exactly the selected languages — ED (forced-set gate enables Publish with
+  - [x] browser B3: Escape, Cancel, toggle → Cancel → reopen (saved default re-shown), Enter on the
+    focused checkbox (dialog stays open, nothing submitted): zero PUT/POST in the network log,
+    status "Saved to server" unchanged, DB `omitted`/`updated_at` unchanged; focus back on Publish.
+- [x] **AC5** Gap checks exactly the selected languages — ED (forced-set gate enables Publish with
   an incomplete optional secondary; dialog blocks while it is selected, unblocks when deselected;
   gap jump closes and focuses the field after `flushDialogEvents()`); browser B5.
   - [x] ED — PD › `lets a %s-primary story with an unfinished secondary reach the dialog, which
     checks exactly what is selected` (both primaries), `rechecks the selected languages at
     confirmation and stays open when one has lost a required field`.
-  - [ ] browser B5.
+  - [x] browser B5: Publish enabled with an incomplete EN; dialog shows "Missing: slug, excerpt,
+    country, hero", Publish disabled with "Complete or deselect English to publish."; unchecking
+    English enables Publish; "Go to slug" (name "Go to slug in English") closes the dialog and
+    focuses `slugFieldEn`.
 - [x] **AC6** Translation for an omitted secondary decided, implemented, copy updated — ED
   (translation runs with omitted target, note shown; no `translationCoverage` key).
   Evidence: TR › `hides single-language targets, and translates into or from a language that is
   not selected for publication`, `aborts and ignores late output after a coverage change`
   (a publish confirmed mid-translation); `translationUnavailable` in PD › `renders every copy key
-  the issue adds or keeps`.
-- [ ] **AC7** "Translate" + AI icon, accessible name "Translate with AI" — ED (label text,
+  the issue adds or keeps`. Browser: Translate on the EN-primary story with DE unselected opens
+  "Translate English to German" with the private-draft note; only `POST /translation/prepare` and
+  `GET /ai-config` were sent (no model call).
+- [x] **AC7** "Translate" + AI icon, accessible name "Translate with AI" — ED (label text,
   `aria-label`, `svg[aria-hidden=true][stroke=currentColor]`); browser B7.
   - [x] ED — PD › `labels the trigger “Translate”, leads it with the shared AI icon and names it
     “Translate with AI”`.
-  - [ ] browser B7.
-  *Icon and button CSS (`uploader/public/admin-ui.js` `AdminIcons.ai()`, `admin.css`
-  `.admin-icon`/`.btn-icon`/`#translateArticle`): implemented, browser pending.*
-- [ ] **AC8** `ui.ts` complete, no orphans; README and §9 updated — `site` `ui.test.ts`; ED asserts
+  - [x] browser B7: label "Translate", `aria-label` "Translate with AI", 16px `svg[aria-hidden]`
+    in `currentColor`; height 32px at 1440/832/390/320 px and with emulated coarse pointer; one
+    line, no horizontal scroll and no overlap with `#inspectorToggle` at every width and at 200%
+    text. (Pre-existing, unchanged by #568 and identical with `dev`'s `admin.css`: at ≤390px *and*
+    200% text, the Details toggle overlaps the locale tab strip.)
+- [x] **AC8** `ui.ts` complete, no orphans; README and §9 updated — `site` `ui.test.ts`; ED asserts
   each added/kept key is rendered; grep shows no caller of removed keys; docs diff.
   - [x] ED — PD › `renders every copy key the issue adds or keeps` (all 21 added/kept keys); no
     caller of `languageCoverageLabel`/`translationCoverage` is left in `uploader/public/`.
-  - [ ] `site` `ui.test.ts`, README, docs diff.
-- [ ] **AC9** Tests + checks — `uploader`: `npx tsc --noEmit`, `npm test` with
+  - [x] `site` `npm test` (incl. `ui.test.ts`) green; README, contract §9/§7.3, issue-550 note,
+    `DESIGN.md`, `project-reference.md` updated in this branch.
+- [x] **AC9** Tests + checks — `uploader`: `npx tsc --noEmit`, `npm test` with
   `TEST_DATABASE_URL` (integration suites not skipped); `site`: `npm test`, `npx astro check` with
-  `DATABASE_URL`.
-- [ ] **AC10** Visual verification desktop + narrow — browser B1–B8 screenshots.
-  *Publish dialog and Translate CSS (`uploader/public/admin.css`): implemented, browser pending.*
+  `DATABASE_URL`. Evidence (rebased on `dev` 081394d, disposable PostgreSQL 18, native ownership
+  addon built, `pg_dump` 18.6 on PATH): `tsc` clean; uploader 183 files / 5304 tests passed, none
+  skipped; site 56 files / 934 tests passed; `astro check` 155 files, 0 errors/warnings/hints.
+- [x] **AC10** Visual verification desktop + narrow — browser B1–B8 screenshots (dialog at 1440,
+  390 and 320×568 px — scrolls within the viewport, full-width footer buttons, no horizontal
+  overflow; coarse pointer: 24px checkboxes, 44px footer buttons). Impeccable detector: only
+  pre-existing findings (dynamically filled images, mandated Inter, unresolved stylesheet paths).
 - [x] **INV1/INV2** With a forced row's checkbox programmatically unchecked, the PUT still sends
   `omitted: false` for the primary and the published secondary — ED against `memoryPostStore`;
   server refusals of crafted payloads — existing `posts` tests (named in evidence).
@@ -369,8 +387,10 @@ integration owner (AC9).
   nothing, returns focus to Publish, and a retry proceeds — ED.
   Evidence: PD › `shows a failed gallery check in the dialog, changes nothing, and publishes on
   retry`.
-- [ ] **INV5/INV6** Diff touches nothing under `uploader/src/` or `site/src/lib/`; language-mode
-  integration and public-paths parity suites green.
+- [x] **INV5/INV6** Diff touches nothing under `uploader/src/` or `site/src/lib/`; language-mode
+  integration and public-paths parity suites green. Evidence: `git diff --name-only` against the
+  merge base lists no file under either path; `language-mode.integration.test.ts`,
+  `language-api.integration.test.ts` and `public-paths-parity.test.ts` pass in the AC9 run.
 - [x] **INV7** A title/slug containing markup creates no element inside `#publishDialog` — ED.
   Evidence: PD › `renders titles and URLs as text, creating no element from them`.
 - [x] **GUARDS** Every existing publish-flow test in ED and EG goes through one helper that asserts
@@ -393,12 +413,12 @@ integration owner (AC9).
   ED › `does not save or publish when the route state has not loaded`; `writeRecovery.unresolved()`
   at the click and again at confirmation — PD › `refuses while the stored version is unresolved: at
   confirmation, and at the click`.
-- [ ] **REOPEN** Confirm, let the flow settle, reopen, then Escape / Cancel / `close()` → zero
+- [x] **REOPEN** Confirm, let the flow settle, reopen, then Escape / Cancel / `close()` → zero
   POST/PUT, `omitted` unchanged; toggle, Cancel, reopen → the saved default is shown — ED;
   browser B3.
   - [x] ED — PD › `asks afresh on every opening: %s after an earlier confirmed publish sends
     nothing` (escape, cancel, close).
-  - [ ] browser B3.
+  - [x] browser B3 (see AC4).
 - [x] **LATCH** Two rapid `publishBtn` clicks and two rapid dialog Publish clicks → one PUT and one
   publish; after confirming (`flushDialogEvents()`, PUT held) a `publishBtn` click opens no
   dialog — ED.
