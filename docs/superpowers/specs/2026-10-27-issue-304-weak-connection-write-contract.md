@@ -9,6 +9,11 @@ for D4, and approved the recorded sequencing amendment. The independent read-onl
 authenticated-context prerequisite is also approved. These decisions preserve §5.3's
 native-lock implementation/packaging requirements and authorize no merges or deployments.
 
+> 2026-11-11 (#569): the editor's hero and title-image upload callers listed below were removed
+> (library only). Body image, About, Media and the picker remain upload callers; the editor's
+> body-image upload case in `editor-dom.test.ts` is the remaining editor evidence. See
+> `2026-11-11-issue-569-editor-cleanup-design.md`.
+
 Parent epic: #303. Blocks: #305 (reconcile lost responses), #306 (user-scoped stashes, offline
 signals, stale-tab conflicts). Independent narrow fixes that this contract must stay compatible
 with: #345 (restored stash keeps its base token) and #362 (one write in flight per editor tab).

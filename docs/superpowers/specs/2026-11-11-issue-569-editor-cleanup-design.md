@@ -16,20 +16,20 @@ disclosure lives once the Excerpt help text is removed (section 3).
 
 | # | Item (issue AC or invariant) | Owner | Evidence |
 |---|---|---|---|
-| A1 | Hero + title image (DE/EN) set only from the library; no file input or upload button in those sections; their upload code paths removed | Lead | _pending_ |
-| A2 | Body-image upload and body-image **Suggest alt text** still work (`*BodyImgUpload`, `*BodyImgSuggest`, `alt-suggest.js` unchanged) | Lead | _pending_ |
-| A3 | Hero has no **Suggest alt text**; hero alt input stays editable and saves | Lead | _pending_ |
-| A4 | Publish-gap jump for a missing hero focuses the library button | Lead | _pending_ |
-| A5 | Excerpt help text gone (both locales); AI-excerpt disclosure implemented per section 3 and recorded | Lead | _pending_ |
-| A6 | Stop row: Find coordinates · Via point · Continue by on one wrapping line; lookup status/results and profile note below it at full width; routing values save unchanged | Lead | _pending_ |
-| A7 | `ui.ts`: no orphan or missing keys in either locale | Lead | _pending_ |
-| A8 | Tests: hero upload cases (~L4213) removed/rewritten library-only; focus expectation (~L1866) retargeted; stop-row layout + routing covered; `tsc --noEmit` + `npm test` (uploader), `npm test` + `astro check` (site) pass | Lead | _pending_ |
-| A9 | Verified visually in the running editor (desktop, narrow inspector, ~375px mobile; coarse-pointer targets) | Lead | _pending_ |
-| I1 | Library pick adds no new behaviour; existing hero alt prefill (only when the field is empty) and title-image alt adoption kept as is | Lead | _pending_ |
-| I2 | `rowValues()`, `syncRows()`, `aria-describedby="stopRouteViaHelp"`, select↔note linkage unchanged; saved routing values identical | Lead | _pending_ |
-| I3 | Waypoint change is DOM placement + CSS only (no copy, no behaviour) | Lead | _pending_ |
-| I4 | No slug, route, schema or API change | Lead | _pending_ |
-| I5 | Every `aria-describedby` / `for` points at an existing ID | Lead | _pending_ |
+| A1 | Hero + title image (DE/EN) set only from the library; no file input or upload button in those sections; their upload code paths removed | Lead | Test "offers no file input, upload or suggest action…" (both locales, exact button ids); grep: no `HeroFile/HeroUpload/uploadHero/TitleImageFile/TitleImageUpload`, no `trips/<slug>/hero|title` `UploadRecovery` call; browser: 0 file inputs in all four sections, picked alps/coast/wide from the library |
+| A2 | Body-image upload and body-image **Suggest alt text** still work (`*BodyImgUpload`, `*BodyImgSuggest`, `alt-suggest.js` unchanged) | Lead | New tests: body upload (owner, key, insert, `images[src]`), no insert after account change, `AltSuggest.wire` exactly the two body panels; browser: upload inserted `trips/testreise-569/wl569-body-photo-16c7c7c0`, saved in `body_markdown`; Suggest ran (no provider configured → its documented failure status) |
+| A3 | Hero has no **Suggest alt text**; hero alt input stays editable and saves | Lead | Test "sets the hero from the library … saves an edited alt"; browser: DE/EN alt edited → Save → reload → persisted (`hero_image->>'alt'` in Postgres) |
+| A4 | Publish-gap jump for a missing hero focuses the library button | Lead | Test (mobile drawer) focuses `enHeroLibrary` with `enHeroDetails` open; browser: "German missing hero" via mouse and keyboard → `deHeroLibrary` focused, section opened, 2px steel-blue ring on keyboard |
+| A5 | Excerpt help text gone (both locales); AI-excerpt disclosure implemented per section 3 and recorded | Lead | Tests: no `#xxExcerptHelp`, textarea without `aria-describedby`, Generate → `excerpt-disclosure-<locale>`; `editor-excerpt.test.ts` note visible, outside the action row, stays during busy; browser a11y tree DE/EN: name "Generate excerpt with AI", description = disclosure; note y unchanged while Cancel shows |
+| A6 | Stop row: Find coordinates · Via point · Continue by on one wrapping line; lookup status/results and profile note below it at full width; routing values save unchanged | Lead | Lookup test pins controls children and row order controls → note → status → results; routing tests unchanged and green; browser: rows render Find coordinates · Via point / Continue by (last stop: "Last stop…"), mocked lookup results below, profile note under the line; stops JSON in Postgres identical before/after save+reload |
+| A7 | `ui.ts`: no orphan or missing keys in either locale | Lead | 11 removed keys: 0 references each in `uploader/public`, `uploader/src`, `site/src`; added `editor.chrome.excerptDisclosure` in DE+EN and used; `ui.test.ts` completeness green |
+| A8 | Tests: hero upload cases (~L4213) removed/rewritten library-only; focus expectation (~L1866) retargeted; stop-row layout + routing covered; `tsc --noEmit` + `npm test` (uploader), `npm test` + `astro check` (site) pass | Lead | Site: 53 files / 927 tests pass, `astro check` 0/0/0 (local Postgres). Uploader: see PR (full suite with `TEST_DATABASE_URL` on a disposable local Postgres) |
+| A9 | Verified visually in the running editor (desktop, narrow inspector, ~375px mobile; coarse-pointer targets) | Lead | Local stack (uploader dev + Postgres 18 container), managed headless Chromium: 1440px (inspector 312px), 375px and 320px drawers with `pointer: coarse`; `scrollWidth − clientWidth = 0` for every stop row, controls line, hero zone and excerpt assist; targets 44px (search, Via label, select, library, Generate), checkbox 24px |
+| I1 | Library pick adds no new behaviour; existing hero alt prefill (only when the field is empty) and title-image alt adoption kept as is | Lead | `pickHero()` body unchanged except a comment; test: empty alt prefilled, typed alt kept; cancelled picker leaves src unchanged and returns focus (browser) |
+| I2 | `rowValues()`, `syncRows()`, `aria-describedby="stopRouteViaHelp"`, select↔note linkage unchanged; saved routing values identical | Lead | Functions untouched; ID sweep test resolves `stopRouteViaHelp` and each `stopProfileNote<n>`; Postgres `stops` identical after reload + save |
+| I3 | Waypoint change is DOM placement + CSS only (no copy, no behaviour) | Lead | Diff: element placement in `waypoint-lookup.js`/`decorateRow`, unused `row` parameter dropped, CSS; no copy or listener change |
+| I4 | No slug, route, schema or API change | Lead | Diff touches only `uploader/public/*`, `site/src/i18n/ui.ts`, tests, docs |
+| I5 | Every `aria-describedby` / `for` points at an existing ID | Lead | Test "resolves every label and description reference…" over the loaded editor incl. stop rows and excerpt assists |
 
 Implementation was not delegated: the lead already holds the complete context for all four parts,
 and the parts share `editor.html`, `admin.css` and `editor-dom.test.ts`, so a split would create
@@ -194,7 +194,7 @@ name · remove / lat · lng / `.stop-lookup` (Find coordinates button, status, r
 
 - `addStopRow()` creates `.stop-controls` and passes it to both modules:
   `WaypointLookup.attach({ row, controls, … })` puts the button in `controls` and status/results
-  in `row`; `decorateRow(row, controls, routing)` puts via/leg/last in `controls` and inserts the
+  in `row`; `decorateRow(controls, routing)` (its unused `row` parameter dropped) puts via/leg/last in `controls` and inserts the
   note directly after `controls`, so the warning stays next to the select it describes. Row
   order: controls → note → status → results. The `.stop-lookup` and `.stop-routing` wrappers are
   removed (their CSS too); no other caller exists. Each flex child wraps independently, so a

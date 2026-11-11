@@ -748,7 +748,8 @@ Spec: `docs/superpowers/specs/2026-11-03-issue-513-stop-routing-design.md`.
 
 ## AI alt-text (browser-direct providers)
 
-The post editor and photo uploader offer a "Suggest alt text" button per alt field.
+The post editor's body-photo panels and the photo uploader offer a "Suggest alt text" button
+per alt field; hero alt text is written by hand or in the media library (#569).
 The browser downscales the photo and calls the selected OpenAI-compatible vision
 provider directly; the app server never contacts a model. Which provider that is comes
 from the **AI provider registry** (below): `captionProviderId` (or the default provider)

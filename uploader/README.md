@@ -656,7 +656,7 @@ files without the field use 8,000; saved values survive restart.
 
 Alt-text suggestions discard case-insensitive `<think>…</think>` blocks, including
 an unfinished block through the end of the reply. A `finish_reason: "length"` reply
-is refused even if it contains valid-looking caption JSON. Hero/body fields and
+is refused even if it contains valid-looking caption JSON. Body-photo fields and
 hosted-gallery alt text retain their existing value on refusal; the token-limit
 hint names **Maximum output tokens** rather than suggesting a connection problem.
 Gallery suggestions still require explicit acceptance before changing Markdown.
@@ -747,7 +747,9 @@ only `{"excerpt":"…"}` with plain text up to 300 characters, rejecting rather 
 truncating invalid output. The shared review transport preserves its cancellation,
 redirect, credential, and response-format fallback rules.
 
-The generator previews the suggestion next to the locale's excerpt. Explicit acceptance
+The generator previews the suggestion next to the locale's excerpt. A muted line under
+**Generate excerpt with AI** (the button's `aria-describedby`) discloses that this language's
+unsaved title and story go to the Story Review provider and that charges may apply. Explicit acceptance
 is required; no request saves or publishes. Draft edits, locale switches, and loading a
 different post invalidate results, with a second snapshot comparison on acceptance.
 Provider failure leaves the current excerpt untouched. New chrome lives in both locales

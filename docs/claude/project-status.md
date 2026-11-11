@@ -4,6 +4,18 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Implemented locally:** editor clean-up (#569, 2026-11-11; design, AI-approval record and
+  acceptance tracker in `docs/superpowers/specs/2026-11-11-issue-569-editor-cleanup-design.md`).
+  Hero and title image are chosen from the media library only: the Replace-photo disclosure,
+  file inputs, upload buttons, `uploadHero()` and the title-image upload handler are gone, and
+  **Choose from library** is always visible; a missing-hero publish jump focuses it. The hero's
+  Suggest alt text is removed (body photos keep upload and Suggest). The Excerpt help text is
+  removed; the AI disclosure is now a muted line under **Generate excerpt with AI** and that
+  button's `aria-describedby` (new key `editor.chrome.excerptDisclosure`; 11 orphaned keys
+  removed). Each stop row has one wrapping controls line (Find coordinates · Via point ·
+  Continue by) with the profile note, lookup status and results below it; routing values are
+  unchanged. Client-only: no slug, route, schema or API change.
+
 - **Implemented locally:** admin consistency review fixes (2026-11-10, owner-requested
   Impeccable critique + audit; decisions and invariants in
   `docs/superpowers/specs/2026-11-10-admin-consistency-review-fixes.md`). On the road:
