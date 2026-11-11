@@ -1,0 +1,342 @@
+# Issue #569 — Editor clean-up: library-only hero/title image, no hero alt suggest, excerpt disclosure, waypoint row
+
+Status: APPROVED by independent AI design review (round 2, 2026-11-11). Owner: Simon.
+
+## Scope and risk
+
+Four clean-ups in the story editor (`uploader/public/editor.html` and helpers), as specified in
+GitHub issue #569. Admin surface only ("Editorial Desk", `admin.css` tokens, no decoration).
+
+**Risk: Normal.** No slug, route, schema, API, auth, session, comment, body-HTML render, EXIF or
+AI-credential change. Server endpoints (`POST /upload`, `/geocode`, `/ai-config`) are untouched;
+the change removes client entry points only. One privacy-relevant decision: where the AI-excerpt
+disclosure lives once the Excerpt help text is removed (section 3).
+
+## Acceptance tracker (single source; mirrored in the PR body)
+
+| # | Item (issue AC or invariant) | Owner | Evidence |
+|---|---|---|---|
+| A1 | Hero + title image (DE/EN) set only from the library; no file input or upload button in those sections; their upload code paths removed | Lead | _pending_ |
+| A2 | Body-image upload and body-image **Suggest alt text** still work (`*BodyImgUpload`, `*BodyImgSuggest`, `alt-suggest.js` unchanged) | Lead | _pending_ |
+| A3 | Hero has no **Suggest alt text**; hero alt input stays editable and saves | Lead | _pending_ |
+| A4 | Publish-gap jump for a missing hero focuses the library button | Lead | _pending_ |
+| A5 | Excerpt help text gone (both locales); AI-excerpt disclosure implemented per section 3 and recorded | Lead | _pending_ |
+| A6 | Stop row: Find coordinates · Via point · Continue by on one wrapping line; lookup status/results and profile note below it at full width; routing values save unchanged | Lead | _pending_ |
+| A7 | `ui.ts`: no orphan or missing keys in either locale | Lead | _pending_ |
+| A8 | Tests: hero upload cases (~L4213) removed/rewritten library-only; focus expectation (~L1866) retargeted; stop-row layout + routing covered; `tsc --noEmit` + `npm test` (uploader), `npm test` + `astro check` (site) pass | Lead | _pending_ |
+| A9 | Verified visually in the running editor (desktop, narrow inspector, ~375px mobile; coarse-pointer targets) | Lead | _pending_ |
+| I1 | Library pick adds no new behaviour; existing hero alt prefill (only when the field is empty) and title-image alt adoption kept as is | Lead | _pending_ |
+| I2 | `rowValues()`, `syncRows()`, `aria-describedby="stopRouteViaHelp"`, select↔note linkage unchanged; saved routing values identical | Lead | _pending_ |
+| I3 | Waypoint change is DOM placement + CSS only (no copy, no behaviour) | Lead | _pending_ |
+| I4 | No slug, route, schema or API change | Lead | _pending_ |
+| I5 | Every `aria-describedby` / `for` points at an existing ID | Lead | _pending_ |
+
+Implementation was not delegated: the lead already holds the complete context for all four parts,
+and the parts share `editor.html`, `admin.css` and `editor-dom.test.ts`, so a split would create
+overlapping writes without saving work.
+
+## 1. Hero and title image: library only
+
+### Current
+
+- Hero (per locale, `editor.html`): `#deHeroReplace` `<details open>` "Replace photo" holds
+  `#deHeroFileLabel` + `#deHeroFile` (file input) and a row with `#deHeroUpload` +
+  `#deHeroLibrary`. `uploadHero()` + two click listeners upload via `UploadRecovery.run` with key
+  `trips/<slug>/hero`. `populateForm` sets `HeroReplace.open = !hero.src`.
+- Title image (`editor-title-image.js`): `${prefix}Replace` `<details>` with File label/input and
+  `Upload`, `Library`, `Remove`; an upload handler (busy toggling of `Upload/Library/Remove/File`,
+  `UploadRecovery.run` with key `trips/<slug>/title`); `load()` opens Replace only when empty.
+
+### Design
+
+The disclosure existed to fold the heavy upload UI (dashed file drop field + two buttons). With
+upload gone it would hide a single button behind an extra click, so it is **removed**, not
+renamed. The library action is always visible directly in the section:
+
+```
+Hero image (DE)            [thumb]     ← existing collapsible section (unchanged)
+  [preview]
+  Hero alt text (DE)
+  [ alt input ......................... ]
+  status (role=status)
+  [Choose from library]                ← .hero-actions-row, always visible
+  ▸ Adjust framing                     ← unchanged, only for a usable hero
+
+Title image (optional)     [thumb]
+  help text
+  [preview]
+  Alt text for the title image [input] ← only with an image (unchanged)
+  status (fallback / selected)
+  [Choose from library] [Remove title image]   ← Remove only with an image (unchanged)
+  ▸ Adjust framing
+```
+
+- "Replace photo" → "Change photo" rename: **not applied** — the disclosure no longer exists.
+  The single button keeps its established label **Choose from library** / **Aus Mediathek
+  wählen**, which names the source, and reads correctly whether or not a photo is set (the preview
+  and summary thumbnail show the state).
+- Library button shown directly when no image is set: **yes, always** (with or without an image).
+- Order and copy otherwise unchanged; the hero alt input loses its `.hero-alt-row` wrapper (it only
+  existed to place Suggest beside the input).
+- Library pick behaviour unchanged (I1): `pickHero()` keeps "prefill alt only when empty", resets
+  framing, marks dirty, status "Hero photo chosen from the library." + key; title image keeps its
+  current library adoption. A failed/cancelled picker leaves the section exactly as it was (the
+  picker only calls `onPick` on a choice; its own error states are unchanged).
+- A hero whose library photo has gone missing keeps its preview `onerror` handling; the library
+  button is the recovery path. Publish refuses a hero only while its media row exists and is not
+  ready (`server.ts` publish media check); a hero URL with no media row is not refused, and
+  in-use photos cannot be deleted from Media, so this edge stays as it is today (out of scope).
+
+### Dead code to delete
+
+- `editor.html`: the two `#xxHeroReplace` `<details>` (summary, `#xxHeroFileLabel`, `#xxHeroFile`,
+  `#xxHeroUpload`); `uploadHero()` and its two listeners; the `HeroFileLabel` `textContent`
+  assignment; `$(loc + 'HeroReplace').open = !hero.src` in `populateForm`; the stale "see
+  uploadHero" comment in `pickHero`. `photoStatus()` stays (used by `pickHero`).
+- `editor-title-image.js`: File label/input, `Upload` button, `Replace` `<details>`, the upload
+  handler, `busy`, `el('File').value = ''`, `load()` (its only job was the `open` state), and the
+  now-unused options `getSlug` and `recovery` (+ the caller's arguments in `editor.html`).
+- `admin.css`: `.hero-alt-row`, `.hero-replace > label`; `:is(.hero-replace, .hero-focus)[open]`
+  becomes `.hero-focus[open]`. `.hero-file-input` **stays** (body-image file inputs use it).
+- No `UploadRecovery` call with `trips/<slug>/hero|title` remains in the editor. `UploadRecovery`
+  itself stays (body-image upload, About page). `upload-recovery.test.ts` uses those key strings
+  only as arbitrary fixtures for the shared module and stays.
+- Stale comments updated: `editor.html` "hero upload" section header and the `pickHero` lead
+  comment ("the other half of upload"); `admin.css` comments on the hero alt row, image
+  disclosures and the hero banner zone; `editor-title-image.js` header (mirrors "Replace photo").
+- Spec trail: this change removes the editor hero and title-image consumers listed as upload
+  callers in `2026-10-27-issue-304-weak-connection-write-contract.md` (§5.3 and the evidence
+  table); body image and About remain, and the new body-image upload test (Test plan) is the
+  remaining editor evidence. It supersedes the "and upload pipeline" clause of
+  `2026-10-16-story-title-image-design.md` (title image is library-only). Both receive a short
+  dated note pointing here.
+
+### Focus
+
+- Publish-gap jump: `hero: kind + 'HeroFile'` → `hero: kind + 'HeroLibrary'`.
+  `inspectorApi.reveal()` already opens the closed `HeroDetails` section and focuses the target.
+- Title image Remove already focuses its Library button; unchanged.
+
+### `ui.ts` keys removed (DE and EN)
+
+`editor.chrome.heroFile`, `editor.chrome.uploadNotApplied` (only the removed hero/title upload
+paths used it), `editor.titleImage.replace`, `.file`, `.upload`, `.processing`, `.uploading`,
+`.pickFile`, `.slugRequired`, `.uploadFailed`. (Hero section chrome is literal English in
+`editor.html` and has no keys.)
+
+## 2. Hero "Suggest alt text": removed
+
+- Remove `#deHeroSuggest` / `#enHeroSuggest` and their two `AltSuggest.wire` calls.
+- Keep `AltSuggest.wire` for `#deBodyImgSuggest` / `#enBodyImgSuggest` and `alt-suggest.js`
+  unchanged. The title image never had one; nothing changes there.
+- Hero alt input remains editable and is collected by `buildPayload()` as today.
+
+## 3. Excerpt help text and the AI disclosure
+
+### Removal
+
+`#deExcerptHelp` / `#enExcerptHelp`, their `textContent` assignment, the Excerpt textareas'
+`aria-describedby`, and `editor.chrome.excerptHelp` (DE/EN).
+
+### Disclosure decision: **move it onto the Generate action**
+
+The removed help was the only statement that **Generate excerpt with AI** sends unsaved text to a
+possibly remote, paid provider. Article translation and Story review disclose at the action: a
+visible statement plus `aria-describedby` on the button that calls the model. The excerpt assist
+follows the same pattern inline:
+
+- `EditorExcerpt` renders a short muted note as **its own line directly under the action row**
+  (Generate · Cancel), before the status region:
+  `<p class="excerpt-assist__note" id="excerpt-disclosure-<locale>">`. The Generate button gets
+  `aria-describedby="excerpt-disclosure-<locale>"`. Accessible name stays "Generate excerpt with
+  AI"; description = the note. Cancel appearing during a run does not move the note (no layout
+  jump); the inspector is never wide enough for the note to sit beside the button.
+- New key `editor.chrome.excerptDisclosure` (added to `EditorExcerpt`'s required `COPY_KEYS`):
+  - EN: "Sends this language’s unsaved title and story to the Story Review provider. Charges
+    may apply."
+  - DE: "Sendet den ungespeicherten Titel und Text dieser Sprache an den Story-Review-Anbieter.
+    Kosten können entstehen."
+  The copy is accurate to the payload (`LLM.suggestExcerpt` receives locale, title and
+  markdown plus the configured guidance) and names where the provider is configured.
+- Outcome stated plainly for the owner: a visible sentence remains under the Excerpt, now
+  below the Generate button instead of between the field and the button, shorter, and attached
+  to the action rather than to the field. The Excerpt textarea no longer carries an AI
+  description on every focus. This is the only option consistent with `DESIGN.md` "Help": a
+  privacy disclosure stays visible, after the controls.
+
+Rejected alternatives: **dropping** the disclosure (excerpt would be the only text-sending AI
+action without one); **`title` tooltip / visually hidden description only** (invisible to
+sighted keyboard and touch users, and `title` is not reliably exposed — WCAG 1.3.1/1.4.13
+risk); **first-run confirmation step** (new behaviour and friction outside the issue's scope).
+
+## 4. Waypoint stop row
+
+### Current DOM (per `.stop-row`, 3-column grid)
+
+name · remove / lat · lng / `.stop-lookup` (Find coordinates button, status, results) /
+`.stop-routing` (Via point, Continue by + select or "Last stop…" text, profile note).
+
+### Target DOM and CSS
+
+```
+.stop-row  (grid: 1fr 1fr var(--control-h-sm); unchanged columns)
+  input.stop-name   (1 / 3)        button.btn-remove (3, row 1)
+  input.stop-lat    (1, row 2)     input.stop-lng    (2 / 4, row 2)
+  div.stop-controls (1 / -1)  display:flex; flex-wrap:wrap; align-items:center; gap:.5rem 1rem
+     button.stop-search          ← WaypointLookup
+     label.stop-via-field        ← StopRouteEditor.decorateRow
+     label.stop-leg-field        ← decorateRow (hidden on the last stop)
+     span.stop-last              ← decorateRow (shown on the last stop, same slot)
+  p.stop-profile-note    (1 / -1; [hidden] → display:none)      ← decorateRow, right after controls
+  p.stop-search-status   (1 / -1; :empty → display:none)        ← WaypointLookup
+  div.stop-search-results(1 / -1; grid; :empty → display:none)  ← WaypointLookup
+```
+
+- `addStopRow()` creates `.stop-controls` and passes it to both modules:
+  `WaypointLookup.attach({ row, controls, … })` puts the button in `controls` and status/results
+  in `row`; `decorateRow(row, controls, routing)` puts via/leg/last in `controls` and inserts the
+  note directly after `controls`, so the warning stays next to the select it describes. Row
+  order: controls → note → status → results. The `.stop-lookup` and `.stop-routing` wrappers are
+  removed (their CSS too); no other caller exists. Each flex child wraps independently, so a
+  narrow line breaks as "Find coordinates · Via point" then "Continue by [select]" (or "Last
+  stop…").
+- Focus order: unchanged for name, lat, lng and Remove (Remove stays after lng in the DOM while
+  drawn in row 1, as today). Then Find coordinates, Via point, Continue by select, then result
+  buttons — matching the visual order of the controls line and the results below it. Results
+  can no longer sit between the button and the checkbox. Result pick still focuses lat
+  (unchanged).
+- Spacing: the row's 0.5rem grid gap replaces `.stop-search-status` margin-block and
+  `.stop-search-results` margin-top; empty status/results take no grid row.
+- Labels inside `.stop-controls` get `margin: 0` with a selector that outranks
+  `body.editor-page .editor-inspector label`, so the Via label is vertically centred beside the
+  button. The Via label gets `min-height: var(--control-h-sm)` (44px under coarse pointer),
+  which costs no line height beside the 44px button and select, and keeps a near-miss off Find
+  coordinates (which sends the place name out).
+- Width reality (stated in the PR): every real inspector width keeps the content box at or
+  under ~20.5rem, so the controls never fit on one line; the row renders as four lines (name ·
+  remove / lat · lng / Find coordinates · Via point / Continue by [select] or "Last stop…").
+  That is the issue's narrow-width form; the three-line form needs a wider line than the
+  inspector or phone drawer provides. Overflow is measured in the browser, including a 320px
+  viewport.
+- Coarse pointer: buttons and the select use `--control-h-sm` (2.75rem under
+  `pointer: coarse`); the checkbox keeps its 1.5rem coarse box inside the label row.
+- Unchanged: `rowValues()`, `syncRows()` (both use `row.querySelector`, independent of
+  placement), `aria-describedby="stopRouteViaHelp"`, select `aria-describedby` → its note id,
+  `aria-invalid`, copy, `collectStops()`.
+- `2026-11-03-issue-513-stop-routing-design.md` contains no row-layout statement (checked: it
+  defines data, normalization, "the editor shows 'Last stop'" — still true); no update needed.
+
+## Docs to update
+
+- `DESIGN.md` (admin): hero/title image bullet (no Replace disclosure, no upload), excerpt
+  disclosure placement, stop-row line; title-image paragraph (~L790-794 "media picker, upload
+  and framing controls").
+- `docs/authoring-workflow.md`: Stage 1 hero note (point to Media instead of the old `/admin/`
+  upload page, which is now the Desk), "Replace photo" sentence, title-image "or upload", field
+  table rows, library history note, quick checklist (~L979).
+- `ARCHITECTURE.md` "AI alt-text": "per alt field" → body photos and media library, not hero.
+- `uploader/README.md`: excerpt section mentions the action-level disclosure; "Hero/body fields"
+  refusal sentence (~L659) → body fields.
+- `2026-10-27-issue-304-weak-connection-write-contract.md`, `2026-10-16-story-title-image-design.md`:
+  dated supersede notes (see section 1).
+- `docs/claude/project-status.md`: status entry.
+- The 2026-07-05 alt-text plan/spec are dated historical documents and stay as written.
+
+## Rollback
+
+Client-only change (static admin files + `ui.ts` copy). Reverting the PR restores the upload
+controls, hero Suggest, Excerpt help and the old stop-row DOM; no data, schema, API or stored
+routing value changes in either direction.
+
+## Test plan
+
+Automated (`uploader/test/editor-dom.test.ts` unless noted):
+
+- Replace "inline upload snapshot adoption" hero/title upload cases with a library-only test:
+  per locale, hero and title sections contain no `input[type=file]`, no upload or suggest
+  button, keep the library button; a library pick sets src, prefills an empty alt, keeps a
+  typed alt; hero alt edits reach `buildPayload()`.
+- Body-image upload (new, resolves review B1): drive `#deBodyImgUpload` through the harness
+  `upload` seam; assert exactly one `UploadRecovery.run` call with the editor owner and
+  `fields.key = trips/<slug>/<file-slug>`, the image inserted in the manuscript with
+  `images[src]` recorded; and a second case where the account changes while the upload is
+  pending (`recovery.observeOwner(other)`) inserts nothing.
+- Suggest wiring (resolves B1): the harness records `AltSuggest.wire` calls; assert exactly two,
+  for the DE/EN body-image button/file/alt elements, and none for hero elements.
+- Focus test: missing-hero jump focuses `enHeroLibrary` with `enHeroDetails` open.
+- Rewrite "opens Replace photo on load…": library buttons visible for set and missing images;
+  thumbnails; Remove hides itself and focuses the library button.
+- ID references (I5): every `aria-describedby` token and every `label[for]` in the loaded
+  editor (including generated stop rows and excerpt assists) resolves to an existing element.
+- Excerpt: textarea has no `aria-describedby`, no `#xxExcerptHelp`; in `editor-excerpt.test.ts`
+  the Generate button's `aria-describedby` resolves to a visible note with the disclosure copy
+  in each locale view.
+- Stop rows: controls line children are `[stop-search, stop-via-field, stop-leg-field,
+  stop-last]`; row order controls → note → status → results after a lookup; existing routing
+  round-trip, stale/fresh, and disabled-provider tests keep passing.
+- `ui.ts` orphans (A7): no automated orphan check exists; the PR records a per-key grep for
+  every removed key (no remaining reference) and for the added key (used).
+- Full: `npx tsc --noEmit` + `npm test` (uploader; integration suites with `TEST_DATABASE_URL`
+  against a disposable local Postgres), `npm test` + `npx astro check` (site).
+
+Browser (real local stack, managed browser profile, both locales): hero set/change from
+library; no file input/upload; hero alt edit → save → reload persists; title image pick +
+remove; missing-hero publish-gap jump focuses library button; excerpt (no help, note visible,
+accessible description, busy state with Cancel does not move the note); body-image upload +
+Suggest alt present and working; stop rows (middle + last), lookup status/results below,
+profile note, save → reload → identical routing values; desktop, narrow inspector, ~375px and
+320px with measured `scrollWidth ≤ clientWidth` for every stop row and the excerpt assist,
+coarse-pointer target sizes; keyboard order and focus ring; no console errors. Screenshots stay
+local (Golden Rule 5).
+
+## Scoped exception record
+
+- **Waived rule:** the human design-approval pause before implementation in this workflow.
+- **Replacement:** independent AI design approval (fresh-context reviewer agent).
+- **Reason:** owner-requested workflow automation.
+- **Risks:** reviewer blind spots; shared-model bias between author and reviewer.
+- **Compensating controls:** adversarial independent reviewer; re-review of any material design
+  change; `/review` on the PR; required CI; owner review before merge.
+- **Approver:** Simon (owner), 2026-11-11, scoped to issue #569 only.
+- **Expiry:** when the PR completes (merged or closed) or the work is abandoned.
+- This exception does not relax any other repository rule.
+
+## Independent AI design approval
+
+### Round 1
+
+- **Reviewer:** fresh-context `reviewer` agent, model `anthropic/claude-fable-5-2` (as reported
+  by the runtime and the agent session log; provider `anthropic`, model `claude-fable-5-2`).
+  Inputs: the issue, this document, the relevant file paths.
+- **Verdict:** CHANGES REQUIRED (confidence 0.85).
+- **B1 (blocking)** — A2 had no automated coverage: no test drives `*BodyImgUpload`; the upload
+  seam was only used by the two removed hero/title cases; `AltSuggest.wire` is a no-op stub, so
+  losing the body wiring fails nothing; the #304 contract cites the removed cases as evidence.
+  **Resolution:** Test plan adds a body-image upload case (owner, key, insert, `images[src]`, no
+  insert after an account change) and a recorded-`wire` assertion (exactly the two body
+  wirings); plan sentence corrected; #304 spec gets a dated consumer note.
+- **N1** excerpt note vs Cancel → note is its own line under the action row (section 3).
+- **N2** label margin → reset inside `.stop-controls` with sufficient specificity (section 4).
+- **N3** Via touch target → `min-height: var(--control-h-sm)` (section 4).
+- **N4** profile note order → inserted right after the controls line (section 4, test plan).
+- **N5** focus-order sentence → corrected (section 4).
+- **N6** owner-visible outcomes → stated in sections 3 and 4 and in the PR.
+- **N7** copy → "this language's" restored (section 3).
+- **N8** docs/comments/spec trail → added to Docs, Dead code, Rollback.
+- **N9** evidence → per-key grep in PR; ID-reference sweep test; measured overflow incl. 320px.
+- **N10** missing-hero wording → corrected (section 1).
+- Accepted by the reviewer without change: removing (not renaming) the disclosure; disclosure
+  on the Generate action; `ui.ts` removal list complete; CSS deletions safe (`.hero-file-input`
+  kept); no hero/title upload path left; routing invariants; focus retarget; risk Normal; no
+  #513 spec update.
+
+### Round 2
+
+- **Reviewer:** same agent and model (`anthropic/claude-fable-5-2`), re-reviewing the revised
+  document against the code.
+- **Result:** B1 and N1–N10 verified resolved; no new blocking issue.
+- **Minor (non-blocking) and handling:** EN copy uses the dictionary's typographic apostrophe
+  (adopted, section 3); recorded-`wire` assertion also checks `lang` and `statusEl` per call
+  (adopted in the test); Find coordinates reads "Finding location…" during a lookup so Via
+  point shifts a few pixels (accepted: existing label behaviour, transient, no overlap).
+- **Verdict:** `VERDICT: APPROVED`.
