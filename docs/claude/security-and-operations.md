@@ -96,6 +96,10 @@ Full security model: `SECURITY.md`. These patterns MUST be preserved when changi
   Translation's authenticated prepare/validate routes are bounded, read-only source analysis,
   not inference or persistence. Translation requires explicit consent, complete structural
   validation and reviewed application; it never automatically retries, saves or publishes.
+  Translation's system message starts with the admin-editable `translationPrompt` (#567, readable by any authenticated author through `/ai-config`): trusted
+  house guidance, visible plain text of at most 4000 characters, validated without coercion at every
+  reader. Code always appends the direction, the untrusted-input guard and the JSON contract,
+  so the prompt never changes what the parser accepts. A prompt change requires renewed consent.
 - Provider/key management (`/ai-providers*`, incl. the admin-only `/credential` read for
   Settings Test) and settings writes remain admin-only. Settings responses expose only key
   presence; `ENCRYPTION_KEY` is separately escrowed. Missing master key allows local

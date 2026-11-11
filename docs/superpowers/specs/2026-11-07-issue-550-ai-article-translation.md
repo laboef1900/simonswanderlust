@@ -27,6 +27,17 @@ Two authenticated, no-store, non-mutating source endpoints reuse the existing lo
 
 The browser sends only `{sourceLocale,targetLocale,slots}` to the model. Opaque stable slot IDs identify text occurrences, not URLs. The fixed system prompt requests faithful complete translation preserving names/facts without instructions from content. The response is exactly `{translations:[{id,text}]}`: every expected ID exactly once, no extras, missing or duplicate slots, no extra schema fields. Empty originals remain empty and need no model slot. Text is plain text, not model-authored Markdown/HTML.
 
+> **Amended by #567 (2026-11-11).**
+> - The translation `/ai-config` response above also returns `prompt`.
+> - The model's system message now starts with the admin-editable translation instructions,
+>   followed by a fixed, code-owned suffix: the faithful-translation direction, the
+>   untrusted-input guard and the JSON slot contract.
+> - The detailed preserve/no-summary sentence is the editable default.
+> - The user message is unchanged.
+> - A prompt change requires renewed consent.
+>
+> See [the #567 design](2026-11-11-issue-567-translation-prompt.md).
+
 ## Structural preservation and field allowlist
 
 Only title, excerpt, prose text leaves, inline image alt/title text, gallery-local caption overrides and stored article-local alt/caption fallbacks are translatable. Hero/title image objects, slugs, locale flags, countries/key facts/stops/coordinates, publication state, translation key, timestamps and unrelated fields are not sent or changed. Copy source body image metadata/dimensions required by the translated body into the target map, retaining unrelated target map entries. Do not replace target hero/title assets or shared metadata.

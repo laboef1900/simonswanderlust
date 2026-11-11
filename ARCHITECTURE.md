@@ -795,11 +795,16 @@ authoritative. Unsupported source and locally targeted headings remain unchanged
 
 `public/editor-translation.js` owns explicit consent, current-draft/configuration checks,
 review and replacement confirmation. `LLM.translateArticle` sends only text slots from the
-browser in one bounded attempt. Application uses a deferred-sync source transaction in
+browser in one bounded attempt. Its system message is the admin-editable `translationPrompt`
+(`settings.json`, #567; default in `src/translation-prompt.ts`; visible plain text of at most
+4000 characters), followed by a code-owned suffix: the faithful-translation direction, the
+untrusted-input guard and the JSON slot contract. The prompt is part of the consent descriptor,
+so a change requires a new explicit click. Application uses a deferred-sync source transaction in
 `editor-rich-bridge.js`, updates only the target allowlist, and preserves failed-commit
 histories. Whole-field Undo and existing dirty/recovery/optimistic-save paths are reused.
 No new persistence model, autosave, publication, Media write or upload is introduced.
-See the [issue design](docs/superpowers/specs/2026-11-07-issue-550-ai-article-translation.md).
+See the [issue design](docs/superpowers/specs/2026-11-07-issue-550-ai-article-translation.md)
+and the [prompt design](docs/superpowers/specs/2026-11-11-issue-567-translation-prompt.md).
 
 ### AI provider registry (2026-10-19)
 
@@ -818,7 +823,7 @@ per remote provider under `ai_provider_key:<id>`; local providers never hold one
 | `POST /ai-providers`, `PUT` / `DELETE /ai-providers/:id` | admin | provider CRUD with optional key set/replace/remove |
 | `GET /ai-providers/:id/credential` | admin | key for Settings' model lookup and **Test** (browser calls only `<baseUrl>/models`) |
 | `GET /ai-config[?purpose=caption]` | author | resolved review/caption provider + its key; existing consumer shape unchanged |
-| `GET /ai-config?purpose=translation` | author | only translation provider identity/endpoint, model, timeout and request-local key |
+| `GET /ai-config?purpose=translation` | author | only translation provider identity/endpoint, model, timeout, translation prompt and request-local key |
 
 Default `GET /ai-config` returns the review provider's `kind` as `aiProvider`, its base URL as
 `aiBaseUrl`, and its own key. Local caption and translation configs never query or decrypt

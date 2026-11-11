@@ -17,6 +17,7 @@ import { pgJourneyStore } from '../src/journeys.js';
 import { pgMediaStore } from '../src/media-store.js';
 import sharp from 'sharp';
 import { createSettingsStore, defaultSettings } from '../src/settings.js';
+import { DEFAULT_TRANSLATION_PROMPT } from '../src/translation-prompt.js';
 
 import { seedSiteIdentity, type IdentityRecord } from '../src/site-identity.js';
 const url = process.env.TEST_DATABASE_URL;
@@ -489,6 +490,8 @@ maybe.each(['split', 'loopback'] as const)('production boot (src/main.ts, Postgr
     expect(saved).toMatchObject({
       aiDefaultProviderId: 'openrouter', reviewProviderId: 'openrouter', captionProviderId: 'lm-studio', commentsEnabled: true,
       translationProviderId: null, translationModel: 'qwen2.5-7b-instruct', translationTimeoutMs: 120000,
+      // #567: the boot migration's whole-object persist writes the default instructions.
+      translationPrompt: DEFAULT_TRANSLATION_PROMPT,
     });
     expect(saved).not.toHaveProperty('aiProvider');
     expect(JSON.parse(await readFile(`${settingsPath}.pre-ai-registry`, 'utf8'))).toMatchObject({ aiProvider: 'openrouter' });
@@ -512,7 +515,8 @@ maybe.each(['split', 'loopback'] as const)('production boot (src/main.ts, Postgr
     expect(translation.headers.get('cache-control')).toBe('no-store');
     expect(await translation.json()).toEqual({
       providerId: 'openrouter', providerName: 'OpenRouter', providerKind: 'openrouter',
-      baseUrl: 'https://openrouter.ai/api/v1', model: 'qwen2.5-7b-instruct', timeoutMs: 120000, apiKey: 'boot-legacy-fixture',
+      baseUrl: 'https://openrouter.ai/api/v1', model: 'qwen2.5-7b-instruct', timeoutMs: 120000,
+      prompt: DEFAULT_TRANSLATION_PROMPT, apiKey: 'boot-legacy-fixture',
     });
   });
 
@@ -545,7 +549,7 @@ maybe.each(['split', 'loopback'] as const)('production boot (src/main.ts, Postgr
       const config = await fetch(`${base}/ai-config?purpose=translation`, { headers: { cookie } });
       expect(await config.json()).toEqual({
         providerId, providerName: 'Translation fixture', providerKind: 'custom', baseUrl: 'https://translation.example/v1',
-        model: 'translation-fixture-model', timeoutMs: 180000, apiKey: 'boot-translation-fixture',
+        model: 'translation-fixture-model', timeoutMs: 180000, prompt: DEFAULT_TRANSLATION_PROMPT, apiKey: 'boot-translation-fixture',
       });
       expect(await pgSecretsStore(pool, encryptionKey).get('ai_provider_key:openrouter')).toBe(originalKey);
       const refused = await fetch(`${base}/ai-providers/${providerId}`, { method: 'DELETE', headers: { origin: base, cookie } });
