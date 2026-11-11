@@ -936,12 +936,13 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
    tallest height, never shrinking, so neither showing nor hiding the bar
    moves a row. */
 /* The runway's floor before the bar is first measured: one row of compact
-   controls, two rows where the bar wraps (below 62rem), the stacked bar
-   below 40rem, each larger at the coarse-pointer control height. */
+   controls, two rows where the bar can wrap (below 64rem, long counts
+   included), the stacked bar below 40rem, each larger at the coarse-pointer
+   control height. */
 .posts-page { --bulk-bar-min: 3.5rem; }
 @media (pointer: coarse) { .posts-page { --bulk-bar-min: 4rem; } }
-@media (max-width: 62rem) { .posts-page { --bulk-bar-min: 5.5rem; } }
-@media (max-width: 62rem) and (pointer: coarse) { .posts-page { --bulk-bar-min: 7.5rem; } }
+@media (max-width: 64rem) { .posts-page { --bulk-bar-min: 5.5rem; } }
+@media (max-width: 64rem) and (pointer: coarse) { .posts-page { --bulk-bar-min: 7.5rem; } }
 .posts-page .cms-workspace { scrollbar-gutter: stable; }
 .posts-page:has(.bulk-bar-slot.is-reserved) .cms-workspace {
   scroll-padding-bottom: calc(max(var(--bulk-bar-min), var(--bulk-bar-h, 0px)) + 1.5rem);
@@ -986,8 +987,11 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 /* Short and narrow (a small landscape phone, 400% zoom): a fixed bar would
    cover most of the workspace, so it sits in its reserved slot instead. */
 @media (max-height: 30rem) and (max-width: 40rem) {
-  /* Relative (insets reset) so Review selection still anchors to the bar. */
+  /* The bar sits in flow at the end of the list, so Review selection opens
+     from its own row, as low as it can, to stay on screen. */
   .posts-page .bulk-bar { position: relative; inset: auto; }
+  .posts-page .selection-review { position: relative; }
+  .posts-page .selection-review ul { right: 0; left: 0; }
   .posts-page:has(.bulk-bar-slot.is-reserved) .cms-workspace { scroll-padding-bottom: 0; }
 }
 

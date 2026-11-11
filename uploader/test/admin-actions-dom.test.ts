@@ -940,6 +940,31 @@ describe('posts.html selection, recovery and disclosures', () => {
     expect(el('bulkBarSlot').classList.contains('is-reserved')).toBe(true);
   });
 
+  it('Clear selection hands focus to a checkbox already in view, without scrolling', async () => {
+    const { el, box } = await selectablePage();
+    // The workspace shows y 0–500; select-all has scrolled away above it and
+    // every row checkbox (re-created by render()) sits on screen at y 120.
+    const at = (top: number) => () => ({ top, bottom: top + 16, height: 16 });
+    const workspace = { getBoundingClientRect: () => ({ top: 0, bottom: 500, height: 500 }) };
+    el('postsTable').closest = () => workspace as unknown as Element;
+    let focused: { label: string | null; options: unknown } | null = null;
+    const track = (node: Element) => Object.assign(node, {
+      getBoundingClientRect: node === el('selectAll') ? at(-60) : at(120),
+      focus: (options?: { preventScroll?: boolean }) => { focused = { label: node.getAttribute('aria-label'), options }; },
+    });
+    track(el('selectAll'));
+    const rows = el('postsList');
+    const find = rows.querySelectorAll.bind(rows);
+    rows.querySelectorAll = (selector: string) => find(selector).map(track);
+
+    const first = box(0);
+    first.checked = true;
+    await first.fire('change');
+    await el('clearSelection').click();
+
+    expect(focused).toEqual({ label: 'Select Alpha', options: { preventScroll: true } });
+  });
+
   it('Escape in the bar closes Review selection first, ignores a held key, then clears like Clear selection', async () => {
     const { ctx, el } = await selectablePage();
     vm.runInContext("selected.add('a'); selected.add('b'); render();", ctx);

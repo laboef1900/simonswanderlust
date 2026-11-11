@@ -8,9 +8,10 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
   foot of the workspace (centred over it, never the sidebar; `--menu-shadow`; `--surface` at a
   measured 95% floor, no blur — 13.58:1 ink, 5.53:1 accent, 3.03:1 outline over a black
   thumbnail, sampled in Chrome). Its runway is a slot after the list reserved from the first
-  admin render and never shrinking, so selecting or clearing never moves a row (Δ = 0 measured
+  admin render and never shrinking, so selecting or unticking never moves a row (Δ = 0 measured
   at 1440, 844×390, 390 and 320×256); `inert` travels with `hidden`, Escape closes Review
-  selection then clears, Clear selection focuses a visible checkbox without scrolling. The
+  selection then clears, and Clear selection focuses a checkbox already in view without
+  scrolling (only when none is in view does it scroll select-all into view). The
   five filters use the new reusable `admin-select.js` (APG select-only combobox over the hidden
   native `<select>`, which stays the source of truth and receives `input` + `change`). Row
   checkboxes fade in on hover and stay when focused, checked, in selection mode, or without

@@ -198,16 +198,18 @@ visually detached from the list.
   0.75rem)`; `width: fit-content; margin-inline: auto` centres it between those insets.
   `--cms-sidebar-w: 13rem` becomes the shell token that the grid column also uses (one source).
   At ≤ 900 px the sidebar is a drawer, so `left` uses the shell gutter.
-- Wide (> 40rem): one row, `width: fit-content`; `.selection-review` is `flex: none` there.
+- Wide (> 40rem): `width: fit-content`, one row where the workspace allows (it wraps to two below
+  about 64rem, longer with three-digit counts); `.selection-review` is `flex: none` there.
   ≤ 40rem: `width: auto` (full width minus gutters), count and Review selection each take a full
   row (`flex-basis: 100%`), action buttons wrap at `flex: 1 1 7rem` — today's narrow rules, moved
   from the card container query to a viewport query because the bar is no longer inside the card.
   The base `.bulk-bar` `margin-bottom` is reset.
 - Short, narrow viewports (`(max-height: 30rem) and (max-width: 40rem)`, e.g. 320 × 256 or 400 %
-  zoom): the bar is **not fixed**; it is `position: static` inside its slot, so it never covers
-  most of the workspace and its upward Review panel is never clipped. Landscape phones wider than
-  40rem keep the floating bar. The slot keeps its reserved height in both modes, so showing or
-  hiding the bar never moves rows there either.
+  zoom): the bar is **not fixed**; it sits in flow inside its slot (`position: relative; inset:
+  auto`), so it never covers most of the workspace, and Review selection opens from its own row so
+  as much of the list as possible stays on screen. Landscape phones wider than 40rem keep the
+  floating bar. The slot keeps its reserved height in both modes, so showing or hiding the bar
+  never moves rows there either.
 - Elevation: `--menu-shadow` only, no border (Declare-Once), `--radius-lg` corners, compact
   controls at `--control-h-sm` (2.75rem on coarse pointers via the existing token).
 - **Stacking** (one shared order inside the workspace): page header `.cms-topbar` 50 → bar and its
@@ -280,9 +282,10 @@ on the first render (before any selection), and the class is never removed. A `R
 writes the **largest** border-box height the bar has had since load to `--bulk-bar-h` on
 `<body>`. The reserved slot has `min-height: max(var(--bulk-bar-min), var(--bulk-bar-h, 0px))`,
 where `--bulk-bar-min` is declared on `.posts-page` (the body, so the slot and `.cms-workspace`
-both inherit it) as `3.5rem` (≥ the one-row bar's 2.875rem) and `9rem` at ≤ 40rem (≈ the stacked
-narrow bar). `max()` with a fixed floor means the first measurement can only keep or raise the
-slot, never lower it. `.cms-content` keeps its normal 2.5rem bottom padding.
+both inherit it): `3.5rem` (≥ the one-row bar's 2.875rem), `4rem` on coarse pointers, `5.5rem` /
+`7.5rem` (fine / coarse) below 64rem where the bar can wrap to two rows, and `9rem` / `11rem` at
+≤ 40rem for the stacked bar. `max()` with a fixed floor means the first measurement can only keep
+or raise the slot, never lower it. `.cms-content` keeps its normal 2.5rem bottom padding.
 
 - Floating mode: the bar is fixed and the empty slot is the runway, so the last rows scroll 1.75rem
   clear of the bar's top. Short-narrow mode: the bar sits statically inside the same slot.
@@ -293,9 +296,11 @@ slot, never lower it. `.cms-content` keeps its normal 2.5rem bottom padding.
   appears is not covered either (on a wide window; at ≤ 40rem the 9rem floor approximates the
   stacked bar and the first measurement corrects it).
 - The slot only ever grows, and only at the end of the content, so neither selecting (first select
-  or Select visible) nor clearing (untick, Clear selection, Escape) at the scroll end can move rows
-  on screen, in either mode. `.posts-page .cms-workspace` also gets `scrollbar-gutter: stable`, so
-  a slot that first creates overflow cannot add a scrollbar and reflow the table.
+  or Select visible) nor unticking can move rows on screen, in either mode, and neither can Clear
+  selection or Escape while a checkbox is in view. The one exception is §6 Focus: when no checkbox
+  is fully in view, clearing scrolls `#selectAll` into view so focus stays visible.
+  `.posts-page .cms-workspace` also gets `scrollbar-gutter: stable`, so a slot that first creates
+  overflow cannot add a scrollbar and reflow the table.
 - “Bottom padding equal to the bar's height while the bar is visible” holds (the slot is at least
   the bar's height); it is reserved before and retained after. Non-admins get no slot height.
 
@@ -379,7 +384,8 @@ Automated (`uploader/`): `npx tsc --noEmit`; `npm test` with a disposable `TEST_
   `sync()` per select id), `ResizeObserver`, `document.body` and `style.setProperty` so the inline
   script loads; stub elements gain `closest()` (no shell → `#selectAll` fallback). New cases: bar
   shown + `inert=false` + `is-selecting` on first selection, both reverted on Clear selection;
-  showing the bar leaves focus on the checkbox; Clear selection focuses with `preventScroll`;
+  showing the bar leaves focus on the checkbox; Clear selection focuses a checkbox in view with
+  `preventScroll`, else `#selectAll` with scrolling;
   Escape in the bar closes an open review first, then clears and focuses the fallback, and a
   repeated Escape is ignored; a label-area click toggles the checkbox once without a scrolling
   focus; `sync()` runs for all five menus after a status-view click, Clear filters and the URL
@@ -389,9 +395,10 @@ Browser (real local app on an isolated stack, Chromium): desktop 1440, ~700 px, 
 drawer —
 
 - row position before/after single select and Select visible **at the top and at the scroll end**
-  (including a first select at the scroll end on a fresh load at 1440), and after clearing (untick,
-  Clear selection, Escape) at the scroll end — Δ = 0 at 1440, 390 px, 844 × 390 and 320 × 256;
-  after Clear selection / Escape mid-list, focus is on a visible checkbox and Δ = 0;
+  (including a first select at the scroll end on a fresh load at 1440), and after unticking at the
+  scroll end — Δ = 0 at 1440, 390 px, 844 × 390 and 320 × 256; after Clear selection / Escape with
+  a checkbox in view, focus is on that checkbox and Δ = 0; at 320 × 256 with none in view, focus
+  is on `#selectAll` and inside the viewport;
 - a click on the label edge (not the box) of a checkbox in the bottom strip, before any selection
   and with the bar visible, at 1440 and at 390 with touch emulation: toggles once, Δ = 0;
 - Review selection at 375 × 548, scroll top, 12+ selected: the panel paints over the page header
