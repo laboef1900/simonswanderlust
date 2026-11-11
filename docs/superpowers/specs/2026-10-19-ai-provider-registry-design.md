@@ -398,3 +398,8 @@ secrets; remote reads preserve the existing serialized endpoint/key binding. No 
 credentials, server inference or model-side persistence are introduced. Translation
 consent/review, structural validation, no-retry behavior and the scoped approval exception
 are defined in the issue-specific design, not retroactively waived by this registry spec.
+
+> **Amended by #567 (2026-11-11):** the translation config also returns `prompt`, the
+> admin-editable translation instructions. They come from the same settings snapshot that
+> resolves the provider, and the key comes from that provider's own `app_secrets` slot.
+> See [the #567 design](2026-11-11-issue-567-translation-prompt.md).

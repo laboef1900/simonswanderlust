@@ -8,12 +8,13 @@ window.EditorTranslation = (function () {
     if (!config || typeof config.providerId !== 'string' || !config.providerId ||
         typeof config.providerName !== 'string' || !config.providerName ||
         !['lm-studio', 'openrouter', 'deepseek', 'anthropic', 'openai', 'custom'].includes(config.providerKind) || typeof config.model !== 'string' || !config.model.trim() ||
-        !Number.isInteger(config.timeoutMs) || config.timeoutMs < 1000 || typeof config.baseUrl !== 'string') return null;
+        !Number.isInteger(config.timeoutMs) || config.timeoutMs < 1000 || typeof config.baseUrl !== 'string' ||
+        !window.LLM.isTranslationPrompt(config.prompt)) return null;
     let url;
     try { url = new URL(config.baseUrl); } catch (_) { return null; }
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) return null;
     return { providerId: config.providerId, providerName: config.providerName, providerKind: config.providerKind,
-      baseUrl: config.baseUrl, model: config.model, timeoutMs: config.timeoutMs };
+      baseUrl: config.baseUrl, model: config.model, timeoutMs: config.timeoutMs, prompt: config.prompt };
   };
 
   function create(options) {
@@ -192,7 +193,7 @@ window.EditorTranslation = (function () {
         say(copy.translationRunning, 'translating');
         const output = await window.LLM.translateArticle({ baseUrl: prepared.baseUrl, model: prepared.model,
           timeoutMs: prepared.timeoutMs, apiKey, sourceLocale: input.sourceLocale, targetLocale: input.targetLocale,
-          slots: plan.slots, signal: request.controller.signal });
+          prompt: prepared.prompt, slots: plan.slots, signal: request.controller.signal });
         if (!current(request)) return;
         apiKey = null;
         const patch = await json('/translation/validate', request, { ...input, output });

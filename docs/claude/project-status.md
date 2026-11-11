@@ -4,6 +4,24 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Implemented locally (PR, not merged):** configurable Article translation prompt (#567,
+  2026-11-11, high risk; design, scoped AI-approval exception and review record in
+  `docs/superpowers/specs/2026-11-11-issue-567-translation-prompt.md`).
+  - **Setting.** `settings.json` gains `translationPrompt` (default
+    `DEFAULT_TRANSLATION_PROMPT` in `uploader/src/translation-prompt.ts`). It must be visible
+    plain text of at most 4000 UTF-16 units and is never coerced.
+  - **Settings UI.** Under Article translation → Advanced settings, with a character count,
+    an inline error and **Reset instructions to default**.
+  - **`/ai-config?purpose=translation`** now also returns `prompt`.
+  - **Transport.** `LLM.translateArticle` puts the prompt first, then the code-owned suffix:
+    faithful direction, untrusted-input guard and JSON contract. `parse()` is unchanged. With
+    the default prompt, every pre-#567 sentence is sent byte-identically; only the first two
+    sentences swap places.
+  - **Consent.** A prompt change between disclosure and run shows `translationConfigChanged`.
+  - **Upgrade.** Existing installs read the default with no migration write.
+  - **Release notes:** say that `settings.json` is outside DB dumps and that a downgrade to a
+    pre-#567 version drops `translationPrompt` on its next settings write.
+
 - **Implemented locally:** admin consistency review fixes (2026-11-10, owner-requested
   Impeccable critique + audit; decisions and invariants in
   `docs/superpowers/specs/2026-11-10-admin-consistency-review-fixes.md`). On the road:

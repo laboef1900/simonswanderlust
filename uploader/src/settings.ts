@@ -3,6 +3,7 @@ import { dirname } from 'node:path';
 import { DEFAULT_PROMPT } from './caption.js';
 import { DEFAULT_REVIEW_PROMPT } from './editorial-review.js';
 import { DEFAULT_PROCESS_OPTIONS } from './variants.js';
+import { DEFAULT_TRANSLATION_PROMPT, isTranslationPrompt } from './translation-prompt.js';
 import {
   cleanProviders, defaultProviders, deriveFromLegacy, isLegacyAiSettings, isProviderId, validateProviders,
   type AiProvider,
@@ -33,6 +34,12 @@ export interface Settings {
   translationProviderId: string | null;
   translationModel: string;
   translationTimeoutMs: number;
+  /**
+   * #567: owner house guidance (tone, glossary, fidelity rules) that leads the
+   * translation system message; the code-owned direction, guard and JSON
+   * contract are always appended after it. Stored verbatim, never blank.
+   */
+  translationPrompt: string;
   lmModel: string;
   captionTimeoutMs: number;
   /** Shared output ceiling for alt text and media details, including model reasoning. */
@@ -96,6 +103,7 @@ export function defaultSettings(): Settings {
     translationProviderId: null,
     translationModel: 'qwen2.5-7b-instruct',
     translationTimeoutMs: 120000,
+    translationPrompt: DEFAULT_TRANSLATION_PROMPT,
     lmModel: 'qwen/qwen3-vl-4b',
     captionTimeoutMs: 60000,
     captionMaxTokens: 8000,
@@ -141,6 +149,9 @@ const FIELD_CHECKS: { [K in keyof Settings]: (v: unknown) => string | null } = {
     ? null : 'Translation model must be a string of at most 100 characters.',
   translationTimeoutMs: (v) =>
     intInRange(v, 5000, 300000) ? null : 'Translation timeout must be a whole number of milliseconds between 5000 and 300000.',
+  // Fixed message: the reason is logged and sent to the client, the value never is.
+  translationPrompt: (v) => isTranslationPrompt(v)
+    ? null : 'Translation instructions are required and must be visible plain text of at most 4000 characters.',
   lmModel: (v) => (typeof v === 'string' && v.trim() !== '' ? null : 'Model is required.'),
   captionTimeoutMs: (v) =>
     intInRange(v, 1000, 600000) ? null : 'Timeout must be a whole number of milliseconds between 1000 and 600000.',

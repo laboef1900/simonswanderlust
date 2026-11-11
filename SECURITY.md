@@ -1085,8 +1085,8 @@ and presented results; acceptance checks the snapshot again. `/ai-config` has a 
 15-second abortable read deadline. Suggestions and keys are not persisted.
 
 Article translation (#550) sends only bounded, opaque article-local text slots and locale
-codes. Image URLs, binaries, EXIF/GPS, shared fields, routes and unrelated metadata never
-enter its inference payload. Authenticated, no-store `POST /translation/prepare` and
+codes as its user message. Image URLs, binaries, EXIF/GPS, shared fields, routes and unrelated
+metadata never enter its inference payload. Authenticated, no-store `POST /translation/prepare` and
 `/translation/validate` perform source analysis only: no model calls or writes. The compiler
 reconstructs from the source, validates the complete response and structural fingerprint,
 and preserves image identities, dimensions, gallery order/layout, reference destinations,
@@ -1095,9 +1095,22 @@ only article-local fallback text and occurrence-specific overrides are translata
 When local fragment links exist, all headings remain unchanged to preserve generated IDs.
 Provider-created autolinks are rejected rather than weakening structural preservation.
 
+The system message begins with the admin-editable **translation instructions**
+(`translationPrompt`, #567). This is trusted owner configuration: house style only, visible plain
+text of at most 4000 UTF-16 units. It must contain no controls other than tab, newline and CR, no lone surrogates, and some visible character. It is validated without coercion by the settings API, the settings
+loader, the browser transport and the editor's consent descriptor. Code always appends three
+fixed parts after it: the faithful-translation direction, the guard that marks article text as
+untrusted, and the exact JSON slot contract. The instructions cannot change what the parser or
+`/translation/validate` accepts. A conflicting format request only produces a rejected response.
+Any authenticated author can read the instructions through `/ai-config?purpose=translation`,
+and the provider receives them with every request, so they are not a secret store. They are never
+logged. Replacing the default removes its detailed preserve/no-summary sentence; the code-owned
+"faithfully" requirement and the author's review before Apply remain. See
+`docs/superpowers/specs/2026-11-11-issue-567-translation-prompt.md`.
+
 Opening translation performs no inference. The author must explicitly consent after seeing
-the provider, exact endpoint, model, content scope and cost disclosure; configuration changes
-require renewed consent. Translation has exactly one bounded, abortable attempt—**no paid
+the provider, exact endpoint, model, content scope and cost disclosure. Configuration changes,
+including changed translation instructions, require renewed consent. Translation has exactly one bounded, abortable attempt—**no paid
 retry**, including the review client's unsupported-format fallback. Malformed, incomplete,
 truncated, oversized or structurally different output never mutates the draft. Source,
 target, locale or configuration changes invalidate pending/reviewed results. Closing aborts;
@@ -1575,7 +1588,8 @@ preview even though the live site would load it.
 - **No server AI egress:** the server never fetches provider URLs. The caption and translation
   purposes resolve independent assignments. Local providers perform no secret lookup or wait,
   so remote crypto failures do not disable local tasks. Remote captions send a resized JPEG
-  and prompt; translation sends text slots only, from the browser with the assigned provider's
+  and prompt. Translation sends text slots plus the owner's translation instructions and the
+  fixed contract, from the browser with the assigned provider's
   key. Remote config fails closed on secret errors. Presets and custom HTTP(S) destinations
   are admin authority. Custom HTTP can expose key/content on the network; prefer HTTPS and
   never add a proxy to work around CORS/mixed-content failures.
