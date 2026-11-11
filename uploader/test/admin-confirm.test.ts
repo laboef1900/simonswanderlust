@@ -10,7 +10,6 @@ interface Api {
   ask(opts: { title?: string; body?: string; confirmLabel?: string; danger?: boolean; typed?: string; tone?: 'publish' }): Promise<boolean>;
   prompt(opts: { title?: string; label?: string; value?: string; confirmLabel?: string; required?: string | false; validate?: (text: string) => string }): Promise<string | null>;
   liveUrls(slugs: { de?: string; en?: string }): { de: string; en: string };
-  urlsPlain(slugs: { de?: string; en?: string }): string;
 }
 
 function load(opts: { confirm?: () => boolean; prompt?: (msg: string, def?: string) => string | null; origin?: string; language?: { primary: 'de' | 'en'; locales: ('de' | 'en')[] } } = {}): { api: Api; confirmedWith: string[]; promptedWith: string[] } {
@@ -78,15 +77,6 @@ describe('AdminConfirm.liveUrls', () => {
   });
 });
 
-describe('AdminConfirm.urlsPlain', () => {
-  it('formats both URLs for the confirm body', () => {
-    const { api } = load();
-    expect(api.urlsPlain({ de: 'a', en: 'b' })).toBe(
-      'DE  https://simonswanderlust.com/a/\nEN  https://simonswanderlust.com/en/b/',
-    );
-  });
-});
-
 describe('AdminConfirm.ask fallback', () => {
   it('uses window.confirm when <dialog> is unavailable', async () => {
     const { api, confirmedWith } = load({ confirm: () => false });
@@ -105,13 +95,6 @@ describe('AdminConfirm.ask typed fallback', () => {
     const { api } = load({ prompt: () => 'delete' });
     await expect(api.ask({ title: 'Delete?', typed: 'DELETE' })).resolves.toBe(false);
   });
-});
-
-it('presents the primary URL first in the publication confirmation', () => {
-  const { api } = load({ language: { primary: 'en', locales: ['en', 'de'] } });
-  expect(api.urlsPlain({ de: 'reise', en: 'journey' })).toBe(
-    'EN  https://simonswanderlust.com/journey/\nDE  https://simonswanderlust.com/de/reise/',
-  );
 });
 
 describe('AdminConfirm.ask native dialog', () => {
