@@ -53,6 +53,8 @@ interface TranslationRequest {
   slots: { id: string; text: string }[]; signal: AbortSignal;
 }
 type TranslationOutput = { translations: { id: string; text: string }[] };
+/** What editor.html passes to AltSuggest.wire, as far as these tests read it. */
+interface AltSuggestWire { button: Element | null; fileInput: Element | null; altInput: Element | null; statusEl: Element | null; lang: string }
 
 interface EditorOptions {
   language?: { primary: 'de' | 'en'; locales: ('de' | 'en')[] };
@@ -90,7 +92,7 @@ interface EditorOptions {
   onEditor?: (editor: { value(text?: string): string }, index: number) => void;
   pickImage?: { src: string; width: number; height: number; alt: { de: string; en: string }; format?: 'jpeg' };
   caption?: (options: { url: string; lang: string; signal: AbortSignal }) => Promise<string>;
-  upload?: (options: { ownerId: string; fields: Record<string, string>; file: File }) => Promise<{ src: string; key: string; width: number; height: number; status: string }>;
+  upload?: (options: { ownerId: string; fields: Record<string, string>; file: File; recovery: { observeOwner(userId: string): void } }) => Promise<{ src: string; key: string; width: number; height: number; status: string }>;
   /** #513 `/posts/:tk/stop-route` answers; default: every profile off, no stored route. */
   stopRouteFetch?: Fetch;
 }
@@ -159,6 +161,7 @@ async function loadEditor(options: EditorOptions = {}) {
   const requests: { url: string; options: RequestInit }[] = [];
   const galleryRequests: { url: string; options: RequestInit }[] = [];
   const stopRouteRequests: { url: string; options: RequestInit }[] = [];
+  const altSuggestWires: AltSuggestWire[] = [];
   const timers = new Map<number, () => void>();
   let nextTimer = 0;
   const prompts: ConfirmPrompt[] = [];
@@ -522,7 +525,7 @@ async function loadEditor(options: EditorOptions = {}) {
     GpxMap: { create: async () => ({ render() {}, destroy() {}, resize() {} }) },
     GpxEditor: { wire: () => ({ refresh: options.routeRefresh ?? (async () => true), publishVersion: options.publishVersion ?? (() => null), publishError: () => null, noteCreated() {}, hasPreview: () => false, discard() {}, revisionNotice() {}, syncCaption() {}, guardAction: () => true }) },
     EditorGalleryImageOrigin: 'https://img',
-    AltSuggest: { wire() {}, suggestHosted: options.caption ?? (() => Promise.reject(new Error('no model in test'))) },
+    AltSuggest: { wire(wiring: AltSuggestWire) { altSuggestWires.push(wiring); }, suggestHosted: options.caption ?? (() => Promise.reject(new Error('no model in test'))) },
   };
   ctx.window = ctx;
   ctx.languageFixture = { primary: 'de', locales: ['de', 'en'], ...options.language, lockedAt: null, updatedAt: '2026-10-27T00:00:00.000Z' };
@@ -564,6 +567,7 @@ async function loadEditor(options: EditorOptions = {}) {
   const api = vm.runInContext('({ populateForm, buildPayload, loadPost, doSaveDraft, renderAltAudit })', ctx) as EditorApi;
   return {
     api, el, editors, richEditors, created: dom.created, document: dom.document, requests, galleryRequests, stopRouteRequests, prompts, local, galleryPickers,
+    altSuggestWires,
     ctx,
     flushDialogEvents: dom.flushDialogEvents,
     logout: () => {
@@ -1865,8 +1869,8 @@ describe('editor.html inline script against its own markup', () => {
       el('editorActionsMenu').open = true;
       heroJump!.click();
       expect(el('editorActionsMenu').open).toBe(false);
-      expect(el('enHeroReplace').open).toBe(true);
-      expect(document.activeElement).toBe(el('enHeroFile'));
+      expect(el('enHeroDetails').open).toBe(true);
+      expect(document.activeElement).toBe(el('enHeroLibrary'));
     });
 
   it.each(['editorActionsMenu', 'publishChecklist'])('dismisses %s without changing the draft and restores focus on Escape', async (id) => {
@@ -1897,24 +1901,23 @@ describe('editor.html inline script against its own markup', () => {
       expect(el('deHeroFocus').hidden).toBe(true);
     });
 
-  it('opens Replace photo on load only for a missing image and thumbnails a present one', async () => {
-      const { api, el } = await loadEditor();
+  it('shows the library action directly for a set or missing image and thumbnails a present one', async () => {
+      const { api, el, document } = await loadEditor();
       const pair = fullPair();
       pair.de.titleImage = { src: 'https://img/title-photo', width: 2400, height: 800, alt: 'Berge' };
       api.populateForm(pair);
-      expect(el('deHeroReplace').open).toBe(false);
       expect(el('deHeroThumb').hidden).toBe(false);
-      expect(el('deTitleImageReplace').open).toBe(false);
       expect(el('deTitleImageThumb').hidden).toBe(false);
-      // Removing is an author action inside the open picker; it must not fold it.
-      el('deTitleImageReplace').open = true;
+      // No nested disclosure: the nearest <details> is the image section itself.
+      expect(el('deHeroLibrary').closest('details')).toBe(el('deHeroDetails'));
+      expect(el('deTitleImageLibrary').closest('details')).toBe(el('deTitleImage'));
       el('deTitleImageRemove').click();
-      expect(el('deTitleImageReplace').open).toBe(true);
+      expect(el('deTitleImageRemove').hidden).toBe(true);
       expect(el('deTitleImageThumb').hidden).toBe(true);
+      expect(document.activeElement).toBe(el('deTitleImageLibrary'));
       api.populateForm(minimalPair());
-      expect(el('deHeroReplace').open).toBe(true);
       expect(el('deHeroThumb').hidden).toBe(true);
-      expect(el('deTitleImageReplace').open).toBe(true);
+      for (const id of ['deHeroLibrary', 'deTitleImageLibrary']) expect(el(id).closest('[hidden]')).toBeNull();
     });
 
   it('names the CodeMirror inputs EasyMDE swaps in for the labelled body textareas (SC 4.1.2)', async () => {
@@ -2833,6 +2836,16 @@ describe('waypoint location lookup', () => {
     const choices = row.querySelectorAll('.stop-search-result');
     expect(choices[1]!.textContent).toBe('<img src=x>');
     expect(choices[1]!.querySelector('img')).toBeNull();
+    // Results sit below the controls line at full width, never inside it (#569).
+    const controls = required(row, '.stop-controls');
+    expect(controls.contains(choices[0]!)).toBe(false);
+    expect(controls.children.map((child) => child.className)).toEqual([
+      'btn-secondary stop-search', 'check-field stop-via-field', 'stop-leg-field', 'muted stop-last',
+    ]);
+    expect(row.children.map((child) => child.className)).toEqual([
+      'stop-name', 'stop-lat', 'stop-lng', 'btn-remove editor-icon-remove', 'stop-controls',
+      'muted stop-profile-note', 'muted stop-search-status', 'stop-search-results',
+    ]);
     const before = h.dirtyCalls();
     choices[0]!.click();
     expect(h.api.buildPayload().shared.stops).toEqual([
@@ -2840,6 +2853,44 @@ describe('waypoint location lookup', () => {
     ]);
     expect(h.dirtyCalls()).toBe(before + 1);
     expect(h.document.activeElement).toBe(required(row, '.stop-lat'));
+  });
+
+  it('keeps Find coordinates an icon named by its label and tooltip in every lookup state', async () => {
+    const search = ui.en['editor.waypoint.search'];
+    let reply = Promise.withResolvers<Response>();
+    const h = await loadEditor({ fetch: () => reply.promise });
+    h.api.populateForm(fullPair());
+    const row = required(h.el('stopsList'), '.stop-row');
+    const button = required(row, '.stop-search');
+    // A text write would replace the icon; the name lives in aria-label and title only.
+    const expectNamed = (label: string) => {
+      expect(button.querySelector('svg')).not.toBeNull();
+      expect(button.textContent).toBe('');
+      expect([button.getAttribute('aria-label'), button.title]).toEqual([label, label]);
+    };
+    expectNamed(search);
+    button.click();
+    expect(button.disabled).toBe(true);
+    expectNamed(ui.en['editor.waypoint.searching']);
+    required(row, '.stop-name').dispatchEvent(new EditorEvent('input'));
+    expect(button.disabled).toBe(false);
+    expectNamed(search);
+    reply = Promise.withResolvers<Response>();
+    button.click();
+    reply.resolve(response({ results: [location] }));
+    await settle();
+    expect(row.querySelectorAll('.stop-search-result')).toHaveLength(1);
+    expectNamed(search);
+    reply = Promise.withResolvers<Response>();
+    button.click();
+    reply.resolve(response({ code: 'lookup_failed' }, 502));
+    await settle();
+    expect(required(row, '.stop-search-status').textContent).toBe(ui.en['editor.waypoint.failed']);
+    expectNamed(search);
+    // "Continue by" stays the select's label, only visually hidden, and is its tooltip.
+    const legLabel = required(row, '.stop-leg-field > span');
+    expect([legLabel.textContent, legLabel.className]).toEqual([ui.en['editor.stopRoute.legProfile'], 'visually-hidden']);
+    expect(required(row, '.stop-profile').title).toBe(ui.en['editor.stopRoute.legProfile']);
   });
 
   it.each([200, 429, 502, 503])('preserves coordinates when search returns no usable result (%s)', async (status) => {
@@ -4211,38 +4262,92 @@ describe('editor region select', () => {
     });
 });
 
-describe('inline upload snapshot adoption', () => {
-  const landed = { src: 'https://img/uploaded', key: 'trips/photo-12345678', width: 800, height: 600, status: 'processing' };
-  it('keeps a newer hero selection when the earlier upload finally lands', async () => {
-    const pending = Promise.withResolvers<typeof landed>();
-    const requests: { ownerId: string; fields: Record<string, string> }[] = [];
-    const h = await loadEditor({ upload: options => { requests.push(options); return pending.promise; } });
-    h.api.populateForm(fullPair());
-    Reflect.set(h.el('deHeroFile'), 'files', [new File(['photo'], 'photo.jpg')]);
-    h.el('deHeroUpload').click();
-    h.el('deHeroSrc').value = 'https://img/newer-library-choice';
-    pending.resolve(landed); await settle();
-    expect(requests).toHaveLength(1);
-    expect(requests[0]).toMatchObject({ ownerId: EDITOR_OWNER, fields: { key: 'trips/bukarest/hero' } });
-    expect(h.api.buildPayload().de.heroImage.src).toBe('https://img/newer-library-choice');
-    // The photo is named by its library key in the status, never by a raw URL.
-    expect(h.el('deHeroStatus').textContent).toContain(ui.en['editor.chrome.uploadNotApplied']);
-    expect(required(h.el('deHeroStatus'), 'code').textContent).toBe(landed.key);
-    expect(h.el('deHeroStatus').textContent).not.toContain(landed.src);
+describe('story images come from the library; body photos keep upload and Suggest alt text', () => {
+  const landed = { src: 'https://img/uploaded', key: 'trips/bukarest/cenote-ik-kil-12345678', width: 800, height: 600, status: 'processing' };
+  const pickImage = { src: 'https://img/library-pick', width: 1600, height: 900, alt: { de: 'Bergsee am Morgen', en: 'Mountain lake at dawn' } };
+
+  it('offers no file input, upload or suggest action for hero and title images, in both locales', async () => {
+    const h = await loadEditor({ pickImage });
+    h.api.populateForm(minimalPair());
+    for (const locale of ['de', 'en'] as const) {
+      const hero = h.el(locale + 'HeroDetails');
+      const title = h.el(locale + 'TitleImage');
+      for (const section of [hero, title]) expect(section.querySelectorAll('input[type="file"]')).toEqual([]);
+      expect(hero.querySelectorAll('button').map((button) => button.id)).toEqual([locale + 'HeroLibrary', locale + 'HeroFocusReset']);
+      expect(title.querySelectorAll('button').map((button) => button.id))
+        .toEqual([locale + 'TitleImageLibrary', locale + 'TitleImageRemove', locale + 'TitleImageReset']);
+    }
   });
-  it('preserves alt and framing edits made while a title-image upload is unresolved', async () => {
-    const pending = Promise.withResolvers<typeof landed>();
-    const h = await loadEditor({ upload: () => pending.promise });
-    const pair = fullPair();
-    pair.de.titleImage = { src: 'https://img/old-title', width: 800, height: 600, alt: 'Old alt' };
-    h.api.populateForm(pair);
-    Reflect.set(h.el('deTitleImageFile'), 'files', [new File(['photo'], 'photo.jpg')]);
-    h.el('deTitleImageUpload').click();
-    h.el('deTitleImageAlt').value = 'Newer alt';
-    h.el('deTitleImageX').value = '35'; h.el('deTitleImageX').dispatchEvent(new EditorEvent('input'));
-    pending.resolve(landed); await settle();
-    expect(h.api.buildPayload().de.titleImage).toMatchObject({ src: landed.src, alt: 'Newer alt', focus: { x: 35, y: 50 } });
-    expect(h.dirtyCalls()).toBeGreaterThan(0);
+
+  it('sets the hero from the library, prefills only an empty alt, and saves an edited alt', async () => {
+    const h = await loadEditor({ pickImage });
+    h.api.populateForm(minimalPair());
+    h.el('deHeroLibrary').click();
+    expect(h.api.buildPayload().de.heroImage).toMatchObject({ src: pickImage.src, width: 1600, height: 900, alt: 'Bergsee am Morgen' });
+    h.el('enHeroAlt').value = 'Typed before picking';
+    h.el('enHeroLibrary').click();
+    expect(h.api.buildPayload().en.heroImage).toMatchObject({ src: pickImage.src, alt: 'Typed before picking' });
+    h.el('deHeroAlt').value = 'Edited hero alt';
+    h.el('deHeroAlt').fire('input');
+    expect(h.api.buildPayload().de.heroImage.alt).toBe('Edited hero alt');
+    h.el('deTitleImageLibrary').click();
+    expect(h.api.buildPayload().de.titleImage).toMatchObject({ src: pickImage.src, alt: 'Bergsee am Morgen' });
+  });
+
+  it('uploads a body photo as the editor owner and inserts it with its dimensions', async () => {
+    const requests: { ownerId: string; fields: Record<string, string> }[] = [];
+    const h = await loadEditor({ upload: async (options) => { requests.push(options); return landed; } });
+    h.api.populateForm(fullPair());
+    h.editors[0]!.value('Erster Absatz.');
+    h.el('deBodyImgAlt').value = 'Cenote im Morgenlicht';
+    Reflect.set(h.el('deBodyImgFile'), 'files', [new File(['photo'], 'Cenote Ik Kil.jpg')]);
+    h.el('deBodyImgUpload').click();
+    for (let i = 0; i < 12; i++) await settle();
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({ ownerId: EDITOR_OWNER, fields: { key: 'trips/bukarest/cenote-ik-kil', alt: 'Cenote im Morgenlicht' } });
+    expect(h.editors[0]!.value()).toContain('![Cenote im Morgenlicht](https://img/uploaded)');
+    expect(h.api.buildPayload().de.images[landed.src]).toEqual({ width: 800, height: 600 });
+  });
+
+  it('inserts nothing when the account changed while a body upload was pending', async () => {
+    const h = await loadEditor({ upload: async ({ recovery }) => {
+      recovery.observeOwner('22222222-2222-4222-8222-222222222222');
+      return landed;
+    } });
+    h.api.populateForm(fullPair());
+    h.editors[0]!.value('Erster Absatz.');
+    Reflect.set(h.el('deBodyImgFile'), 'files', [new File(['photo'], 'Cenote Ik Kil.jpg')]);
+    h.el('deBodyImgUpload').click();
+    for (let i = 0; i < 12; i++) await settle();
+    expect(h.editors[0]!.value()).toBe('Erster Absatz.');
+    expect(h.api.buildPayload().de.images[landed.src]).toBeUndefined();
+  });
+
+  it('wires Suggest alt text for the two body-photo panels only', async () => {
+    const h = await loadEditor();
+    expect(h.altSuggestWires.map((wiring) => [wiring.button?.id, wiring.fileInput?.id, wiring.altInput?.id, wiring.statusEl?.id, wiring.lang])).toEqual([
+      ['deBodyImgSuggest', 'deBodyImgFile', 'deBodyImgAlt', 'deBodyImgStatus', 'de'],
+      ['enBodyImgSuggest', 'enBodyImgFile', 'enBodyImgAlt', 'enBodyImgStatus', 'en'],
+    ]);
+  });
+
+  it('resolves every label and description reference, and the excerpt has no field help', async () => {
+    const h = await loadEditor();
+    h.api.populateForm(fullPair());
+    expect(h.el('stopsList').querySelectorAll('.stop-row').length).toBeGreaterThan(0);
+    for (const node of h.document.querySelectorAll('[aria-describedby]')) {
+      for (const id of node.getAttribute('aria-describedby')!.split(/\s+/).filter(Boolean)) {
+        expect(h.document.getElementById(id), `${node.id || node.className} → #${id}`).not.toBeNull();
+      }
+    }
+    for (const label of h.document.querySelectorAll('label[for]')) {
+      expect(h.document.getElementById(label.getAttribute('for')!), `label for #${label.getAttribute('for')}`).not.toBeNull();
+    }
+    for (const locale of ['de', 'en']) {
+      expect(h.el(locale + 'Excerpt').hasAttribute('aria-describedby')).toBe(false);
+      expect(h.document.getElementById(locale + 'ExcerptHelp')).toBeNull();
+      expect(required(h.el(locale + 'ExcerptAssist'), '[data-excerpt-action="generate"]').getAttribute('aria-describedby')).toBe('excerpt-disclosure-' + locale);
+    }
   });
 });
 

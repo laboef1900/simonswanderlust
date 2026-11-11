@@ -60,10 +60,9 @@
     const profileLabel = (profile) => copy['profile.' + profile];
     const fill = (template, values) => template.replace(/\{(\w+)\}/g, (match, key) => (key in values ? String(values[key]) : match));
 
-    function decorateRow(row, { via = false, profile = 'car' } = {}) {
-      const box = doc.createElement('div');
-      box.className = 'stop-routing';
-
+    // Via point and Continue by join the row's controls line after Find
+    // coordinates; the profile note sits directly under that line (#569).
+    function decorateRow(controls, { via = false, profile = 'car' } = {}) {
       const viaLabel = doc.createElement('label');
       viaLabel.className = 'check-field stop-via-field';
       const viaInput = doc.createElement('input');
@@ -75,10 +74,14 @@
 
       const legLabel = doc.createElement('label');
       legLabel.className = 'stop-leg-field';
+      // Still the select's label (its accessible name); hidden so the controls
+      // fit one line in the inspector (#569). The tooltip repeats it for the mouse.
       const legText = doc.createElement('span');
+      legText.className = 'visually-hidden';
       legText.textContent = copy.legProfile;
       const select = doc.createElement('select');
       select.className = 'stop-profile';
+      select.title = copy.legProfile;
       for (const value of PROFILES) {
         const option = doc.createElement('option');
         option.value = value;
@@ -102,8 +105,8 @@
       const changed = () => { host.markDirty(); update(); };
       viaInput.addEventListener('change', changed);
       select.addEventListener('change', changed);
-      box.append(viaLabel, legLabel, last, note);
-      row.appendChild(box);
+      controls.append(viaLabel, legLabel, last);
+      controls.after(note);
     }
 
     /** Canonical routing fields of one row; the last row never carries a profile. */

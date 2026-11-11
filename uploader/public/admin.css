@@ -1436,10 +1436,38 @@ dialog.media-picker[open] { display: grid; grid-template-rows: auto minmax(0, 1f
 .stop-lat { grid-column: 1; grid-row: 2; }
 .stop-lng { grid-column: 2 / 4; grid-row: 2; }
 .stop-row .btn-remove { grid-column: 3; grid-row: 1; }
-.stop-lookup { grid-column: 1 / -1; min-width: 0; }
-.stop-search-status { margin-block: 0.5rem; }
+/* One controls line: Find coordinates (icon), Via point, Continue by (or the
+   last stop's note). It never wraps; editor-stop-route.css names the item that
+   shrinks. Lookup status, results and the profile note follow below (#569). */
+.stop-controls {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+/* Find coordinates: a square the size of the × remove, in the same stroke. */
+.stop-row .stop-search {
+  flex: none;
+  width: var(--control-h-sm);
+  min-height: var(--control-h-sm);
+  padding: 0;
+  line-height: 1;
+}
+.stop-search svg {
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+.stop-search-status { grid-column: 1 / -1; margin: 0; }
 .stop-search-status:empty { display: none; }
-.stop-search-results { display: grid; gap: 0.5rem; margin-top: 0.5rem; }
+.stop-search-results { grid-column: 1 / -1; display: grid; gap: 0.5rem; }
+.stop-search-results:empty { display: none; }
 .stop-search-result { justify-content: flex-start; width: 100%; text-align: left; white-space: normal; overflow-wrap: anywhere; }
 .stops-notes { margin-top: 0.75rem; font-size: 0.75rem; line-height: 1.45; }
 .stops-notes p { margin: 0 0 0.375rem; }
@@ -3167,7 +3195,7 @@ body.editor-page .editor-disclosure[open] > summary::after {
 }
 
 /* Hero image and title image share one box: white on the tinted inspector,
-   preview first, then alt text, status and the two disclosures. */
+   preview first, then alt text, status, the library action and framing. */
 body.editor-page .hero-banner-zone {
   display: grid;
   gap: 0.5rem;
@@ -3182,13 +3210,6 @@ body.editor-page .hero-fields > label { margin: 0.25rem 0 0; }
 body.editor-page .hero-banner-zone > .muted { margin: 0; }
 body.editor-page .hero-banner-zone > .muted:empty { display: none; }
 body.editor-page .hero-fields { display: grid; justify-items: start; gap: 0.5rem; }
-
-/* The alt text gets the inspector's full width; its suggest action follows. */
-body.editor-page .hero-alt-row {
-  display: grid;
-  justify-items: start;
-  gap: 0.5rem;
-}
 
 body.editor-page .keyfacts-editor,
 body.editor-page #stopsContainer { margin-top: 1.25rem; }
@@ -3206,16 +3227,14 @@ body.editor-page .hero-actions-row > button {
   padding-inline: 0.5rem;
 }
 
-/* Both image disclosures lay out only when open: a closed <details> still
+/* The framing disclosure lays out only when open: a closed <details> still
    hands its hidden content slot to a grid, which would add an empty gap. */
-body.editor-page :is(.hero-replace, .hero-focus)[open] {
+body.editor-page .hero-focus[open] {
   display: grid;
   justify-items: start;
   gap: 0.5rem;
   padding-bottom: 0.25rem;
 }
-
-body.editor-page .hero-replace > label { margin: 0; }
 
 /* A native file input accepts a dropped file; the dashed edge says so. */
 body.editor-page .hero-file-input {
@@ -3827,6 +3846,7 @@ body.editor-page .editor-field-help:empty { display: none; }
   background: var(--studio-accent-soft);
   color: var(--ink);
 }
+.excerpt-assist__note { margin: 0.375rem 0 0; color: var(--muted); font-size: 0.75rem; line-height: 1.45; }
 .excerpt-assist__status { margin-top: 0.375rem; font-size: 0.75rem; overflow-wrap: anywhere; }
 .excerpt-assist__status:empty { display: none; }
 .excerpt-assist__status p { margin: 0; }
