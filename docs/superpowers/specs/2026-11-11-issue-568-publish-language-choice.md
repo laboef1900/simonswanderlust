@@ -359,11 +359,10 @@ integration owner (AC9).
     `DESIGN.md`, `project-reference.md` updated in this branch.
 - [x] **AC9** Tests + checks — `uploader`: `npx tsc --noEmit`, `npm test` with
   `TEST_DATABASE_URL` (integration suites not skipped); `site`: `npm test`, `npx astro check` with
-  `DATABASE_URL`. Evidence (rebased on `dev` eca8fa9, disposable PostgreSQL 18, native ownership
-  addon built, `pg_dump` 18.6 on PATH): `tsc` clean; uploader 183 files / 5310 tests, none
-  skipped — all passed except one busy-focus assertion that the second review fix changed, after
-  which `editor-dom.test.ts` passed in full; site 56 files / 934 tests passed; `astro check` 155
-  files, 0 errors/warnings/hints. CI reruns both required checks on the final commit.
+  `DATABASE_URL`. Evidence on the final code (35a6fb8, rebased on `dev` f88b4b6; disposable
+  PostgreSQL 18, native ownership addon built, `pg_dump` 18.6 on PATH): `tsc` clean; uploader
+  185 files / 5535 tests passed, none skipped, no timeouts; site 56 files / 934 tests passed;
+  `astro check` 155 files, 0 errors/warnings/hints.
 - [x] **AC10** Visual verification desktop + narrow — browser B1–B8 screenshots (dialog at 1440,
   390 and 320×568 px — scrolls within the viewport, full-width footer buttons, no horizontal
   overflow; coarse pointer: 24px checkboxes, 44px footer buttons). Impeccable detector: only
@@ -437,8 +436,9 @@ integration owner (AC9).
   Evidence: PD › `never populates the primary or a published secondary as held back` (local draft
   restore and direct populate, both primaries, tab chips), `keeps the current coverage when a
   revision is restored (secondary held back now: %s)` (payload, tab chip, checklist).
-- [ ] **CI** Required checks green on the final commit: `site · tests + astro check`,
-  `uploader · typecheck + tests`.
+- [x] **CI** Required checks green on the final commit: `site · tests + astro check`,
+  `uploader · typecheck + tests`. Evidence: both green on 35a6fb8 (run 43111962149); this
+  docs-only tracker commit's run is reported on the PR.
 - [x] **REVIEW** `/review` findings resolved or rebutted in the PR; fixes re-reviewed. Evidence:
   PR review by `PrReview574d` (`anthropic/claude-opus-5-5`; earlier attempts on
   `anthropic/claude-fable-5-2` and `openai-codex/gpt-6-astra` failed on provider limits): 8 INFO
