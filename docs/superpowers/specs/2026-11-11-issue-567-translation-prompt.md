@@ -67,8 +67,8 @@ A short amendment note on the #550 spec records both changes.
 | Field | `translationPrompt: string` in `Settings` (`uploader/src/settings.ts`) |
 | Default | `DEFAULT_TRANSLATION_PROMPT` in `uploader/src/translation-prompt.ts`: `Preserve meaning, facts, names and detail; do not summarize, omit or invent content.` |
 | Cap | `TRANSLATION_PROMPT_MAX_LENGTH = 4000` UTF-16 code units (`String.length`). This is the unit of the 100 000-character slot budget and of browser textarea length, and every layer uses it, including the visible counter. |
-| Valid | `typeof v === 'string'`, `v.trim() !== ''` and `v.length <= 4000`. No coercion: numbers, booleans, `null`, arrays and objects are rejected, never passed through `String()`. Newlines and tabs are allowed. The value is stored verbatim (not trimmed). |
-| Error (fixed, never echoes the value) | `Translation instructions are required and must be a string of at most 4000 characters.` |
+| Valid | `typeof v === 'string'` and `v.length <= 4000`. The value is **visible plain text**: it contains no C0/C1 control characters other than tab, newline and carriage return, no lone surrogates, and at least one character that is not whitespace, a control or an invisible format character (`\p{Cf}`, for example a zero-width space or soft hyphen). Format characters are allowed next to visible text, as in emoji ZWJ sequences. No coercion: numbers, booleans, `null`, arrays and objects are rejected, never passed through `String()`. The value is stored verbatim (not trimmed). |
+| Error (fixed, never echoes the value) | `Translation instructions are required and must be visible plain text of at most 4000 characters.` |
 
 **Empty prompt: rejected** (owner decision, 2026-11-11). The default carries the detailed
 fidelity rules (no summarizing, omitting or inventing). Clearing the field would silently drop
@@ -174,8 +174,9 @@ validation are. As the final instruction, the suffix also gains recency preceden
 4. **Article text injects instructions against the house prompt.** Unchanged from #550: the
    guard comes after the owner text and output validation is structural.
 5. **Non-admin authors.** They cannot change the prompt, and reading it grants nothing.
-6. **Oversize or wrong type** (number, `null`, array, object, 4001 characters, whitespace
-   only).
+6. **Oversize, wrong type or invisible** (number, `null`, array, object, 4001 characters,
+   whitespace only, zero-width or other invisible-only text, control characters, lone
+   surrogates).
    - `POST /settings` returns a 400 with the fixed message and leaves the stored value
      unchanged.
    - A hand-edited `settings.json` falls back to the default for that field only. The existing
@@ -382,3 +383,29 @@ L408-413, and found no new blocking issues. Its non-blocking notes were adopted:
 
 The acceptance checklist is kept in the PR body. This approval covers the design only. The
 owner's approval before merge still applies.
+
+## PR review record
+
+On PR #571, independent `PrReview571` (`reviewer`) and `SecReview571` (`security-reviewer`),
+both `anthropic/claude-fable-5-2`, each returned **VERDICT: APPROVE**. They reported no
+CRITICAL or WARNING findings, only INFO notes.
+
+**Adopted:**
+- **Security INFO-1:** "non-blank" accepted invisible-only text (zero-width space, word joiner,
+  soft hyphen), which would silently drop the fidelity default. Controls and lone surrogates
+  were also accepted. Fixed: the shared rule now requires visible plain text (see *Setting*).
+  It is mirrored in `llm.js`, and the server, transport, parity and Settings tests cover it.
+  This tightens the approved rule in the direction of the approved empty-prompt decision, so it
+  went back for review together with the other fixes.
+- **Security INFO-3:** the always-visible Settings privacy sentence now names the instructions.
+- **Code review 1:** amendment notes on the registry spec and in `project-reference.md`.
+- **Code review 2:** `security-and-operations.md` now says "admin-editable, readable by authors".
+- **Code review 4:** removed a tautological baseline assertion.
+
+**Not adopted:**
+- **Security INFO-2** (showing the instructions in the editor dialog): the spec already accepts
+  this, and on a single-author install the author is the admin.
+- **Code review 3** (regex pins on the markup for `required`, initial `disabled` and no
+  `maxlength`): this would test source text, not behaviour. The real-browser run confirmed
+  `required` is true and `maxLength` is -1. Reset ships `disabled` in the markup, the DOM tests
+  cover enabling it from a usable default, and the no-truncation decision is documented here.

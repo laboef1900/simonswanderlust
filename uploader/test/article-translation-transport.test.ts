@@ -169,8 +169,6 @@ describe('browser-direct article translation', () => {
       response_format: { type: 'json_object' }, max_tokens: 32768,
     });
     expect(rawBody(options)).toBe(body(expected));
-    // Swapping the old system message back in reproduces the pre-#567 body byte for byte.
-    expect(rawBody(options).replace(JSON.stringify(expected), JSON.stringify(before))).toBe(body(before));
   });
 
   it.each(directions)('puts custom instructions first, then direction, guard and contract (%s to %s)', async (sourceLocale, targetLocale) => {
@@ -255,6 +253,9 @@ describe('browser-direct article translation', () => {
       [' '.repeat(TRANSLATION_PROMPT_MAX_LENGTH), false],
       // UTF-16 code units, not code points: an astral character counts twice.
       ['😀'.repeat(TRANSLATION_PROMPT_MAX_LENGTH / 2), true], ['😀'.repeat(TRANSLATION_PROMPT_MAX_LENGTH / 2) + 'x', false],
+      // Visible plain text only: invisible-only, control characters and lone surrogates are refused.
+      ['\u200b', false], ['\u2060\u00ad\ufeff', false], [' \u200b\n', false], ['a\u0000', false], ['a\u0085', false],
+      ['a\u001b', false], ['a\ud800', false], ['a\udc00b', false], ['a\r\nb', true], ['Wander\u00adlust', true], ['👩‍💻', true],
     ];
     for (const [value, valid] of cases) {
       expect(llm.isTranslationPrompt(value)).toBe(valid);

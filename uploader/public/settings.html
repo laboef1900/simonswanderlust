@@ -1457,7 +1457,7 @@
           $('translationAdvanced').open = true;
           $('aiOut').textContent = '';
           AdminField.invalid($('translationPrompt'), translationPromptText(
-            $('translationPrompt').value.trim() ? 'settingsTranslationPromptTooLong' : 'settingsTranslationPromptRequired'));
+            $('translationPrompt').value.length > LLM.TRANSLATION_PROMPT_MAX_LENGTH ? 'settingsTranslationPromptTooLong' : 'settingsTranslationPromptRequired'));
           return;
         }
         clearReviewTest();

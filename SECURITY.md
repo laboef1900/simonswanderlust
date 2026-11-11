@@ -1096,8 +1096,8 @@ When local fragment links exist, all headings remain unchanged to preserve gener
 Provider-created autolinks are rejected rather than weakening structural preservation.
 
 The system message begins with the admin-editable **translation instructions**
-(`translationPrompt`, #567). This is trusted owner configuration: house style only, a non-empty
-string of at most 4000 UTF-16 units, validated without coercion by the settings API, the settings
+(`translationPrompt`, #567). This is trusted owner configuration: house style only, visible plain
+text (no control characters or invisible-only content) of at most 4000 UTF-16 units, validated without coercion by the settings API, the settings
 loader, the browser transport and the editor's consent descriptor. Code always appends three
 fixed parts after it: the faithful-translation direction, the guard that marks article text as
 untrusted, and the exact JSON slot contract. The instructions cannot change what the parser or

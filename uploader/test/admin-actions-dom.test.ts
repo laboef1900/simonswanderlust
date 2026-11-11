@@ -3737,6 +3737,7 @@ describe('settings.html translation instructions', () => {
   it.each([
     ['blank', '', EDITOR_COPY.settingsTranslationPromptRequired],
     ['whitespace-only', ' \n\t ', EDITOR_COPY.settingsTranslationPromptRequired],
+    ['invisible-only', '\u200b\u2060', EDITOR_COPY.settingsTranslationPromptRequired],
     ['over-limit', 'x'.repeat(MAX + 1),
       EDITOR_COPY.settingsTranslationPromptTooLong!.replace('{max}', String(MAX)).replace('{over}', '1')],
   ])('refuses %s instructions under the field without a request, and typing clears the error', async (_name, value, message) => {

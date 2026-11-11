@@ -8,8 +8,8 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
   2026-11-11, high risk; design, scoped AI-approval exception and review record in
   `docs/superpowers/specs/2026-11-11-issue-567-translation-prompt.md`).
   - **Setting.** `settings.json` gains `translationPrompt` (default
-    `DEFAULT_TRANSLATION_PROMPT` in `uploader/src/translation-prompt.ts`). It is non-empty,
-    at most 4000 UTF-16 units and never coerced.
+    `DEFAULT_TRANSLATION_PROMPT` in `uploader/src/translation-prompt.ts`). It must be visible
+    plain text of at most 4000 UTF-16 units and is never coerced.
   - **Settings UI.** Under Article translation → Advanced settings, with a character count,
     an inline error and **Reset instructions to default**.
   - **`/ai-config?purpose=translation`** now also returns `prompt`.

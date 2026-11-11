@@ -360,10 +360,17 @@ window.LLM = (function () {
     }
   }
 
-  /** #567: one rule for every browser reader of the translation instructions; mirrors the server's `isTranslationPrompt`. */
+  /**
+   * #567: one rule for every browser reader of the translation instructions; mirrors
+   * the server's `isTranslationPrompt`: visible plain text (no controls other than
+   * tab/newline/CR, no lone surrogates, not only whitespace or invisible format
+   * characters), at most 4000 UTF-16 units.
+   */
   const TRANSLATION_PROMPT_MAX_LENGTH = 4000;
   function isTranslationPrompt(value) {
-    return typeof value === 'string' && value.trim() !== '' && value.length <= TRANSLATION_PROMPT_MAX_LENGTH;
+    return typeof value === 'string' && value.length <= TRANSLATION_PROMPT_MAX_LENGTH &&
+      !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(value) && !/\p{Cs}/u.test(value) &&
+      /[^\s\p{Cc}\p{Cf}]/u.test(value);
   }
 
   /**

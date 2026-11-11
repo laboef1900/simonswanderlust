@@ -151,7 +151,7 @@ const FIELD_CHECKS: { [K in keyof Settings]: (v: unknown) => string | null } = {
     intInRange(v, 5000, 300000) ? null : 'Translation timeout must be a whole number of milliseconds between 5000 and 300000.',
   // Fixed message: the reason is logged and sent to the client, the value never is.
   translationPrompt: (v) => isTranslationPrompt(v)
-    ? null : 'Translation instructions are required and must be a string of at most 4000 characters.',
+    ? null : 'Translation instructions are required and must be visible plain text of at most 4000 characters.',
   lmModel: (v) => (typeof v === 'string' && v.trim() !== '' ? null : 'Model is required.'),
   captionTimeoutMs: (v) =>
     intInRange(v, 1000, 600000) ? null : 'Timeout must be a whole number of milliseconds between 1000 and 600000.',

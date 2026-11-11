@@ -2189,7 +2189,7 @@ describe('article translation assignment API', () => {
     } finally { await b.app.close(); }
   });
 
-  const PROMPT_ERROR = 'Translation instructions are required and must be a string of at most 4000 characters.';
+  const PROMPT_ERROR = 'Translation instructions are required and must be visible plain text of at most 4000 characters.';
   const PROMPT_MARKER = 'PRIVATE-PROMPT-MARKER';
   const CUSTOM_PROMPT = "  Use informal 'du' in German.\n\tKeep place names in the local spelling.  ";
 
@@ -2237,6 +2237,8 @@ describe('article translation assignment API', () => {
     ['an empty string', '', undefined],
     ['whitespace only', ' \n\t ', undefined],
     ['4001 characters', PROMPT_MARKER + 'x'.repeat(TRANSLATION_PROMPT_MAX_LENGTH + 1 - PROMPT_MARKER.length), PROMPT_MARKER],
+    ['only a zero-width space', '\u200b', undefined],
+    ['a NUL control character', PROMPT_MARKER + '\u0000', PROMPT_MARKER],
   ] as const)('refuses %s as translation instructions with the fixed 400, storing and echoing nothing', async (_name, value, leak) => {
     const settings = fakeStore({ ...SETTINGS, translationPrompt: CUSTOM_PROMPT });
     const b = build({ settings });

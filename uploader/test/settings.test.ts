@@ -534,7 +534,7 @@ describe('article translation assignment lifecycle', () => {
 });
 
 describe('article translation instructions (#567)', () => {
-  const MESSAGE = 'Translation instructions are required and must be a string of at most 4000 characters.';
+  const MESSAGE = 'Translation instructions are required and must be visible plain text of at most 4000 characters.';
   const MARKER = 'PRIVATE-PROMPT-MARKER';
   const withPrompt = (translationPrompt: unknown) => ({ ...DEFAULTS, translationPrompt }) as unknown as Settings;
   const failure = (run: () => unknown): unknown => {
@@ -552,6 +552,10 @@ describe('article translation instructions (#567)', () => {
     ['whitespace only', ' \n\t '],
     ['4001 characters', MARKER + 'x'.repeat(TRANSLATION_PROMPT_MAX_LENGTH + 1 - MARKER.length), MARKER],
     ['4001 UTF-16 code units of astral characters', '😀'.repeat(TRANSLATION_PROMPT_MAX_LENGTH / 2) + 'x'],
+    ['only invisible format characters', '\u200b\u2060\u00ad\ufeff'],
+    ['a NUL control character', 'Keep it formal.\u0000'],
+    ['a C1 control character', 'Keep it formal.\u0085'],
+    ['a lone surrogate', 'Keep it formal.\ud800'],
   ];
 
   it('defaults to the fidelity rules, which pass their own validation', () => {
@@ -573,6 +577,9 @@ describe('article translation instructions (#567)', () => {
     expect(validate(withPrompt(astral)).translationPrompt).toBe(astral);
     const multiline = "  Use informal 'du' in German.\n\tKeep place names in the local spelling.\r\n\n- km, not miles  ";
     expect(validate(withPrompt(multiline)).translationPrompt).toBe(multiline);
+    // Format characters are fine beside visible text (an emoji ZWJ sequence, a soft hyphen).
+    const joined = 'Use 👩‍💻 as written; Wander\u00adlust.';
+    expect(validate(withPrompt(joined)).translationPrompt).toBe(joined);
   });
 
   it.each(INVALID)('load replaces %s in the file with the default for that field only and never logs the file value', async (_name, value, leak) => {
