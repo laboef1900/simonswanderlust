@@ -256,10 +256,25 @@ describe('browser-direct article translation', () => {
       // Visible plain text only: invisible-only, control characters and lone surrogates are refused.
       ['\u200b', false], ['\u2060\u00ad\ufeff', false], [' \u200b\n', false], ['a\u0000', false], ['a\u0085', false],
       ['a\u001b', false], ['a\ud800', false], ['a\udc00b', false], ['a\r\nb', true], ['Wander\u00adlust', true], ['👩‍💻', true],
+      ['a\u0008', false], ['a\u000b', false], ['a\u000c', false], ['a\u000e', false], ['a\u001f', false], ['a\u007f', false],
+      ['a\u009f', false], ['\t\n\r', false], ['a\u00a0', true], ['a\u2028b', true], ['✈️', true],
+      // Default-ignorable fillers and the blank Braille pattern are not visible text either.
+      ['\u3164', false], ['\u115f\u1160', false], ['\uffa0', false], ['\u034f', false], ['\ufe0f', false], ['\u2800', false],
     ];
     for (const [value, valid] of cases) {
       expect(llm.isTranslationPrompt(value)).toBe(valid);
       expect(isTranslationPrompt(value)).toBe(valid);
     }
+  });
+
+  it('agrees with the server on every BMP code unit, alone and beside visible text', () => {
+    const llm = client(async () => reply());
+    const disagreements: string[] = [];
+    for (let unit = 0; unit <= 0xffff; unit++) {
+      for (const value of [String.fromCharCode(unit), 'a' + String.fromCharCode(unit)]) {
+        if (llm.isTranslationPrompt(value) !== isTranslationPrompt(value)) disagreements.push(JSON.stringify(value));
+      }
+    }
+    expect(disagreements).toEqual([]);
   });
 });

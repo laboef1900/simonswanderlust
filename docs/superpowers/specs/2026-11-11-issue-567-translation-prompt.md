@@ -67,7 +67,7 @@ A short amendment note on the #550 spec records both changes.
 | Field | `translationPrompt: string` in `Settings` (`uploader/src/settings.ts`) |
 | Default | `DEFAULT_TRANSLATION_PROMPT` in `uploader/src/translation-prompt.ts`: `Preserve meaning, facts, names and detail; do not summarize, omit or invent content.` |
 | Cap | `TRANSLATION_PROMPT_MAX_LENGTH = 4000` UTF-16 code units (`String.length`). This is the unit of the 100 000-character slot budget and of browser textarea length, and every layer uses it, including the visible counter. |
-| Valid | `typeof v === 'string'` and `v.length <= 4000`. The value is **visible plain text**: it contains no C0/C1 control characters other than tab, newline and carriage return, no lone surrogates, and at least one character that is not whitespace, a control or an invisible format character (`\p{Cf}`, for example a zero-width space or soft hyphen). Format characters are allowed next to visible text, as in emoji ZWJ sequences. No coercion: numbers, booleans, `null`, arrays and objects are rejected, never passed through `String()`. The value is stored verbatim (not trimmed). |
+| Valid | `typeof v === 'string'` and `v.length <= 4000`. The value must be **visible plain text**. It contains no C0 control characters other than tab, newline and carriage return, no DEL or C1 control characters (U+007F–U+009F) and no lone surrogates. It must also contain at least one character that is not whitespace, a control, an invisible format character (`\p{Cf}`, for example a zero-width space or soft hyphen), a default-ignorable code point (for example a Hangul filler or a variation selector) or the blank Braille pattern U+2800. Format characters are allowed next to visible text, as in emoji ZWJ sequences. Because of that, the rule does **not** guarantee "no hidden content": pasted text can still carry invisible sequences next to visible ones. The trusted-owner model and the review before Apply bound that risk. No coercion: numbers, booleans, `null`, arrays and objects are rejected, never passed through `String()`. The value is stored verbatim, not trimmed. In the browser, `LLM.translationPromptProblem` classifies a failure as `tooLong`, `blank` or `hidden` so Settings can name it. |
 | Error (fixed, never echoes the value) | `Translation instructions are required and must be visible plain text of at most 4000 characters.` |
 
 **Empty prompt: rejected** (owner decision, 2026-11-11). The default carries the detailed
@@ -148,7 +148,7 @@ validation are. As the final instruction, the suffix also gains recency preceden
 
 | Input | Trust | Controls |
 |---|---|---|
-| `translationPrompt` | **Trusted owner configuration.** Only admins write it (`POST /settings`). Any authenticated author can read it through `/ai-config`, as they already read `reviewPrompt`. | Type, blank and length validation at the API, at load, in the browser transport and in `describe()`. The code-owned suffix is appended after it. It is not a secret: the help text says it is sent to the provider. |
+| `translationPrompt` | **Trusted owner configuration.** Only admins write it (`POST /settings`). Any authenticated author can read it through `/ai-config`, as they already read `reviewPrompt`. | Type, length and visible-plain-text validation at the API, at load, in the browser transport, in `describe()` and in Settings. The code-owned suffix is appended after it. It is not a secret: the help text says it is sent to the provider. |
 | Article slots (title, excerpt, prose, local image text) | **Untrusted** user content, unchanged from #550 | JSON user message, guard sentence, strict `parse()`, server structural validation, entity escaping, human review before Apply |
 | Model output | **Untrusted** | Unchanged: `parse()` and `/translation/validate` decide what is accepted |
 
@@ -277,7 +277,7 @@ Placement mirrors Review's prompt. Everything goes inside Article translation's 
 ### Save and errors
 
 - **Save AI settings** sends `translationPrompt` verbatim.
-- Before any request, a blank or over-limit value is caught locally:
+- Before any request, an invalid value is caught locally. A value over the limit shows `settingsTranslationPromptTooLong`. A value that is blank or invisible-only shows `settingsTranslationPromptRequired`. Visible text carrying a hidden control character or lone surrogate shows `settingsTranslationPromptHidden`, which names pasted text as the usual source. Settings then:
   1. the disclosure opens;
   2. `AdminField.invalid($('translationPrompt'), message)` shows the documented inline
      `.field-error` line under the field, sets `aria-invalid` and `aria-describedby`, and
@@ -325,7 +325,7 @@ Placement mirrors Review's prompt. Everything goes inside Article translation's 
 | `/ai-config?purpose=translation` exact new shape (local and remote) | `server.test.ts`, `admin-actions-dom.test.ts`, `main-boot.integration.test.ts` (with `TEST_DATABASE_URL`) |
 | Default equivalence against the literal pre-#567 baseline (both directions), custom and style-only prompt plus fixed suffix in order, invalid prompt rejected before fetch, 4000 accepted and 4001 rejected against the server constant, conflicting-format prompt still rejected by `parse()` | `uploader/test/article-translation-transport.test.ts` |
 | Prompt passed to the transport; prompt change → `translationConfigChanged` with zero model calls until another click; invalid or missing prompt → config failure | `uploader/test/editor-dom.test.ts` |
-| Settings UI: fill on load, save payload, Reset (value, unsaved state, focus, status), blank and over-limit client validation (inline error line, `aria-invalid`, `aria-describedby`, focus, open disclosure, no request), counter text | `uploader/test/admin-actions-dom.test.ts`. Where the DOM harness cannot dispatch bubbling events, it is extended; the real browser check is authoritative for the unsaved state. |
+| Settings UI: fill on load, save payload, Reset (value, unsaved state, focus, status), and client validation for blank, invisible-only, hidden-control and over-limit values (inline error line with the matching message, `aria-invalid`, `aria-describedby`, focus, open disclosure, no request), counter text | `uploader/test/admin-actions-dom.test.ts`. Where the DOM harness cannot dispatch bubbling events, it is extended; the real browser check is authoritative for the unsaved state. |
 | DE/EN copy completeness | site `npm test` (`ui.ts` completeness) and `npx astro check` |
 | Full suites | uploader `npx tsc --noEmit` and `npm test` with a local Postgres `TEST_DATABASE_URL` (and `pg_dump` 18 on `PATH`); site `npm test` and `npx astro check` |
 | Real browser | Local Postgres plus the `uploader` dev server. Settings flow: default, edit, save, reload, blank and oversize errors, Reset, keyboard and focus, 390 px. Editor translation against a local OpenAI-compatible stub that records the system message. A prompt change between disclosure and run → `translationConfigChanged`. |
@@ -409,3 +409,25 @@ CRITICAL or WARNING findings, only INFO notes.
   `maxlength`): this would test source text, not behaviour. The real-browser run confirmed
   `required` is true and `maxLength` is -1. Reset ships `disabled` in the markup, the DOM tests
   cover enabling it from a usable default, and the no-truncation decision is documented here.
+
+**Fix review (commit `4334104`).** Both agents re-reviewed the fix commit.
+
+- The code reviewer returned **APPROVE**, with INFO notes:
+  - default-ignorable fillers (U+3164, U+FE0F, U+2800) still passed as visible;
+  - a hidden control character inside visible text got the "enter instructions" message;
+  - some wording was stale.
+- The security reviewer returned **COMMENT**. Its WARNING was the same message regression. Its
+  INFO notes asked for:
+  - class-boundary parity tests;
+  - updated doc wording;
+  - a note that format characters next to visible text can still hide content.
+
+All of these were adopted in the follow-up commit:
+
+- the visible class now excludes default-ignorable code points and U+2800;
+- `LLM.translationPromptProblem` classifies failures, and the new
+  `settingsTranslationPromptHidden` copy (DE/EN) names a hidden control character;
+- a parity test sweeps every BMP code unit alone and next to a letter through both mirrors;
+- the Settings tests cover the hidden-control case and the over-limit plus hidden-control case;
+- the spec, `SECURITY.md`, `ARCHITECTURE.md`, `uploader/README.md` and the registry amendment
+  are reworded.

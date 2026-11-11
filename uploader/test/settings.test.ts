@@ -553,6 +553,7 @@ describe('article translation instructions (#567)', () => {
     ['4001 characters', MARKER + 'x'.repeat(TRANSLATION_PROMPT_MAX_LENGTH + 1 - MARKER.length), MARKER],
     ['4001 UTF-16 code units of astral characters', '😀'.repeat(TRANSLATION_PROMPT_MAX_LENGTH / 2) + 'x'],
     ['only invisible format characters', '\u200b\u2060\u00ad\ufeff'],
+    ['only default-ignorable fillers', '\u3164\ufe0f\u2800'],
     ['a NUL control character', 'Keep it formal.\u0000'],
     ['a C1 control character', 'Keep it formal.\u0085'],
     ['a lone surrogate', 'Keep it formal.\ud800'],

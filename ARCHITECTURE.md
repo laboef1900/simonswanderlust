@@ -794,8 +794,8 @@ authoritative. Unsupported source and locally targeted headings remain unchanged
 `public/editor-translation.js` owns explicit consent, current-draft/configuration checks,
 review and replacement confirmation. `LLM.translateArticle` sends only text slots from the
 browser in one bounded attempt. Its system message is the admin-editable `translationPrompt`
-(`settings.json`, #567; default in `src/translation-prompt.ts`, at most 4000 characters, never
-empty), followed by a code-owned suffix: the faithful-translation direction, the
+(`settings.json`, #567; default in `src/translation-prompt.ts`; visible plain text of at most
+4000 characters), followed by a code-owned suffix: the faithful-translation direction, the
 untrusted-input guard and the JSON slot contract. The prompt is part of the consent descriptor,
 so a change requires a new explicit click. Application uses a deferred-sync source transaction in
 `editor-rich-bridge.js`, updates only the target allowlist, and preserves failed-commit

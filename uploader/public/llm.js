@@ -362,15 +362,23 @@ window.LLM = (function () {
 
   /**
    * #567: one rule for every browser reader of the translation instructions; mirrors
-   * the server's `isTranslationPrompt`: visible plain text (no controls other than
-   * tab/newline/CR, no lone surrogates, not only whitespace or invisible format
-   * characters), at most 4000 UTF-16 units.
+   * the server's `isTranslationPrompt`: visible plain text of at most 4000 UTF-16
+   * units, with no controls other than tab/newline/CR, no lone surrogates, and at
+   * least one character that is not whitespace, a control, a format character, a
+   * default-ignorable code point or the blank Braille pattern.
+   * `translationPromptProblem` names why a value fails, for the Settings message:
+   * 'type' | 'tooLong' | 'blank' | 'hidden' (a control or lone surrogate in otherwise visible text).
    */
   const TRANSLATION_PROMPT_MAX_LENGTH = 4000;
+  function translationPromptProblem(value) {
+    if (typeof value !== 'string') return 'type';
+    if (value.length > TRANSLATION_PROMPT_MAX_LENGTH) return 'tooLong';
+    if (!/[^\s\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}\u2800]/u.test(value)) return 'blank';
+    if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(value) || /\p{Cs}/u.test(value)) return 'hidden';
+    return null;
+  }
   function isTranslationPrompt(value) {
-    return typeof value === 'string' && value.length <= TRANSLATION_PROMPT_MAX_LENGTH &&
-      !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(value) && !/\p{Cs}/u.test(value) &&
-      /[^\s\p{Cc}\p{Cf}]/u.test(value);
+    return translationPromptProblem(value) === null;
   }
 
   /**
@@ -766,6 +774,6 @@ window.LLM = (function () {
   return {
     parseCaption, listModels, prepImage, caption, mixedContentWarning, parseEditorialReview, reviewStory,
     parseExcerptSuggestion, suggestExcerpt, parsePhotoDetails, describePhoto, translateArticle,
-    TRANSLATION_PROMPT_MAX_LENGTH, isTranslationPrompt,
+    TRANSLATION_PROMPT_MAX_LENGTH, isTranslationPrompt, translationPromptProblem,
   };
 })();

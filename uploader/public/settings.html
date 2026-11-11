@@ -1452,12 +1452,14 @@
 
       $('saveAi').addEventListener('click', async () => {
         if (!saved || $('aiFields').disabled) return;
-        if (!LLM.isTranslationPrompt($('translationPrompt').value)) {
+        const promptProblem = LLM.translationPromptProblem($('translationPrompt').value);
+        if (promptProblem) {
           // Caught before anything is sent; the text stays for the owner to fix.
           $('translationAdvanced').open = true;
           $('aiOut').textContent = '';
           AdminField.invalid($('translationPrompt'), translationPromptText(
-            $('translationPrompt').value.length > LLM.TRANSLATION_PROMPT_MAX_LENGTH ? 'settingsTranslationPromptTooLong' : 'settingsTranslationPromptRequired'));
+            promptProblem === 'tooLong' ? 'settingsTranslationPromptTooLong'
+              : promptProblem === 'hidden' ? 'settingsTranslationPromptHidden' : 'settingsTranslationPromptRequired'));
           return;
         }
         clearReviewTest();

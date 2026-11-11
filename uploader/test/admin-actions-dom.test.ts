@@ -2226,11 +2226,14 @@ function settingsResponse(overrides: Partial<SettingsResponse> = {}): SettingsRe
 // Settings checks translation instructions with the browser's own rule, so the
 // harness takes it from the real llm.js rather than restating it (its top-level
 // body only assigns window.LLM).
-const browserLlm: { LLM?: { TRANSLATION_PROMPT_MAX_LENGTH: number; isTranslationPrompt(value: unknown): boolean } } = {};
+const browserLlm: { LLM?: {
+  TRANSLATION_PROMPT_MAX_LENGTH: number; isTranslationPrompt(value: unknown): boolean; translationPromptProblem(value: unknown): string | null;
+} } = {};
 vm.runInNewContext(readFileSync('public/llm.js', 'utf8'), { window: browserLlm });
 const TRANSLATION_PROMPT_RULE = {
   TRANSLATION_PROMPT_MAX_LENGTH: browserLlm.LLM!.TRANSLATION_PROMPT_MAX_LENGTH,
   isTranslationPrompt: browserLlm.LLM!.isTranslationPrompt,
+  translationPromptProblem: browserLlm.LLM!.translationPromptProblem,
 };
 
 function loadSettingsPage(extra: Record<string, unknown> = {}) {
@@ -3738,6 +3741,9 @@ describe('settings.html translation instructions', () => {
     ['blank', '', EDITOR_COPY.settingsTranslationPromptRequired],
     ['whitespace-only', ' \n\t ', EDITOR_COPY.settingsTranslationPromptRequired],
     ['invisible-only', '\u200b\u2060', EDITOR_COPY.settingsTranslationPromptRequired],
+    ['hidden-control', 'Line one\u000bLine two', EDITOR_COPY.settingsTranslationPromptHidden],
+    ['over-limit with a hidden control', '\u000b' + 'x'.repeat(MAX),
+      EDITOR_COPY.settingsTranslationPromptTooLong!.replace('{max}', String(MAX)).replace('{over}', '1')],
     ['over-limit', 'x'.repeat(MAX + 1),
       EDITOR_COPY.settingsTranslationPromptTooLong!.replace('{max}', String(MAX)).replace('{over}', '1')],
   ])('refuses %s instructions under the field without a request, and typing clears the error', async (_name, value, message) => {

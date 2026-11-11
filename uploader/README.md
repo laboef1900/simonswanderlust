@@ -24,7 +24,7 @@ If Visual initialization fails, the Markdown editor remains available.
 non-omitted language of the same story. Configure its independent provider/model/timeout
 under Settings → AI models → Article translation. **Advanced settings → Translation
 instructions** sets house style (tone, form of address, glossary, place names, units), up to
-4000 characters. It cannot be empty, and **Reset instructions to default** restores the
+4000 characters. It must contain visible text. Hidden control characters, which pasted text sometimes carries, are refused. **Reset instructions to default** restores the
 default. The language direction, the untrusted-article guard and the JSON output format are
 always appended by code and cannot be changed there. The instructions are sent to the
 provider with every request. Opening the dialog is free of inference;
