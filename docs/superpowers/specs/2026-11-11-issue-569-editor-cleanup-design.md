@@ -340,3 +340,19 @@ local (Golden Rule 5).
   (adopted in the test); Find coordinates reads "Finding location…" during a lookup so Via
   point shifts a few pixels (accepted: existing label behaviour, transient, no overlap).
 - **Verdict:** `VERDICT: APPROVED`.
+
+## PR review follow-ups (PR #572)
+
+PR review (fresh `reviewer` agent, verdict APPROVE, five INFO items) — all adopted:
+
+1. `docs/authoring-workflow.md` upload-receipt sentence no longer lists hero/title-image uploads.
+2. #304 spec note: "Body image, About and the Media queue" (the picker only browses).
+3. Docs no longer say hero alt "is written … in Media": it is typed in the field, and a library
+   pick copies the Media alt only into an empty field (`DESIGN.md`, `ARCHITECTURE.md`,
+   `docs/authoring-workflow.md`).
+4. The hero and title-image **Choose from library** buttons get `aria-describedby` pointing at
+   their section summary (`xxHeroLabel`, `xxTitleImageHeading`), so the missing-hero jump
+   target announces which image it changes. Accessible description only; no visual, copy,
+   layout or behaviour change, so not a material design change (no design re-review needed).
+5. `editor-excerpt.test.ts` pins the assist order actions → note → status → suggestion in idle
+   and busy states.

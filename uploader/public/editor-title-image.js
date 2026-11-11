@@ -25,7 +25,7 @@
         </div>
         <p class="muted" id="${prefix}Status" role="status"></p>
         <div class="hero-actions-row">
-          <button type="button" class="btn-secondary" id="${prefix}Library" data-copy="library"></button>
+          <button type="button" class="btn-secondary" id="${prefix}Library" data-copy="library" aria-describedby="${prefix}Heading"></button>
           <button type="button" class="btn-secondary" id="${prefix}Remove" data-copy="remove" hidden></button>
         </div>
         <details class="editor-disclosure hero-focus" id="${prefix}Focus" hidden>

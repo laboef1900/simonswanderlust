@@ -1400,8 +1400,9 @@ criterion (2.5.5 is AAA), so the accessibility commitment in `PRODUCT.md` is una
 - Hero image and title image are collapsible inspector sections (closed by default) with
   one box: a white panel with preview, alt text, status, then **Choose from library**
   (always visible, no upload; the title image adds **Remove title image**) and **Adjust
-  framing**. A closed section shows a small thumbnail of its photo beside Show. Alt text is
-  written here or in Media; the hero has no AI alt suggestion (body photos keep theirs).
+  framing**. A closed section shows a small thumbnail of its photo beside Show. Hero alt text
+  is typed here (a pick copies the photo's Media alt only into an empty field); the hero has
+  no AI alt suggestion (body photos keep theirs).
 - Excerpts grow with their text; no inner scrollbar or resize grip.
 - The slug's site prefix sits above the slug in the inspector, so neither half truncates.
   A published, disabled permalink is styled as a quiet reference; editable slugs retain a field boundary.

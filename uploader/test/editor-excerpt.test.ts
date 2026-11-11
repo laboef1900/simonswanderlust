@@ -261,17 +261,19 @@ describe('EditorExcerpt controller', () => {
   it('discloses at the Generate action in each locale, on a line a running request does not move', async () => {
     const pending = Promise.withResolvers<Response>();
     const page = excerptPage(() => pending.promise);
+    // Action row, then the disclosure, then the status the request fills.
+    const expected = ['excerpt-assist__actions', 'excerpt-assist__note', 'excerpt-assist__status', 'excerpt-assist__suggestion'];
     for (const locale of ['de', 'en'] as const) {
       const view = page.view(locale);
       const note = page.document.getElementById(view.action('generate').getAttribute('aria-describedby')!)!;
       expect(note.textContent).toBe('[excerptDisclosure]');
       expect(note.closest('[hidden]')).toBeNull();
-      expect(view.root.contains(note)).toBe(true);
-      expect(view.root.querySelector('.excerpt-assist__actions')!.contains(note)).toBe(false);
+      expect(view.root.children.map((child) => child.className.split(' ')[0])).toEqual(expected);
     }
     page.view().action('generate').click();
     expect(page.view().state()).toBe('busy');
     expect(page.view().action('cancel').hidden).toBe(false);
+    expect(page.view().root.children.map((child) => child.className.split(' ')[0])).toEqual(expected);
     expect(page.document.getElementById('excerpt-disclosure-de')!.closest('[hidden]')).toBeNull();
     page.instance.invalidate();
   });

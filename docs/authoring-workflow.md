@@ -249,7 +249,8 @@ photo has since been removed, the editor asks you to save rather than jumping to
 an unrelated photo. These checks are optional and never block publishing.
 Missing-field links select the right language and reveal the field to fix.
 For the hero, use **Choose from library** to set or change the photo, and **Adjust framing**
-for focal-point controls. Alt text is written in the hero alt field or in Media.
+for focal-point controls. Type the hero alt text in the hero alt field; when you pick a photo
+while that field is empty, the photo's Media alt text for this language is copied in.
 
 **Separate wide title image** — in Story details, use **Titelbild (optional)** on the DE tab
 or **Title image (optional)** on the EN tab. Choose a wide photograph with **Choose from
@@ -541,7 +542,7 @@ get back are final, but the responsive AVIF/WebP variants take a few seconds per
 thumbnail appears once it is done. You can close the tab: uploading needs the tab open,
 encoding does not.
 
-**Unknown transfer is not a failed transfer.** Media, hero, body, About and title-image
+**Unknown transfer is not a failed transfer.** Media, story-body and About
 uploads keep a client-generated ID and check its server receipt once after an ambiguous
 response. **Check again** is read-only. Only an explicit retry authorized by definite
 failure or a new server retry generation can send bytes again. A retained original waiting

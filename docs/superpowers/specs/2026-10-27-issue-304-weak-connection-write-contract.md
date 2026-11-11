@@ -10,9 +10,9 @@ authenticated-context prerequisite is also approved. These decisions preserve §
 native-lock implementation/packaging requirements and authorize no merges or deployments.
 
 > 2026-11-11 (#569): the editor's hero and title-image upload callers listed below were removed
-> (library only). Body image, About, Media and the picker remain upload callers; the editor's
-> body-image upload case in `editor-dom.test.ts` is the remaining editor evidence. See
-> `2026-11-11-issue-569-editor-cleanup-design.md`.
+> (library only). Body image, About and the Media queue remain upload callers (the picker only
+> browses); the editor's body-image upload case in `editor-dom.test.ts` is the remaining editor
+> evidence. See `2026-11-11-issue-569-editor-cleanup-design.md`.
 
 Parent epic: #303. Blocks: #305 (reconcile lost responses), #306 (user-scoped stashes, offline
 signals, stale-tab conflicts). Independent narrow fixes that this contract must stay compatible
