@@ -8,6 +8,7 @@ import pg from 'pg';
 import { describe, expect, it } from 'vitest';
 import { ensureSchema } from '../src/db.js';
 import { pgPostStore, type PostLocale } from '../src/posts.js';
+import { emptyMediaExif } from '../src/exif.js';
 import { pgMediaStore } from '../src/media-store.js';
 import { buildServer } from '../src/server.js';
 import { memoryUserStore } from '../src/users.js';
@@ -23,7 +24,7 @@ import { publishBody } from './publish-tokens.js';
 const url = process.env.TEST_DATABASE_URL;
 const maybe = url ? describe : describe.skip;
 const origin = 'https://images.test';
-const exif = { takenAt: null, camera: null, lens: null, lat: null, lng: null };
+const exif = emptyMediaExif();
 
 maybe('renderer-based publication readiness (real PostgreSQL, #334)', () => {
   it.each(['single', 'bulk'] as const)('%s preserves snapshots on refusal and publishes with unused failed metadata', async (mode) => {

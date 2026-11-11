@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { setImmediate as nextTurn } from 'node:timers/promises';
 import type { BackupState, DbBackup } from '../src/backup.js';
-import sharp from 'sharp';
+import sharp, { type Exif } from 'sharp';
 import FormData from 'form-data';
 import { buildServer, type ServerConfig } from '../src/server.js';
 import { rehostImage } from '../src/wp-images.js';
@@ -30,6 +30,7 @@ import { memoryPageStore, type PageStore } from '../src/pages.js';
 import { memoryLanguageStore } from '../src/language.js';
 import { memoryNavigationStore } from '../src/navigation.js';
 import { DEFAULT_NAVIGATION } from '../../site/src/lib/navigation.js';
+import { emptyExposure, emptyMediaExif, readExif } from '../src/exif.js';
 import { memoryMediaStore, type MediaStore } from '../src/media-store.js';
 import type { MediaImpact } from '../src/media-impact.js';
 import { createEncodeQueue, type EncodeQueue } from '../src/encode-queue.js';
@@ -1113,7 +1114,7 @@ describe('media library', () => {
     await media.upsert({
       key: 'library/2025/geo', status: 'ready', width: 800, height: 600, origBytes: 1,
       uploadedBy: 'user-1',
-      exif: { takenAt: new Date('2025-01-01T10:00:00Z'), camera: 'Leica Q2', lens: 'Summilux', lat: 63.4, lng: 10.4 },
+      exif: { ...emptyMediaExif(), takenAt: new Date('2025-01-01T10:00:00Z'), camera: 'Leica Q2', lens: 'Summilux', lat: 63.4, lng: 10.4 },
     });
     const author = await authed(b, { isAdmin: false, username: 'author' });
 
@@ -1133,7 +1134,7 @@ describe('media library', () => {
     const b = build({ media });
     await media.upsert({
       key: 'library/2025/geo', status: 'ready', width: 8, height: 6, origBytes: 1, uploadedBy: 'u1',
-      exif: { takenAt: null, camera: null, lens: null, lat: 1.5, lng: 2.5 },
+      exif: { ...emptyMediaExif(), lat: 1.5, lng: 2.5 },
     });
     const author = await authed(b, { isAdmin: false, username: 'author' });
     const res = await b.app.inject({ method: 'GET', url: '/media/items/library/2025/geo', cookies: author.cookie });
@@ -1151,8 +1152,56 @@ describe('media library', () => {
     expect(res.json().total).toBe(1);
     expect(res.json().items[0]).toMatchObject({
       key: storedKey, src, width: 1000, height: 800,
-      thumbSrc: `${src}-640.webp`, status: 'ready', usedIn: [],
+      thumbSrc: `${src}-640.webp`, fullSrc: `${src}-1000.webp`, status: 'ready', usedIn: [],
     });
+    // #570: fullSrc names a file the encoder really wrote — the intrinsic-width variant.
+    expect(existsSync(join(dir, `${storedKey}-1000.webp`))).toBe(true);
+  });
+
+  // #570: the upload path stores what parseExif read from the photo, and never
+  // fails on what it could not read.
+  it('POST /upload stores the exposure settings, keeps them out of the published tags, and survives malformed or missing EXIF', async () => {
+    const b = buildEncoding();
+    const { cookie } = await authed(b);
+    const author = await authed(b, { isAdmin: false, username: 'author' });
+    const photo = (exif?: Exif): Promise<Buffer> => {
+      const image = sharp({ create: { width: 1000, height: 800, channels: 3, background: '#5a7' } });
+      return (exif ? image.withExif(exif) : image).jpeg().toBuffer();
+    };
+
+    const full = await put(b, cookie, 'trips/exif/full', await photo({
+      IFD0: { Make: 'Leica Camera AG', Model: 'LEICA Q2' },
+      IFD2: {
+        LensModel: 'SUMMILUX 1:1.7/28 ASPH.', ExposureTime: '1/250', FNumber: '28/10',
+        ISOSpeedRatings: '400', FocalLength: '28/1', FocalLengthIn35mmFilm: '35',
+      },
+      IFD3: {
+        GPSLatitudeRef: 'N', GPSLatitude: '63/1 4/1 3312/100',
+        GPSLongitudeRef: 'E', GPSLongitude: '10/1 23/1 1944/100',
+      },
+    }));
+    const exposure = { focalLength: 28, focalLength35mm: 35, fNumber: 2.8, iso: 400, exposureTime: 0.004 };
+    expect((await b.media.get(full.storedKey))?.exif).toMatchObject({
+      camera: 'Leica Camera AG LEICA Q2', lens: 'SUMMILUX 1:1.7/28 ASPH.', ...exposure,
+    });
+    // The details route shows them to an author, who still never sees the coordinates.
+    const seen = (await b.app.inject({ method: 'GET', url: `/media/items/${full.storedKey}`, cookies: author.cookie })).json();
+    expect(seen.exif).toMatchObject({ ...exposure, lat: null, lng: null });
+    // The published variant carries the allow-listed tags only: no 35 mm equivalent, no GPS.
+    const published = readExif((await sharp(join(dir, `${full.storedKey}-640.webp`)).metadata()).exif);
+    expect(published?.Photo).toMatchObject({ FNumber: 2.8, ISOSpeedRatings: 400, FocalLength: 28 });
+    expect(published?.Photo).not.toHaveProperty('FocalLengthIn35mmFilm');
+    expect(published?.GPSInfo).toBeUndefined();
+
+    // Zero-denominator and negative rationals, ISO 0 and an "unknown" 35 mm value: accepted, encoded, nulls.
+    const malformed = await put(b, cookie, 'trips/exif/malformed', await photo({
+      IFD0: { Make: 'Canon' },
+      IFD2: { ExposureTime: '1/0', FNumber: '0/0', FocalLength: '-5/1', ISOSpeedRatings: '0', FocalLengthIn35mmFilm: '0' },
+    }));
+    expect(await b.media.get(malformed.storedKey)).toMatchObject({ status: 'ready', exif: { camera: 'Canon', ...emptyExposure() } });
+
+    const bare = await put(b, cookie, 'trips/exif/none', await photo());
+    expect(await b.media.get(bare.storedKey)).toMatchObject({ status: 'ready', exif: emptyMediaExif() });
   });
 
   it('GET /media reports usedIn when a post references the image', async () => {
@@ -1193,7 +1242,9 @@ describe('media library', () => {
     const admin = await authed(b);
     const photo = await b.media.upsert({ key: 'impact', status: 'ready', width: 800, height: 600, origBytes: 1,
       alt: { de: 'DE', en: 'EN' }, caption: { de: 'Before', en: 'Same' }, uploadedBy: 'private-user',
-      exif: { takenAt: new Date('2025-01-01T10:00:00Z'), camera: 'Leica', lens: 'Summilux', lat: 1, lng: 2 } });
+      // #570: the exposure settings are whole-item fields an author sees, on GET and PATCH alike.
+      exif: { ...emptyMediaExif(), takenAt: new Date('2025-01-01T10:00:00Z'), camera: 'Leica', lens: 'Summilux', lat: 1, lng: 2,
+        focalLength: 28, focalLength35mm: 35, fNumber: 1.7, iso: 200, exposureTime: 0.004 } });
     for (let n = 0; n < 3; n++) {
       const input = draftUsing(photo.src);
       for (const locale of ['de', 'en'] as const) {
@@ -1213,7 +1264,8 @@ describe('media library', () => {
       const body = response.json();
       expect(body).not.toHaveProperty('livePending');
       expect(body.uploadedBy).toBeNull();
-      expect(body.exif).toEqual({ takenAt: '2025-01-01T10:00:00.000Z', camera: 'Leica', lens: 'Summilux', lat: null, lng: null });
+      expect(body.exif).toEqual({ takenAt: '2025-01-01T10:00:00.000Z', camera: 'Leica', lens: 'Summilux', lat: null, lng: null,
+        focalLength: 28, focalLength35mm: 35, fNumber: 1.7, iso: 200, exposureTime: 0.004 });
       const impact = body.impact as MediaImpact;
       expect(Object.keys(impact).sort()).toEqual(['availability', 'drafts', 'newerDrafts', 'published']);
       if (impact.availability !== 'available') throw new Error('expected impact');
@@ -1237,7 +1289,7 @@ describe('media library', () => {
   it.each(['about', 'contact'])('keeps %s-only references in deletion guards but out of story impact', async (key) => {
     const b = build(); const { cookie } = await authed(b);
     const photo = await b.media.upsert({ key: 'about-only', status: 'ready', width: 800, height: 600, origBytes: 1,
-      uploadedBy: null, exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null } });
+      uploadedBy: null, exif: emptyMediaExif() });
     const about = await b.pages.get(key);
     await b.pages.save({ ...about, de: { ...about.de, bodyMarkdown: `\`\`\`gallery\n${photo.src} | 800x600\n\`\`\`` } });
     const response = await b.app.inject({ method: 'GET', url: '/media/items/about-only', cookies: cookie });
@@ -1249,7 +1301,7 @@ describe('media library', () => {
   it('preserves this write and its delta when optional enrichment fails or another writer lands', async () => {
     const s = stubBuilder(); const b = build({ builder: s.builder }); const { cookie } = await authed(b);
     await b.media.upsert({ key: 'impact', status: 'ready', width: 800, height: 600, origBytes: 1,
-      uploadedBy: null, exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null } });
+      uploadedBy: null, exif: emptyMediaExif() });
     b.posts.mediaImpactCorpus = async () => {
       await b.media.patch('impact', { caption: { de: 'later writer', en: 'later EN' } });
       throw new Error('optional classification failed');
@@ -1270,7 +1322,7 @@ describe('media library', () => {
     const b = build({ builder: builder.builder }); const { cookie } = await authed(b);
     const photo = await b.media.upsert({ key: 'pending', status: 'ready', width: 800, height: 600, origBytes: 1,
       alt: { de: 'DE', en: 'EN' }, caption: { de: 'Before', en: 'English' }, uploadedBy: null,
-      exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null } });
+      exif: emptyMediaExif() });
     const input = draftUsing(photo.src);
     for (const locale of ['de', 'en'] as const) input[locale].bodyMarkdown =
       `\`\`\`gallery\n${photo.src} | 800x600\n${photo.src} | 800x600 | caption-override=""\n\`\`\``;
@@ -1320,7 +1372,7 @@ describe('media library', () => {
     const { cookie } = await authed(b);
     const before = await b.media.upsert({
       key: 'conditional', status: 'ready', width: 8, height: 6, origBytes: 1, uploadedBy: null,
-      exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null },
+      exif: emptyMediaExif(),
     });
     const valid = { version: 1, patch: { title: 'new' }, expect: { title: '' } };
     for (const payload of [
@@ -1347,7 +1399,7 @@ describe('media library', () => {
     const b = build();
     await b.media.upsert({
       key: 'conditional', title: 'stored', status: 'ready', width: 8, height: 6, origBytes: 1, uploadedBy: 'u1',
-      exif: { takenAt: null, camera: null, lens: null, lat: 1.5, lng: 2.5 },
+      exif: { ...emptyMediaExif(), lat: 1.5, lng: 2.5 },
     });
     const author = await authed(b, { isAdmin: false, username: 'author' });
     const admin = await authed(b);
@@ -2800,7 +2852,7 @@ describe('GET /api/cms/stats', () => {
   it('mediaCount is the whole library, not the first page (#130)', async () => {
     const b = build();
     const { cookie } = await authed(b);
-    const exif = { takenAt: null, camera: null, lens: null, lat: null, lng: null };
+    const exif = emptyMediaExif();
     for (let i = 0; i < 61; i++) {
       await b.media.upsert({ key: `library/p${i}`, status: 'ready', width: 9, height: 9, origBytes: 1, exif, uploadedBy: null });
     }
@@ -3331,7 +3383,7 @@ describe('publish gate (encode status)', () => {
       const { cookie } = await authed(b);
       const key = 'trips/g/title';
       if (status !== 'unknown') await b.media.upsert({ key, status, width: 2400, height: 800, origBytes: 1,
-        exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null }, uploadedBy: null });
+        exif: emptyMediaExif(), uploadedBy: null });
       const p = pairUsing(`${IMG}/trips/g/hero`);
       const tk = await create(b, cookie, { ...p, de: { ...p.de,
         titleImage: { src: `${IMG}/${key}`, width: 2400, height: 800, alt: 'View' } } });
@@ -3363,7 +3415,7 @@ describe('publish gate (encode status)', () => {
       const { cookie } = await authed(b);
       const key = 'trips/g/title';
       await b.media.upsert({ key, status: 'ready', width: 2400, height: 800, origBytes: 1,
-        exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null }, uploadedBy: null });
+        exif: emptyMediaExif(), uploadedBy: null });
       const p = pairUsing(`${IMG}/trips/g/hero`);
       const tk = await create(b, cookie, { ...p, de: { ...p.de,
         titleImage: { src: `${IMG}/${key}`, width: 2400, height: 800, alt: 'View' } } });
@@ -3382,7 +3434,7 @@ describe('publish gate (encode status)', () => {
   it('blocks publishing while a referenced photo is still processing', async () => {
     const b = build();
     const { cookie } = await authed(b);
-    await b.media.upsert({ key: 'trips/g/hero', status: 'processing', width: 9, height: 9, origBytes: 1, exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null }, uploadedBy: null });
+    await b.media.upsert({ key: 'trips/g/hero', status: 'processing', width: 9, height: 9, origBytes: 1, exif: emptyMediaExif(), uploadedBy: null });
     const tk = await create(b, cookie, pairUsing(`${IMG}/trips/g/hero`));
     const res = await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) });
     expect(res.statusCode).toBe(409);
@@ -3394,7 +3446,7 @@ describe('publish gate (encode status)', () => {
   it('blocks on a failed encode too', async () => {
     const b = build();
     const { cookie } = await authed(b);
-    await b.media.upsert({ key: 'trips/g/hero', status: 'failed', width: 9, height: 9, origBytes: 1, exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null }, uploadedBy: null });
+    await b.media.upsert({ key: 'trips/g/hero', status: 'failed', width: 9, height: 9, origBytes: 1, exif: emptyMediaExif(), uploadedBy: null });
     const tk = await create(b, cookie, pairUsing(`${IMG}/trips/g/hero`));
     expect((await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) })).statusCode).toBe(409);
   });
@@ -3402,7 +3454,7 @@ describe('publish gate (encode status)', () => {
   it('allows publishing once every referenced photo is ready', async () => {
     const b = build();
     const { cookie } = await authed(b);
-    await b.media.upsert({ key: 'trips/g/hero', status: 'ready', width: 9, height: 9, origBytes: 1, exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null }, uploadedBy: null });
+    await b.media.upsert({ key: 'trips/g/hero', status: 'ready', width: 9, height: 9, origBytes: 1, exif: emptyMediaExif(), uploadedBy: null });
     const tk = await create(b, cookie, pairUsing(`${IMG}/trips/g/hero`));
     expect((await b.app.inject({ method: 'POST', url: `/posts/${tk}/publish`, cookies: cookie, payload: await publishBody(b.posts, tk) })).statusCode).toBe(200);
   });
@@ -3417,7 +3469,7 @@ describe('publish gate (encode status)', () => {
   it('checks a gallery actually referenced in the body, not just the hero', async () => {
     const b = build();
     const { cookie } = await authed(b);
-    const exif = { takenAt: null, camera: null, lens: null, lat: null, lng: null };
+    const exif = emptyMediaExif();
     await b.media.upsert({ key: 'trips/g/hero', status: 'ready', width: 9, height: 9, origBytes: 1, exif, uploadedBy: null });
     await b.media.upsert({ key: 'trips/g/gallery-a', status: 'processing', width: 9, height: 9, origBytes: 1, exif, uploadedBy: null });
     const p = pairUsing(`${IMG}/trips/g/hero`, {
@@ -3433,7 +3485,7 @@ describe('publish gate (encode status)', () => {
   it('maps a hand-pasted variant URL back to its key, and ignores foreign origins', async () => {
     const b = build();
     const { cookie } = await authed(b);
-    const exif = { takenAt: null, camera: null, lens: null, lat: null, lng: null };
+    const exif = emptyMediaExif();
     await b.media.upsert({ key: 'trips/g/hero', status: 'processing', width: 9, height: 9, origBytes: 1, exif, uploadedBy: null });
     const tk = await create(b, cookie, pairUsing(`${IMG}/trips/g/hero-1280.jpeg`, {
       // A different origin is not ours to gate on.
@@ -3447,7 +3499,7 @@ describe('publish gate (encode status)', () => {
   it('applies to the bulk path as a per-post failure', async () => {
     const b = build();
     const { cookie } = await authed(b);
-    await b.media.upsert({ key: 'trips/g/hero', status: 'processing', width: 9, height: 9, origBytes: 1, exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null }, uploadedBy: null });
+    await b.media.upsert({ key: 'trips/g/hero', status: 'processing', width: 9, height: 9, origBytes: 1, exif: emptyMediaExif(), uploadedBy: null });
     const tk = await create(b, cookie, pairUsing(`${IMG}/trips/g/hero`));
     const res = await b.app.inject({
       method: 'POST', url: '/posts/bulk', headers: { 'content-type': 'application/json' }, cookies: cookie,
@@ -3464,7 +3516,7 @@ describe('publish gate (encode status)', () => {
       const { cookie } = await authed(b);
       const key = 'trips/g/body';
       await b.media.upsert({ key, status, width: 1280, height: 960, origBytes: 1,
-        exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null }, uploadedBy: null });
+        exif: emptyMediaExif(), uploadedBy: null });
       for (const format of ['avif', 'webp', 'jpeg']) {
         for (const locale of ['de', 'en'] as const) {
           const src = `${IMG}/${key}-640.${format}`;
@@ -3491,7 +3543,7 @@ describe('publish gate (encode status)', () => {
     const b = build();
     try {
       const { cookie } = await authed(b);
-      const exif = { takenAt: null, camera: null, lens: null, lat: null, lng: null };
+      const exif = emptyMediaExif();
       await b.media.upsert({ key: 'trips/g/stale', status: 'failed', width: 9, height: 9, origBytes: 1, exif, uploadedBy: null });
       await b.media.upsert({ key: 'trips/g/ready', status: 'ready', width: 9, height: 9, origBytes: 1, exif, uploadedBy: null });
       const p = pairUsing(`${IMG}/wp/legacy/hero`, { [`${IMG}/trips/g/stale`]: { width: 9, height: 9 } });
@@ -3595,7 +3647,7 @@ describe('alt-text audit (advisory, never a gate)', () => {
   it('judges library gallery photos by their current Media alt, before and after publishing', async () => {
     const b = build();
     const { cookie } = await authed(b);
-    const exif = { takenAt: null, camera: null, lens: null, lat: null, lng: null };
+    const exif = emptyMediaExif();
     await b.media.upsert({ key: 'trips/rhodos/g1', status: 'ready', width: 9, height: 9, origBytes: 1, exif, uploadedBy: null,
       alt: { de: 'Fischerboote im Hafen', en: 'Fishing boats' } });
     const pair = {
@@ -5414,7 +5466,7 @@ describe('GET /posts/:tk/preview', () => {
     };
     const seedLib = (media: MediaStore) => media.upsert({
       key: 'trips/gal/lib', status: 'ready', width: 1600, height: 1200, origBytes: 1, uploadedBy: 'simon',
-      exif: { takenAt: null, camera: 'SECRET-CAM', lens: null, lat: 63.0759, lng: 10.3887 },
+      exif: { ...emptyMediaExif(), camera: 'SECRET-CAM', lat: 63.0759, lng: 10.3887 },
       title: 'Library title only', alt: { de: 'Bibliothek DE', en: 'Library EN' }, caption: { de: 'Text DE', en: 'Text EN' },
     });
 
@@ -5824,7 +5876,7 @@ describe('write reconciliation HTTP trust boundaries (#305)', () => {
     const b = build(); const a = await authed(b, { isAdmin: false });
     for (let i = 0; i < 205; i++) await b.media.upsert({ key: `photos/p${i}`, folder: i === 204 ? 'Moved' : '',
       width: 8, height: 6, origBytes: 20, status: 'ready', uploadedBy: a.user.id,
-      exif: { takenAt: null, camera: 'Camera', lens: null, lat: 12, lng: 13 } });
+      exif: { ...emptyMediaExif(), camera: 'Camera', lat: 12, lng: 13 } });
     const result = await b.app.inject({ method: 'POST', url: '/media/lookup', cookies: a.cookie,
       payload: { keys: ['photos/p204', 'photos/deleted'] } });
     expect(result.statusCode).toBe(200); expect(result.headers['cache-control']).toBe('no-store');

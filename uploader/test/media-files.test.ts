@@ -1,9 +1,10 @@
 import { describe, expect, it, beforeEach } from 'vitest';
-import { mkdtemp, mkdir, writeFile, readdir } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readdir, symlink } from 'node:fs/promises';
 import { readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { deleteMedia, imageUsage, VARIANT_FILE_RE } from '../src/media-files.js';
+import sharp from 'sharp';
+import { deleteMedia, imageUsage, listVariantFiles, VARIANT_FILE_RE } from '../src/media-files.js';
 import type { PostUsageRow } from '../src/posts.js';
 import type { PagePair } from '../src/pages.js';
 
@@ -158,5 +159,110 @@ describe('deleteMedia', () => {
     for (const bad of ['../evil', 'a//b', 'trips/../../etc/x', 'Evil', '/abs']) {
       await expect(deleteMedia(dir, bad)).rejects.toThrow(/key/i);
     }
+  });
+});
+
+// #570: the Versions list. The disk is the authoritative source for which
+// variant files exist, so these run against real files with real headers.
+describe('listVariantFiles', () => {
+  /** A real image whose pixel size is unrelated to the width in its file name. */
+  const image = (format: 'avif' | 'webp' | 'jpeg', width: number, height: number): Promise<Buffer> =>
+    sharp({ create: { width, height, channels: 3, background: { r: 40, g: 80, b: 120 } } })
+      .toFormat(format, format === 'avif' ? { effort: 0 } : {}).toBuffer();
+
+  it('lists a modern set by width, then AVIF before WebP, with header height and file size', async () => {
+    const files = {
+      'hero-1280.webp': await image('webp', 128, 80),
+      'hero-640.webp': await image('webp', 64, 40),
+      'hero-1280.avif': await image('avif', 128, 80),
+      'hero-640.avif': await image('avif', 64, 40),
+    };
+    for (const [name, bytes] of Object.entries(files)) await put(`trips/x/${name}`, bytes);
+    // The private original, a temp from an interrupted write and an unrelated file are never variants.
+    await put('trips/x/hero-orig.jpg', await image('jpeg', 300, 200));
+    await put('trips/x/hero-640.webp.part-1a2b3c4d', 'partial');
+    await put('trips/x/notes.txt');
+    expect(await listVariantFiles(dir, 'trips/x/hero')).toEqual([
+      { format: 'avif', width: 640, height: 40, bytes: files['hero-640.avif'].length },
+      { format: 'webp', width: 640, height: 40, bytes: files['hero-640.webp'].length },
+      { format: 'avif', width: 1280, height: 80, bytes: files['hero-1280.avif'].length },
+      { format: 'webp', width: 1280, height: 80, bytes: files['hero-1280.webp'].length },
+    ]);
+  });
+
+  it('lists a JPEG-only set, and orders AVIF, WebP, JPEG within one width', async () => {
+    const jpeg = await image('jpeg', 64, 48);
+    await put('library/2026/jpeg-640.jpeg', jpeg);
+    await put('library/2026/jpeg-800.jpeg', jpeg);
+    expect(await listVariantFiles(dir, 'library/2026/jpeg')).toEqual([
+      { format: 'jpeg', width: 640, height: 48, bytes: jpeg.length },
+      { format: 'jpeg', width: 800, height: 48, bytes: jpeg.length },
+    ]);
+    for (const format of ['jpeg', 'webp', 'avif'] as const) await put(`mixed-640.${format}`, await image(format, 64, 48));
+    expect((await listVariantFiles(dir, 'mixed')).map((file) => file.format)).toEqual(['avif', 'webp', 'jpeg']);
+  });
+
+  it('lists exactly what exists for a partial set, and null height for a file it cannot read', async () => {
+    const webp = await image('webp', 64, 40);
+    await put('trips/x/hero-640.webp', webp);       // the encoder died after one file
+    await put('trips/x/hero-1280.avif', 'truncated'); // present, but not an image
+    expect(await listVariantFiles(dir, 'trips/x/hero')).toEqual([
+      { format: 'webp', width: 640, height: 40, bytes: webp.length },
+      { format: 'avif', width: 1280, height: null, bytes: 'truncated'.length },
+    ]);
+  });
+
+  it('matches the exact base, never a sibling key sharing the prefix', async () => {
+    await put('trips/x/hero-640.webp');
+    await put('trips/x/hero-b-640.webp');
+    await put('trips/x/hero-2-640.webp');
+    await put('trips/x/hero-640-640.webp');
+    const widths = async (key: string) => (await listVariantFiles(dir, key)).map((file) => file.width);
+    expect(await widths('trips/x/hero')).toEqual([640]);
+    expect(await widths('trips/x/hero-b')).toEqual([640]);
+    expect(await widths('trips/x/hero-640')).toEqual([640]);
+    expect(await widths('trips/x/her')).toEqual([]);
+  });
+
+  it('leaves out a name whose width does not round-trip into the public URL', async () => {
+    await put('trips/x/hero-640.webp');
+    await put('trips/x/hero-0640.webp');
+    await put(`trips/x/hero-${'9'.repeat(25)}.webp`);
+    expect((await listVariantFiles(dir, 'trips/x/hero')).map((file) => file.width)).toEqual([640]);
+  });
+
+  it('takes regular files only: a symlinked variant and a directory are skipped, never followed', async () => {
+    await put('trips/x/hero-640.webp', await image('webp', 64, 40));
+    // A full-size private file elsewhere, reachable only through the link.
+    await put('private/secret-orig.jpg', await image('jpeg', 300, 200));
+    await symlink(join(dir, 'private/secret-orig.jpg'), join(dir, 'trips/x/hero-1280.webp'));
+    await mkdir(join(dir, 'trips/x/hero-1920.avif'));
+    expect((await readdir(join(dir, 'trips/x'))).sort()).toEqual(['hero-1280.webp', 'hero-1920.avif', 'hero-640.webp']);
+    expect((await listVariantFiles(dir, 'trips/x/hero')).map((file) => [file.format, file.width])).toEqual([['webp', 640]]);
+  });
+
+  it('rejects an unsafe key before any path is built or read', async () => {
+    // `<dir>/file` is a regular file: a readdir reaching it would fail with
+    // ENOTDIR, and one reaching `<dir>/outside` would find a variant. The
+    // guard's own error proves neither path was ever touched.
+    await put('file');
+    await put('outside/hero-640.webp', await image('webp', 64, 40));
+    const storage = join(dir, 'storage');
+    await mkdir(storage);
+    for (const bad of ['../file/hero', '../outside/hero', 'a//b', 'trips/../../etc/x', 'Evil', '/abs', 'a.b', 'k'.repeat(201)]) {
+      await expect(listVariantFiles(storage, bad)).rejects.toThrow(/^unsafe storage key/);
+    }
+  });
+
+  it('answers an empty list for a missing directory and for a key with no files', async () => {
+    await put('trips/x/hero-640.webp');
+    expect(await listVariantFiles(dir, 'nowhere/at/all')).toEqual([]);
+    expect(await listVariantFiles(dir, 'trips/x/ghost')).toEqual([]);
+    expect(await listVariantFiles(join(dir, 'no-such-storage'), 'hero')).toEqual([]);
+  });
+
+  it('throws every other storage error for the caller to report as unavailable', async () => {
+    await put('trips'); // the key's directory is a file
+    await expect(listVariantFiles(dir, 'trips/x/hero')).rejects.toMatchObject({ code: 'ENOTDIR' });
   });
 });

@@ -14,6 +14,7 @@ import { pgPostStore } from '../src/posts.js';
 import { pgUserStore } from '../src/users.js';
 import { pgSecretsStore } from '../src/secrets.js';
 import { pgJourneyStore } from '../src/journeys.js';
+import { emptyMediaExif } from '../src/exif.js';
 import { pgMediaStore } from '../src/media-store.js';
 import sharp from 'sharp';
 import { createSettingsStore, defaultSettings } from '../src/settings.js';
@@ -160,7 +161,7 @@ maybe.each(['split', 'loopback'] as const)('production boot (src/main.ts, Postgr
       hero.clone().avif().toFile(join(dir, 'images', heroKey + '-640.avif')),
     ]);
     await pgMediaStore(pool, { baseUrl: imageOrigin }).upsert({ key: heroKey, width: 640, height: 400, origBytes: 1, status: 'ready',
-      exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null }, uploadedBy: null });
+      exif: emptyMediaExif(), uploadedBy: null });
     // Both working and retained snapshot orphans must be repaired before admission.
     const snapshot = { version: 1, members: [tk, 'missing-journey-boot-story'], locales: {
       de: { slug: 'boot-journey-' + stamp, title: 'Boot journey', intro: 'Intro', heroImage: { src: imageOrigin + '/' + heroKey, width: 640, height: 400, alt: 'Landscape' } },

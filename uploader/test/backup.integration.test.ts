@@ -7,12 +7,14 @@ import { gunzipSync, gzipSync } from 'node:zlib';
 import { mkdtemp, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import pg from 'pg';
 import { createPool, ensureSchema, type DbPool } from '../src/db.js';
 import { pgUserStore } from '../src/users.js';
 import { pgPostStore } from '../src/posts.js';
 import { pgSessionStore } from '../src/sessions.js';
-import { dumpDatabase, readDump, restoreDatabase, BACKUP_FILE_RE, DUMP_VERSION } from '../src/backup.js';
+import { dumpDatabase, readDump, restoreDatabase, BACKUP_FILE_RE, DUMP_VERSION, type Dump } from '../src/backup.js';
 import { pgCommentStore } from '../src/comments.js';
+import { emptyMediaExif } from '../src/exif.js';
 import { pgMediaStore } from '../src/media-store.js';
 import { runCli } from './run-cli.js';
 import { seedSiteIdentity } from '../src/site-identity.js';
@@ -185,6 +187,8 @@ maybe('backup round-trip (Postgres)', () => {
     expect(restored).not.toHaveProperty('format');
     expect(restored).not.toHaveProperty('encoding');
     expect(restored?.thumbSrc).toBe('https://img.example/legacy/photo-640.webp');
+    // #570: a dump from before the exposure columns existed restores them as NULL.
+    expect(restored?.exif).toEqual(emptyMediaExif());
   });
 
   // Dump v5: `featured` is an explicit column in the SELECT/INSERT lists, so
@@ -322,7 +326,10 @@ maybe('backup round-trip (Postgres)', () => {
       tags: ['dawn', 'sea'], status: 'ready',
       width: 3000, height: 2000, origBytes: 10_700_000,
       format: 'jpeg', encoding: { convertJpeg: false, webpQuality: 86, avifQuality: 66 },
-      exif: { takenAt: new Date('2026-07-04T18:23:11Z'), camera: 'LEICA Q2', lens: 'Summilux', lat: 63.0759, lng: 10.3887 },
+      exif: {
+        takenAt: new Date('2026-07-04T18:23:11Z'), camera: 'LEICA Q2', lens: 'Summilux', lat: 63.0759, lng: 10.3887,
+        focalLength: 28, focalLength35mm: 35, fNumber: 1.7, iso: 200, exposureTime: 0.004,
+      },
       uploadedBy: u.id,
     });
     await media.setVariantBytes('library/2025/a', 6_900_000);
@@ -332,6 +339,8 @@ maybe('backup round-trip (Postgres)', () => {
       (await import('node:zlib')).gunzipSync((await import('node:fs')).readFileSync(join(dir, name))).toString('utf8'),
     );
     expect(dump.version).toBe(DUMP_VERSION);
+    // #570: `SELECT *` carries the exposure columns into the dump as numbers, with no version bump.
+    expect(dump.tables.media[0]).toMatchObject({ focal_length: 28, focal_length_35mm: 35, f_number: 1.7, iso: 200, exposure_time: 0.004 });
 
     await pool.query('DELETE FROM media');
     await pool.query('DELETE FROM media_folders');
@@ -346,13 +355,134 @@ maybe('backup round-trip (Postgres)', () => {
       origBytes: 10_700_000, variantBytes: 6_900_000, status: 'ready',
       format: 'jpeg', encoding: { convertJpeg: false, webpQuality: 86, avifQuality: 66 },
       thumbSrc: 'https://img.example/library/2025/a-640.jpeg',
+      fullSrc: 'https://img.example/library/2025/a-3000.jpeg',
     });
     expect(back?.exif.camera).toBe('LEICA Q2');
     expect(back?.exif.lat).toBeCloseTo(63.0759, 4);
+    expect(back?.exif).toMatchObject({ focalLength: 28, focalLength35mm: 35, fNumber: 1.7, iso: 200, exposureTime: 0.004 });
     // Restore ordering: media is deleted BEFORE users, so uploaded_by is not
     // nulled by the users cascade before the rows come back.
     expect(back?.uploadedBy).toBe(u.id);
     expect(await media.folders()).toEqual(expect.arrayContaining(['Island', 'Island/Sued']));
+  });
+
+  // #570: the five exposure columns ride in the current format as optional row
+  // keys — no DUMP_VERSION bump — so each direction of that choice is pinned.
+  describe('media exposure columns', () => {
+    const EXPOSURE_COLUMNS = ['focal_length', 'focal_length_35mm', 'f_number', 'iso', 'exposure_time'];
+    const base = { status: 'ready' as const, width: 800, height: 600, origBytes: 10, uploadedBy: null };
+    const mediaRows = async (db: DbPool) => (await db.query('SELECT * FROM media ORDER BY key')).rows;
+    /** Dump `db`, let `edit` rewrite the media rows, and save the result as another dump file. */
+    async function editedDump(db: DbPool, name: string, edit: (rows: Record<string, unknown>[]) => void): Promise<string> {
+      const dump = JSON.parse(gunzipSync(readFileSync(join(dir, await dumpDatabase(db, dir)))).toString('utf8')) as Dump;
+      edit(dump.tables.media ?? []);
+      const file = join(dir, name);
+      writeFileSync(file, gzipSync(JSON.stringify(dump)));
+      return file;
+    }
+    async function seed(db: DbPool): Promise<void> {
+      await db.query('DELETE FROM media');
+      await db.query('DELETE FROM media_folders');
+      const media = pgMediaStore(db, { baseUrl: 'https://img.example' });
+      await media.upsert({ ...base, key: 'library/2025/a', exif: { ...emptyMediaExif(), camera: 'Pixel 9', focalLength: 4.3, focalLength35mm: 24, fNumber: 1.8, iso: 125, exposureTime: 1 / 500 } });
+      await media.upsert({ ...base, key: 'library/2025/bare', exif: emptyMediaExif() });
+      await media.upsert({ ...base, key: 'library/2025/high', exif: { ...emptyMediaExif(), focalLength: 5000, focalLength35mm: 10_000, fNumber: 512, iso: 10_000_000, exposureTime: 86_400 } });
+      await media.upsert({ ...base, key: 'library/2025/low', exif: { ...emptyMediaExif(), focalLength: 0.5, focalLength35mm: 1, fNumber: 0.5, iso: 1, exposureTime: Number.MIN_VALUE } });
+    }
+
+    it('round-trips typical values, both ends of every range and NULLs, exactly', async () => {
+      await seed(pool);
+      const before = await mediaRows(pool);
+      expect(before.map((row) => row.exposure_time)).toEqual([1 / 500, null, 86_400, Number.MIN_VALUE]);
+      const file = join(dir, await dumpDatabase(pool, dir));
+      expect(readDump(file).version).toBe(DUMP_VERSION);
+      await pool.query('DELETE FROM media');
+      expect((await restoreDatabase(pool, file)).media).toBe(4);
+      // toEqual on whole rows: every double survives JSON and the bind bit for bit.
+      expect(await mediaRows(pool)).toEqual(before);
+    });
+
+    it('restores a fractional integer rounded: iso 100.4 comes back as 100', async () => {
+      await seed(pool);
+      const file = await editedDump(pool, 'db-20261111-000001.json.gz', (rows) => {
+        const row = rows.find((candidate) => candidate.key === 'library/2025/a')!;
+        row.iso = 100.4;
+        row.focal_length_35mm = 23.6;
+      });
+      // The raw 100.4 would fail the integer cast and abort the whole restore.
+      await restoreDatabase(pool, file);
+      const restored = (await mediaRows(pool)).find((row) => row.key === 'library/2025/a');
+      expect(restored).toMatchObject({ iso: 100, focal_length_35mm: 24, focal_length: 4.3, f_number: 1.8, exposure_time: 1 / 500 });
+    });
+
+    it('restores a dump without the keys (written before #570) with NULLs, losing nothing else', async () => {
+      await seed(pool);
+      const before = await mediaRows(pool);
+      const file = await editedDump(pool, 'db-20261111-000002.json.gz', (rows) => {
+        for (const row of rows) for (const column of EXPOSURE_COLUMNS) delete row[column];
+      });
+      expect(Object.keys(readDump(file).tables.media![0]!).filter((key) => EXPOSURE_COLUMNS.includes(key))).toEqual([]);
+      await restoreDatabase(pool, file);
+      expect(await mediaRows(pool)).toEqual(before.map((row) => ({
+        ...row, focal_length: null, focal_length_35mm: null, f_number: null, iso: null, exposure_time: null,
+      })));
+    });
+
+    it('refuses an out-of-range or non-numeric value before touching any row', async () => {
+      await seed(pool);
+      const before = await mediaRows(pool);
+      const users = (await pool.query('SELECT count(*)::int AS n FROM users')).rows[0].n;
+      for (const [name, value] of [['db-20261111-000003.json.gz', 'four hundred'], ['db-20261111-000004.json.gz', 10_000_001]] as const) {
+        const file = await editedDump(pool, name, (rows) => { rows[0]!.iso = value; });
+        await expect(restoreDatabase(pool, file)).rejects.toThrow('Invalid media camera metadata in backup.');
+      }
+      expect(await mediaRows(pool)).toEqual(before);
+      expect((await pool.query('SELECT count(*)::int AS n FROM users')).rows[0].n).toBe(users);
+    });
+
+    // The documented order is: start the upgraded app once (it migrates), then
+    // restore. Done the other way round, the INSERT names columns that do not
+    // exist; it must fail INSIDE the transaction, so nothing is half-replaced.
+    it('a restore into a database the upgraded app has not migrated fails and rolls back', async () => {
+      const schema = `backup570_${randomUUID().replaceAll('-', '')}`;
+      await pool.query(`CREATE SCHEMA ${schema}`);
+      const scoped = new pg.Pool({ connectionString: url, options: `-c search_path=${schema}` });
+      try {
+        await ensureSchema(scoped);
+        await seedSiteIdentity(scoped);
+        await pgUserStore(scoped).create({ username: 'in-the-dump', password: 'password123456', isAdmin: true });
+        await seed(scoped);
+        const file = join(dir, await dumpDatabase(scoped, dir));
+
+        // The destination: other content, and a `media` table from before #570.
+        await scoped.query(`ALTER TABLE media ${EXPOSURE_COLUMNS.map((column) => `DROP COLUMN ${column}`).join(', ')}`);
+        await pgUserStore(scoped).create({ username: 'only-live', password: 'password123456', isAdmin: false });
+        await scoped.query(`UPDATE media SET title = 'Edited since the dump' WHERE key = 'library/2025/a'`);
+        const content = async () => ({
+          users: (await scoped.query('SELECT username FROM users ORDER BY username')).rows,
+          media: await mediaRows(scoped),
+          pages: (await scoped.query('SELECT key, locale, title FROM pages ORDER BY key, locale')).rows,
+          identity: (await scoped.query('SELECT revision, site_name FROM site_identity')).rows,
+        });
+        const before = await content();
+        expect(before.users).toEqual([{ username: 'in-the-dump' }, { username: 'only-live' }]);
+
+        await expect(restoreDatabase(scoped, file)).rejects.toMatchObject({ code: '42703' }); // undefined_column
+        expect(await content()).toEqual(before);
+
+        // Roll forward as documented: migrate, then the same dump restores in full.
+        await ensureSchema(scoped);
+        expect((await restoreDatabase(scoped, file)).media).toBe(4);
+        const after = await content();
+        expect(after.users).toEqual([{ username: 'in-the-dump' }]);
+        expect(after.media.find((row) => row.key === 'library/2025/a')).toMatchObject({
+          title: '', camera: 'Pixel 9', focal_length: 4.3, focal_length_35mm: 24, f_number: 1.8, iso: 125, exposure_time: 1 / 500,
+        });
+      } finally {
+        await scoped.end();
+        await pool.query(`DROP SCHEMA ${schema} CASCADE`);
+      }
+    }, 60_000);
   });
 
   it('a v2 dump (no media tables) still restores and leaves media rows to be rescanned', async () => {

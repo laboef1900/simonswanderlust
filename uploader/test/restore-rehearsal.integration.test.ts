@@ -17,6 +17,7 @@ import { pgCommentStore } from '../src/comments.js';
 import { ensureSchema, type DbPool } from '../src/db.js';
 import { ROUTE_ARCHIVE_RE } from '../src/gpx-backup.js';
 import { createGpxFiles, sourceDigest } from '../src/gpx-files.js';
+import { emptyMediaExif } from '../src/exif.js';
 import { pgMediaStore } from '../src/media-store.js';
 import { pgPageStore } from '../src/pages.js';
 import { pgPostStore, type PostLocale } from '../src/posts.js';
@@ -73,6 +74,8 @@ const LIBRARY = {
   alt: { de: 'Bergsee im Morgenlicht', en: 'Mountain lake at dawn' },
   caption: { de: 'Aus der Bibliothek wiederhergestellt', en: 'Restored from the library' },
 };
+/** #570: the photo's exposure settings, five distinct numbers so a swapped column shows. */
+const EXPOSURE = { focalLength: 28, focalLength35mm: 35, fNumber: 1.7, iso: 200, exposureTime: 0.004 };
 const GEOMETRY: PrivateGeometry = { version: 1, segments: [{ points: [
   { lat: 46.512345678, lng: 8.123456789, elevation: 1820.5, time: '2026-08-14T06:00:00.000Z' },
   { lat: 46.513345678, lng: 8.124456789, elevation: 1835.25, time: '2026-08-14T06:20:00.000Z' },
@@ -257,7 +260,8 @@ maybe('restore rehearsal: app backup → fresh database → restore CLI → prod
     await media.upsert({
       key: photoKey, folder: 'reisen/bergsee', title: 'Bergsee', alt: LIBRARY.alt, caption: LIBRARY.caption, tags: ['see', 'morgen'],
       width: stored.width, height: stored.height, origBytes: photo.length, status: 'ready',
-      exif: { takenAt: null, camera: null, lens: null, lat: 46.5123, lng: 8.1234 }, uploadedBy: adminId,
+      // #570: exposure settings ride through the dump and the restore CLI with everything else.
+      exif: { ...emptyMediaExif(), lat: 46.5123, lng: 8.1234, ...EXPOSURE }, uploadedBy: adminId,
     });
 
     const posts = pgPostStore(productionPool);
@@ -429,11 +433,20 @@ maybe('restore rehearsal: app backup → fresh database → restore CLI → prod
     const item = `${restored.base}/media/items/${photoKey}`;
     expect(await (await fetch(item, { headers: { cookie: admin } })).json()).toMatchObject({
       key: photoKey, folder: 'reisen/bergsee', alt: LIBRARY.alt, caption: LIBRARY.caption, tags: ['see', 'morgen'],
-      status: 'ready', uploadedBy: adminId, exif: { lat: 46.5123, lng: 8.1234 },
+      status: 'ready', uploadedBy: adminId, exif: { lat: 46.5123, lng: 8.1234, ...EXPOSURE },
     });
+    // The exposure settings carry no location: an author sees them, never the coordinates.
     expect(await (await fetch(item, { headers: { cookie: author } })).json()).toMatchObject({
-      key: photoKey, uploadedBy: null, exif: { lat: null, lng: null },
+      key: photoKey, uploadedBy: null, exif: { lat: null, lng: null, ...EXPOSURE },
     });
+    // #570: the Versions list is read from the restored files themselves — every variant, never the original.
+    const { versions } = await (await fetch(`${item}?versions=1`, { headers: { cookie: author } })).json() as {
+      versions: { availability: string; items: { src: string; bytes: number }[] };
+    };
+    expect(versions.availability).toBe('available');
+    expect(versions.items.map((version) => version.src.slice(IMAGE_BASE.length + 1)).sort())
+      .toEqual(storedFiles.filter((file) => !file.includes('-orig.')).sort());
+    expect(versions.items.every((version) => version.bytes > 0)).toBe(true);
 
     // The image host serves the untarred variants byte-for-byte; the original stays private.
     for (const file of storedFiles) {

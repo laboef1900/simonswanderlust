@@ -253,3 +253,21 @@ describe('rebuild CLI wiring (spawned process)', () => {
     expect(r.stderr).toContain('src/cli.ts rebuild');
   }, 30_000);
 });
+
+// Wiring for backfillExifMain (#570). Both guards fire before a pool is
+// created; the run itself is covered against Postgres in
+// exif-backfill.integration.test.ts.
+describe('backfill-exif CLI wiring (spawned process)', () => {
+  it('stops at the missing DATABASE_URL rather than guessing a database', async () => {
+    const r = await runCli(['backfill-exif'], envWithoutDatabaseUrl());
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('DATABASE_URL is required for backfill-exif');
+  }, 30_000);
+
+  it('is listed in the usage, next to audit-exif', async () => {
+    const r = await runCli([], envWithoutDatabaseUrl());
+    expect(r.code).toBe(1);
+    const exec = 'docker compose exec app node --import tsx src/cli.ts';
+    expect(r.stderr).toContain(`  ${exec} audit-exif\n  ${exec} backfill-exif\n`);
+  }, 30_000);
+});

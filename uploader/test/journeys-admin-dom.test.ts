@@ -6,6 +6,7 @@ import Fastify from 'fastify';
 import { registerJourneyAdmin } from '../src/journeys-admin.js';
 import { memoryJourneyStore } from '../src/journeys.js';
 import { memoryPostStore } from '../src/posts.js';
+import { emptyMediaExif } from '../src/exif.js';
 import { memoryMediaStore } from '../src/media-store.js';
 import { idleBuildState } from './build-fixture.js';
 import { editorDocument, EditorEvent, type EditorElement } from './editor-dom-harness.js';
@@ -34,7 +35,7 @@ async function storedEditorFixture() {
     const post = await posts.upsertDraft({ translationKey: '', status: 'draft', shared: { date: '2026-01-01', countryCode: 'DE', region: 'europe', coordinates: { lat: 1, lng: 1 } }, de: locale('de'), en: locale('en') });
     keys.push(post.translationKey);
   }
-  for (const key of ['hero', 'chosen']) await media.upsert({ key, width: 640, height: 480, origBytes: 1, status: 'ready', exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null }, uploadedBy: null });
+  for (const key of ['hero', 'chosen']) await media.upsert({ key, width: 640, height: 480, origBytes: 1, status: 'ready', exif: emptyMediaExif(), uploadedBy: null });
   const locale = { title: 'Journey', slug: 'journey', intro: 'Original intro', heroImage: { src: imageBase + '/hero', width: 640, height: 480, alt: 'Landscape' }, omitted: false };
   const created = await journeys.create({ de: structuredClone(locale), en: structuredClone(locale), members: keys });
   const published = await journeys.publish(created.id, created.updatedAt);

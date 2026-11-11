@@ -19,6 +19,8 @@ import { prepareNativeRestore, restoreWithOnboarding } from './onboarding-restor
 import { publishRestoreFence } from './onboarding-fence.js';
 import { buildFailureMessage, type BuildFailureCode } from './build-state.js';
 import { configuredOriginRoles, validateCanonicalRoles, type OriginRoles } from './canonical-origin.js';
+import { backfillExif, hasExposureColumns } from './exif-backfill.js';
+import { pgMediaStore } from './media-store.js';
 
 /** Reusable: process an in-memory image and store its variants.
  * Keys are content-hash versioned like POST /upload, so a re-upload mints a
@@ -363,6 +365,39 @@ async function auditExifMain(): Promise<void> {
   console.log('\nBack up first, then: node --import tsx src/cli.ts strip-gps --dry-run');
 }
 
+/**
+ * Fill the #570 exposure columns of existing photos from their retained
+ * originals (exif-backfill.ts). Runs beside the live app: it writes only those
+ * five columns, one conditional UPDATE per row, so it needs no lock.
+ *
+ * Exit codes: 0 done — missing originals are normal for legacy keys; 2 some
+ * key was ambiguous, unreadable or unsafe, so an operator notices; 1 the
+ * schema is not migrated yet (or DATABASE_URL is missing).
+ */
+async function backfillExifMain(): Promise<void> {
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) {
+    console.error('DATABASE_URL is required for backfill-exif.');
+    process.exit(1);
+  }
+  const storageDir = process.env.STORAGE_DIR ?? './data/images';
+  const pool = createPool(databaseUrl);
+  try {
+    // The upgraded app adds the columns on boot; without them the first UPDATE would fail.
+    if (!await hasExposureColumns(pool)) {
+      console.error('Start the upgraded app once (it migrates the schema), then re-run backfill-exif.');
+      process.exitCode = 1;
+      return;
+    }
+    // The base URL only shapes URLs the store derives on read; the backfill reads none.
+    const store = pgMediaStore(pool, { baseUrl: process.env.PUBLIC_BASE_URL ?? 'http://localhost:3000' });
+    const report = await backfillExif(store, storageDir, (message) => console.log(message));
+    if (report.ambiguousOriginal + report.unreadable + report.invalidKey > 0) process.exitCode = 2;
+  } finally {
+    await pool.end();
+  }
+}
+
 /** A 60s window is a whole build's worth of headroom for a request the CLI
  * makes and revokes in the same function. It is not a login. */
 export const REBUILD_SESSION_TTL_MS = 60_000;
@@ -480,6 +515,7 @@ async function rebuildMain(): Promise<void> {
 
 async function main(): Promise<void> {
   if (process.argv[2] === 'audit-exif') return auditExifMain();
+  if (process.argv[2] === 'backfill-exif') return backfillExifMain();
   if (process.argv[2] === 'restore') return restoreMain(process.argv.slice(3));
   if (process.argv[2] === 'onboarding-retire' || process.argv[2] === 'prepare-native-restore') {
     return onboardingRecoveryMain(process.argv[2], process.argv.slice(3));
@@ -501,7 +537,8 @@ async function main(): Promise<void> {
       `  (offline) ${offline} prepare-native-restore [--yes]\n` +
       `  (offline) ${offline} onboarding-retire\n` +
       `  ${exec} set-password <username> [newPassword]\n` +
-      `  ${exec} audit-exif`,
+      `  ${exec} audit-exif\n` +
+      `  ${exec} backfill-exif`,
     );
     process.exit(1);
   }
