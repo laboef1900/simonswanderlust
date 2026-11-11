@@ -1555,7 +1555,7 @@
   async function deleteOne(item) {
     var ok = await window.AdminConfirm.ask({
       title: 'Delete this photo?',
-      body: '"' + (item.title || item.key) + '"\n\nThe image files and its metadata are removed. This cannot be undone.',
+      body: '"' + photoName(item) + '"\n\nThe image files and its metadata are removed. This cannot be undone.',
       confirmLabel: 'Delete',
       danger: true,
     });

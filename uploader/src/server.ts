@@ -599,7 +599,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
    * panel's observation read) and skipped for `processing` rows: the encoding
    * poll GETs exactly those keys every 3 s, library keys share one directory
    * per year, and their file set is still in flux. A stored key that fails
-   * `assertStoredMediaKey` (a hand-edited or restored row) and every storage
+   * `assertSafeKey` (a hand-edited or restored row) and every storage
    * error other than ENOENT answer `unavailable`; the error embeds the
    * filesystem path, so only a fixed line is logged (stdout via console —
    * `app.log` is a no-op, the app runs with `logger: false`).

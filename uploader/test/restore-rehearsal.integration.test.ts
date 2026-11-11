@@ -288,6 +288,10 @@ maybe('restore rehearsal: app backup → fresh database → restore CLI → prod
     const comments = pgCommentStore(productionPool);
     const reader = await comments.create({ translationKey: tk, locale: 'de', name: 'Leserin', body: 'Wunderschöner See!' });
     await comments.approve(reader.id);
+    // Real replies follow a comment by seconds, not microseconds. Back-to-back
+    // inserts can share a millisecond, and the dump keeps millisecond precision,
+    // so the restored thread would order the pair by its random ids (a flake).
+    await productionPool.query(`UPDATE comments SET created_at = created_at - interval '1 second' WHERE id = $1`, [reader.id]);
     await comments.replyAsAuthor({ translationKey: tk, body: 'Danke fürs Lesen!', postedLocale: 'de' }, 'Rehearsal author');
     await comments.create({ translationKey: tk, locale: 'en', name: 'Waiting reader', body: 'Still in moderation' });
 

@@ -415,3 +415,26 @@ columns is never part of rollback (Golden Rule 3).
   directory cache, schema-scoped column check, fixed log categories for the backfill;
   widen-only bounds; `equiv.` passed from `copy`, case-insensitive `F`, format names as data;
   release facts in the project-status entry.
+
+## Pre-merge fixes (owner request after PR review, 2026-11-11)
+
+Findings from the PR review that were outside the original scope, fixed at the owner's request
+before merge. None changes the approved design; the first tightens an existing guard.
+
+- **Trailing-slash storage keys.** `assertSafeKey` (`storage.ts`) now refuses a key ending in
+  `/`. `dirname`/`basename` resolved `trips/x/` to the sibling key `trips/x`, so an admin
+  `DELETE /media/items/trips/x/` passed the usage check (which looked for `…/trips/x/`) and then
+  deleted `trips/x`'s variants and original; the #570 versions list and backfill had the same
+  aliasing. No key producer mints a trailing slash (`contentHashKey` appends `-<hash8>`,
+  WordPress keys end in a file name), so no legitimate key is refused. The interim
+  `assertStoredMediaKey` helper is removed: the central guard covers every reader and writer.
+  Tests: `storage.test.ts`, `media-files.test.ts` (sibling files survive), `media-routes.test.ts`
+  (`DELETE` answers 400 before the usage check). Reviewed by `anthropic/claude-fable-5-2`: no
+  substantiated findings; its two test/comment nits are applied.
+- **Delete confirm** names an untitled photo by its file name (`photoName`), never its storage
+  path, matching the discard confirm.
+- **Restore-rehearsal flake.** The test created a reader comment and the author's reply within the
+  same millisecond; the dump keeps millisecond precision, so the restored thread ordered the pair
+  by random id. The fixture now dates the reader comment one second earlier. The dump's
+  millisecond precision for `comments.created_at` is unchanged (out of scope; only same-ms
+  comments are affected).

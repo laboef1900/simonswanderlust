@@ -185,25 +185,12 @@ async function headerHeight(file: string): Promise<number | null> {
 }
 
 /**
- * `assertSafeKey` for a key READ from a database row (#570 readers).
- *
- * @ai-warning `assertSafeKey` admits a trailing slash (`trips/x/`), which
- * `dirname`/`basename` then resolve to the sibling key `trips/x` — so a
- * hand-edited or restored row could read another photo's files. A stored key
- * never ends in `/` (`contentHashKey` appends `-<hash8>`), so refuse it here.
- */
-export function assertStoredMediaKey(key: string): void {
-  assertSafeKey(key);
-  if (key.endsWith('/')) throw new Error('unsafe storage key (trailing slash)');
-}
-
-/**
  * The variant files that exist for `key`, sorted by width and then AVIF, WebP,
  * JPEG. The DISK is the authoritative source (media-store.ts), so legacy,
  * partial and JPEG-only sets list exactly what is there.
  *
  * @ai-warning `key` comes from a database row here, and a row can be
- * hand-edited or restored from a dump: `assertStoredMediaKey` is re-asserted BEFORE
+ * hand-edited or restored from a dump: `assertSafeKey` is re-asserted BEFORE
  * any path is built, like `deleteMedia`, and its exact-base match keeps `hero`
  * from listing `hero-b`. Regular files only — `Dirent.isFile()` and then
  * `lstat().isFile()` — so a symlink is never followed and its target's size or
@@ -214,7 +201,7 @@ export function assertStoredMediaKey(key: string): void {
  * the caller reports it as unavailable and must not log it with the path.
  */
 export async function listVariantFiles(storageDir: string, key: string): Promise<VariantFile[]> {
-  assertStoredMediaKey(key);
+  assertSafeKey(key);
   const dir = join(resolve(storageDir), dirname(key));
   const base = basename(key);
   let entries;

@@ -23,8 +23,9 @@ import { basename, dirname, join, resolve } from 'node:path';
 import sharp from 'sharp';
 import type { DbPool } from './db.js';
 import { parseExif, type MediaExposure } from './exif.js';
-import { assertStoredMediaKey, ORIGINAL_FILE_RE } from './media-files.js';
+import { ORIGINAL_FILE_RE } from './media-files.js';
 import type { MediaStore } from './media-store.js';
+import { assertSafeKey } from './storage.js';
 
 export interface ExifBackfillReport {
   /** Media rows visited. */
@@ -39,7 +40,7 @@ export interface ExifBackfillReport {
   ambiguousOriginal: number;
   /** The directory or the original could not be read. */
   unreadable: number;
-  /** The stored key fails `assertStoredMediaKey`; nothing was read for it. */
+  /** The stored key fails `assertSafeKey`; nothing was read for it. */
   invalidKey: number;
 }
 
@@ -136,7 +137,7 @@ export async function backfillExif(
   for (const key of await store.allKeys()) {
     report.scanned++;
     try {
-      assertStoredMediaKey(key);
+      assertSafeKey(key);
     } catch {
       report.invalidKey++; // counted only: no path is built and the key is never echoed
       continue;

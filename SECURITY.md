@@ -785,7 +785,9 @@ multiple replicas, limits would be counted per replica.)
 
 - **Storage keys** pass `assertSafeKey` in `storeOriginal` — the central chokepoint for every write
   path (direct upload *and* the WordPress re-host path). Keys must match `^[a-z0-9][a-z0-9/_-]*$`
-  with no `..` or `//`, so a write can never escape `STORAGE_DIR` (path-traversal defense), and
+  with no `..`, `//` or trailing `/`, so a write can never escape `STORAGE_DIR` (path-traversal
+  defense) and a key can never alias its sibling (`trips/x/` would resolve to `trips/x`'s files in
+  `DELETE /media/items/*`, the versions list and the backfill, past the usage check), and
   are capped at **200 characters / 8 path segments** (`MAX_KEY_LEN`, `MAX_KEY_DEPTH`, #133) so a
   client-chosen key can neither `mkdir -p` an arbitrarily deep tree nor fail with `ENAMETOOLONG`
   after passing the regex. `POST /upload` validates the folder and the versioned key before any

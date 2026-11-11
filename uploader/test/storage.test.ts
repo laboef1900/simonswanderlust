@@ -180,6 +180,11 @@ describe('assertSafeKey bounds (#133)', () => {
     await expect(readdir(join(dir, 'a'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it('rejects a trailing slash, which dirname/basename would read as the sibling key', () => {
+    expect(() => assertSafeKey('trips/x/')).toThrow(/trailing slash/);
+    expect(() => assertSafeKey('trips/x')).not.toThrow();
+  });
+
   // The producers every real key comes from must sit inside the cap.
   it('a versioned library key fits with room to spare', () => {
     const key = contentHashKey(`library/2026/${'x'.repeat(60)}`, Buffer.from('img'));

@@ -160,6 +160,13 @@ describe('deleteMedia', () => {
       await expect(deleteMedia(dir, bad)).rejects.toThrow(/key/i);
     }
   });
+
+  it('refuses a trailing-slash key, which would otherwise delete the sibling key\'s files', async () => {
+    await put('trips/x-640.webp');
+    await put('trips/x-orig.jpg');
+    await expect(deleteMedia(dir, 'trips/x/')).rejects.toThrow(/trailing slash/);
+    expect((await readdir(join(dir, 'trips'))).sort()).toEqual(['x-640.webp', 'x-orig.jpg']);
+  });
 });
 
 // #570: the Versions list. The disk is the authoritative source for which

@@ -2835,6 +2835,14 @@ describe('media-browser focus after actions', () => {
     expect(page.activeElement()).toBe(page.el('emptyChoosePhotos'));
   });
 
+  it('names an untitled photo by its file name in the delete confirm, never by its storage path', async () => {
+    const page = loadPage();
+    const key = 'library/2026/l1002345-1a2b3c4d';
+    await open(page, [{ ...item(key), title: '' }, item('b')]);
+    await deletePhoto(page, 0);
+    expect(page.confirms).toEqual(['"l1002345-1a2b3c4d"\n\nThe image files and its metadata are removed. This cannot be undone.']);
+  });
+
   it('keeps focus on Save details after saving and says so', async () => {
     const page = loadPage();
     await open(page, [item('a')]);

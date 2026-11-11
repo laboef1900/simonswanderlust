@@ -194,7 +194,7 @@ describe('backfillExif', () => {
     await mkdir(storage);
     // A readable original sits exactly where the traversing key points.
     await put('outside/secret-orig.jpg', await original());
-    // `outside/secret/` passes assertSafeKey but would resolve to the sibling key `outside/secret`.
+    // `outside/secret/` would resolve to the sibling key `outside/secret`; assertSafeKey refuses it.
     const unsafe = ['../outside/secret', 'Evil', 'a.b', `long/${'k'.repeat(5000)}`, 'outside/secret/'];
     for (const key of unsafe) await add(store, key);
 

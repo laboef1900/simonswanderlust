@@ -349,7 +349,7 @@ describe('GET /media/items/* details (#570)', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
       // A row can be hand-edited or restored from a dump: its key is re-checked
-      // before any path is built. None of these passes assertStoredMediaKey
+      // before any path is built. None of these passes assertSafeKey
       // (`blocked/y/` would otherwise resolve to the sibling key `blocked/y`).
       await photo(b.media, 'Evil');
       await photo(b.media, 'a.b');
@@ -368,5 +368,21 @@ describe('GET /media/items/* details (#570)', () => {
       expect(error).not.toHaveBeenCalled();
       expect(log).not.toHaveBeenCalled();
     } finally { warn.mockRestore(); error.mockRestore(); log.mockRestore(); await b.app.close(); }
+  });
+});
+
+describe('DELETE /media/items/* key guard', () => {
+  // `trips/x/` used to pass the key guard: the usage check then looked for
+  // `…/trips/x/`, which no post references, while deleteMedia resolved it to
+  // the sibling key `trips/x` and removed that photo's files and original
+  // (file survival is pinned on deleteMedia itself in media-files.test.ts).
+  it('refuses a trailing-slash key with 400 before the usage check', async () => {
+    const b = await build();
+    try {
+      await photo(b.media, 'trips/x');
+      const res = await b.app.inject({ method: 'DELETE', url: '/media/items/trips/x/', cookies: b.cookie });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toMatch(/trailing slash/);
+    } finally { await b.app.close(); }
   });
 });
