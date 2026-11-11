@@ -3,6 +3,7 @@ import { createPublicationProjection, galleryPending, postPublicationCounts, pro
 import type { PublicationFact } from '../src/publication-contract.js';
 import type { ReleaseObservation } from '../src/release-manifest.js';
 import type { ReleaseManifestV1 } from '../../site/src/lib/publication-manifest.js';
+import { emptyMediaExif } from '../src/exif.js';
 import { memoryMediaStore } from '../src/media-store.js';
 
 const ORIGIN = 'https://images.example';
@@ -91,7 +92,7 @@ describe('shared current-release gallery summary', () => {
   it('measures field changes, reverts, post-read edits and rebuild inclusion without caching working metadata', async () => {
     const media = memoryMediaStore({ baseUrl: ORIGIN });
     await media.upsert({ key: 'photo', width: 800, height: 600, origBytes: 1, status: 'ready',
-      exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null }, uploadedBy: null,
+      exif: emptyMediaExif(), uploadedBy: null,
       alt: { de: 'Alt', en: 'English' }, caption: { de: 'Caption', en: 'English caption' } });
     const photo = { src: `${ORIGIN}/photo`, alt: 'Alt', caption: 'Caption' };
     const posts: ReleaseManifestV1['posts'] = [
@@ -123,7 +124,7 @@ describe('shared current-release gallery summary', () => {
   it('excludes disabled/omitted locale occurrences, missing media and foreign keys', async () => {
     const media = memoryMediaStore({ baseUrl: ORIGIN });
     await media.upsert({ key: 'photo', width: 1, height: 1, origBytes: 1, status: 'ready',
-      exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null }, uploadedBy: null, alt: { de: 'new', en: 'new' } });
+      exif: emptyMediaExif(), uploadedBy: null, alt: { de: 'new', en: 'new' } });
     const current = release([
       { translationKey: 'story', locale: 'en', slug: 'trip', digest: B, gallery: [{ src: `${ORIGIN}/photo`, alt: 'old', caption: '' }] },
       { translationKey: 'story', locale: 'de', slug: 'reise', digest: A, gallery: [

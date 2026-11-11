@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { loadGalleryMetadata } from '../src/gallery-metadata.js';
+import { emptyMediaExif } from '../src/exif.js';
 import { memoryMediaStore, type MediaStore } from '../src/media-store.js';
 import type { ImageDims, PostLocale } from '../src/posts.js';
 
 // The draft preview and the alt audit resolve current Media-library gallery
 // text through this one function (2026-10-19 gallery-library-metadata spec).
 const BASE = 'https://img.example.com';
-const exif = { takenAt: null, camera: null, lens: null, lat: 51.5, lng: -0.1 };
+const exif = { ...emptyMediaExif(), lat: 51.5, lng: -0.1 };
 const dims: ImageDims = { width: 800, height: 600, alt: 'Kopie', caption: 'Kopie' };
 
 function loc(locale: 'de' | 'en', images: Record<string, ImageDims>): PostLocale {

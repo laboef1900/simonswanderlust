@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import vm from 'node:vm';
 import { setImmediate } from 'node:timers/promises';
 import { ui } from '../../site/src/i18n/ui.js';
+import { emptyMediaExif } from '../src/exif.js';
 import { memoryMediaStore, type MediaQuery, type MediaStore, type NewMediaItem } from '../src/media-store.js';
 import { normalizeGalleryFences, type ImageMeta } from '../src/body-content.js';
 import { editorDocument } from './editor-dom-harness.js';
@@ -13,7 +14,7 @@ const copy = Object.fromEntries(Object.entries(ui.en)
   .filter(([key]) => key.startsWith('editor.chrome.'))
   .map(([key, value]) => [key.slice('editor.chrome.'.length), value]));
 const baseUrl = 'https://images.example';
-const noExif = { takenAt: null, camera: null, lens: null, lat: null, lng: null };
+const noExif = emptyMediaExif();
 interface PickedItem {
   src: string; title?: string; width?: number; height?: number; fromPost?: boolean; format?: string;
   alt?: { de?: string; en?: string }; caption?: { de?: string; en?: string };

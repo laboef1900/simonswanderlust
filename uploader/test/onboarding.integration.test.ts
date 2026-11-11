@@ -333,6 +333,46 @@ describe.skipIf(!url)('onboarding PostgreSQL boot and snapshot boundary', () => 
     expect((await pool.query('SELECT * FROM upload_receipts')).rows).toEqual([]);
     expect((await pool.query('SELECT last_save_id, last_save_by FROM pages')).rows.every(row => row.last_save_id === null && row.last_save_by === null)).toBe(true);
   });
+  // #570 added five nullable exposure columns to `media`. A bootstrap-only
+  // database from the previous release has none of them; a boot interrupted
+  // between two of the ALTERs has some.
+  it.each([
+    ['none of the exposure columns (the previous release)', ['focal_length', 'focal_length_35mm', 'f_number', 'iso', 'exposure_time']],
+    ['some of them (a boot interrupted mid-migration)', ['iso', 'exposure_time']],
+  ] as const)('admits a pre-#570 media table with %s, and initialization completes it', async (_shape, missing) => {
+    await ensureSchema(pool);
+    await assertBootstrapOnlyTarget(pool, guard);
+    await pool.query(`ALTER TABLE media ${missing.map(column => `DROP COLUMN ${column}`).join(', ')}`);
+    await assertBootstrapOnlyTarget(pool, guard);
+    expect(await prepareNativeRestore(pool, { storageDir: paths.storageDir, assertOwner: guard, confirm: async () => true })).toBe(true);
+    await assertBootstrapOnlyTarget(pool, guard);
+    expect((await pool.query(`SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns
+      WHERE table_schema=current_schema() AND table_name='media'
+        AND column_name IN ('focal_length','focal_length_35mm','f_number','iso','exposure_time') ORDER BY column_name`)).rows).toEqual([
+      { column_name: 'exposure_time', data_type: 'double precision', is_nullable: 'YES', column_default: null },
+      { column_name: 'f_number', data_type: 'double precision', is_nullable: 'YES', column_default: null },
+      { column_name: 'focal_length', data_type: 'double precision', is_nullable: 'YES', column_default: null },
+      { column_name: 'focal_length_35mm', data_type: 'integer', is_nullable: 'YES', column_default: null },
+      { column_name: 'iso', data_type: 'integer', is_nullable: 'YES', column_default: null },
+    ]);
+  });
+  it.each([
+    'ALTER TABLE media ALTER COLUMN iso TYPE bigint',
+    'ALTER TABLE media ALTER COLUMN focal_length TYPE real',
+    'ALTER TABLE media ALTER COLUMN focal_length_35mm TYPE double precision',
+    'ALTER TABLE media ALTER COLUMN f_number SET NOT NULL',
+    'ALTER TABLE media ALTER COLUMN exposure_time SET DEFAULT 0',
+    'ALTER TABLE media ADD CONSTRAINT media_iso_check CHECK (iso > 0)',
+    'ALTER TABLE media ADD COLUMN shutter_count integer',
+  ])('refuses a media exposure column that is not exactly the bootstrap shape: %s', async sql => {
+    await ensureSchema(pool);
+    await assertBootstrapOnlyTarget(pool, guard);
+    await pool.query(sql);
+    await expect(assertBootstrapOnlyTarget(pool, guard)).rejects.toThrow(/Preparation refuses/);
+    await expect(prepareNativeRestore(pool, { storageDir: paths.storageDir, assertOwner: guard, confirm: async () => true })).rejects.toThrow();
+    expect(await readRestoreFence(paths.storageDir)).toBe(false);
+    expect((await pool.query('SELECT * FROM site_identity')).rows).toEqual([]);
+  });
   it.each(['navigation-table', 'navigation-seed', 'page-columns'] as const)('repairs only genuinely absent generic page metadata: %s', async missing => {
     await ensureSchema(pool);
     await assertBootstrapOnlyTarget(pool, guard);

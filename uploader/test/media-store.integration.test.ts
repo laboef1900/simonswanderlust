@@ -1,11 +1,15 @@
 import { describe, expect, it, beforeAll, afterAll, beforeEach } from 'vitest';
+import { randomUUID } from 'node:crypto';
+import pg from 'pg';
 import { createPool, ensureSchema, type DbPool } from '../src/db.js';
+import { emptyExposure, emptyMediaExif } from '../src/exif.js';
 import { pgMediaStore, MediaStoreError, type MediaStore } from '../src/media-store.js';
 
 const url = process.env.TEST_DATABASE_URL;
 const maybe = url ? describe : describe.skip;
 const BASE = 'https://img.simonswanderlust.com';
-const noExif = { takenAt: null, camera: null, lens: null, lat: null, lng: null };
+const noExif = emptyMediaExif();
+const EXPOSURE_COLUMNS = ['focal_length', 'focal_length_35mm', 'f_number', 'iso', 'exposure_time'];
 
 /**
  * @ai-warning pgMediaStore is covered ONLY here, and this suite is
@@ -152,14 +156,22 @@ maybe('pgMediaStore (integration)', () => {
     const saved = await add('library/2025/a', {
       folder: 'Island', title: 'Sunrise', tags: ['dawn', 'sea'],
       alt: { de: 'DE', en: 'EN' }, caption: { de: 'CD', en: 'CE' },
-      exif: { takenAt: new Date('2026-07-04T18:23:11Z'), camera: 'LEICA Q2', lens: 'Summilux', lat: 63.0759, lng: 10.3887 },
+      exif: {
+        takenAt: new Date('2026-07-04T18:23:11Z'), camera: 'LEICA Q2', lens: 'Summilux', lat: 63.0759, lng: 10.3887,
+        focalLength: 28, focalLength35mm: 35, fNumber: 1.7, iso: 200, exposureTime: 0.004,
+      },
     });
     expect(saved).toMatchObject({
       key: 'library/2025/a', folder: 'Island', title: 'Sunrise',
       alt: { de: 'DE', en: 'EN' }, caption: { de: 'CD', en: 'CE' },
       tags: ['dawn', 'sea'], width: 800, height: 600, status: 'ready',
       src: `${BASE}/library/2025/a`, thumbSrc: `${BASE}/library/2025/a-640.webp`,
+      fullSrc: `${BASE}/library/2025/a-800.webp`,
     });
+    // #570: five distinct values, so a column bound to the wrong parameter cannot pass.
+    expect(saved.exif).toMatchObject({ focalLength: 28, focalLength35mm: 35, fNumber: 1.7, iso: 200, exposureTime: 0.004 });
+    expect((await store.get('library/2025/a'))?.exif).toEqual(saved.exif);
+    expect((await store.list({})).items[0]?.exif).toEqual(saved.exif);
     expect(saved.exif.lat).toBeCloseTo(63.0759, 4);
     // @ai-warning: EXIF wall-clock is stored as if UTC — read with getUTC*.
     expect(saved.exif.takenAt?.getUTCHours()).toBe(18);
@@ -176,11 +188,191 @@ maybe('pgMediaStore (integration)', () => {
       format: 'jpeg',
       encoding: { convertJpeg: false, webpQuality: 82, avifQuality: 62 },
       thumbSrc: `${BASE}/library/2026/jpeg-640.jpeg`,
+      fullSrc: `${BASE}/library/2026/jpeg-800.jpeg`,
     });
     expect(await store.get('library/2026/jpeg')).toMatchObject({
       format: 'jpeg',
       encoding: { convertJpeg: false, webpQuality: 82, avifQuality: 62 },
     });
+  });
+
+  // #570: the fullscreen viewer's URL — the intrinsic-width variant, only once ready.
+  it('derives fullSrc from the stored width, status and format', async () => {
+    expect((await add('wide', { width: 3000, height: 2000 })).fullSrc).toBe(`${BASE}/wide-3000.webp`);
+    expect((await add('small', { width: 500 })).fullSrc).toBe(`${BASE}/small-500.webp`);
+    expect((await add('unknown', { width: 0, height: 0 })).fullSrc).toBeNull();
+    for (const status of ['processing', 'failed', 'missing'] as const) {
+      expect((await add(`not-ready-${status}`, { status, width: 3000 })).fullSrc).toBeNull();
+    }
+    await store.setStatus('not-ready-processing', 'ready');
+    expect((await store.get('not-ready-processing'))?.fullSrc).toBe(`${BASE}/not-ready-processing-3000.webp`);
+  });
+
+  describe('exposure columns (#570)', () => {
+    const exposure = { focalLength: 4.3, focalLength35mm: 24, fNumber: 1.8, iso: 125, exposureTime: 1 / 500 };
+    /** The five columns exactly as Postgres holds them — a stored NaN would read back as NaN, not null. */
+    const stored = async (key: string) => (await pool.query(
+      `SELECT focal_length, focal_length_35mm, f_number, iso, exposure_time FROM media WHERE key = $1`, [key],
+    )).rows[0];
+    const nulls = { focal_length: null, focal_length_35mm: null, f_number: null, iso: null, exposure_time: null };
+
+    it('round-trips both ends of every accepted range exactly', async () => {
+      const extremes = {
+        low: { focalLength: 0.5, focalLength35mm: 1, fNumber: 0.5, iso: 1, exposureTime: Number.MIN_VALUE },
+        high: { focalLength: 5000, focalLength35mm: 10_000, fNumber: 512, iso: 10_000_000, exposureTime: 86_400 },
+        typical: exposure,
+      };
+      for (const [key, values] of Object.entries(extremes)) {
+        const saved = await add(key, { exif: { ...emptyMediaExif(), ...values } });
+        // toEqual, not toBeCloseTo: a double survives the text round-trip bit for bit.
+        expect(saved.exif).toEqual({ ...emptyMediaExif(), ...values });
+        expect((await store.get(key))?.exif).toEqual(saved.exif);
+        expect(await stored(key)).toEqual({
+          focal_length: values.focalLength, focal_length_35mm: values.focalLength35mm, f_number: values.fNumber,
+          iso: values.iso, exposure_time: values.exposureTime,
+        });
+      }
+      expect((await add('bare')).exif).toEqual(emptyMediaExif());
+      expect(await stored('bare')).toEqual(nulls);
+    });
+
+    // ON CONFLICT takes EXCLUDED.* for these, like taken_at — the rule the memory store mirrors.
+    it('a re-upsert takes the incoming exposure values', async () => {
+      await add('k', { exif: { ...emptyMediaExif(), ...exposure } });
+      expect((await add('k', { exif: { ...emptyMediaExif(), iso: 800 } })).exif).toEqual({ ...emptyMediaExif(), iso: 800 });
+      expect((await add('k')).exif).toEqual(emptyMediaExif());
+    });
+
+    // @ai-warning The control this exists for: `double precision` ACCEPTS NaN
+    // and there is no CHECK, so only the store's write-point normalization
+    // keeps a malformed number out — and a raw 100.4 would fail the integer cast.
+    it('upsert never stores NaN, an out-of-range value or a fractional integer', async () => {
+      await add('bad', {
+        exif: {
+          ...emptyMediaExif(), lens: 'kept',
+          focalLength: Number.NaN, focalLength35mm: 10_001, fNumber: Number.POSITIVE_INFINITY, iso: 0, exposureTime: -1,
+        },
+      });
+      expect(await stored('bad')).toEqual(nulls);
+      expect((await store.get('bad'))?.exif).toEqual({ ...emptyMediaExif(), lens: 'kept' });
+      const rounded = await add('rounded', { exif: { ...emptyMediaExif(), focalLength35mm: 23.6, iso: 100.4 } });
+      expect(rounded.exif).toMatchObject({ focalLength35mm: 24, iso: 100 });
+      expect(await stored('rounded')).toEqual({ ...nulls, focal_length_35mm: 24, iso: 100 });
+      // Postgres really would have taken the NaN: this is not a no-op guard.
+      await pool.query(`UPDATE media SET f_number = 'NaN' WHERE key = 'bad'`);
+      expect((await stored('bad')).f_number).toBeNaN();
+    });
+
+    it('setExposure never stores NaN, an out-of-range value or a fractional integer', async () => {
+      await add('k');
+      expect(await store.setExposure('k', {
+        focalLength: Number.NaN, focalLength35mm: 10_001, fNumber: Number.POSITIVE_INFINITY, iso: 0, exposureTime: -1,
+      })).toBe(false); // nothing storable, and the row had nothing
+      expect(await stored('k')).toEqual(nulls);
+      expect(await store.setExposure('k', {
+        focalLength: Number.NaN, focalLength35mm: 23.6, fNumber: 513, iso: 100.4, exposureTime: Number.POSITIVE_INFINITY,
+      })).toBe(true);
+      expect(await stored('k')).toEqual({ ...nulls, focal_length_35mm: 24, iso: 100 });
+      // Different raw input, same stored values: compared after normalizing.
+      expect(await store.setExposure('k', { focalLength: 0, focalLength35mm: 24.2, fNumber: null, iso: 99.6, exposureTime: 0 })).toBe(false);
+    });
+
+    it('setExposure writes only the five columns and reports whether a stored value changed', async () => {
+      const { rows } = await pool.query<{ id: string }>(
+        `INSERT INTO users (id, username, password_hash) VALUES (gen_random_uuid(), $1, 'x') RETURNING id`,
+        [`exposure-${randomUUID()}`],
+      );
+      const userId = rows[0]!.id;
+      try {
+        await add('k', {
+          folder: 'Island', title: 'Sunrise', alt: { de: 'DE', en: 'EN' }, caption: { de: 'CD', en: 'CE' }, tags: ['dawn'],
+          uploadedBy: userId, format: 'jpeg', encoding: { convertJpeg: false, webpQuality: 82, avifQuality: 62 },
+          exif: { ...emptyMediaExif(), takenAt: new Date('2026-07-04T18:23:11Z'), camera: 'LEICA Q2', lens: 'Summilux', lat: 63.0759, lng: 10.3887 },
+        });
+        await store.setStatus('k', 'failed', 'encode_failed');
+        await store.setVariantBytes('k', 4242);
+        const row = async () => (await pool.query(`SELECT * FROM media WHERE key = 'k'`)).rows[0];
+        const before = await row();
+        expect(Object.keys(before).filter((column) => EXPOSURE_COLUMNS.includes(column)).sort()).toEqual([...EXPOSURE_COLUMNS].sort());
+
+        expect(await store.setExposure('k', exposure)).toBe(true);
+        const after = await row();
+        // Every other column is byte-for-byte what it was: status, error, text, camera, GPS, uploader, timestamps.
+        expect(after).toEqual({
+          ...before, focal_length: 4.3, focal_length_35mm: 24, f_number: 1.8, iso: 125, exposure_time: 1 / 500,
+        });
+
+        // An identical second write matches no row — the backfill's idempotence.
+        expect(await store.setExposure('k', { ...exposure })).toBe(false);
+        expect(await row()).toEqual(after);
+        // The comparison is NULL-safe in both directions.
+        expect(await store.setExposure('k', { ...exposure, iso: null })).toBe(true);
+        expect(await store.setExposure('k', { ...exposure, iso: null })).toBe(false);
+        expect(await store.setExposure('k', { ...exposure, iso: 125 })).toBe(true);
+        expect(await row()).toEqual(after);
+      } finally {
+        await pool.query('DELETE FROM users WHERE id = $1', [userId]);
+      }
+      await add('bare');
+      expect(await store.setExposure('bare', emptyExposure())).toBe(false); // NULLs onto NULLs
+      expect(await store.setExposure('ghost', exposure)).toBe(false);
+      expect(await store.get('ghost')).toBeNull();
+    });
+
+    // Simulates an install from before #570 by dropping the columns from a
+    // populated table, in a schema of its own so the shared one is untouched.
+    it('the migration adds five nullable columns to a pre-#570 table, idempotently, without rewriting rows', async () => {
+      const schema = `media570_${randomUUID().replaceAll('-', '')}`;
+      await pool.query(`CREATE SCHEMA ${schema}`);
+      const scoped = new pg.Pool({ connectionString: url, options: `-c search_path=${schema}` });
+      const definitions = async () => (await scoped.query(
+        `SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns
+          WHERE table_schema = current_schema() AND table_name = 'media' AND column_name = ANY($1::text[])
+          ORDER BY column_name`, [EXPOSURE_COLUMNS],
+      )).rows;
+      try {
+        await ensureSchema(scoped);
+        const fresh = await definitions();
+        expect(fresh).toEqual([
+          { column_name: 'exposure_time', data_type: 'double precision', is_nullable: 'YES', column_default: null },
+          { column_name: 'f_number', data_type: 'double precision', is_nullable: 'YES', column_default: null },
+          { column_name: 'focal_length', data_type: 'double precision', is_nullable: 'YES', column_default: null },
+          { column_name: 'focal_length_35mm', data_type: 'integer', is_nullable: 'YES', column_default: null },
+          { column_name: 'iso', data_type: 'integer', is_nullable: 'YES', column_default: null },
+        ]);
+
+        await scoped.query(`ALTER TABLE media ${EXPOSURE_COLUMNS.map((column) => `DROP COLUMN ${column}`).join(', ')}`);
+        expect(await definitions()).toEqual([]);
+        await scoped.query(
+          `INSERT INTO media (key, title, status, width, height, orig_bytes, camera, lens, lat, lng)
+           VALUES ('legacy/photo', 'Kept', 'ready', 800, 600, 10, 'LEICA Q2', 'Summilux', 63.0759, 10.3887)`,
+        );
+        const before = (await scoped.query('SELECT * FROM media')).rows;
+
+        await ensureSchema(scoped);
+        await ensureSchema(scoped); // it runs on every boot
+        // The migrated table matches a fresh install's: same types, nullable, no default.
+        expect(await definitions()).toEqual(fresh);
+        // No backfill and no rewrite: the old row is intact and simply reads NULL.
+        expect((await scoped.query('SELECT * FROM media')).rows).toEqual(
+          before.map((row) => ({ ...row, focal_length: null, focal_length_35mm: null, f_number: null, iso: null, exposure_time: null })),
+        );
+        // No CHECK guards the new columns (the bounds live at the write points).
+        const checks = (await scoped.query<{ definition: string }>(
+          `SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint
+            WHERE conrelid = to_regclass('media') AND contype = 'c'`,
+        )).rows.map((check) => check.definition);
+        expect(checks.filter((definition) => EXPOSURE_COLUMNS.some((column) => definition.includes(column)))).toEqual([]);
+
+        const migrated = pgMediaStore(scoped, { baseUrl: BASE });
+        expect((await migrated.get('legacy/photo'))?.exif).toMatchObject({ camera: 'LEICA Q2', lat: 63.0759, ...emptyExposure() });
+        expect(await migrated.setExposure('legacy/photo', exposure)).toBe(true);
+        expect((await migrated.get('legacy/photo'))?.exif).toMatchObject({ camera: 'LEICA Q2', ...exposure });
+      } finally {
+        await scoped.end();
+        await pool.query(`DROP SCHEMA ${schema} CASCADE`);
+      }
+    }, 30_000);
   });
 
   it('upserting a folder creates its ancestor rows', async () => {

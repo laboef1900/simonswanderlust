@@ -11,7 +11,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { DbClient, DbPool } from './db.js';
-import type { MediaExif } from './exif.js';
+import { normalizeExposure, type MediaExif, type MediaExposure } from './exif.js';
 import { storedProcessOptions, type ProcessOptions } from './pipeline.js';
 import { JPEG_FORMAT, type ImageOutputFormat } from './variants.js';
 import {
@@ -36,6 +36,7 @@ export interface MediaItem {
   key: string;
   src: string;                 // `${baseUrl}/${key}`
   thumbSrc: string | null;     // server-derived; see thumbWidth()
+  fullSrc: string | null;      // server-derived largest variant; see fullSrcFor()
   folder: string; title: string;
   alt: { de: string; en: string };
   caption: { de: string; en: string };
@@ -129,6 +130,8 @@ export interface MediaStore {
   createFolder(path: string): Promise<void>;
   renameFolder(from: string, to: string): Promise<number>;
   deleteFolder(path: string): Promise<void>;
+  /** Writes ONLY the five exposure columns (normalized); resolves true when a stored value changed. */
+  setExposure(key: string, exposure: MediaExposure): Promise<boolean>;
   /** Keys with a row but no matching file on disk are marked missing by media-sync. */
   allKeys(): Promise<string[]>;
 }
@@ -259,6 +262,28 @@ function thumbSrcFor(
   return w === null ? null : `${baseUrl}/${key}-${w}.${extension}`;
 }
 
+/**
+ * The largest variant that EXISTS for a photo — what the fullscreen viewer
+ * shows (#570).
+ *
+ * @ai-warning Server-derived for the same reason as `thumbWidth`: the client
+ * must not become a third copy of the width contract. `variantWidths()` always
+ * appends the intrinsic width (variants.ts), so `-${width}` is the full-size
+ * file — `.webp` for modern rows, `.jpeg` for JPEG-only rows. Null exactly when
+ * the thumbnail is: no variant files before `ready`, none for an unknown width.
+ */
+function fullSrcFor(
+  baseUrl: string,
+  key: string,
+  width: number,
+  status: MediaStatus,
+  format?: ImageOutputFormat,
+): string | null {
+  if (status !== 'ready' || thumbWidth(width) === null) return null;
+  const extension = format === JPEG_FORMAT ? JPEG_FORMAT : 'webp';
+  return `${baseUrl}/${key}-${width}.${extension}`;
+}
+
 // ---------------------------------------------------------------------------
 // Serialization
 // ---------------------------------------------------------------------------
@@ -280,8 +305,8 @@ export function redactForNonAdmin(item: MediaItem): MediaItem {
 // In-memory store (mirrors pgMediaStore so the suites run without a database)
 // ---------------------------------------------------------------------------
 
-/** The stored shape: everything but the two URLs, which are derived on read. */
-type MemRow = Omit<MediaItem, 'src' | 'thumbSrc'>;
+/** The stored shape: everything but the three URLs, which are derived on read. */
+type MemRow = Omit<MediaItem, 'src' | 'thumbSrc' | 'fullSrc'>;
 
 export interface MediaStoreOptions { baseUrl: string }
 
@@ -316,6 +341,7 @@ export function memoryMediaStore(opts: MediaStoreOptions): MediaStore {
     ...structuredClone(r),
     src: `${baseUrl}/${r.key}`,
     thumbSrc: thumbSrcFor(baseUrl, r.key, r.width, r.status, r.format),
+    fullSrc: fullSrcFor(baseUrl, r.key, r.width, r.status, r.format),
   });
   const need = (key: string): MemRow => {
     const r = rows.get(key);
@@ -386,7 +412,8 @@ export function memoryMediaStore(opts: MediaStoreOptions): MediaStore {
         status: item.status, error: null,
         ...(format ? { format } : {}),
         ...(encoding ? { encoding } : {}),
-        exif: { ...item.exif },
+        // pg applies the same bounds at this write point (see normalizeExposure).
+        exif: { ...item.exif, ...normalizeExposure(item.exif) },
         uploadedAt: existing?.uploadedAt ?? new Date(),
         // pg's ON CONFLICT clause never touches uploaded_by: the first
         // uploader stays, even once the FK has nulled it (#135).
@@ -462,6 +489,16 @@ export function memoryMediaStore(opts: MediaStoreOptions): MediaStore {
       r.error = s === 'failed' ? e ?? null : null;
       return true;
     },
+    async setExposure(key, exposure) {
+      const r = rows.get(key);
+      if (!r) return false;
+      const next = normalizeExposure(exposure);
+      const fields = Object.keys(next) as (keyof MediaExposure)[];
+      // Mirrors pg's `IS DISTINCT FROM` guard: an identical write changes nothing.
+      if (fields.every((field) => r.exif[field] === next[field])) return false;
+      r.exif = { ...r.exif, ...next };
+      return true;
+    },
     async setVariantBytes(key, bytes) {
       const r = rows.get(key);
       if (r) r.variantBytes = bytes;
@@ -521,6 +558,8 @@ interface MediaRow {
   status: MediaStatus; error: MediaError | null;
   taken_at: Date | null; camera: string | null; lens: string | null;
   lat: number | null; lng: number | null;
+  focal_length: number | null; focal_length_35mm: number | null;
+  f_number: number | null; iso: number | null; exposure_time: number | null;
   uploaded_at: Date; uploaded_by: string | null;
   format: unknown;
   encoding: unknown;
@@ -547,6 +586,7 @@ function rowToItem(r: MediaRow, baseUrl: string): MediaItem {
     key: r.key,
     src: `${baseUrl}/${r.key}`,
     thumbSrc: thumbSrcFor(baseUrl, r.key, r.width, r.status, format),
+    fullSrc: fullSrcFor(baseUrl, r.key, r.width, r.status, format),
     folder: r.folder, title: r.title,
     alt: { de: r.alt_de, en: r.alt_en },
     caption: { de: r.caption_de, en: r.caption_en },
@@ -555,7 +595,11 @@ function rowToItem(r: MediaRow, baseUrl: string): MediaItem {
     // bigint comes back as a string from node-postgres.
     origBytes: Number(r.orig_bytes), variantBytes: Number(r.variant_bytes),
     status: r.status, error: r.error,
-    exif: { takenAt: r.taken_at, camera: r.camera, lens: r.lens, lat: r.lat, lng: r.lng },
+    exif: {
+      takenAt: r.taken_at, camera: r.camera, lens: r.lens, lat: r.lat, lng: r.lng,
+      focalLength: r.focal_length, focalLength35mm: r.focal_length_35mm,
+      fNumber: r.f_number, iso: r.iso, exposureTime: r.exposure_time,
+    },
     uploadedAt: r.uploaded_at, uploadedBy: r.uploaded_by,
     ...(format ? { format } : {}),
     ...(encoding ? { encoding } : {}),
@@ -564,6 +608,7 @@ function rowToItem(r: MediaRow, baseUrl: string): MediaItem {
 
 const COLS = `key, folder, title, alt_de, alt_en, caption_de, caption_en, tags, width, height,
               orig_bytes, variant_bytes, status, error, taken_at, camera, lens, lat, lng,
+              focal_length, focal_length_35mm, f_number, iso, exposure_time,
               uploaded_at, uploaded_by, format, encoding`;
 
 export function pgMediaStore(pool: DbPool, opts: MediaStoreOptions): MediaStore {
@@ -673,11 +718,17 @@ export function pgMediaStore(pool: DbPool, opts: MediaStoreOptions): MediaStore 
       // always take the new value.
       const format = imageFormat(item.format);
       const encoding = mediaEncoding(format, item.encoding);
+      // @ai-warning The exposure bounds are applied HERE, at the write point, not
+      // trusted from the caller: `double precision` accepts NaN and there is no
+      // DB CHECK (see db.ts), so this is what keeps a stored row restorable.
+      const exposure = normalizeExposure(item.exif);
       await pool.query(
         `INSERT INTO media (key, folder, title, alt_de, alt_en, caption_de, caption_en, tags,
                             width, height, orig_bytes, status, error,
-                            taken_at, camera, lens, lat, lng, uploaded_by, format, encoding)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8::text[],$9,$10,$11,$12,NULL,$13,$14,$15,$16,$17,$18,$19,$20::jsonb)
+                            taken_at, camera, lens, lat, lng, uploaded_by, format, encoding,
+                            focal_length, focal_length_35mm, f_number, iso, exposure_time)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8::text[],$9,$10,$11,$12,NULL,$13,$14,$15,$16,$17,$18,$19,$20::jsonb,
+                 $21,$22,$23,$24,$25)
          ON CONFLICT (key) DO UPDATE SET
            folder = EXCLUDED.folder,
            title = CASE WHEN EXCLUDED.title = '' THEN media.title ELSE EXCLUDED.title END,
@@ -690,6 +741,8 @@ export function pgMediaStore(pool: DbPool, opts: MediaStoreOptions): MediaStore 
            status = EXCLUDED.status, error = NULL,
            taken_at = EXCLUDED.taken_at, camera = EXCLUDED.camera, lens = EXCLUDED.lens,
            lat = EXCLUDED.lat, lng = EXCLUDED.lng,
+           focal_length = EXCLUDED.focal_length, focal_length_35mm = EXCLUDED.focal_length_35mm,
+           f_number = EXCLUDED.f_number, iso = EXCLUDED.iso, exposure_time = EXCLUDED.exposure_time,
            format = EXCLUDED.format, encoding = EXCLUDED.encoding`,
         [
           item.key, folder, cleanText(item.title), cleanText(item.alt?.de), cleanText(item.alt?.en),
@@ -697,6 +750,7 @@ export function pgMediaStore(pool: DbPool, opts: MediaStoreOptions): MediaStore 
           item.width, item.height, item.origBytes, item.status,
           item.exif.takenAt, item.exif.camera, item.exif.lens, item.exif.lat, item.exif.lng,
           item.uploadedBy, format ?? null, encoding ? JSON.stringify(encoding) : null,
+          exposure.focalLength, exposure.focalLength35mm, exposure.fNumber, exposure.iso, exposure.exposureTime,
         ],
       );
       const saved = await getRow(item.key);
@@ -795,6 +849,20 @@ export function pgMediaStore(pool: DbPool, opts: MediaStoreOptions): MediaStore 
       const res = await pool.query(
         `UPDATE media SET status = $1, error = $2 WHERE key = $3 AND status = 'processing'`,
         [s, s === 'failed' ? e ?? null : null, key],
+      );
+      return (res.rowCount ?? 0) > 0;
+    },
+    async setExposure(key, exposure) {
+      const e = normalizeExposure(exposure);
+      // The row comparison is NULL-safe, so an identical second write matches no
+      // row: that is what makes the backfill idempotent and its `updated` count
+      // honest. No other column is named.
+      const res = await pool.query(
+        `UPDATE media SET focal_length = $2, focal_length_35mm = $3, f_number = $4, iso = $5, exposure_time = $6
+          WHERE key = $1
+            AND (focal_length, focal_length_35mm, f_number, iso, exposure_time)
+                IS DISTINCT FROM ($2::double precision, $3::integer, $4::double precision, $5::integer, $6::double precision)`,
+        [key, e.focalLength, e.focalLength35mm, e.fNumber, e.iso, e.exposureTime],
       );
       return (res.rowCount ?? 0) > 0;
     },

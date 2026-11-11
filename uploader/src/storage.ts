@@ -48,6 +48,10 @@ export function assertSafeKey(key: string): void {
   if (!SAFE_KEY_RE.test(key) || key.includes('..') || key.includes('//')) {
     throw new Error(`unsafe storage key "${key}" (lowercase a-z, 0-9, / _ - only; no traversal)`);
   }
+  // `dirname`/`basename` resolve `trips/x/` to the sibling key `trips/x`: a
+  // trailing slash would let a read, a delete or a usage check address another
+  // photo's files under a key no content references. No producer mints one.
+  if (key.endsWith('/')) throw new Error(`unsafe storage key "${key}" (trailing slash)`);
   if (key.split('/').length > MAX_KEY_DEPTH) {
     throw new Error(`unsafe storage key "${key}" (more than ${MAX_KEY_DEPTH} path segments)`);
   }

@@ -1148,7 +1148,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .media-sidebar,
 .media-main,
 .media-detail { min-width: 0; }
-.media-detail .media-key { margin: 0.5rem 0 0; color: var(--muted); }
 .media-detail > label:first-of-type { margin-top: 1rem; }
 .media-detail > button { margin-top: 1rem; }
 .media-detail > button + button { margin-left: 0.25rem; }
@@ -1172,8 +1171,15 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   color: var(--muted);
   font-size: 0.8125rem;
 }
-/* Camera · capture time · pixel size: measurements, in mono like the key beneath. */
+/* Camera · capture time · pixel size: measurements, set in mono. */
 .media-detail__shot { margin-top: 0.5rem; color: var(--ink); font-family: var(--mono); font-size: 0.75rem; }
+/* What can be done with the photograph, directly under it: View fullscreen and
+   Suggest with AI share one row, so the fields stay close to the photo; the
+   suggestion's status takes the full line beneath them. */
+.media-detail__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-top: 0.75rem; }
+.media-detail__actions > button { min-height: var(--control-h-sm); padding: 0.25rem 0.75rem; font-size: 0.75rem; }
+.media-detail__actions > .muted { flex-basis: 100%; margin: 0; }
+.media-detail__actions > .muted:empty { display: none; }
 .media-detail__empty { margin: 0; color: var(--ink); font-size: 0.875rem; }
 .media-detail__hints { margin: 0.75rem 0 0; padding-left: 1.1rem; font-size: 0.8125rem; line-height: 1.6; }
 
@@ -1236,8 +1242,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   font-size: 0.6875rem;
   font-weight: 500;
 }
-/* File-name titles run long; two lines each keeps the grid's rows level. The
-   detail panel shows the full key. */
+/* File-name titles run long; two lines each keeps the grid's rows level. */
 .media-cell__title,
 .media-cell__used {
   display: -webkit-box;
@@ -1261,6 +1266,13 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .keyfacts-mini { display: grid; grid-template-columns: auto 1fr; gap: 0.25rem 0.75rem; margin: 0.375rem 0 0; }
 .keyfacts-mini dt { color: var(--muted); font-size: 0.75rem; }
 .keyfacts-mini dd { margin: 0; font-size: 0.8125rem; overflow-wrap: anywhere; }
+/* Versions: one row per variant file on disk. Format · pixels · size are
+   measurements, so the rows are set in mono like the shot line. Every row is a
+   link with its own 24px target; touch gets the 44px control height. */
+.media-versions { list-style: none; margin: 0.25rem 0 0; padding: 0; font-family: var(--mono); font-size: 0.75rem; }
+.media-versions li { overflow-wrap: anywhere; }
+.media-versions a { display: inline-flex; align-items: center; min-height: 1.5rem; }
+@media (pointer: coarse) { .media-versions a { min-height: var(--control-h-sm); } }
 
 /* First native <dialog> in the admin — same choice as the blog lightbox, for
    the same reasons: focus trap, Esc, inert background and ::backdrop for free. */
@@ -4301,9 +4313,6 @@ body.editor-page .locale-chip-link:where(:not(:disabled)):hover { background: no
    A suggestion offered beside text the author already wrote reads as a note,
    never as a saved value: tinted, ruled, with its own explicit Use. */
 .posts-filters > .media-ai-open { flex: none; margin-left: auto; }
-.media-ai-suggest { margin-top: 0.75rem; }
-.media-ai-suggest > button { width: auto; min-height: var(--control-h-sm); padding: 0.25rem 0.75rem; font-size: 0.75rem; }
-.media-ai-suggest > .muted:empty { display: none; }
 .media-ai-hint {
   margin: 0.375rem 0 0;
   padding: 0.375rem 0.5rem;
@@ -4325,6 +4334,150 @@ dialog.media-ai { max-width: min(38rem, calc(100vw - 2rem)); }
 .media-ai__summary:empty { display: none; }
 .media-ai__failures { max-height: 12rem; margin: 0.75rem 0 0; padding-left: 1.25rem; overflow-y: auto; font-size: 0.8125rem; }
 .media-ai__failures li + li { margin-top: 0.25rem; }
+
+/* ---- media library: fullscreen viewer (media-browser.js, #mediaViewer) ----
+   The photograph on a solid dark stage, its caption on an opaque navy plate
+   beneath it — never over it, no scrim, no blur (DESIGN.md, The Opaque Plate
+   Rule). Measured on --navy: white type 11.5:1, the softened lines (white at
+   72%) 6.8:1, the control edge (white at 55%) 4.7:1. The studio-accent focus
+   ring is 1.9:1 there, so inside the viewer the ring is white. */
+dialog.media-viewer {
+  --viewer-soft: rgb(255 255 255 / 72%);
+  --viewer-edge: rgb(255 255 255 / 55%);
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  background: #0f141a;
+  color: #fff;
+  color-scheme: dark;
+}
+dialog.media-viewer[open] { display: grid; grid-template: minmax(0, 1fr) auto / minmax(0, 1fr); }
+dialog.media-viewer::backdrop { background: #0f141a; }
+.media-viewer__stage { position: relative; display: grid; place-items: center; min-width: 0; min-height: 0; }
+.media-viewer__stage img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+/* No photograph to show (still encoding, failed, no variant, a failed load):
+   the reason in words, in the dashed frame the panel's placeholder uses. */
+.media-viewer__note {
+  display: grid;
+  place-items: center;
+  width: min(26rem, calc(100% - 2rem));
+  max-height: calc(100% - 2rem);
+  aspect-ratio: 4 / 3;
+  margin: 0;
+  padding: 1rem;
+  border: 1px dashed var(--viewer-edge);
+  border-radius: var(--radius-lg);
+  font-size: 0.875rem;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+/* The plate takes at most 60% of the height, so the photograph always keeps
+   the rest. A caption longer than that scrolls inside the plate, under the
+   controls, which stay pinned to its foot. */
+.media-viewer__plate {
+  display: flex;
+  flex-direction: column;
+  max-height: 60dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--viewer-edge) transparent;
+  background: var(--navy);
+}
+.media-viewer__caption { min-width: 0; padding: 0.75rem 0.875rem 0; }
+.media-viewer__title { max-width: 36rem; margin: 0; color: #fff; font-size: 1rem; line-height: 1.35; overflow-wrap: anywhere; }
+/* As on a tile, a bare file name is a fallback and is set back. */
+.media-viewer__title.is-filename { color: var(--viewer-soft); font-weight: 500; }
+.media-viewer__alts {
+  display: grid;
+  gap: 0.25rem;
+  max-width: 56ch;
+  margin: 0.375rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+.media-viewer__alts li {
+  display: grid;
+  grid-template-columns: 1.625rem minmax(0, 1fr);
+  column-gap: 0.5rem;
+  align-items: baseline;
+  overflow-wrap: anywhere;
+}
+/* The language code is data, set in mono like every other code in the admin. */
+.media-viewer__code { color: var(--viewer-soft); font-family: var(--mono); font-size: 0.6875rem; font-weight: 600; }
+.media-viewer__position { margin: 0.375rem 0 0; color: var(--viewer-soft); font-size: 0.75rem; font-variant-numeric: tabular-nums; }
+/* Previous and Next sit together; Close stands apart at the far end, so a
+   repeated Next never lands on it. The row is the plate's foot, so the
+   controls do not move when a caption grows or shrinks between photos. */
+.media-viewer__controls {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 0.875rem;
+  background: var(--navy);
+}
+.media-viewer__controls #viewerClose { margin-left: auto; }
+/* The outlined secondary button on dark material: same shape and height (44px
+   on touch), white edge and label instead of the white surface. */
+.media-viewer .btn-secondary {
+  min-width: 5.5rem;
+  border-color: var(--viewer-edge);
+  background-color: transparent;
+  color: #fff;
+  transition: none;
+}
+.media-viewer .btn-secondary:where(:not([aria-disabled='true'])):hover {
+  border-color: #fff;
+  background-color: rgb(255 255 255 / 12%);
+  color: #fff;
+}
+.media-viewer .btn-secondary:where(:not([aria-disabled='true'])):active { background-color: rgb(255 255 255 / 20%); }
+/* At the first and last photo a step control stays focusable (aria-disabled,
+   never disabled) and holds its resting look under hover. */
+.media-viewer .btn-secondary[aria-disabled='true'] {
+  border-color: var(--viewer-edge);
+  background-color: transparent;
+  color: #fff;
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.media-viewer :focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+@media (min-width: 48rem) {
+  .media-viewer__stage img { padding: 1rem; }
+  .media-viewer__plate { flex-direction: row; align-items: flex-end; justify-content: space-between; }
+  .media-viewer__caption { padding: 0.875rem 0 0.875rem 1.25rem; }
+  .media-viewer__controls { flex: none; flex-wrap: nowrap; padding: 0.875rem 1.25rem 0.875rem 1.5rem; }
+  .media-viewer__controls #viewerClose { margin-left: 0.5rem; }
+}
+/* A short, wide viewport — a phone on its side, a zoomed laptop — has no height
+   to give: the plate stands beside the photograph instead of under it. */
+@media (max-height: 30rem) and (min-aspect-ratio: 5/4) {
+  dialog.media-viewer[open] { grid-template: minmax(0, 1fr) / minmax(0, 1fr) minmax(16.5rem, 36%); }
+  .media-viewer__stage img { padding: 0; }
+  .media-viewer__plate { flex-direction: column; align-items: stretch; justify-content: space-between; max-height: none; }
+  .media-viewer__caption { padding: 0.75rem 0.875rem 0; }
+  .media-viewer__controls { flex-wrap: wrap; padding: 0.75rem 0.875rem; }
+  .media-viewer__controls #viewerClose { margin-left: auto; }
+  .media-viewer .btn-secondary { min-width: 0; padding-inline: 0.625rem; }
+}
+/* Motion only for those who have not asked for less: the viewer and each new
+   photograph fade in once; nothing else moves. */
+@media (prefers-reduced-motion: no-preference) {
+  dialog.media-viewer[open],
+  .media-viewer__stage img { animation: media-viewer-in 180ms cubic-bezier(0.16, 1, 0.3, 1); }
+  .media-viewer .btn-secondary { transition: background-color 150ms ease, border-color 150ms ease; }
+}
+@keyframes media-viewer-in { from { opacity: 0; } }
 
 /* Recovery and connectivity notices stay in the workspace, never inside the
    sticky command bar; they carry .notice-warn and only get placed here. On the

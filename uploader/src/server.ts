@@ -10,7 +10,7 @@ import type { DbClient } from './db.js';
 import { encodeVariant, normalizeProcessOptions, probeImage, type ImageProbe } from './pipeline.js';
 import { WIDTHS } from './variants.js';
 import { assertSafeKey } from './storage.js';
-import { deleteMedia, imageUsage, VARIANT_FILE_RE, type UsageRef } from './media-files.js';
+import { deleteMedia, imageUsage, listVariantFiles, VARIANT_FILE_RE, type MediaVersions, type UsageRef } from './media-files.js';
 import {
   redactForNonAdmin, MediaStoreError, MediaChangedError, assertSafeFolder,
   type MediaError, type MediaItem, type MediaQuery, type MediaStatus, type MediaStore,
@@ -592,6 +592,33 @@ export function buildServer(cfg: ServerConfig): AppServer {
     return { impact, ...(usedIn ? { usedIn } : {}), ...(isAdmin ? { livePending } : {}) };
   }
 
+  /**
+   * The variant files that exist for a photo (#570) — the public files, so
+   * authors and admins see the same list.
+   *
+   * @ai-warning Reads the disk, so it is opt-in (`?versions=1`, the details
+   * panel's observation read) and skipped for `processing` rows: the encoding
+   * poll GETs exactly those keys every 3 s, library keys share one directory
+   * per year, and their file set is still in flux. A stored key that fails
+   * `assertSafeKey` (a hand-edited or restored row) and every storage
+   * error other than ENOENT answer `unavailable`; the error embeds the
+   * filesystem path, so only a fixed line is logged (stdout via console —
+   * `app.log` is a no-op, the app runs with `logger: false`).
+   */
+  async function mediaVersions(item: MediaItem): Promise<MediaVersions> {
+    if (item.status === 'processing') return { availability: 'processing' };
+    try {
+      const files = await listVariantFiles(storageDir, item.key);
+      return {
+        availability: 'available',
+        items: files.map((file) => ({ ...file, src: `${item.src}-${file.width}.${file.format}` })),
+      };
+    } catch {
+      console.warn('Media versions unavailable');
+      return { availability: 'unavailable' };
+    }
+  }
+
   const mediaError = (e: unknown, reply: import('fastify').FastifyReply) => {
     if (e instanceof MediaStoreError) {
       const status = e.code === 'not_found' ? 404 : e.code === 'exists' || e.code === 'not_empty' ? 409 : 400;
@@ -748,9 +775,14 @@ export function buildServer(cfg: ServerConfig): AppServer {
     if (!item) return reply.code(404).send({ error: 'image not found' });
     reply.header('Cache-Control', 'no-store');
     const isAdmin = Boolean(req.authUser?.isAdmin);
+    // Only this GET, and only when asked: PATCH, GET /media and every other
+    // reader of this route (gallery lookups, the bulk AI run, the encoding
+    // poll, recovery reads) keep their cost.
+    const wantsVersions = (req.query as { versions?: unknown } | undefined)?.versions === '1';
     return reply.send({
       ...serializeMedia(item, isAdmin),
       ...await mediaDetailProjection(item, isAdmin),
+      ...(wantsVersions ? { versions: await mediaVersions(item) } : {}),
     });
   });
 

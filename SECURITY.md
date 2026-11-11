@@ -621,8 +621,11 @@ the parent integration/type/runtime checks; no production migration was performe
 ### Media metadata redaction
 
 `GET /media` and `GET /media/items/*` strip **`exif.lat`, `exif.lng` and `uploadedBy`** for
-non-admin users (`redactForNonAdmin`, `uploader/src/media-store.ts`). Camera, lens and capture
-time are kept — they are useful and carry no location.
+non-admin users (`redactForNonAdmin`, `uploader/src/media-store.ts`). Camera, lens, capture
+time and, since #570, the exposure settings (`focalLength`, `focalLength35mm`, `fNumber`, `iso`,
+`exposureTime`) are kept — they carry no location. They are shown to authenticated users
+(authors and admins) only; `allowedExif()` is **not** widened by them, so
+`FocalLengthIn35mmFilm` (and an array-valued ISO) stay out of public variants.
 
 > **This is what keeps the Phase 0 privacy fix intact.** Published image variants carry no GPS
 > at all (the EXIF allow-list above), but the library *stores* coordinates as private metadata
@@ -634,6 +637,23 @@ The #317 shared gallery-description summary reads only the existing four localiz
 columns and rendered manifest occurrences. It does not widen Media item serialization or change
 this redaction contract. The approved #318 projection-key amendment remains separate from
 existing whole-item camera/lens/capture access; #317 adds no Media detail impact/pending response.
+
+**#570 boundaries** ([spec](docs/superpowers/specs/2026-11-11-issue-570-media-details-design.md)):
+
+- The five exposure values are untrusted EXIF numbers. `exposureValue()` (`exif.ts`) admits only
+  finite numbers inside fixed per-field bounds; NaN/Infinity from zero-denominator rationals,
+  out-of-range and non-numeric values become `null`. The stores normalize again at every write
+  (`upsert`, `setExposure`), and `readDump` refuses a dump carrying an invalid value before any
+  write. Malformed EXIF never fails an upload. The bounds may only widen.
+- `GET /media/items/*?versions=1` lists the variant files on disk for the details panel. It
+  re-asserts `assertSafeKey` on the stored key before building a path, takes regular files only
+  (no symlinks are followed), never lists the `-orig.*` original, and maps any storage error to
+  `versions: unavailable` without logging the path. The listed URLs are the public variants.
+- **Originals stay private:** the details panel shows the original's size only. No route serves
+  an original; they carry full EXIF including GPS.
+- The `backfill-exif` CLI reads retained originals to fill the five columns. It writes only those
+  columns, never echoes an unsafe key, and logs fixed reason categories and counts — never
+  metadata values, coordinates, paths or libvips messages.
 
 ### Upload preconditions
 
@@ -765,7 +785,9 @@ multiple replicas, limits would be counted per replica.)
 
 - **Storage keys** pass `assertSafeKey` in `storeOriginal` — the central chokepoint for every write
   path (direct upload *and* the WordPress re-host path). Keys must match `^[a-z0-9][a-z0-9/_-]*$`
-  with no `..` or `//`, so a write can never escape `STORAGE_DIR` (path-traversal defense), and
+  with no `..`, `//` or trailing `/`, so a write can never escape `STORAGE_DIR` (path-traversal
+  defense) and a key can never alias its sibling (`trips/x/` would resolve to `trips/x`'s files in
+  `DELETE /media/items/*`, the versions list and the backfill, past the usage check), and
   are capped at **200 characters / 8 path segments** (`MAX_KEY_LEN`, `MAX_KEY_DEPTH`, #133) so a
   client-chosen key can neither `mkdir -p` an arbitrarily deep tree nor fail with `ENAMETOOLONG`
   after passing the regex. `POST /upload` validates the folder and the versioned key before any
@@ -857,7 +879,9 @@ so an uploaded original's GPS never leaves the request. It reuses `/upload`'s mu
 (25 MiB, one file part), runs under the shared work-lock so a site build preempts it, and is
 single-flight (a concurrent preview gets 429), bounding sharp's memory under `mem_limit`.
 
-**Widening this list is a privacy change, not a refactor.** `audit-exif`
+**Widening this list is a privacy change, not a refactor.** #570 reconfirmed it unchanged: the
+library stores more camera settings than variants publish, but the allow-list did not move.
+`audit-exif`
 (`docker compose exec app node --import tsx src/cli.ts audit-exif`) is a
 read-only scan of the stored corpus reporting how many variants carry EXIF
 and how many carry GPS (in either the EXIF GPS IFD or an XMP packet). A

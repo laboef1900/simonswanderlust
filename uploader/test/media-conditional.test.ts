@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { canonicalizeConditional, canonicalizePatch, type MediaConditional } from '../public/media-conditional.js';
+import { emptyMediaExif } from '../src/exif.js';
 import { memoryMediaStore } from '../src/media-store.js';
 
 const seed = { key: 'photo', status: 'ready' as const, width: 800, height: 600, origBytes: 1,
-  exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null }, uploadedBy: null };
+  exif: emptyMediaExif(), uploadedBy: null };
 const makeStore = () => memoryMediaStore({ baseUrl: 'https://img.example' });
 const envelope = (patch: unknown, expect: unknown) => ({ conditional: { version: 1, patch, expect } });
 
