@@ -111,6 +111,22 @@ class FakeNode {
   dispatch(type: string, ev: Record<string, unknown> = {}): void {
     for (const fn of this.listeners[type] ?? []) fn({ type, preventDefault() {}, ...ev });
   }
+  /** Page roots bubble on to these (the document, then the window). */
+  bubbleTo: FakeNode[] = [];
+  /** Like a real bubbling event: this node, each ancestor, then the document and window, until stopped. */
+  dispatchBubbling(type: string, ev: Record<string, unknown> = {}): void {
+    let stopped = false;
+    const event = { type, target: this, preventDefault() {}, stopPropagation() { stopped = true; }, ...ev };
+    const path: FakeNode[] = [];
+    for (let n: FakeNode | null = this; n; n = n.parent) {
+      path.push(n);
+      if (!n.parent) path.push(...n.bubbleTo);
+    }
+    for (const n of path) {
+      for (const fn of n.listeners[type] ?? []) fn(event);
+      if (stopped) return;
+    }
+  }
   querySelectorAll(sel: string): FakeNode[] {
     const cls = sel.replace(/^\./, '');
     const out: FakeNode[] = [];
@@ -248,6 +264,7 @@ function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' 
   let timerSeq = 0;
   const windowEvents = new FakeNode('window');
   const documentEvents = new FakeNode('document');
+  for (const r of roots.values()) r.bubbleTo = [documentEvents, windowEvents];
   const listRequests: Deferred[] = [];
   const uploadRequests: PendingUpload[] = [];
   const patches: { url: string; body: Record<string, unknown> }[] = [];
@@ -3106,10 +3123,12 @@ describe('media-browser Versions section (#570)', () => {
     await open(page, item('a'), { availability: 'available', items: [
       { ...version('a', 'avif', 640, 427, 38 * kB), src: 'https://elsewhere.example/a-640.avif' },
       { ...version('a', 'webp', 640, 427, 52 * kB), src: 'javascript:alert(1)' },
+      // On the image origin, but carrying credentials: never a link.
+      { ...version('a', 'webp', 1280, 853, 60 * kB), src: 'https://user:secret@img.example/a-1280.webp' },
       version('a', 'avif', 1920, 1280, 412 * kB),
     ] });
     expect(page.el('dVersions').querySelectorAll('li').map((row) => row.textContent)).toEqual([
-      'AVIF · 640 × 427 · 38 kB', 'WebP · 640 × 427 · 52 kB', 'AVIF · 1920 × 1280 · 412 kB' + NEW_TAB,
+      'AVIF · 640 × 427 · 38 kB', 'WebP · 640 × 427 · 52 kB', 'WebP · 1280 × 853 · 60 kB', 'AVIF · 1920 × 1280 · 412 kB' + NEW_TAB,
     ]);
     expect(links(page).map((link) => link.href)).toEqual(['https://img.example/a-1920.avif']);
   });
@@ -3147,6 +3166,49 @@ describe('media-browser Versions section (#570)', () => {
     await page.flush();
     expect(links(page)).toHaveLength(4);
   });
+
+  it('lists a ready photo opened while the poll is reading other photos', async () => {
+    const b = Promise.withResolvers<unknown>();
+    const c = Promise.withResolvers<unknown>();
+    const page = loadPage({ request: (url) => url === '/media/items/b' ? b.promise : url === '/media/items/c' ? c.promise : undefined });
+    page.versions.set('a', stored);
+    await showLibrary(page, [item('a'), processing('b'), processing('c')]);
+    await runPoll(page); // b's read stays in flight: the round is open
+    tiles(page)[0]!.click();
+    await page.flush();
+    // The panel's read goes out between b and c, and settles while c is being read.
+    b.resolve({ status: 200, ok: true, json: async () => processing('b') });
+    await page.flush();
+    expect(page.itemReads).toEqual(['/media/items/b', '/media/items/a?versions=1', '/media/items/c']);
+    expect(page.el('dVersions').textContent).toBe(ui.en['editor.chrome.mediaVersionsLoading']);
+    c.resolve({ status: 200, ok: true, json: async () => processing('c') });
+    await page.flush();
+    // The round's end asks again, without waiting for the 30 s cycle.
+    expect(links(page)).toHaveLength(4);
+  });
+
+  it('lists a ready photo whose first read lands inside a poll round that started after it', async () => {
+    const first = Promise.withResolvers<unknown>();
+    const other = Promise.withResolvers<unknown>();
+    let versionReads = 0;
+    const page = loadPage({ request: (url) => {
+      if (url === '/media/items/b') return other.promise;
+      if (url === '/media/items/a?versions=1' && versionReads++ === 0) return first.promise;
+      return undefined;
+    } });
+    page.versions.set('a', stored);
+    await showLibrary(page, [item('a'), processing('b')]);
+    tiles(page)[0]!.click();
+    await page.flush();
+    await runPoll(page);
+    expect(page.itemReads).toEqual(['/media/items/a?versions=1', '/media/items/b']);
+    first.resolve({ status: 200, ok: true, json: async () => ({ ...item('a'), versions: stored }) });
+    await page.flush();
+    expect(page.el('dVersions').textContent).toBe(ui.en['editor.chrome.mediaVersionsLoading']);
+    other.resolve({ status: 200, ok: true, json: async () => processing('b') });
+    await page.flush();
+    expect(links(page)).toHaveLength(4);
+  });
 });
 
 describe('media-browser fullscreen viewer (#570)', () => {
@@ -3156,10 +3218,12 @@ describe('media-browser fullscreen viewer (#570)', () => {
   function stageNote(page: Page): string {
     return page.el('viewerStage').querySelectorAll('.media-viewer__note').map((note) => note.textContent).join('');
   }
-  /** Sends a key to `node`; the returned spy tells whether the page claimed it. */
+  /** Sends a key to `node` the way a browser does — bubbling through its ancestors to the
+   *  document and window — so a handler registered above the target is exercised too.
+   *  The returned spy tells whether the page claimed it. */
   function press(node: FakeNode, key: string, modifiers: Record<string, unknown> = {}): Mock {
     const preventDefault = vi.fn();
-    node.dispatch('keydown', { key, preventDefault, ...modifiers });
+    node.dispatchBubbling('keydown', { key, preventDefault, ...modifiers });
     return preventDefault;
   }
   /** Focuses a tile and presses F on it, as a keyboard user does. */

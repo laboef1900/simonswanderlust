@@ -1242,8 +1242,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   font-size: 0.6875rem;
   font-weight: 500;
 }
-/* File-name titles run long; two lines each keeps the grid's rows level. The
-   detail panel shows the full key. */
+/* File-name titles run long; two lines each keeps the grid's rows level. */
 .media-cell__title,
 .media-cell__used {
   display: -webkit-box;

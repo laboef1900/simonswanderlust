@@ -893,9 +893,12 @@
       }
       // applyEncoded asked for the open photo's versions at once, but a background
       // read that lands while a later photo is still being read is dropped
-      // (PublicationRefresh): ask again now that the round's reads have settled.
+      // (PublicationRefresh), and so is the panel's first read when it settles
+      // during a round about OTHER photos: ask again now that the round's reads
+      // have settled, whenever the open panel still has no versions listing.
       // A read still in flight is reused, never doubled.
-      if (flipped) detailRefresh.refresh();
+      var unlisted = state.detailKey && !(state.detailObservation && state.detailObservation.versions);
+      if (flipped || unlisted) detailRefresh.refresh();
       if (!stop) schedulePoll();
     }
   }
