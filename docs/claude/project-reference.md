@@ -198,7 +198,7 @@ blog/
     │                              #   media-files (disk) · media-store (database) · media-sync (reconcile) · encode-queue · work-lock · disk · exif
     │                              #   journeys · journey-cleanup · journeys-admin (working copies, snapshots and language-first cleanup)
     ├── public/                    #   index.html (hero upload) · import.html (WordPress import) · editor/posts/about/settings/users
-    │                              #   media.html + media-api/media-ai/media-ai-dialog/media-browser/media-picker.js · posts-filter.js
+    │                              #   media.html + media-api/media-ai/media-ai-dialog/media-browser/media-picker.js · posts-filter.js · admin-select.js (in-label filter menus)
     │                              #   journeys.html · journey-editor.html (ordered, bilingual journey authoring)
     ├── test/                      #   Vitest suites (integration suites run when TEST_DATABASE_URL is set)
     └── .env.example · README.md

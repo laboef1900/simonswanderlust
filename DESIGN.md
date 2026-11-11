@@ -1126,7 +1126,8 @@ criterion (2.5.5 is AAA), so the accessibility commitment in `PRODUCT.md` is una
 **One control vocabulary.** Every page uses the same primitives; page CSS only places them.
 
 - **Labels** sit above their field in the body face (13px, 600, ink) — the old mono
-  uppercase labels are gone from the admin. A checkbox sits beside its label
+  uppercase labels are gone from the admin. The exception is a **filter menu**, whose
+  caption sits inside its trigger (below). A checkbox sits beside its label
   (`.check-field`), and its help text indents under the label. A label that names a
   language appends the code in parentheses — Excerpt (DE), Permalink (EN), Tagline (DE) —
   never the language name; only the locale tabs spell the language out.
@@ -1139,6 +1140,22 @@ criterion (2.5.5 is AAA), so the accessibility commitment in `PRODUCT.md` is una
 - **Inputs, selects and textareas** share one height, `--line-control` border, 6px radius
   and accent focus ring. Selects draw their own chevron so they match inputs exactly. File
   inputs use a quiet outlined picker button, not a filled mono one.
+- **Filter menus** (`admin-select.js`, #566; Posts only so far) replace a list filter's
+  native popup with an in-label trigger — `Status: All`, caption in muted 500, value in
+  ink — at the field height and radius, with the menus' drawn chevron. A filter set away
+  from its default reads in `--studio-accent-hover` at 600 with an accent border. The panel
+  is the row-menu panel (`--surface`, `--menu-shadow`); the selected option carries a drawn
+  check and 600 weight, the active one a soft fill plus an inset accent outline. It is an
+  APG select-only combobox over a hidden native `<select>`, which stays the source of truth
+  and receives `input` + `change`. Spec:
+  `docs/superpowers/specs/2026-11-11-issue-566-posts-bulk-bar-filters-design.md`.
+- **Posts bulk actions float** in a bar fixed at the foot of the workspace (never over the
+  sidebar), centred, `--menu-shadow`, and translucent at a measured floor: `--surface` at
+  95%, never blurred (ink 13.61:1, accent 5.54:1, outlined-button border 3.04:1 over a black
+  thumbnail). Its runway is reserved after the list and never shrinks, so selecting or
+  clearing never moves a row. Row checkboxes fade in on row hover and stay visible when
+  focused, checked, while anything is selected, and wherever there is no hover. Media's
+  bulk bar stays in flow.
 - **Buttons** have four roles: the unclassed button is the one navy primary per form or
   section (Save, Add user, Import, Sign in); `.btn-secondary` is outlined and auxiliary
   (Test connection, Insert image, Review story, Cancel); `.btn-remove` is outlined red for
@@ -1202,10 +1219,11 @@ criterion (2.5.5 is AAA), so the accessibility commitment in `PRODUCT.md` is una
   a consequence the author must see before acting ("discards your edits to them") and a
   privacy disclosure stay visible, after the controls rather than above them.
 - **Menus and disclosures** share one shape: outlined trigger with a drawn chevron and a
-  floating panel (the editor's More actions, the Posts row's admin-only More actions); inline
-  disclosures (alt-text review, bulk selection, picker folders, help details) use the same
-  chevron in place of the UA triangle. A floating panel closes like a menu: Escape returns
-  focus to its trigger, and a click outside it dismisses it.
+  floating panel (the editor's More actions, the Posts row's admin-only More actions, the
+  Posts filter menus, Review selection in the floating bulk bar); inline disclosures
+  (alt-text review, picker folders, help details) use the same chevron in place of the UA
+  triangle. A floating panel closes like a menu: Escape returns focus to its trigger, and a
+  click outside it dismisses it.
 - **Advisories** that never block anything (the editor's alt-text review before a publish)
   use the neutral `.notice-info`; `.notice-warn` is for results with a consequence (a live
   story missing alt text, backups off, an incomplete import).
