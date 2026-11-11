@@ -1470,8 +1470,21 @@ criterion (2.5.5 is AAA), so the accessibility commitment in `PRODUCT.md` is una
   back. With no detail selected the grid takes the inspector's
   space; selection guidance and keyboard shortcuts live under Folders. The detail panel
   (20rem) has a quiet **Photo details / Back to photos** header, then the photo itself,
-  camera · date · pixel size and the key in mono, then fields; lens and file sizes
-  stay under **File**. The laptop inspector pins within the workspace and scrolls independently.
+  camera · date · pixel size in mono (the storage key is not shown, #570), then **View
+  fullscreen** beside **Suggest with AI** in one compact row, then fields. **File** lists Lens
+  and Exposure (`28 mm · f/2.8 · 1/250 s · ISO 200`) only when recorded — no dash — then the
+  original and variant sizes. **Versions** follows: one mono, underlined link per stored
+  variant file (`AVIF · 1920 × 1280 · 412 kB`), opening a new tab; the original is size-only
+  and never linked. The fullscreen viewer is a native `<dialog>` on a solid `#0f141a` stage with
+  the photo at `object-fit: contain`; its caption sits **under** the photo on an opaque navy
+  plate (white title, DE/EN alt texts with mono codes, "Photo n of N on this page") with
+  outlined white Previous / Next / Close (white focus ring; the accent ring fails on navy).
+  Previous/Next stay focusable at the ends (`aria-disabled`); ←/→ step, Escape closes and focus
+  returns to the opener. At 320px the plate stacks under the photo with the three controls on
+  one row; on short wide screens it stands beside the photo. A photo without a ready variant
+  shows its status in a dashed frame, never a broken image. Only a fade, and only without a
+  reduced-motion preference. **F** on a focused tile opens it fullscreen; the hint sits with
+  the other shortcuts. The laptop inspector pins within the workspace and scrolls independently.
   Enter opens the focused photo without changing bulk selection; **Photo details** also moves
   focus into the panel. On phones an unmodified photo tap reveals the panel from its top.
   Back to photos asks before discarding unsaved metadata and restores the photo's grid focus.

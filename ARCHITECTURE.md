@@ -636,6 +636,13 @@ time. This contract is mirrored on the blog side in `site/src/lib/images.ts`.
   EXIF and how many carry GPS, and (when any do) which storage keys and whether each has a
   retained `-orig` to re-encode from. Gates whether a remediation pass is needed at all; nothing
   is written. `docker compose exec app node --import tsx src/cli.ts audit-exif`.
+- `backfill-exif` — fills the #570 exposure columns (`focal_length`, `focal_length_35mm`,
+  `f_number`, `iso`, `exposure_time`) for existing photos from their retained `-orig` originals.
+  Writes only those five columns, idempotently (a second run reports `updated: 0`); a missing
+  original leaves them NULL. Run once after upgrading, with the upgraded app running so the schema
+  is migrated: `docker compose exec app node --import tsx src/cli.ts backfill-exif`. Exit 0 when
+  only originals are missing, 2 when any key was unreadable, ambiguous or unsafe, 1 on an
+  unmigrated schema.
 - `strip-gps` — **not built, and its trigger never fired.** It would remediate the historical
   corpus (a lossy re-encode for the keys with no retained original), scoped to be added only if
   an `audit-exif` run found GPS-carrying variants. Audits found 102 variant files with EXIF and
@@ -901,8 +908,9 @@ Created idempotently by `uploader/src/db.ts` (`ensureSchema`):
 - **`comments`** — reader comments (#204, [spec](docs/superpowers/specs/2026-09-14-comments-design.md)): `id`, `translation_key` (one flat thread per post pair, no FK — `posts` has no single-column pair key), `locale` (the locale the reader posted from), `name`, `body` (plain text, 1–2000 chars, control characters stripped), `status` (`pending`/`approved`/`rejected`/`spam`; every reader row is born `pending`), `is_author` (an admin reply — born `approved`), `sender_hash` (keyed HMAC of the IP for rate limiting, never the raw IP), `created_at`. The legacy `email` column is always `NULL` — no email is collected. `pgPostStore.remove` deletes the thread in the same transaction as the post, and `ensureSchema` sweeps orphans on boot. **Runtime data, not build input:** the Astro build never reads this table — the blog fetches approved comments from `GET /comments?tk=…` at page load, so approving a comment needs no rebuild.
 - **`media`** — one row per storage key: `folder` (virtual, decoupled from the key), `title`,
   bilingual `alt_*`/`caption_*`, `tags` (`text[]`), dimensions, byte sizes, `status`
-  (`processing`/`ready`/`failed`/`missing`), EXIF (`taken_at`, `camera`, `lens`, `lat`, `lng`)
-  and `uploaded_by` (FK, `ON DELETE SET NULL`).
+  (`processing`/`ready`/`failed`/`missing`), EXIF (`taken_at`, `camera`, `lens`, `lat`, `lng`,
+  and since #570 the nullable numeric exposure columns `focal_length`, `focal_length_35mm`,
+  `f_number`, `iso`, `exposure_time`) and `uploaded_by` (FK, `ON DELETE SET NULL`).
 - **`media_folders`** — `path` primary key; the single source of truth for the folder tree
   (every write that sets a `folder` upserts the row and its ancestors).
 - **`import_jobs`** — one row per WordPress import (#92): `status` (`running` / `done` /
@@ -1182,6 +1190,10 @@ disposable `/data` host path and the credential-free database target printed by 
   **before** `users` (`media.uploaded_by` is `ON DELETE SET NULL`, so the other order silently
   nulls every attribution), and `tags` is `text[]`, which cannot round-trip through the
   `JSON.stringify` path every other non-scalar column uses — it needs a `$n::text[]` bind.
+  #570's five `media` exposure columns ride in the existing v15 format without a version bump —
+  a deliberate deviation from the v9 rule above: they are derived metadata, fully re-derivable
+  from retained originals by `backfill-exif`, not author intent. Older dumps restore them as
+  NULL; present values are validated against the parser's bounds before any write.
 - **Schedule** — admin-configurable in settings: `backupSchedule` (`off` / `daily` / `weekly`,
   default `off`) and `backupRetention` (1–100 files, default 14). An hourly in-process tick (same
   pattern as the session sweep) runs a backup in the first tick of each new calendar window —

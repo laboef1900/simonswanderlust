@@ -1003,3 +1003,15 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
   attached but unpublished, or detached). `GET/PUT/DELETE /posts/:tk/route` add a read-only
   `published` flag; the editor re-reads it after Publish/Unpublish. Payload, storage, snapshot,
   MDX export and public rendering are unchanged (option 3 out of scope).
+- **Implemented, PR pending (#570, 2026-11-11):** Media photo details store and show focal
+  length (and 35 mm equivalent), aperture, ISO and shutter speed; a fullscreen viewer (native
+  dialog, ←/→, Escape, `F` on a tile); a **Versions** list read from the variant files on disk
+  (`GET /media/items/*?versions=1`); the storage key is no longer shown. Originals stay private:
+  size only, no link. High-risk design approved by an independent AI reviewer under a scoped,
+  recorded exception ([spec](../superpowers/specs/2026-11-11-issue-570-media-details-design.md)).
+  **Release facts:** five nullable `media` columns (`focal_length`, `focal_length_35mm`,
+  `f_number`, `iso`, `exposure_time`) are added automatically on boot; run
+  `docker compose exec app node --import tsx src/cli.ts backfill-exif` once after upgrading to
+  fill existing photos from their originals; dumps stay v15 with the new keys optional (older
+  dumps restore them as NULL); recovery is roll-forward only. `allowedExif()` and GPS
+  redaction are unchanged.
