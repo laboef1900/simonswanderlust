@@ -791,7 +791,8 @@ The photograph can be an independently selected **title image**, with its own al
 and focal point. If absent, the existing hero is used. This does not alter the opening's
 geometry or introduce text over the photograph; homepage covers, cards, pagination and
 social images keep the hero. Selection is per locale in the editor's existing inspector,
-using the same media picker, upload and framing controls rather than a new visual pattern.
+using the same media picker and framing controls rather than a new visual pattern; like
+the hero, it is chosen from the library only (#569).
 
 Story openings and About use one 3rem, extra-bold red drop cap on the article's
 first **direct-child paragraph**. A preceding heading does not suppress it.
@@ -1397,10 +1398,11 @@ criterion (2.5.5 is AAA), so the accessibility commitment in `PRODUCT.md` is una
   Below 52rem the audit-to-title gap, title-field margin and title-to-body gap are reduced
   without shrinking the touch targets or changing the manuscript's reading size.
 - Hero image and title image are collapsible inspector sections (closed by default) with
-  one box: a white panel with preview, alt text, status, then **Replace photo** (native
-  file input with a dashed drop edge, upload, library) and **Adjust framing**. A closed
-  section shows a small thumbnail of its photo beside Show. A loaded story opens Replace
-  photo only when that image is missing; author actions never fold it under focus.
+  one box: a white panel with preview, alt text, status, then **Choose from library**
+  (always visible, no upload; the title image adds **Remove title image**) and **Adjust
+  framing**. A closed section shows a small thumbnail of its photo beside Show. Hero alt text
+  is typed here (a pick copies the photo's Media alt only into an empty field); the hero has
+  no AI alt suggestion (body photos keep theirs).
 - Excerpts grow with their text; no inner scrollbar or resize grip.
 - The slug's site prefix sits above the slug in the inspector, so neither half truncates.
   A published, disabled permalink is styled as a quiet reference; editable slugs retain a field boundary.
@@ -1425,7 +1427,12 @@ criterion (2.5.5 is AAA), so the accessibility commitment in `PRODUCT.md` is una
   ("3 Oct 2024 · RO · Europe · 1 stop") or what is missing ("Missing date"), and never
   forces itself open — the readiness chip's Trip link is the way in to a gap.
 - Waypoints show their stops and **Add stop** first; the via-point note, the geocoding
-  privacy note and the routing privacy note follow together below them.
+  privacy note and the routing privacy note follow together below them. Each stop row is
+  name · remove, lat · lng, then one controls line that never wraps: a square magnifier
+  button (**Find coordinates**, named by `aria-label` and tooltip, the size of the ×) ·
+  **Via point** · the travel-mode select (labelled **Continue by**, visually hidden, tooltip),
+  or the last stop's note in that slot. The select gives up width first. The profile warning,
+  lookup status and result buttons follow below at full width.
 - **Route along stops** and **GPX route** fold like the sections around them; each
   summary carries its live status line, so the state reads without opening them. A GPX
   error opens its section before taking focus.
@@ -1460,7 +1467,8 @@ criterion (2.5.5 is AAA), so the accessibility commitment in `PRODUCT.md` is una
 - Country assistance and excerpt generation sit next to the relevant fields in Story
   details. Coordinate approximation is explicit. Excerpt suggestions have a plain-text
   preview, character count, and separate accept/dismiss actions; generation never looks
-  like a saved edit.
+  like a saved edit. The Excerpt field carries no help text; the provider disclosure is a
+  muted line under **Generate excerpt with AI** and is that button's description.
 - **Media leads with the photograph.** The library grid uses larger tiles (≥10.5rem, two
   columns on a phone) captioned with the photo's title; a photo without one shows its file
   name set back in muted, one-line type. Tiles carry no alt-text tag (owner decision,

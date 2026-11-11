@@ -6,6 +6,7 @@ import { createSettingsStore, defaultSettings, validate, SettingsError, type Set
 import {
   deriveFromLegacy, newProviderId, resolveProvider, slotFor, type AiProvider, type LegacyDerivation,
 } from '../src/ai-providers.js';
+import { DEFAULT_TRANSLATION_PROMPT, TRANSLATION_PROMPT_MAX_LENGTH } from '../src/translation-prompt.js';
 
 const DEFAULTS: Settings = defaultSettings();
 
@@ -22,6 +23,7 @@ describe('defaultSettings', () => {
     expect(d.captionMaxEdge).toBe(768);
     expect(d.captionPrompt.length).toBeGreaterThan(0);
     expect(d).toMatchObject({ translationProviderId: null, translationModel: 'qwen2.5-7b-instruct', translationTimeoutMs: 120000 });
+    expect(d.translationPrompt).toBe('Preserve meaning, facts, names and detail; do not summarize, omit or invent content.');
     expect(d.backupSchedule).toBe('off');
     expect(d.backupRetention).toBe(14);
   });
@@ -528,6 +530,125 @@ describe('article translation assignment lifecycle', () => {
     expect(store.update({ translationModel: 'x'.repeat(100) }).translationModel).toHaveLength(100);
     // Same convention as review: an empty model is stored but prevents inference.
     expect(store.update({ translationModel: '' }).translationModel).toBe('');
+  });
+});
+
+describe('article translation instructions (#567)', () => {
+  const MESSAGE = 'Translation instructions are required and must be visible plain text of at most 4000 characters.';
+  const MARKER = 'PRIVATE-PROMPT-MARKER';
+  const withPrompt = (translationPrompt: unknown) => ({ ...DEFAULTS, translationPrompt }) as unknown as Settings;
+  const failure = (run: () => unknown): unknown => {
+    try { run(); } catch (e) { return e; }
+    return null;
+  };
+  /** Every invalid shape; `leak` is the text that must never reach a log line or an error. */
+  const INVALID: [string, unknown, string?][] = [
+    ['a number', 7654321987, '7654321987'],
+    ['null', null],
+    ['a boolean', true],
+    ['an array', [MARKER], MARKER],
+    ['an object', { secret: MARKER }, MARKER],
+    ['an empty string', ''],
+    ['whitespace only', ' \n\t '],
+    ['4001 characters', MARKER + 'x'.repeat(TRANSLATION_PROMPT_MAX_LENGTH + 1 - MARKER.length), MARKER],
+    ['4001 UTF-16 code units of astral characters', '😀'.repeat(TRANSLATION_PROMPT_MAX_LENGTH / 2) + 'x'],
+    ['only invisible format characters', '\u200b\u2060\u00ad\ufeff'],
+    ['only default-ignorable fillers', '\u3164\ufe0f\u2800'],
+    ['a NUL control character', 'Keep it formal.\u0000'],
+    ['a C1 control character', 'Keep it formal.\u0085'],
+    ['a lone surrogate', 'Keep it formal.\ud800'],
+  ];
+
+  it('defaults to the fidelity rules, which pass their own validation', () => {
+    expect(DEFAULTS.translationPrompt).toBe(DEFAULT_TRANSLATION_PROMPT);
+    expect(() => validate(DEFAULTS)).not.toThrow();
+  });
+
+  it.each(INVALID)('validate() rejects %s with the fixed message and never coerces', (_name, value, leak) => {
+    const error = failure(() => validate(withPrompt(value)));
+    expect(error).toBeInstanceOf(SettingsError);
+    expect((error as Error).message).toBe(MESSAGE);
+    if (leak) expect((error as Error).message).not.toContain(leak);
+  });
+
+  it('validate() accepts the exact cap and keeps multi-line text verbatim', () => {
+    const longest = 'x'.repeat(TRANSLATION_PROMPT_MAX_LENGTH);
+    expect(validate(withPrompt(longest)).translationPrompt).toBe(longest);
+    const astral = '😀'.repeat(TRANSLATION_PROMPT_MAX_LENGTH / 2);
+    expect(validate(withPrompt(astral)).translationPrompt).toBe(astral);
+    const multiline = "  Use informal 'du' in German.\n\tKeep place names in the local spelling.\r\n\n- km, not miles  ";
+    expect(validate(withPrompt(multiline)).translationPrompt).toBe(multiline);
+    // Format characters are fine beside visible text (an emoji ZWJ sequence, a soft hyphen).
+    const joined = 'Use 👩‍💻 as written; Wander\u00adlust.';
+    expect(validate(withPrompt(joined)).translationPrompt).toBe(joined);
+  });
+
+  it.each(INVALID)('load replaces %s in the file with the default for that field only and never logs the file value', async (_name, value, leak) => {
+    const path = join(dir, 'settings.json');
+    await writeFile(path, JSON.stringify({
+      aiProviders: [LOCAL, provider('remote')], aiDefaultProviderId: 'remote', translationProviderId: 'remote',
+      translationModel: 'keep-model', translationTimeoutMs: 200000, translationPrompt: value,
+      reviewPrompt: 'Keep the review prompt.', captionPrompt: 'Keep the caption prompt.', backupSchedule: 'daily',
+    }));
+    const log = vi.fn();
+    const loaded = createSettingsStore({ path, defaults: DEFAULTS, log }).get();
+    expect(loaded).toEqual({
+      ...DEFAULTS, aiProviders: [LOCAL, provider('remote')], aiDefaultProviderId: 'remote', translationProviderId: 'remote',
+      translationModel: 'keep-model', translationTimeoutMs: 200000, translationPrompt: DEFAULT_TRANSLATION_PROMPT,
+      reviewPrompt: 'Keep the review prompt.', captionPrompt: 'Keep the caption prompt.', backupSchedule: 'daily',
+    });
+    expect(log).toHaveBeenCalledTimes(1);
+    const line = String(log.mock.calls[0]?.[0]);
+    expect(line).toContain('"translationPrompt"');
+    expect(line).toContain(MESSAGE);
+    if (leak) expect(line).not.toContain(leak);
+    expect(() => validate(loaded)).not.toThrow();
+  });
+
+  it('reads the default from a file without the key and does not rewrite the file on load', async () => {
+    const path = join(dir, 'settings.json');
+    const bytes = JSON.stringify({
+      aiProviders: [LOCAL, provider('remote')], aiDefaultProviderId: 'remote',
+      reviewPrompt: 'House review prompt.', translationModel: 'older-model', backupSchedule: 'daily',
+    });
+    await writeFile(path, bytes);
+    const log = vi.fn();
+    const store = createSettingsStore({ path, defaults: DEFAULTS, log });
+    expect(store.pendingAiMigration()).toBeNull();
+    expect(store.get()).toMatchObject({
+      translationPrompt: DEFAULT_TRANSLATION_PROMPT, aiDefaultProviderId: 'remote',
+      reviewPrompt: 'House review prompt.', translationModel: 'older-model', backupSchedule: 'daily',
+    });
+    expect(await readFile(path, 'utf8')).toBe(bytes);
+    expect(await readdir(dir)).toEqual(['settings.json']);
+    expect(log).not.toHaveBeenCalled();
+    // The next whole-object persist writes the default beside the unrelated change.
+    store.update({ backupRetention: 5 });
+    expect(JSON.parse(await readFile(path, 'utf8'))).toMatchObject({
+      translationPrompt: DEFAULT_TRANSLATION_PROMPT, backupRetention: 5, translationModel: 'older-model',
+    });
+  });
+
+  it('update() persists a custom prompt verbatim across reload and refuses invalid values atomically', async () => {
+    const path = join(dir, 'settings.json');
+    const store = createSettingsStore({ path, defaults: DEFAULTS });
+    const custom = "  Use informal 'du' in German.\n\tKeep place names in the local spelling.  ";
+    expect(store.update({ translationPrompt: custom }).translationPrompt).toBe(custom);
+    expect(createSettingsStore({ path, defaults: DEFAULTS }).get()).toEqual({ ...DEFAULTS, translationPrompt: custom });
+    const before = await readFile(path, 'utf8');
+    for (const [name, value] of INVALID) {
+      const error = failure(() => store.update({ translationPrompt: value } as Partial<Settings>));
+      expect(error, name).toBeInstanceOf(SettingsError);
+      expect((error as Error).message, name).toBe(MESSAGE);
+      expect(await readFile(path, 'utf8'), name).toBe(before);
+      expect(store.get().translationPrompt, name).toBe(custom);
+    }
+    const longest = 'x'.repeat(TRANSLATION_PROMPT_MAX_LENGTH);
+    store.update({ translationPrompt: longest });
+    expect(createSettingsStore({ path, defaults: DEFAULTS }).get().translationPrompt).toBe(longest);
+    // Reset is an ordinary save of the default.
+    store.update({ translationPrompt: DEFAULT_TRANSLATION_PROMPT });
+    expect(createSettingsStore({ path, defaults: DEFAULTS }).get()).toEqual(DEFAULTS);
   });
 });
 

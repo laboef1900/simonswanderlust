@@ -29,6 +29,7 @@ import {
   setSessionCookie, clearSessionCookie, isSecureRequest, SESSION_COOKIE,
 } from './authn.js';
 import { SettingsError, validate as validateSettings, type Settings, type SettingsStore } from './settings.js';
+import { DEFAULT_TRANSLATION_PROMPT } from './translation-prompt.js';
 import { SecretsError, type SecretsStore } from './secrets.js';
 import {
   isProviderId, isProviderKind, isRemoteKind, newProviderId, providerNameError, providerUrlError, resolveProvider, slotFor,
@@ -868,6 +869,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     return {
       providerId: provider.id, providerName: provider.name, providerKind: provider.kind,
       baseUrl: provider.baseUrl, model: s.translationModel, timeoutMs: s.translationTimeoutMs,
+      prompt: s.translationPrompt,
     };
   }
   type ProviderView = AiProvider & { hasApiKey: boolean };
@@ -893,6 +895,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
       aiModel: s.aiModel, reviewPrompt: s.reviewPrompt, reviewTimeoutMs: s.reviewTimeoutMs,
       translationProviderId: s.translationProviderId, translationModel: s.translationModel,
       translationTimeoutMs: s.translationTimeoutMs,
+      translationPrompt: s.translationPrompt, translationPromptDefault: DEFAULT_TRANSLATION_PROMPT,
       lmModel: s.lmModel, captionPrompt: s.captionPrompt,
       captionTimeoutMs: s.captionTimeoutMs, captionMaxTokens: s.captionMaxTokens, captionMaxEdge: s.captionMaxEdge,
       backupSchedule: s.backupSchedule, backupRetention: s.backupRetention,
@@ -1090,7 +1093,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     if (b.avifQuality !== undefined) partial.avifQuality = Number(b.avifQuality);
     for (const field of [
       'aiDefaultProviderId', 'reviewProviderId', 'captionProviderId', 'aiModel', 'reviewPrompt', 'reviewTimeoutMs',
-      'translationProviderId', 'translationModel', 'translationTimeoutMs',
+      'translationProviderId', 'translationModel', 'translationTimeoutMs', 'translationPrompt',
     ] as const) {
       if (Object.hasOwn(b, field)) partial[field] = b[field];
     }

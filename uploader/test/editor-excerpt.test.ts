@@ -168,7 +168,7 @@ const COPY_KEYS = [
   'excerptLoadingSettings', 'excerptGenerating', 'excerptReady', 'excerptApplied', 'excerptCancelled',
   'excerptStale', 'excerptNeedsBody', 'excerptConfigUnavailable', 'excerptConfigInvalid', 'excerptKeyMissing',
   'excerptTimeout', 'excerptRefused', 'excerptInvalidOutput', 'excerptFailed', 'excerptSettingsLink',
-  'excerptAskAdmin',
+  'excerptAskAdmin', 'excerptDisclosure',
 ] as const;
 const copy: Record<string, string> = { ...Object.fromEntries(COPY_KEYS.map((key) => [key, `[${key}]`])), excerptCount: '[{count} chars]' };
 
@@ -258,6 +258,26 @@ function lateReply() {
 }
 
 describe('EditorExcerpt controller', () => {
+  it('discloses at the Generate action in each locale, on a line a running request does not move', async () => {
+    const pending = Promise.withResolvers<Response>();
+    const page = excerptPage(() => pending.promise);
+    // Action row, then the disclosure, then the status the request fills.
+    const expected = ['excerpt-assist__actions', 'excerpt-assist__note', 'excerpt-assist__status', 'excerpt-assist__suggestion'];
+    for (const locale of ['de', 'en'] as const) {
+      const view = page.view(locale);
+      const note = page.document.getElementById(view.action('generate').getAttribute('aria-describedby')!)!;
+      expect(note.textContent).toBe('[excerptDisclosure]');
+      expect(note.closest('[hidden]')).toBeNull();
+      expect(view.root.children.map((child) => child.className.split(' ')[0])).toEqual(expected);
+    }
+    page.view().action('generate').click();
+    expect(page.view().state()).toBe('busy');
+    expect(page.view().action('cancel').hidden).toBe(false);
+    expect(page.view().root.children.map((child) => child.className.split(' ')[0])).toEqual(expected);
+    expect(page.document.getElementById('excerpt-disclosure-de')!.closest('[hidden]')).toBeNull();
+    page.instance.invalidate();
+  });
+
   it('generates from the active-locale snapshot, never writes by itself, and applies only on an explicit click', async () => {
     const page = excerptPage(async () => completion(excerptJson()));
     const manual = page.state.de.excerpt;
