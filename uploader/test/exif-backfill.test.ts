@@ -194,17 +194,18 @@ describe('backfillExif', () => {
     await mkdir(storage);
     // A readable original sits exactly where the traversing key points.
     await put('outside/secret-orig.jpg', await original());
-    const unsafe = ['../outside/secret', 'Evil', 'a.b', `long/${'k'.repeat(5000)}`];
+    // `outside/secret/` passes assertSafeKey but would resolve to the sibling key `outside/secret`.
+    const unsafe = ['../outside/secret', 'Evil', 'a.b', `long/${'k'.repeat(5000)}`, 'outside/secret/'];
     for (const key of unsafe) await add(store, key);
 
     const logs: string[] = [];
     const writes: [string, MediaExposure][] = [];
     const report = await backfillExif(narrow(store, writes), storage, (message) => logs.push(message));
-    expect(report).toEqual(counts({ scanned: 4, invalidKey: 4 }));
+    expect(report).toEqual(counts({ scanned: 5, invalidKey: 5 }));
     expect(writes).toEqual([]);
     expect(vi.mocked(readdir)).not.toHaveBeenCalled();
     // Counted, never named: not one of the keys reaches the log, whatever its size.
-    expect(logs).toEqual(['backfill-exif: scanned 4, updated 0, unchanged 0, missing original 0, ambiguous original 0, unreadable 0, invalid key 4']);
+    expect(logs).toEqual(['backfill-exif: scanned 5, updated 0, unchanged 0, missing original 0, ambiguous original 0, unreadable 0, invalid key 5']);
     for (const key of unsafe) expect((await store.get(key))?.exif).toEqual(emptyMediaExif());
   });
 

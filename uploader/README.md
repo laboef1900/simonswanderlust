@@ -987,7 +987,9 @@ status, camera, lens, capture time and GPS are never touched. It is idempotent: 
 reports `updated: 0`. Photos without a retained original keep empty values. Exit codes: `0`
 done (missing originals are normal for older imports), `2` some keys were unreadable, had more
 than one original or an unsafe key (see the log), `1` the schema is not migrated yet. Logs name
-keys and reasons only, never metadata values or paths.
+keys and reasons only, never metadata values or paths. Photos that reconcile adds later — a
+rescan after a WordPress import or a restored image archive — also start without these values;
+run `backfill-exif` again after such a rescan.
 
 ## CLI password reset (recovery)
 

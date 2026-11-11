@@ -249,7 +249,7 @@ describe('listVariantFiles', () => {
     await put('outside/hero-640.webp', await image('webp', 64, 40));
     const storage = join(dir, 'storage');
     await mkdir(storage);
-    for (const bad of ['../file/hero', '../outside/hero', 'a//b', 'trips/../../etc/x', 'Evil', '/abs', 'a.b', 'k'.repeat(201)]) {
+    for (const bad of ['../file/hero', '../outside/hero', 'a//b', 'trips/../../etc/x', 'Evil', '/abs', 'a.b', 'k'.repeat(201), 'file/']) {
       await expect(listVariantFiles(storage, bad)).rejects.toThrow(/^unsafe storage key/);
     }
   });

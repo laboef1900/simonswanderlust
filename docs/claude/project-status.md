@@ -1012,6 +1012,7 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
   **Release facts:** five nullable `media` columns (`focal_length`, `focal_length_35mm`,
   `f_number`, `iso`, `exposure_time`) are added automatically on boot; run
   `docker compose exec app node --import tsx src/cli.ts backfill-exif` once after upgrading to
-  fill existing photos from their originals; dumps stay v15 with the new keys optional (older
+  fill existing photos from their originals (and again after a rescan that inserted rows, e.g.
+  after a WordPress import); dumps stay v15 with the new keys optional (older
   dumps restore them as NULL); recovery is roll-forward only. `allowedExif()` and GPS
   redaction are unchanged.

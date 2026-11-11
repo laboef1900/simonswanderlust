@@ -642,7 +642,8 @@ time. This contract is mirrored on the blog side in `site/src/lib/images.ts`.
   original leaves them NULL. Run once after upgrading, with the upgraded app running so the schema
   is migrated: `docker compose exec app node --import tsx src/cli.ts backfill-exif`. Exit 0 when
   only originals are missing, 2 when any key was unreadable, ambiguous or unsafe, 1 on an
-  unmigrated schema.
+  unmigrated schema. Rows that reconcile inserts later (a rescan after a WordPress import or a
+  restored image archive) also start empty; re-run it then — it is idempotent.
 - `strip-gps` — **not built, and its trigger never fired.** It would remediate the historical
   corpus (a lossy re-encode for the keys with no retained original), scoped to be added only if
   an `audit-exif` run found GPS-carrying variants. Audits found 102 variant files with EXIF and

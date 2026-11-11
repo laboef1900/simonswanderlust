@@ -343,23 +343,30 @@ describe('GET /media/items/* details (#570)', () => {
     const b = await build();
     // Ready first: plugin start-up logs warnings of its own, unrelated to this route.
     await b.app.ready();
-    const warn = vi.spyOn(b.app.log, 'warn');
+    // The app runs with `logger: false`, so the route logs through console (stdout).
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
       // A row can be hand-edited or restored from a dump: its key is re-checked
-      // before any path is built. Neither of these passes assertSafeKey.
+      // before any path is built. None of these passes assertStoredMediaKey
+      // (`blocked/y/` would otherwise resolve to the sibling key `blocked/y`).
       await photo(b.media, 'Evil');
       await photo(b.media, 'a.b');
+      await photo(b.media, 'blocked/y/');
       // And a safe key whose directory cannot be read (ENOTDIR, not ENOENT).
       await photo(b.media, 'blocked/x/hero', { title: 'Still here' });
       await put('blocked');
-      for (const key of ['Evil', 'a.b', 'blocked/x/hero']) {
+      for (const key of ['Evil', 'a.b', 'blocked/y/', 'blocked/x/hero']) {
         const res = await item(b, key, b.author, '?versions=1');
         expect(res.statusCode).toBe(200);
         expect(res.json().versions).toEqual({ availability: 'unavailable' });
         expect(res.json()).toMatchObject({ key, status: 'ready', impact: { availability: 'available' } });
       }
       // One fixed line per failure: not the key, not the directory, not the error.
-      expect(warn.mock.calls).toEqual([['Media versions unavailable'], ['Media versions unavailable'], ['Media versions unavailable']]);
-    } finally { warn.mockRestore(); await b.app.close(); }
+      expect(warn.mock.calls).toEqual(Array.from({ length: 4 }, () => ['Media versions unavailable']));
+      expect(error).not.toHaveBeenCalled();
+      expect(log).not.toHaveBeenCalled();
+    } finally { warn.mockRestore(); error.mockRestore(); log.mockRestore(); await b.app.close(); }
   });
 });
