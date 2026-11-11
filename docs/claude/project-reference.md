@@ -33,7 +33,8 @@ fields in bulk — the one AI path that saves, with opt-in overwrite
 (`docs/superpowers/specs/2026-10-18-media-ai-details-design.md`). The server never
 contacts a model.
 Article translation (#550) independently assigns provider/model/timeout and translates the
-latest unsaved active locale into the other enabled, non-omitted side of the same pair.
+latest unsaved active locale into the other enabled side of the same pair, including a side not
+selected for publication, which stays a private draft (#568).
 Browser-direct inference receives bounded article-local text slots as the user message, plus
 the admin-editable translation instructions (#567) ahead of a code-owned suffix in the system
 message. Authenticated prepare/validate endpoints preserve source structure without writing

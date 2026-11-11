@@ -419,6 +419,9 @@ before the installer can choose, so that would lock every install on DE+EN DE-pr
   then 404s. It was rejected because it creates a second, per-locale unpublish path that also has
   to handle comments.
 - The primary row can never be omitted (400 `invalid_post`).
+- The story editor mirrors both rules in its Publish dialog (#568): the primary and every
+  secondary with publication history are shown selected and cannot be deselected. The server
+  checks above remain authoritative.
 
 ### 7.4 Published-URL-set invariant and the test that pins it
 
@@ -666,9 +669,19 @@ region, `/feed`, `/en/feed`, and an identity/domain change with unchanged langua
 ## 9. Decision 6 — admin surfaces (Editorial desk style retained; admin UI stays English)
 
 - **Editor:** locale tabs are rendered only for enabled locales. In a single-language install there
-  is no tab strip, just the one locale's fields. In DE+EN the secondary tab carries a checkbox
-  "Publish this story in <German|English>" (checked = not omitted). It is disabled with an
-  explanation once the row has been published (§7.3). The slug preview (`editor.html:249`) and
+  is no tab strip, just the one locale's fields. In DE+EN the language choice is made at publish
+  time (#568, superseding the per-tab "Publish this story in <German|English>" checkbox): **Publish**
+  opens a dialog listing every enabled locale with its title, resulting URL and readiness. The
+  primary is always selected; a secondary with publication history is selected and locked with an
+  explanation (§7.3); any other secondary is selected unless omitted and can be deselected, which
+  keeps it as a private draft (`omitted = true`). Confirming applies the selection to `omitted`,
+  saves through the normal draft save and then publishes; Cancel changes nothing. Gap checks run for
+  the selected locales only. No route, schema or `posts.omitted` semantics change; the server still
+  derives the publishable set from the saved rows. The editor offers no other coverage control (the
+  save API, which any author may call, is unchanged), and restoring a revision keeps the current
+  coverage. See
+  [the #568 spec](2026-11-11-issue-568-publish-language-choice.md). The journey editor keeps its
+  "Publish this journey in …" checkbox. The slug preview (`editor.html:249`) and
   the slug-change confirm (`admin-confirm.js:9`) show the URL from the uploader mirror (§11), never
   a literal `/en/`.
 - **Desk:** the "English body not started" hint (`desk.js:38-39`) becomes "<secondary language> body
