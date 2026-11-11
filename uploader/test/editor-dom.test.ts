@@ -1310,17 +1310,24 @@ describe('publish dialog: languages are chosen where the story is published (#56
     check.hold = true;
     typeAlt('Described while publishing');
     await settle();
-    const dialog = publishThroughDialog(h.el);
+    // A keyboard user confirms from Publish itself.
+    const dialog = publishThroughDialog(h.el, () => h.el('publishDialogConfirm').focus());
     await flush();
     // Still open, and nothing in it can change the selection or confirm a second time.
     expect(dialog.open).toBe(true);
     expect(dialog.getAttribute('aria-busy')).toBe('true');
-    expect(h.el('publishDialogConfirm').disabled).toBe(true);
+    // Publish keeps focus but is marked unavailable: a repeated press neither confirms again nor
+    // lands on Cancel. The status line says what is happening.
+    expect(h.el('publishDialogConfirm').getAttribute('aria-disabled')).toBe('true');
+    expect(h.el('publishDialogConfirm').disabled).toBe(false); // a disabled button would drop focus
+    expect(h.document.activeElement).toBe(h.el('publishDialogConfirm'));
+    expect(h.el('publishDialogStatus').textContent).toBe(copy['editor.chrome.publishDialogChecking']);
     expect(publishRows(h).map(({ input }) => input!.disabled)).toEqual([true, true]);
     expect(h.el('publishDialogCancel').disabled).toBe(false);
+    h.el('publishDialogConfirm').click();
+    await flush();
+    expect(dialog.open).toBe(true);
     expect(writesOf(h)).toEqual([]);
-    // Publish is disabled now; focus waits on the control that still works.
-    expect(h.document.activeElement).toBe(h.el('publishDialogCancel'));
     await release();
     await until(() => !dialog.open);
     await flush();

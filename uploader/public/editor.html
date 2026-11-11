@@ -2619,9 +2619,13 @@
             row.item.append(row.fix);
           }
         }
-        publishDialogStatus.textContent = incomplete.length
-          ? editorCopy.publishDialogBlocked.replace('{languages}', () => incomplete.join(', ')) : '';
-        publishDialogConfirm.disabled = opening.busy || incomplete.length > 0;
+        publishDialogStatus.textContent = opening.busy ? editorCopy.publishDialogChecking
+          : incomplete.length ? editorCopy.publishDialogBlocked.replace('{languages}', () => incomplete.join(', ')) : '';
+        // While busy Publish keeps focus but does nothing (`opening.busy` ignores
+        // clicks): a repeated key press must not land on Cancel and end the flow.
+        publishDialogConfirm.disabled = !opening.busy && incomplete.length > 0;
+        if (opening.busy) publishDialogConfirm.setAttribute('aria-disabled', 'true');
+        else publishDialogConfirm.removeAttribute('aria-disabled');
       }
       // While gallery edits settle, nothing in the dialog can change the
       // selection or confirm twice. Cancel and Escape stay available.
@@ -2703,9 +2707,6 @@
         // Consent is the current opening's Publish click, once.
         if (!opening || opening.busy || !publishDialog.open) return;
         setPublishBusy(opening, true);
-        // Publish is now disabled: keep keyboard and screen-reader focus on the
-        // one live control, which still cancels while the gallery check runs.
-        $('publishDialogCancel').focus();
         let flushError = '';
         const flushed = await flushGalleryEdits((message) => { flushError = message; });
         // A close while the edits settled is a cancel: its opening is retired.

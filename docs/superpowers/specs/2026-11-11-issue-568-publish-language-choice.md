@@ -133,8 +133,10 @@ path in all four modes.
 2. **Any** `close` of the dialog not issued by step 4 — Cancel, Escape, a gap jump, a
    browser-forced close — retires the opening token and clears the latch, in every phase including
    busy; focus returns to `publishBtn` (gap jump: the field). Nothing else happens.
-3. Publish click (current token only): mark the dialog busy (`aria-busy`; Publish and all
-   checkboxes disabled; **Cancel and Escape stay available and cancel**; focus moves to Cancel), `await
+3. Publish click (current token only): mark the dialog busy (`aria-busy`; all checkboxes disabled;
+   Publish keeps focus but is `aria-disabled` and ignores clicks, so a repeated key press can neither
+   confirm twice nor land on Cancel; the status line reads `publishDialogChecking`; **Cancel and
+   Escape stay available and cancel**), `await
    flushGalleryEdits()`. On failure, and only if the dialog is still open with the same token: show
    the error in the dialog status line, leave busy state, return focus to Publish, change nothing;
    the author may retry or cancel.
@@ -235,8 +237,9 @@ re-enforced on the server; the client adds no new trust.
 
 - Native modal `<dialog>`: focus trap and inert background; `aria-labelledby` the heading,
   `aria-describedby` the intro; `aria-busy` while flushing.
-- Initial focus: the first enabled (toggleable) checkbox; otherwise Publish. While busy, focus is on
-  Cancel (Publish is disabled). Cancel/Escape focus `publishBtn` explicitly; a gap jump focuses the
+- Initial focus: the first enabled (toggleable) checkbox; otherwise Publish. While busy, focus stays
+  on Publish, which is `aria-disabled`, and the live status line announces `publishDialogChecking`.
+  Cancel/Escape focus `publishBtn` explicitly; a gap jump focuses the
   field (existing `jumpToGap`). The translation dialog adds `#translationDraftNote` to its
   `aria-describedby` while the note is shown.
 - No form submission exists, so Enter on a checkbox does nothing; Space toggles.
@@ -268,8 +271,8 @@ Changed: `translationAction` → "Translate" / "Übersetzen".
 Added: `translationActionName`, `translationUnavailable`, `translationPrivateDraft`,
 `publishDialogTitle`, `publishDialogIntro`, `publishDialogLanguages`, `publishDialogPrimary`,
 `publishDialogReady`, `publishDialogMissing`, `publishDialogFix`, `publishDialogFixName`,
-`publishDialogPrivate`, `publishDialogBlocked`, `publishDialogRebuild`, `publishDialogConfirm`,
-`publishDialogCancel`, `publishSelectionMismatch`, `publishUnresolved`. Final wording is in `ui.ts`; the completeness
+`publishDialogPrivate`, `publishDialogBlocked`, `publishDialogChecking`, `publishDialogRebuild`,
+`publishDialogConfirm`, `publishDialogCancel`, `publishSelectionMismatch`, `publishUnresolved`. Final wording is in `ui.ts`; the completeness
 test pins both dictionaries, and ED asserts that every added or kept key is rendered.
 
 ## 10. Documentation impact
@@ -331,7 +334,7 @@ integration owner (AC9).
     English enables Publish; "Go to slug" (name "Go to slug in English") closes the dialog and
     focuses `slugFieldEn`.
 - [x] **AC6** Translation for an omitted secondary decided, implemented, copy updated — ED
-  (translation runs with omitted target, note shown; no `translationCoverage` key).
+  (translation runs with omitted target, note shown and announced; `translationCoverage` removed from `ui.ts`).
   Evidence: TR › `hides single-language targets, and translates into or from a language that is
   not selected for publication`, `aborts and ignores late output after a coverage change`
   (a publish confirmed mid-translation); `translationUnavailable` in PD › `renders every copy key
@@ -355,9 +358,11 @@ integration owner (AC9).
     `DESIGN.md`, `project-reference.md` updated in this branch.
 - [x] **AC9** Tests + checks — `uploader`: `npx tsc --noEmit`, `npm test` with
   `TEST_DATABASE_URL` (integration suites not skipped); `site`: `npm test`, `npx astro check` with
-  `DATABASE_URL`. Evidence (rebased on `dev` 081394d, disposable PostgreSQL 18, native ownership
-  addon built, `pg_dump` 18.6 on PATH): `tsc` clean; uploader 183 files / 5304 tests passed, none
-  skipped; site 56 files / 934 tests passed; `astro check` 155 files, 0 errors/warnings/hints.
+  `DATABASE_URL`. Evidence (rebased on `dev` eca8fa9, disposable PostgreSQL 18, native ownership
+  addon built, `pg_dump` 18.6 on PATH): `tsc` clean; uploader 183 files / 5310 tests, none
+  skipped — all passed except one busy-focus assertion that the second review fix changed, after
+  which `editor-dom.test.ts` passed in full; site 56 files / 934 tests passed; `astro check` 155
+  files, 0 errors/warnings/hints. CI reruns both required checks on the final commit.
 - [x] **AC10** Visual verification desktop + narrow — browser B1–B8 screenshots (dialog at 1440,
   390 and 320×568 px — scrolls within the viewport, full-width footer buttons, no horizontal
   overflow; coarse pointer: 24px checkboxes, 44px footer buttons). Impeccable detector: only
@@ -433,7 +438,12 @@ integration owner (AC9).
   revision is restored (secondary held back now: %s)` (payload, tab chip, checklist).
 - [ ] **CI** Required checks green on the final commit: `site · tests + astro check`,
   `uploader · typecheck + tests`.
-- [ ] **REVIEW** `/review` findings resolved or rebutted in the PR; fixes re-reviewed.
+- [x] **REVIEW** `/review` findings resolved or rebutted in the PR; fixes re-reviewed. Evidence:
+  PR review by `PrReview574d` (`anthropic/claude-opus-5-5`; earlier attempts on
+  `anthropic/claude-fable-5-2` and `openai-codex/gpt-6-astra` failed on provider limits): 8 INFO
+  findings, all fixed; re-review of the fix diff `REVIEW: APPROVE` with 2 INFO notes, both fixed
+  (busy Publish keeps focus as `aria-disabled` with a live status message instead of moving focus
+  to Cancel; AC6/AC9 tracker evidence refreshed). Dispositions are on the PR.
 
 Browser steps (a disposable compose stack and disposable posts only; never the owner's data):
 B1 DE+EN DE-primary, new complete DE story with an EN draft: Publish → EN unchecked → only
