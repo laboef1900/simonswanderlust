@@ -2631,8 +2631,10 @@
       // selection or confirm twice. Cancel and Escape stay available.
       function setPublishBusy(opening, busy) {
         opening.busy = busy;
-        if (busy) publishDialog.setAttribute('aria-busy', 'true');
-        else publishDialog.removeAttribute('aria-busy');
+        // Busy marks the choices, not the dialog: the status line outside them must stay audible.
+        const choices = publishDialog.querySelector('.publish-languages');
+        if (busy) choices.setAttribute('aria-busy', 'true');
+        else choices.removeAttribute('aria-busy');
         for (const row of opening.rows) if (row.input) row.input.disabled = busy || row.forced;
         syncPublishDialog(opening);
       }
@@ -2658,7 +2660,7 @@
       // whether the flow goes on (a confirmed Publish) or ends (anything else).
       function retirePublishOpening() {
         publishOpening = null;
-        publishDialog.removeAttribute('aria-busy');
+        publishDialog.querySelector('.publish-languages').removeAttribute('aria-busy');
         if (publishDialog.open) publishDialog.close();
       }
       // Every end of an opening other than its own confirmed Publish: Cancel,

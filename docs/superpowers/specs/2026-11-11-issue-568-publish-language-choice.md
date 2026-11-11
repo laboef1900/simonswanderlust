@@ -133,7 +133,7 @@ path in all four modes.
 2. **Any** `close` of the dialog not issued by step 4 — Cancel, Escape, a gap jump, a
    browser-forced close — retires the opening token and clears the latch, in every phase including
    busy; focus returns to `publishBtn` (gap jump: the field). Nothing else happens.
-3. Publish click (current token only): mark the dialog busy (`aria-busy`; all checkboxes disabled;
+3. Publish click (current token only): mark the language choices busy (`aria-busy` on the fieldset, so the status line outside it stays audible; all checkboxes disabled;
    Publish keeps focus but is `aria-disabled` and ignores clicks, so a repeated key press can neither
    confirm twice nor land on Cancel; the status line reads `publishDialogChecking`; **Cancel and
    Escape stay available and cancel**), `await
@@ -236,7 +236,7 @@ re-enforced on the server; the client adds no new trust.
 ## 7. Accessibility
 
 - Native modal `<dialog>`: focus trap and inert background; `aria-labelledby` the heading,
-  `aria-describedby` the intro; `aria-busy` while flushing.
+  `aria-describedby` the intro; `aria-busy` on the language fieldset while flushing.
 - Initial focus: the first enabled (toggleable) checkbox; otherwise Publish. While busy, focus stays
   on Publish, which is `aria-disabled`, and the live status line announces `publishDialogChecking`.
   Cancel/Escape focus `publishBtn` explicitly; a gap jump focuses the
@@ -352,7 +352,8 @@ integration owner (AC9).
     200% text, the Details toggle overlaps the locale tab strip.)
 - [x] **AC8** `ui.ts` complete, no orphans; README and §9 updated — `site` `ui.test.ts`; ED asserts
   each added/kept key is rendered; grep shows no caller of removed keys; docs diff.
-  - [x] ED — PD › `renders every copy key the issue adds or keeps` (all 21 added/kept keys); no
+  - [x] ED — PD › `renders every copy key the issue adds or keeps` (21 added/kept keys) and the busy test for
+    the 22nd, `publishDialogChecking`; no
     caller of `languageCoverageLabel`/`translationCoverage` is left in `uploader/public/`.
   - [x] `site` `npm test` (incl. `ui.test.ts`) green; README, contract §9/§7.3, issue-550 note,
     `DESIGN.md`, `project-reference.md` updated in this branch.

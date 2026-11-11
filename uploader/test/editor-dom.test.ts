@@ -1248,7 +1248,8 @@ describe('publish dialog: languages are chosen where the story is published (#56
     h.el('publishDialogConfirm').click();
     await flush();
     expect(dialog.open).toBe(true);
-    expect(dialog.getAttribute('aria-busy')).toBeNull();
+    expect(required(dialog, 'fieldset').getAttribute('aria-busy')).toBeNull();
+    expect(h.el('publishDialogConfirm').getAttribute('aria-disabled')).toBeNull();
     const english = publishRows(h)[1]!;
     expect(english.state).toBe(copy['editor.chrome.publishDialogMissing'].replace('{fields}', 'excerpt'));
     expect([english.input!.checked, english.input!.disabled]).toEqual([true, false]);
@@ -1315,7 +1316,9 @@ describe('publish dialog: languages are chosen where the story is published (#56
     await flush();
     // Still open, and nothing in it can change the selection or confirm a second time.
     expect(dialog.open).toBe(true);
-    expect(dialog.getAttribute('aria-busy')).toBe('true');
+    expect(required(dialog, 'fieldset').getAttribute('aria-busy')).toBe('true');
+    // The status line is outside the busy region, so its message is announced.
+    expect(dialog.getAttribute('aria-busy')).toBeNull();
     // Publish keeps focus but is marked unavailable: a repeated press neither confirms again nor
     // lands on Cancel. The status line says what is happening.
     expect(h.el('publishDialogConfirm').getAttribute('aria-disabled')).toBe('true');
@@ -1332,7 +1335,7 @@ describe('publish dialog: languages are chosen where the story is published (#56
     await until(() => !dialog.open);
     await flush();
     expect(dialog.open).toBe(false);
-    expect(dialog.getAttribute('aria-busy')).toBeNull();
+    expect(required(dialog, 'fieldset').getAttribute('aria-busy')).toBeNull();
     expect(writesOf(h).map(({ url }) => url)).toEqual(['/posts/tk1', '/posts/tk1/publish']);
     expect(await galleryAlt(sentPair(writesOf(h)[0]!))).toBe('Described while publishing');
     expect((await posts.get('tk1'))!.status).toBe('published');
@@ -1370,7 +1373,7 @@ describe('publish dialog: languages are chosen where the story is published (#56
       const body = h.api.buildPayload().de.bodyMarkdown;
       const dialog = publishThroughDialog(h.el, () => setChecked(publishRows(h)[1]!.input!, false));
       await flush();
-      expect(dialog.getAttribute('aria-busy')).toBe('true');
+      expect(required(dialog, 'fieldset').getAttribute('aria-busy')).toBe('true');
       const dirty = h.dirtyCalls();
       if (how === 'cancel') h.el('publishDialogCancel').click();
       else if (how === 'escape') h.el('publishDialogCancel').fire('keydown', { key: 'Escape' });
@@ -1381,8 +1384,9 @@ describe('publish dialog: languages are chosen where the story is published (#56
       if (how === 'cancel' || how === 'escape') {
         // The flow ends at the close, not when the gallery check settles: Publish asks afresh at once.
         const fresh = openPublishDialog(h);
-        expect(fresh.getAttribute('aria-busy')).toBeNull();
+        expect(required(fresh, 'fieldset').getAttribute('aria-busy')).toBeNull();
         expect(h.el('publishDialogConfirm').disabled).toBe(false);
+        expect(h.el('publishDialogConfirm').getAttribute('aria-disabled')).toBeNull();
         h.el('publishDialogCancel').click();
         h.flushDialogEvents();
       }
@@ -1400,9 +1404,10 @@ describe('publish dialog: languages are chosen where the story is published (#56
       expect(h.document.activeElement).toBe(h.el('publishBtn'));
       // The flow has ended: Publish asks again, from the draft as it is, with nothing left busy.
       const again = openPublishDialog(h);
-      expect(again.getAttribute('aria-busy')).toBeNull();
+      expect(required(again, 'fieldset').getAttribute('aria-busy')).toBeNull();
       expect(publishRows(h).map(({ input }) => [input!.checked, input!.disabled])).toEqual([[true, true], [true, false]]);
       expect(h.el('publishDialogConfirm').disabled).toBe(false);
+      expect(h.el('publishDialogConfirm').getAttribute('aria-disabled')).toBeNull();
     });
 
   // ---- FLUSHFAIL ----
@@ -1416,8 +1421,9 @@ describe('publish dialog: languages are chosen where the story is published (#56
     await flush();
     expect(dialog.open).toBe(true);
     expect(h.el('publishDialogStatus').textContent).toBe(copy['editor.gallery.analysisFailed']);
-    expect(dialog.getAttribute('aria-busy')).toBeNull();
+    expect(required(dialog, 'fieldset').getAttribute('aria-busy')).toBeNull();
     expect(h.el('publishDialogConfirm').disabled).toBe(false);
+    expect(h.el('publishDialogConfirm').getAttribute('aria-disabled')).toBeNull();
     expect(publishRows(h).map(({ input }) => input!.disabled)).toEqual([true, false]);
     expect(h.document.activeElement).toBe(h.el('publishDialogConfirm'));
     expect(writesOf(h)).toEqual([]);
@@ -1472,7 +1478,7 @@ describe('publish dialog: languages are chosen where the story is published (#56
     await flush();
     expect(dialog.open).toBe(true);
     expect(h.el('publishDialogStatus').textContent).toBe(copy['editor.chrome.publishUnresolved']);
-    expect(dialog.getAttribute('aria-busy')).toBeNull();
+    expect(required(dialog, 'fieldset').getAttribute('aria-busy')).toBeNull();
     expect(writesOf(h)).toEqual([]);
     expect(h.api.buildPayload()).toEqual(before);
     h.el('publishDialogCancel').click();

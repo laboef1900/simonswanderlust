@@ -4567,9 +4567,10 @@ dialog.publish-dialog {
   overflow-y: auto;
   overscroll-behavior: contain;
 }
-.publish-dialog[aria-busy='true'] { cursor: progress; }
+.publish-dialog:has(.publish-languages[aria-busy='true']) { cursor: progress; }
 /* Busy Publish keeps focus (a repeated key press must not reach Cancel) but reads as unavailable. */
-.publish-dialog #publishDialogConfirm[aria-disabled='true'] { opacity: 0.5; cursor: progress; }
+.publish-dialog #publishDialogConfirm[aria-disabled='true'],
+.publish-dialog #publishDialogConfirm[aria-disabled='true']:hover { background-color: var(--red); opacity: 0.5; cursor: progress; }
 .publish-dialog > h2 { margin: 0; }
 .publish-dialog__intro { margin: 0.5rem 0 0; font-size: 0.875rem; }
 .publish-languages { margin-top: 1.25rem; }
