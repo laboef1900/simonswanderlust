@@ -1,6 +1,7 @@
 # Issue #569 — Editor clean-up: library-only hero/title image, no hero alt suggest, excerpt disclosure, waypoint row
 
-Status: APPROVED by independent AI design review (round 2, 2026-11-11). Owner: Simon.
+Status: APPROVED by independent AI design review (round 2, 2026-11-11; Amendment A approved in
+round 4). Owner: Simon.
 
 ## Scope and risk
 
