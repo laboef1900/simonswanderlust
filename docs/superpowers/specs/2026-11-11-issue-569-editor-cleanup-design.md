@@ -21,13 +21,13 @@ disclosure lives once the Excerpt help text is removed (section 3).
 | A3 | Hero has no **Suggest alt text**; hero alt input stays editable and saves | Lead | Test "sets the hero from the library … saves an edited alt"; browser: DE/EN alt edited → Save → reload → persisted (`hero_image->>'alt'` in Postgres) |
 | A4 | Publish-gap jump for a missing hero focuses the library button | Lead | Test (mobile drawer) focuses `enHeroLibrary` with `enHeroDetails` open; browser: "German missing hero" via mouse and keyboard → `deHeroLibrary` focused, section opened, 2px steel-blue ring on keyboard |
 | A5 | Excerpt help text gone (both locales); AI-excerpt disclosure implemented per section 3 and recorded | Lead | Tests: no `#xxExcerptHelp`, textarea without `aria-describedby`, Generate → `excerpt-disclosure-<locale>`; `editor-excerpt.test.ts` note visible, outside the action row, stays during busy; browser a11y tree DE/EN: name "Generate excerpt with AI", description = disclosure; note y unchanged while Cancel shows |
-| A6 | Stop row: Find coordinates · Via point · Continue by on one wrapping line; lookup status/results and profile note below it at full width; routing values save unchanged | Lead | Lookup test pins controls children and row order controls → note → status → results; routing tests unchanged and green; browser: rows render Find coordinates · Via point / Continue by (last stop: "Last stop…"), mocked lookup results below, profile note under the line; stops JSON in Postgres identical before/after save+reload |
+| A6 | Stop row: Find coordinates · Via point · Continue by on one line (Amendment A: never wraps); lookup status/results and profile note below it at full width; routing values save unchanged | Lead | Lookup test pins controls children and row order controls → note → status → results; routing tests unchanged and green; browser: line never wraps at 1440/1280 fine, 1280 with scrollbar gutter, 375/320 coarse; mocked lookup results below, profile note under the line; stops JSON in Postgres identical before/after save+reload |
 | A7 | `ui.ts`: no orphan or missing keys in either locale | Lead | 11 removed keys: 0 references each in `uploader/public`, `uploader/src`, `site/src`; added `editor.chrome.excerptDisclosure` in DE+EN and used; `ui.test.ts` completeness green |
 | A8 | Tests: hero upload cases (~L4213) removed/rewritten library-only; focus expectation (~L1866) retargeted; stop-row layout + routing covered; `tsc --noEmit` + `npm test` (uploader), `npm test` + `astro check` (site) pass | Lead | Site: 53 files / 927 tests pass, `astro check` 0/0/0 (local Postgres). Uploader: see PR (full suite with `TEST_DATABASE_URL` on a disposable local Postgres) |
 | A9 | Verified visually in the running editor (desktop, narrow inspector, ~375px mobile; coarse-pointer targets) | Lead | Local stack (uploader dev + Postgres 18 container), managed headless Chromium: 1440px (inspector 312px), 375px and 320px drawers with `pointer: coarse`; `scrollWidth − clientWidth = 0` for every stop row, controls line, hero zone and excerpt assist; targets 44px (search, Via label, select, library, Generate), checkbox 24px |
 | I1 | Library pick adds no new behaviour; existing hero alt prefill (only when the field is empty) and title-image alt adoption kept as is | Lead | `pickHero()` body unchanged except a comment; test: empty alt prefilled, typed alt kept; cancelled picker leaves src unchanged and returns focus (browser) |
 | I2 | `rowValues()`, `syncRows()`, `aria-describedby="stopRouteViaHelp"`, select↔note linkage unchanged; saved routing values identical | Lead | Functions untouched; ID sweep test resolves `stopRouteViaHelp` and each `stopProfileNote<n>`; Postgres `stops` identical after reload + save |
-| I3 | Waypoint change is DOM placement + CSS only (no copy, no behaviour) | Lead | Diff: element placement in `waypoint-lookup.js`/`decorateRow`, unused `row` parameter dropped, CSS; no copy or listener change |
+| I3 | DOM placement, CSS and the lookup button's accessible-name mechanism; no copy or routing change | Lead | Diff: element placement in `waypoint-lookup.js`/`decorateRow`, unused `row` parameter dropped, icon button named by `aria-label`/`title` from the existing copy, visually hidden Continue by label, CSS; no `ui.ts` or listener change |
 | I4 | No slug, route, schema or API change | Lead | Diff touches only `uploader/public/*`, `site/src/i18n/ui.ts`, tests, docs |
 | I5 | Every `aria-describedby` / `for` points at an existing ID | Lead | Test "resolves every label and description reference…" over the loaded editor incl. stop rows and excerpt assists |
 
@@ -182,7 +182,7 @@ name · remove / lat · lng / `.stop-lookup` (Find coordinates button, status, r
 .stop-row  (grid: 1fr 1fr var(--control-h-sm); unchanged columns)
   input.stop-name   (1 / 3)        button.btn-remove (3, row 1)
   input.stop-lat    (1, row 2)     input.stop-lng    (2 / 4, row 2)
-  div.stop-controls (1 / -1)  display:flex; flex-wrap:wrap; align-items:center; gap:.5rem 1rem
+  div.stop-controls (1 / -1)  display:flex; flex-wrap:nowrap; align-items:center; gap:.5rem (Amendment A)
      button.stop-search          ← WaypointLookup
      label.stop-via-field        ← StopRouteEditor.decorateRow
      label.stop-leg-field        ← decorateRow (hidden on the last stop)
@@ -197,9 +197,8 @@ name · remove / lat · lng / `.stop-lookup` (Find coordinates button, status, r
   in `row`; `decorateRow(controls, routing)` (its unused `row` parameter dropped) puts via/leg/last in `controls` and inserts the
   note directly after `controls`, so the warning stays next to the select it describes. Row
   order: controls → note → status → results. The `.stop-lookup` and `.stop-routing` wrappers are
-  removed (their CSS too); no other caller exists. Each flex child wraps independently, so a
-  narrow line breaks as "Find coordinates · Via point" then "Continue by [select]" (or "Last
-  stop…").
+  removed (their CSS too); no other caller exists. The line itself is laid out by Amendment A
+  (one line, no wrapping).
 - Focus order: unchanged for name, lat, lng and Remove (Remove stays after lng in the DOM while
   drawn in row 1, as today). Then Find coordinates, Via point, Continue by select, then result
   buttons — matching the visual order of the controls line and the results below it. Results
@@ -212,12 +211,7 @@ name · remove / lat · lng / `.stop-lookup` (Find coordinates button, status, r
   button. The Via label gets `min-height: var(--control-h-sm)` (44px under coarse pointer),
   which costs no line height beside the 44px button and select, and keeps a near-miss off Find
   coordinates (which sends the place name out).
-- Width reality (stated in the PR): every real inspector width keeps the content box at or
-  under ~20.5rem, so the controls never fit on one line; the row renders as four lines (name ·
-  remove / lat · lng / Find coordinates · Via point / Continue by [select] or "Last stop…").
-  That is the issue's narrow-width form; the three-line form needs a wider line than the
-  inspector or phone drawer provides. Overflow is measured in the browser, including a 320px
-  viewport.
+- Width reality: superseded by Amendment A below (owner chose a one-line form).
 - Coarse pointer: buttons and the select use `--control-h-sm` (2.75rem under
   `pointer: coarse`); the checkbox keeps its 1.5rem coarse box inside the label row.
 - Unchanged: `rowValues()`, `syncRows()` (both use `row.querySelector`, independent of
@@ -225,6 +219,77 @@ name · remove / lat · lng / `.stop-lookup` (Find coordinates button, status, r
   `aria-invalid`, copy, `collectStops()`.
 - `2026-11-03-issue-513-stop-routing-design.md` contains no row-layout statement (checked: it
   defines data, normalization, "the editor shows 'Last stop'" — still true); no update needed.
+
+### Amendment A — one controls line (owner decision, 2026-11-11, during PR #572)
+
+Asked whether the wrapped form was acceptable, the owner put the merge on hold and chose
+"icon button + visually hidden Continue by label" from three options. The other two were
+shorter visible copy, or keeping the wrap.
+
+- **Measured** in the running editor: the controls line is 280px wide (inspector 19.5rem) and
+  256px below ~1310px viewports (18rem). The items needed 435px: Find coordinates 119 · Via
+  point 80 · "Continue by" 76 + select 120, plus 16px gaps.
+- **Find coordinates** becomes a square icon button the size of the × remove
+  (`--control-h-sm`: 30px fine, 44px coarse). It draws a magnifier in the editor's stroke style
+  (inline SVG, `aria-hidden`, fixed markup, no interpolation). Its accessible name is
+  `aria-label` = `editor.waypoint.search` ("Find coordinates"), and `title` repeats it as the
+  hover tooltip. During a lookup the button's `aria-label`/`title` switch to `searching`
+  instead of its text, as before; the button is disabled as today. The class stays
+  `btn-secondary stop-search`.
+- **Continue by** stays in the DOM as the select's `<label>` text, so the select's accessible
+  name is unchanged. The text gets the existing `.visually-hidden` utility. The select gets
+  `title` = "Continue by" as a hover hint. Its `aria-describedby` to the profile note keeps
+  priority for the description. Options and copy are unchanged: no `ui.ts` change.
+- **CSS (the line cannot wrap):**
+  - `.stop-controls` uses `flex-wrap: nowrap` and a 0.5rem gap.
+  - The search button and the Via label are `flex: none`.
+  - The Continue by label and its select are the item that **absorbs any shortfall**:
+    `flex: 0 1 auto; min-width: 0` on both. The select may shrink and ellipsize its option
+    text (`admin.css` select ellipsis); it never pushes anything to a second line.
+  - `.stop-last` gets `flex: 1 1 0; min-width: 0; line-height: 1.25`, so "Last stop: no
+    further leg." wraps inside its slot.
+  - The dead `min-width: 9.5rem` on the select is removed. It never applied in the editor,
+    because `body.editor-page select { min-width: 0 }` outranks it.
+- **Expected widths** (select at its intrinsic ~120px):
+  - Fine pointer: 30 + 8 + 80 + 8 + 120 = 246px. It fits at 280 and 256 with no shrink.
+  - Fine pointer with a classic always-visible scrollbar (about 8–11px; ~245px at the 18rem
+    inspector): the select gives up a few px and stays on the line.
+  - Last stop: the text wraps to two short lines inside its slot when the line is under
+    ~277px. That row's controls line is then about two text lines high (~33px at
+    `line-height: 1.25`), not one control high. This is accepted: the line itself never
+    breaks.
+  - Coarse pointer: 44 + 8 + 88 + 8 + 120 = 268px. That fits the phone drawer (280px line at
+    a 320px viewport, 336px at 375px). On a touch desktop with a 256px line, the select
+    shrinks to ~108px.
+- **Trade-off accepted by the owner:**
+  - The visible words "Find coordinates" and "Continue by" are gone. The icon, tooltips and
+    accessible names carry them; the Via point label stays visible.
+  - Known risk: the select can read as belonging to Via point. Nothing visible says the
+    mode applies to the leg to the next stop, and the tooltip is mouse-only. Fixing that
+    would need a new visible note (a `ui.ts` key), which the chosen option excludes. Recorded
+    for the owner.
+- **Unchanged:** DOM order and focus order, `rowValues()`, `syncRows()`, the
+  `stopRouteViaHelp` link, select ↔ note, lookup behaviour, and the routing values. No copy
+  change: the lookup's busy label moves from text to `aria-label`/`title`.
+- **Verification:**
+  - Tests:
+    - The button keeps its icon and has no visible text. Its `aria-label`/`title` are checked
+      at first render, after an input reset, while a lookup is pending (`searching`, disabled),
+      and after success and after failure.
+    - The select's label text is "Continue by" with `.visually-hidden`, and the select has
+      `title` "Continue by".
+    - The existing order and routing tests still pass.
+  - Browser: the controls line never wraps (search, Via and select tops are equal) on middle
+    and last stops at:
+    - 1440px (280) and 1280px (256), fine pointer;
+    - 1280px with an 11px gutter simulated for an always-visible scrollbar;
+    - 375px (328px line) and 320px (280px line), coarse pointer.
+    Zero overflow in every case, and the lookup still works.
+- **Docs and tracker updates:**
+  - The `DESIGN.md` stop-row bullet, `docs/authoring-workflow.md` "Find waypoint coordinates"
+    (the magnifier button), and the `project-status.md` entry describe the one-line form.
+  - Tracker rows A6 and I3 are restated: I3 becomes "DOM placement, CSS and the lookup
+    button's accessible-name mechanism; no copy or routing change".
 
 ## Docs to update
 
@@ -340,6 +405,31 @@ local (Golden Rule 5).
   (adopted in the test); Find coordinates reads "Finding location…" during a lookup so Via
   point shifts a few pixels (accepted: existing label behaviour, transient, no overlap).
 - **Verdict:** `VERDICT: APPROVED`.
+
+### Round 3 (Amendment A, one-line stop controls)
+
+- **Reviewer:** same agent and model. **Verdict:** CHANGES REQUIRED.
+- **B1:** the line had 2–10px slack at 256px and would still wrap with an always-visible
+  scrollbar. **Resolution:** `nowrap`; search and Via are `flex: none`; the Continue by
+  label and select absorb the shortfall; the last-stop text wraps inside its slot; the browser
+  check adds a scrollbar-gutter run.
+- **N1–N6 resolutions:**
+  - N1: tests cover every button state.
+  - N2: the docs and tracker list now covers the amendment.
+  - N3: the last-stop height is reworded, with `line-height: 1.25`.
+  - N4: phone figure corrected.
+  - N5: the dead `min-width: 9.5rem` is removed.
+  - N6: the meaning risk is recorded as owner-accepted.
+
+### Round 4
+
+- **Result:** B1 resolved by construction; N1–N6 addressed. **Verdict:** `VERDICT: APPROVED`.
+- **Minor items:**
+  - Adopted: the per-state test asserts "SVG present, no text" as well as the attributes; the
+    375px figure is corrected; rounds 3 and 4 are recorded here; the Target DOM block and
+    tracker rows A6/I3 are restated.
+  - Declined: `line-height` ≈1.15 for the last stop. Uniform row height isn't a requirement,
+    and 1.25 keeps the two short lines legible.
 
 ## PR review follow-ups (PR #572)
 

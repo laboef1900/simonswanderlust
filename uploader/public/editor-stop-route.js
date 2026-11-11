@@ -74,10 +74,14 @@
 
       const legLabel = doc.createElement('label');
       legLabel.className = 'stop-leg-field';
+      // Still the select's label (its accessible name); hidden so the controls
+      // fit one line in the inspector (#569). The tooltip repeats it for the mouse.
       const legText = doc.createElement('span');
+      legText.className = 'visually-hidden';
       legText.textContent = copy.legProfile;
       const select = doc.createElement('select');
       select.className = 'stop-profile';
+      select.title = copy.legProfile;
       for (const value of PROFILES) {
         const option = doc.createElement('option');
         option.value = value;

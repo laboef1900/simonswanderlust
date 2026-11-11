@@ -340,10 +340,11 @@ manually.
 ### Find waypoint coordinates
 
 In **Story details → Expedition details → Waypoints / stops**, add a stop and enter
-a place name, for example **Cancun**. Click **Find coordinates** (or press Enter
-in the name field), then choose the matching full location from the results.
-Add a country to the name if the results are ambiguous. Results and status appear below
-the stop's controls line (**Find coordinates** · **Via point** · **Continue by**).
+a place name, for example **Cancun**. Click the magnifier button (**Find coordinates**) next to
+**Via point**, or press Enter in the name field, then choose the matching full location from
+the results. Add a country to the name if the results are ambiguous. Results and status
+appear below the stop's controls line. The select after **Via point** is the travel mode
+to the next stop (**Continue by**; hover for its name).
 
 Choosing a result fills that stop's latitude and longitude without changing its
 name. Coordinates remain editable. **Save draft** keeps the change; lookup does

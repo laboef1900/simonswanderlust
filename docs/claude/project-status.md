@@ -12,9 +12,10 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
   Suggest alt text is removed (body photos keep upload and Suggest). The Excerpt help text is
   removed; the AI disclosure is now a muted line under **Generate excerpt with AI** and that
   button's `aria-describedby` (new key `editor.chrome.excerptDisclosure`; 11 orphaned keys
-  removed). Each stop row has one wrapping controls line (Find coordinates · Via point ·
-  Continue by) with the profile note, lookup status and results below it; routing values are
-  unchanged. Client-only: no slug, route, schema or API change.
+  removed). Each stop row has one controls line that never wraps: an icon **Find
+  coordinates** button · Via point · the travel-mode select (its **Continue by** label is
+  visually hidden), with the profile note, lookup status and results below it. Routing
+  values are unchanged. Client-only: no slug, route, schema or API change.
 
 - **Implemented locally:** admin consistency review fixes (2026-11-10, owner-requested
   Impeccable critique + audit; decisions and invariants in

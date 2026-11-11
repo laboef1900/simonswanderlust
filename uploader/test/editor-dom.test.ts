@@ -2852,6 +2852,44 @@ describe('waypoint location lookup', () => {
     expect(h.document.activeElement).toBe(required(row, '.stop-lat'));
   });
 
+  it('keeps Find coordinates an icon named by its label and tooltip in every lookup state', async () => {
+    const search = ui.en['editor.waypoint.search'];
+    let reply = Promise.withResolvers<Response>();
+    const h = await loadEditor({ fetch: () => reply.promise });
+    h.api.populateForm(fullPair());
+    const row = required(h.el('stopsList'), '.stop-row');
+    const button = required(row, '.stop-search');
+    // A text write would replace the icon; the name lives in aria-label and title only.
+    const expectNamed = (label: string) => {
+      expect(button.querySelector('svg')).not.toBeNull();
+      expect(button.textContent).toBe('');
+      expect([button.getAttribute('aria-label'), button.title]).toEqual([label, label]);
+    };
+    expectNamed(search);
+    button.click();
+    expect(button.disabled).toBe(true);
+    expectNamed(ui.en['editor.waypoint.searching']);
+    required(row, '.stop-name').dispatchEvent(new EditorEvent('input'));
+    expect(button.disabled).toBe(false);
+    expectNamed(search);
+    reply = Promise.withResolvers<Response>();
+    button.click();
+    reply.resolve(response({ results: [location] }));
+    await settle();
+    expect(row.querySelectorAll('.stop-search-result')).toHaveLength(1);
+    expectNamed(search);
+    reply = Promise.withResolvers<Response>();
+    button.click();
+    reply.resolve(response({ code: 'lookup_failed' }, 502));
+    await settle();
+    expect(required(row, '.stop-search-status').textContent).toBe(ui.en['editor.waypoint.failed']);
+    expectNamed(search);
+    // "Continue by" stays the select's label, only visually hidden, and is its tooltip.
+    const legLabel = required(row, '.stop-leg-field > span');
+    expect([legLabel.textContent, legLabel.className]).toEqual([ui.en['editor.stopRoute.legProfile'], 'visually-hidden']);
+    expect(required(row, '.stop-profile').title).toBe(ui.en['editor.stopRoute.legProfile']);
+  });
+
   it.each([200, 429, 502, 503])('preserves coordinates when search returns no usable result (%s)', async (status) => {
     const h = await loadEditor({ fetch: async () => response(status === 200 ? { results: [] } : { code: 'lookup_failed' }, status) });
     h.api.populateForm(fullPair());

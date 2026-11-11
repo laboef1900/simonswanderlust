@@ -1428,10 +1428,11 @@ criterion (2.5.5 is AAA), so the accessibility commitment in `PRODUCT.md` is una
   forces itself open — the readiness chip's Trip link is the way in to a gap.
 - Waypoints show their stops and **Add stop** first; the via-point note, the geocoding
   privacy note and the routing privacy note follow together below them. Each stop row is
-  name · remove, lat · lng, then one wrapping controls line — **Find coordinates** · **Via
-  point** · **Continue by** (or the last stop's note) — with the profile warning, lookup
-  status and result buttons below it at full width. In the inspector the line wraps after
-  Via point.
+  name · remove, lat · lng, then one controls line that never wraps: a square magnifier
+  button (**Find coordinates**, named by `aria-label` and tooltip, the size of the ×) ·
+  **Via point** · the travel-mode select (labelled **Continue by**, visually hidden, tooltip),
+  or the last stop's note in that slot. The select gives up width first. The profile warning,
+  lookup status and result buttons follow below at full width.
 - **Route along stops** and **GPX route** fold like the sections around them; each
   summary carries its live status line, so the state reads without opening them. A GPX
   error opens its section before taking focus.

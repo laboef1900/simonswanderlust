@@ -2,13 +2,19 @@
 (function (root) {
   'use strict';
 
-  // The button joins the row's controls line; status and results follow below
-  // that line at full width, never between the button and its neighbours.
+  // A magnifier in the editor's stroke-icon style; fixed markup, nothing interpolated.
+  const SEARCH_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>';
+
+  // The icon button joins the row's controls line; status and results follow
+  // below that line at full width, never between the button and its neighbours.
   function attach({ row, controls, nameInput, latInput, lngInput, copy, onChange, onUnauthed }) {
     const search = document.createElement('button');
     search.type = 'button';
     search.className = 'btn-secondary stop-search';
-    search.textContent = copy.search;
+    search.innerHTML = SEARCH_ICON;
+    // Icon only (#569): the name and its tooltip carry "Find coordinates" / "Finding…".
+    const name = (text) => { search.setAttribute('aria-label', text); search.title = text; };
+    name(copy.search);
     const status = document.createElement('p');
     status.className = 'muted stop-search-status';
     status.setAttribute('role', 'status');
@@ -28,7 +34,7 @@
       results.replaceChildren();
       status.textContent = '';
       search.disabled = false;
-      search.textContent = copy.search;
+      name(copy.search);
     }
     [nameInput, latInput, lngInput].forEach((input) => input.addEventListener('input', invalidate));
 
@@ -46,7 +52,7 @@
       controller = pending;
       const timeout = setTimeout(() => pending.abort(), 12000);
       search.disabled = true;
-      search.textContent = copy.searching;
+      name(copy.searching);
       status.textContent = copy.searching;
       try {
         const response = await fetch('/geocode', {
@@ -87,7 +93,7 @@
         if (version === generation && !disposed) {
           controller = undefined;
           search.disabled = false;
-          search.textContent = copy.search;
+          name(copy.search);
         }
       }
     }
