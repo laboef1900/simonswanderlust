@@ -716,6 +716,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   left: 0;
   display: grid;
   gap: 0.125rem;
+  width: max-content;
   min-width: 100%;
   max-height: 20rem;
   margin: 0;
@@ -901,17 +902,19 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .posts-page #loadMsg { overflow-wrap: anywhere; }
 
 .posts-page #bulkCount { flex: 0 1 auto; overflow-wrap: anywhere; }
-.posts-page .selection-review { position: relative; flex: none; min-width: 0; }
+.posts-page .selection-review { flex: none; min-width: 0; }
 .posts-page .selection-review > summary { padding: 0.25rem 0; color: var(--ink); font-weight: 600; cursor: pointer; }
 /* The bar floats at the foot of the workspace, so the list it reviews opens
-   upward as a floating panel, like the row menus. */
+   upward as a floating panel, like the row menus. It is anchored to the bar
+   (the review itself is not positioned), so it never runs past the bar's
+   right edge, wherever the summary sits. */
 .posts-page .selection-review ul {
   position: absolute;
   bottom: calc(100% + 0.75rem);
-  left: 0;
+  left: 0.75rem;
   width: max-content;
   min-width: 14rem;
-  max-width: min(28rem, calc(100vw - 2rem));
+  max-width: min(28rem, calc(100% - 1.5rem));
   max-height: min(40vh, 18rem);
   margin: 0;
   padding: 0.5rem 0.75rem 0.5rem 1.75rem;
@@ -932,7 +935,13 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
    list is the runway: reserved from the first admin render at the bar's
    tallest height, never shrinking, so neither showing nor hiding the bar
    moves a row. */
+/* The runway's floor before the bar is first measured: one row of compact
+   controls, two rows where the bar wraps (below 62rem), the stacked bar
+   below 40rem, each larger at the coarse-pointer control height. */
 .posts-page { --bulk-bar-min: 3.5rem; }
+@media (pointer: coarse) { .posts-page { --bulk-bar-min: 4rem; } }
+@media (max-width: 62rem) { .posts-page { --bulk-bar-min: 5.5rem; } }
+@media (max-width: 62rem) and (pointer: coarse) { .posts-page { --bulk-bar-min: 7.5rem; } }
 .posts-page .cms-workspace { scrollbar-gutter: stable; }
 .posts-page:has(.bulk-bar-slot.is-reserved) .cms-workspace {
   scroll-padding-bottom: calc(max(var(--bulk-bar-min), var(--bulk-bar-h, 0px)) + 1.5rem);
@@ -971,12 +980,14 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   .posts-page .selection-review { flex-basis: 100%; }
   .posts-page .bulk-bar > button { flex: 1 1 7rem; }
   /* Review selection spans the bar, so its panel matches the bar's width. */
-  .posts-page .selection-review ul { right: 0; width: auto; min-width: 0; max-width: none; }
+  .posts-page .selection-review ul { right: 0.75rem; width: auto; min-width: 0; max-width: none; }
 }
+@media (max-width: 40rem) and (pointer: coarse) { .posts-page { --bulk-bar-min: 11rem; } }
 /* Short and narrow (a small landscape phone, 400% zoom): a fixed bar would
    cover most of the workspace, so it sits in its reserved slot instead. */
 @media (max-height: 30rem) and (max-width: 40rem) {
-  .posts-page .bulk-bar { position: static; }
+  /* Relative (insets reset) so Review selection still anchors to the bar. */
+  .posts-page .bulk-bar { position: relative; inset: auto; }
   .posts-page:has(.bulk-bar-slot.is-reserved) .cms-workspace { scroll-padding-bottom: 0; }
 }
 

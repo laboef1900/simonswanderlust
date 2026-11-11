@@ -934,8 +934,9 @@ describe('posts.html selection, recovery and disclosures', () => {
     expect(el('bulkBar').hidden).toBe(true);
     expect((el('bulkBar') as Element & { inert?: boolean }).inert).toBe(true);
     expect(el('postsTable').classList.contains('is-selecting')).toBe(false);
-    // Outside the shell nothing is "in view", so focus falls back to select-all — without scrolling.
-    expect(focusOptions).toEqual({ preventScroll: true });
+    // Outside the shell no checkbox is "in view", so focus falls back to
+    // select-all and is scrolled into view: visible focus outranks a still list.
+    expect(focusOptions).toEqual({ preventScroll: false });
     expect(el('bulkBarSlot').classList.contains('is-reserved')).toBe(true);
   });
 

@@ -256,9 +256,12 @@ instantly — `inert` makes focus behaviour identical either way.
 **Focus.** Showing the bar never moves focus (no `focus()` call is added; the checkbox the author
 used keeps focus). **Clear selection** clears, re-renders, then focuses — **without scrolling**
 (`preventScroll: true`) — the first enabled checkbox, in DOM order `#selectAll` then the row
-checkboxes, whose box lies fully inside the workspace scroller's visible rect; if none does (or the
-shell is not mounted), `#selectAll`. At the top of the list that is `#selectAll`, as today; further
-down it is the first visible row's checkbox, so focus stays visible and the list does not move.
+checkboxes, whose box lies fully inside the workspace scroller's visible rect. If none does (or the
+shell is not mounted) — e.g. 320 × 256 at the scroll end, where the static bar fills the view —
+focus goes to `#selectAll` **with** scrolling, because visible focus (WCAG 2.4.7) outranks a still
+list; that is the one case where clearing scrolls. At the top of the list the target is
+`#selectAll`, as today; further down it is the first visible row's checkbox, so focus stays
+visible and the list does not move.
 **Escape** (non-repeating, not already handled) while focus is inside the bar: closes Review
 selection if open (focus → its summary); otherwise does exactly what Clear selection does. Escape
 outside the bar does not touch the selection; an open filter menu and `AdminConfirm`'s dialog
@@ -506,3 +509,10 @@ needed): the Tab-through check also asserts that tabbing from the last row into 
 across its buttons does not scroll the list; the Clear-selection focus pick is the pure helper
 `AdminFocus.firstInView(candidates, container)` in `admin-ui.js`, unit-tested over stub rects in
 `admin-ui.test.ts`.
+
+PR #575 code review (`/review`, independent agents): `claude-haiku-4-5` — no findings;
+`anthropic/claude-opus-5-5` — 2 warnings, 2 info, all fixed: Review selection anchored to the
+bar (no right-edge overflow at 641–712 px); Clear-selection fallback scrolls `#selectAll` into
+view when no checkbox is visible (§6 Focus, amended above); filter panels size to their content
+(`width: max-content`, so the 22rem cap and end alignment apply); `--bulk-bar-min` floors raised
+where the bar wraps or uses coarse controls. The fixes were re-reviewed before merge.

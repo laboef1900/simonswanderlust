@@ -378,14 +378,15 @@
       }
 
       // Clearing happens from wherever the author is in the list, so focus goes
-      // to a checkbox already on screen (select-all first) without scrolling;
-      // only when none is in view does it fall back to select-all.
+      // to a checkbox already on screen (select-all first) without scrolling.
+      // Only when none is fully in view does it go to select-all, scrolled into
+      // view: visible focus outranks a still list.
       function clearSelection() {
         selected.clear();
         render();
         const candidates = [$('selectAll'), ...$('postsList').querySelectorAll('input')];
-        const target = AdminFocus.firstInView(candidates, $('postsTable').closest('.cms-workspace')) || $('selectAll');
-        target.focus({ preventScroll: true });
+        const inView = AdminFocus.firstInView(candidates, $('postsTable').closest('.cms-workspace'));
+        (inView || $('selectAll')).focus({ preventScroll: Boolean(inView) });
       }
 
       // Bulk DELETE is irreversible and has no undo — revisions are per-save
