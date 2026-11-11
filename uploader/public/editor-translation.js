@@ -29,6 +29,7 @@ window.EditorTranslation = (function () {
     const status = $('translationStatus');
     const result = $('translationResult');
     const consent = $('translationReplace');
+    const draftNote = $('translationDraftNote');
     let epoch = 0;
     let active = null;
     let undoRecord = null;
@@ -37,14 +38,22 @@ window.EditorTranslation = (function () {
     const text = (key, values = {}) => Object.entries(values).reduce((value, [name, replacement]) => value.replaceAll('{' + name + '}', replacement), copy[key]);
     const localeName = (locale) => copy[locale === 'de' ? 'translationGerman' : 'translationEnglish'];
 
-    for (const [id, key] of Object.entries({ translateArticle: 'translationAction', translationUndo: 'translationUndo',
+    for (const [id, key] of Object.entries({ translationUndo: 'translationUndo',
       translationClose: 'translationDiscard', translationData: 'translationData', translationLibrary: 'translationLibrary',
       translationTitleLabel: 'translationTitle', translationExcerptLabel: 'translationExcerpt',
       translationBodyLabel: 'translationBody', translationImagesLabel: 'translationImages', translationSettings: 'translationSettings' })) $(id).textContent = copy[key];
+    // The visible word leads the accessible name (WCAG 2.5.3); the icon is decoration.
+    const triggerLabel = document.createElement('span');
+    triggerLabel.className = 'btn-icon__label';
+    triggerLabel.textContent = copy.translationAction;
+    trigger.replaceChildren(window.AdminIcons.ai(), triggerLabel);
+    trigger.setAttribute('aria-label', copy.translationActionName);
 
+    // Publication is chosen at Publish, so an omitted language is still a
+    // translation source or target; applying never saves or publishes.
     function eligible(snapshot) {
       return !snapshot.blocked && snapshot.locales.length === 2 && snapshot.locales.includes(snapshot.sourceLocale) &&
-        snapshot.locales.includes(snapshot.targetLocale) && !snapshot.omitted[snapshot.sourceLocale] && !snapshot.omitted[snapshot.targetLocale];
+        snapshot.locales.includes(snapshot.targetLocale);
     }
     function current(request) {
       if (active !== request || request.epoch !== epoch || !dialog.open || request.controller.signal.aborted) return false;
@@ -105,6 +114,8 @@ window.EditorTranslation = (function () {
       release();
       clearResult();
       $('translationDestination').textContent = '';
+      draftNote.hidden = true;
+      draftNote.textContent = '';
       if (dialog.open) { queuedCloseEvents++; dialog.close(); }
       const target = trigger.hidden || trigger.disabled ? $('tabbtn-' + options.capture().sourceLocale) : trigger;
       target.focus({ preventScroll: true });
@@ -153,9 +164,12 @@ window.EditorTranslation = (function () {
       $('translationWarnings').textContent = '';
       const snapshot = options.capture();
       $('translationHeading').textContent = text('translationDirection', { source: localeName(snapshot.sourceLocale), target: localeName(snapshot.targetLocale) });
+      const privateDraft = snapshot.omitted[snapshot.targetLocale] === true;
+      draftNote.hidden = !privateDraft;
+      draftNote.textContent = privateDraft ? text('translationPrivateDraft', { target: localeName(snapshot.targetLocale) }) : '';
       if (!dialog.open) dialog.showModal();
       run.disabled = true;
-      if (!eligible(snapshot)) { say(copy.translationCoverage, 'unavailable'); return; }
+      if (!eligible(snapshot)) { say(copy.translationUnavailable, 'unavailable'); return; }
       const request = { epoch, snapshot, controller: new AbortController(), prepared: null, output: null, flushing: true };
       active = request;
       let config = null;

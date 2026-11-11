@@ -1047,3 +1047,14 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
   after a WordPress import); dumps stay v15 with the new keys optional (older
   dumps restore them as NULL); recovery is roll-forward only. `allowedExif()` and GPS
   redaction are unchanged.
+- **Implemented, PR pending (#568, AI-reviewed design under a scoped owner exception):** the
+  story editor chooses published languages in a **Publish** dialog instead of the secondary tab's
+  "Publish this story in …" checkbox. Primary and already-published languages are locked on;
+  an unpublished secondary can be deselected (kept as a private draft, `omitted = true`). The
+  confirmed selection is frozen and the save intent captured while the dialog is still open,
+  then saved through the normal draft save and published; Cancel changes nothing. Gaps are checked
+  for exactly the selected languages (the button gates only the primary, published languages and
+  Expedition details). Translation now also works into an unselected language. The translate
+  action reads **Translate** with a shared AI icon (`AdminIcons.ai()`), accessible name
+  "Translate with AI". No route, schema or `posts.omitted` semantics change. Spec:
+  `docs/superpowers/specs/2026-11-11-issue-568-publish-language-choice.md`.

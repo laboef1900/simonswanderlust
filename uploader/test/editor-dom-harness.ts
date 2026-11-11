@@ -283,3 +283,23 @@ export function editorDocument(markup: string) {
     flushDialogEvents() { for (const event of state.closeEvents.splice(0)) event(); },
   };
 }
+
+/**
+ * The one way a story is published from the editor (issue #568): Publish in
+ * the command bar opens the publish dialog, and only that dialog's own Publish
+ * button confirms. Every publishing click in the editor suites goes through
+ * here, so a flow that skipped the dialog, or opened one that cannot be
+ * confirmed, fails at the click. `choose` runs on the open dialog first (to
+ * select languages). Confirmation settles pending gallery edits before it
+ * saves: await the suite's own settle before reading what was sent.
+ */
+export function publishThroughDialog(el: (id: string) => EditorElement, choose?: (dialog: EditorElement) => void): EditorElement {
+  el('publishBtn').click();
+  const dialog = el('publishDialog');
+  if (!dialog.open) throw new Error('Publish did not open the publish dialog: ' + el('actionError').textContent);
+  choose?.(dialog);
+  const confirm = el('publishDialogConfirm');
+  if (confirm.disabled) throw new Error('The publish dialog cannot be confirmed: ' + el('publishDialogStatus').textContent);
+  confirm.click();
+  return dialog;
+}

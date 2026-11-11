@@ -27,7 +27,7 @@
               English <span class="lang-code" aria-hidden="true">EN</span>
             </button>
           </div>
-          <button id="translateArticle" type="button" class="btn-secondary btn-sm" aria-haspopup="dialog" aria-controls="articleTranslationDialog" hidden></button>
+          <button id="translateArticle" type="button" class="btn-secondary btn-sm btn-icon" aria-haspopup="dialog" aria-controls="articleTranslationDialog" hidden></button>
         </div>
 
         <div class="editor-commandbar__actions">
@@ -537,6 +537,26 @@
       </div>
     </main>
 
+    <!-- The publish confirmation, and the one place publication languages are
+         chosen. It sits outside the main element on purpose: its checkboxes
+         must never reach the draft's dirty, stash and invalidation listeners.
+         No form and no returnValue: only the Publish button of the current
+         opening confirms. -->
+    <dialog id="publishDialog" class="admin-modal publish-dialog" aria-labelledby="publishDialogTitle" aria-describedby="publishDialogIntro">
+      <h2 id="publishDialogTitle"></h2>
+      <p id="publishDialogIntro" class="publish-dialog__intro"></p>
+      <fieldset class="publish-languages">
+        <legend></legend>
+        <ul class="publish-languages__list"></ul>
+      </fieldset>
+      <p id="publishDialogStatus" class="publish-dialog__status" role="status"></p>
+      <p id="publishDialogRebuild" class="help publish-dialog__rebuild"></p>
+      <div class="admin-modal__foot">
+        <button id="publishDialogCancel" type="button" class="btn-secondary"></button>
+        <button id="publishDialogConfirm" type="button" class="btn-publish" aria-describedby="publishDialogStatus"></button>
+      </div>
+    </dialog>
+
     <dialog id="articleTranslationDialog" class="article-translation" aria-labelledby="translationHeading" aria-describedby="translationData translationLibrary">
       <header class="article-translation__header">
         <h2 id="translationHeading"></h2>
@@ -546,6 +566,7 @@
         <p id="translationDestination" class="article-translation__destination"></p>
         <p id="translationData"></p>
         <p id="translationLibrary" class="muted"></p>
+        <p id="translationDraftNote" hidden></p>
         <p id="translationWarnings" class="notice-warn"></p>
         <p id="translationStatus" role="status" aria-live="polite" aria-atomic="true"></p>
         <a id="translationSettings" href="/admin/settings.html#ai-models" target="_blank" rel="noopener"></a>
@@ -757,19 +778,21 @@
       const omitted = { de: false, en: false };
       const publishedLocales = { de: false, en: false };
       let savedRequestedLocales = [];
+      // What the author intends to publish: the primary plus every secondary
+      // not held back. The checklist, tab chips and alt-text audit describe it.
       function requestedLocales() {
         return language ? language.locales.filter((locale) => !omitted[locale]) : [];
       }
-      function syncCoverage() {
-        for (const locale of ['de', 'en']) {
-          const control = $(locale + 'Coverage');
-          control.hidden = !language || language.locales.length < 2 || locale === language.primary;
-          $(locale + 'Included').checked = !omitted[locale];
-          $(locale + 'Included').disabled = publishedLocales[locale];
-          $(locale + 'CoverageHelp').textContent = SiteLanguage.text(publishedLocales[locale] ? 'CoverageLocked' : 'CoverageHelp');
-        }
-        articleTranslation?.refresh();
+      // What a publish can never leave out: the primary, and every secondary
+      // that has been live. Any other language is chosen in the Publish dialog.
+      function forcedLocales() {
+        return language ? language.locales.filter((locale) => locale === language.primary || publishedLocales[locale]) : [];
       }
+      // One Publish flow at a time, from the click until its confirmed write
+      // settles or its dialog closes. `publishOpening` is the one dialog
+      // opening whose Publish button may still confirm.
+      let publishFlow = false;
+      let publishOpening = null;
 
       // ---- slugify ----
       const MAX_SLUG_BYTES = 251; // ASCII only; parity tested against posts.ts.
@@ -1198,30 +1221,6 @@
         onChange: activateLocale,
       });
       syncInspectorLocale(activeTab);
-      for (const locale of ['de', 'en']) {
-        const control = document.createElement('div');
-        control.id = locale + 'Coverage';
-        control.className = 'editor-card';
-        control.hidden = true;
-        const label = document.createElement('label');
-        label.className = 'check-field';
-        const input = document.createElement('input');
-        input.type = 'checkbox';
-        input.id = locale + 'Included';
-        input.checked = true;
-        input.setAttribute('aria-describedby', locale + 'CoverageHelp');
-        label.append(input, document.createTextNode(SiteLanguage.text('CoverageLabel', { language: SiteLanguage.names[locale] })));
-        const help = document.createElement('p');
-        help.id = locale + 'CoverageHelp';
-        help.className = 'muted';
-        control.append(label, help);
-        $('tab-' + locale).prepend(control);
-        input.addEventListener('change', () => {
-          omitted[locale] = !input.checked;
-          guard.markDirty();
-          updateLocaleChip();
-        });
-      }
       const galleryMetadataWarnings = GalleryMetadataWarnings.create({
         root: $('galleryMetadataWarnings'),
         editors: { de: deMDE.codemirror, en: enMDE.codemirror },
@@ -2135,9 +2134,10 @@
         if (lat === '' || lng === '') missing.push('coordinates');
         return missing;
       }
-      function allPublishGaps() {
-        const requested = requestedLocales();
-        return { de: requested.includes('de') ? localeGaps('de') : [], en: requested.includes('en') ? localeGaps('en') : [], trip: tripGaps() };
+      // What publishing `locales` still lacks: each of those languages, plus
+      // the shared Expedition details.
+      function publishGaps(locales) {
+        return { de: locales.includes('de') ? localeGaps('de') : [], en: locales.includes('en') ? localeGaps('en') : [], trip: tripGaps() };
       }
       function gapCount(g) { return g.de.length + g.en.length + g.trip.length; }
       function jumpToGap(kind, field) {
@@ -2228,7 +2228,8 @@
         const chip = $('localeChip');
         const mobileChip = $('mobileLocaleChip');
         if (!chip || !mobileChip) return;
-        const g = allPublishGaps();
+        // The checklist is advisory and describes the intended languages.
+        const g = publishGaps(requestedLocales());
         renderLocaleChip(chip, g);
         renderLocaleChip(mobileChip, g);
         const remaining = gapCount(g);
@@ -2253,7 +2254,11 @@
             label.append('Publish', scope);
             pub.replaceChildren(label);
           } else pub.textContent = 'Publish';
-          const blocked = !language || loadBlocked || (currentTk && publication.availability !== 'available') || gapCount(g) > 0;
+          // Only what a publish can never leave out gates the button: a
+          // language that can still be deselected is checked in the dialog,
+          // for exactly the languages selected there.
+          const blocked = !language || loadBlocked || (currentTk && publication.availability !== 'available')
+            || gapCount(publishGaps(forcedLocales())) > 0;
           pub.disabled = blocked;
           pub.title = blocked ? 'Fill the missing fields before publishing.' : '';
         }
@@ -2340,7 +2345,9 @@
       // only when it runs. Later typing remains dirty; no save is coalesced.
       // Gallery alt edits reach the body asynchronously (#354). Settle them
       // before capturing, so the click's payload includes what was typed.
-      async function flushGalleryEdits() {
+      // `report` receives the failure sentence: the page's error line, or the
+      // Publish dialog's own status line while that modal covers the page.
+      async function flushGalleryEdits(report = showErr) {
         const version = formVersion;
         try {
           let before;
@@ -2353,7 +2360,7 @@
           } while (before !== guard.snapshot());
           return true;
         } catch (error) {
-          if (version === formVersion) showErr(error.message);
+          if (version === formVersion) report(error.message);
           return false;
         }
       }
@@ -2520,7 +2527,155 @@
         status.replaceChildren(document.createTextNode(editorCopy.previewBlocked + ' '), link);
       });
 
-      $('publishBtn').addEventListener('click', async () => {
+      // ---- publish: language choice and confirmation (#568) ----
+      // The dialog is the confirmation, and the only control for which
+      // languages a story is published in. Its checkboxes change nothing by
+      // themselves: a selection reaches `omitted`, the save and the publish
+      // request only through the confirming step of its current opening.
+      const publishDialog = $('publishDialog');
+      const publishDialogStatus = $('publishDialogStatus');
+      const publishDialogConfirm = $('publishDialogConfirm');
+      $('publishDialogTitle').textContent = editorCopy.publishDialogTitle;
+      $('publishDialogIntro').textContent = editorCopy.publishDialogIntro;
+      publishDialog.querySelector('legend').textContent = editorCopy.publishDialogLanguages;
+      $('publishDialogRebuild').textContent = editorCopy.publishDialogRebuild;
+      $('publishDialogCancel').textContent = editorCopy.publishDialogCancel;
+      publishDialogConfirm.textContent = editorCopy.publishDialogConfirm;
+
+      // Titles, URLs, field and language names are text, never markup.
+      function publishLine(className, text) {
+        const line = document.createElement('p');
+        line.className = className;
+        line.textContent = text;
+        return line;
+      }
+      // One row per enabled language, built from the form as it is now.
+      // `checked` carries this opening's own choices across a re-render; a new
+      // opening passes none and starts from the draft's coverage.
+      function renderPublishRows(opening, checked = {}) {
+        const forced = forcedLocales();
+        const choice = language.locales.length > 1;
+        const urls = AdminConfirm.liveUrls(Object.fromEntries(language.locales.map((locale) => [locale, slugFieldFor(locale).value.trim()])));
+        opening.rows = language.locales.map((locale) => {
+          const row = {
+            locale, name: SiteLanguage.names[locale], forced: forced.includes(locale), input: null, fix: null,
+            item: document.createElement('li'), state: publishLine('publish-lang__state', ''),
+          };
+          row.item.className = 'publish-lang';
+          row.state.id = 'publishDialogState-' + locale;
+          if (choice) {
+            const label = document.createElement('label');
+            label.className = 'check-field publish-lang__choice';
+            row.input = document.createElement('input');
+            row.input.type = 'checkbox';
+            row.input.checked = row.forced || (checked[locale] ?? !omitted[locale]);
+            row.input.disabled = row.forced;
+            const note = publishLine('help publish-lang__note', locale === language.primary
+              ? editorCopy.publishDialogPrimary : SiteLanguage.text(row.forced ? 'CoverageLocked' : 'CoverageHelp'));
+            note.id = 'publishDialogNote-' + locale;
+            row.input.setAttribute('aria-describedby', note.id + ' ' + row.state.id);
+            row.input.addEventListener('change', () => { if (publishOpening === opening) syncPublishDialog(opening); });
+            label.append(row.input, row.name);
+            row.item.append(label, note);
+          } else {
+            row.item.append(publishLine('publish-lang__name', row.name));
+          }
+          const url = publishLine('publish-lang__url', urls[locale]);
+          url.hidden = !urls[locale];
+          row.item.append(publishLine('publish-lang__title', singleLineTitle($(locale + 'Title').value).trim() || '(untitled)'), url, row.state);
+          return row;
+        });
+        publishDialog.querySelector('.publish-languages__list').replaceChildren(...opening.rows.map((row) => row.item));
+        syncPublishDialog(opening);
+      }
+      // Readiness follows the selection: gaps count for exactly the selected
+      // languages, and Publish waits until none of them has one.
+      function syncPublishDialog(opening) {
+        const incomplete = [];
+        for (const row of opening.rows) {
+          const selected = row.forced || row.input?.checked === true;
+          const gaps = selected ? localeGaps(row.locale) : [];
+          row.item.classList.toggle('is-locked', row.forced);
+          row.item.classList.toggle('is-excluded', !selected);
+          row.item.classList.toggle('is-incomplete', gaps.length > 0);
+          row.fix?.remove();
+          row.fix = null;
+          if (!selected) row.state.textContent = editorCopy.publishDialogPrivate;
+          else if (!gaps.length) row.state.textContent = editorCopy.publishDialogReady;
+          else {
+            incomplete.push(row.name);
+            row.state.textContent = editorCopy.publishDialogMissing.replace('{fields}', () => gaps.join(', '));
+            row.fix = document.createElement('button');
+            row.fix.type = 'button';
+            row.fix.className = 'publish-lang__fix';
+            row.fix.textContent = editorCopy.publishDialogFix.replace('{field}', () => gaps[0]);
+            row.fix.setAttribute('aria-label', editorCopy.publishDialogFixName
+              .replace('{field}', () => gaps[0]).replace('{language}', () => row.name));
+            row.fix.addEventListener('click', () => {
+              if (publishOpening !== opening) return;
+              // Leaving for the field ends the opening like Cancel does.
+              cancelPublishDialog(false);
+              jumpToGap(row.locale, gaps[0]);
+            });
+            row.item.append(row.fix);
+          }
+        }
+        publishDialogStatus.textContent = incomplete.length
+          ? editorCopy.publishDialogBlocked.replace('{languages}', () => incomplete.join(', ')) : '';
+        publishDialogConfirm.disabled = opening.busy || incomplete.length > 0;
+      }
+      // While gallery edits settle, nothing in the dialog can change the
+      // selection or confirm twice. Cancel and Escape stay available.
+      function setPublishBusy(opening, busy) {
+        opening.busy = busy;
+        if (busy) publishDialog.setAttribute('aria-busy', 'true');
+        else publishDialog.removeAttribute('aria-busy');
+        for (const row of opening.rows) if (row.input) row.input.disabled = busy || row.forced;
+        syncPublishDialog(opening);
+      }
+      function focusPublishDialog(opening) {
+        const first = opening.rows.find((row) => row.input && !row.input.disabled);
+        (first ? first.input : publishDialogConfirm.disabled ? $('publishDialogCancel') : publishDialogConfirm).focus();
+      }
+      function openPublishDialog(reviewedRouteVersion) {
+        const opening = { reviewedRouteVersion, rows: [], busy: false };
+        renderPublishRows(opening);
+        // The intro asks for a choice; without one to make, the dialog is
+        // described by what confirming does.
+        const toggleable = opening.rows.some((row) => row.input && !row.forced);
+        $('publishDialogIntro').hidden = !toggleable;
+        publishDialog.setAttribute('aria-describedby', toggleable ? 'publishDialogIntro' : 'publishDialogRebuild');
+        publishDialog.showModal();
+        // Latched once the dialog is really open, so a failure above leaves Publish usable.
+        publishFlow = true;
+        publishOpening = opening;
+        focusPublishDialog(opening);
+      }
+      // From here no click in the dialog can confirm; the caller decides
+      // whether the flow goes on (a confirmed Publish) or ends (anything else).
+      function retirePublishOpening() {
+        publishOpening = null;
+        publishDialog.removeAttribute('aria-busy');
+        if (publishDialog.open) publishDialog.close();
+      }
+      // Every end of an opening other than its own confirmed Publish: Cancel,
+      // Escape, a gap jump, a replaced form, a close the browser forced.
+      // Nothing was applied to the draft, so nothing is undone and nothing is sent.
+      function cancelPublishDialog(restoreFocus = true) {
+        if (!publishOpening) return;
+        retirePublishOpening();
+        publishFlow = false;
+        if (restoreFocus) $('publishBtn').focus();
+      }
+      $('publishDialogCancel').addEventListener('click', () => cancelPublishDialog());
+      publishDialog.addEventListener('cancel', (event) => { event.preventDefault(); cancelPublishDialog(); });
+      // A close this script did not issue still ends the opening. The event of
+      // an earlier close arrives late: it finds no opening, or a dialog that
+      // is open again, and is ignored.
+      publishDialog.addEventListener('close', () => { if (!publishDialog.open) cancelPublishDialog(); });
+
+      $('publishBtn').addEventListener('click', () => {
+        if (publishFlow) return;
         if (loadBlocked) {
           showErr(editorCopy.reloadFailed);
           return;
@@ -2529,32 +2684,86 @@
         let reviewedRouteVersion;
         try { reviewedRouteVersion = gpxEditor.publishVersion(); }
         catch (e) { showErr(e.message); return; }
-        const g = allPublishGaps();
-        if (gapCount(g) > 0) {
+        // @ai-warning #305: publishing carries this post's version token. While a
+        // save's outcome is unknown, under comparison or paused for another account,
+        // that token is unconfirmed: refuse at the click, as the GPX write does. Not
+        // part of the button's disabled state, which WriteRecovery does not re-render.
+        if (writeRecovery.unresolved()) {
+          showErr(editorCopy.publishUnresolved);
+          return;
+        }
+        if (gapCount(publishGaps(forcedLocales())) > 0) {
           showErr('Not ready to publish. Use the bar above to jump to the missing fields.');
           updateLocaleChip();
           return;
         }
-        const titles = requestedLocales().map((locale) => $(locale + 'Title').value.trim() || '(untitled)');
-        const slugs = Object.fromEntries(requestedLocales().map((locale) => [locale, slugFieldFor(locale).value.trim()]));
-        const urlBlock = AdminConfirm.urlsPlain(slugs);
-        const intent = await captureSaveIntent();
-        if (!intent) return;
-        await enqueueWrite(() => publishNow(intent, reviewedRouteVersion, slugs, titles, urlBlock));
+        openPublishDialog(reviewedRouteVersion);
       });
-      async function publishNow(intent, reviewedRouteVersion, slugs, titles, urlBlock) {
-        const ok = await AdminConfirm.ask({
-          title: 'Publish to the live site?',
-          body: titles.join(' / ') + '\n\n'
-            + (urlBlock ? urlBlock + '\n\n' : '')
-            + 'This rebuilds the public journal. It can take several minutes. The live pages stay unchanged until the rebuild finishes.',
-          confirmLabel: 'Publish', tone: 'publish',
-        });
-        if (!ok) return;
+      publishDialogConfirm.addEventListener('click', async () => {
+        const opening = publishOpening;
+        // Consent is the current opening's Publish click, once.
+        if (!opening || opening.busy || !publishDialog.open) return;
+        setPublishBusy(opening, true);
+        let flushError = '';
+        const flushed = await flushGalleryEdits((message) => { flushError = message; });
+        // A close while the edits settled is a cancel: its opening is retired.
+        if (publishOpening !== opening) return;
+        if (!publishDialog.open) { cancelPublishDialog(); return; }
+        const refuse = (message) => {
+          setPublishBusy(opening, false);
+          publishDialogStatus.textContent = message;
+          publishDialogConfirm.focus();
+        };
+        if (!flushed) { refuse(flushError); return; }
+        // @ai-warning One synchronous step from here to the queued write. The
+        // selection is frozen and the save intent captured while the modal is
+        // still open, so nothing typed, toggled or reloaded afterwards can
+        // change what is saved and published. Do not add an await before
+        // enqueueWrite().
+        if (loadBlocked) { refuse(editorCopy.reloadFailed); return; }
+        if (writeRecovery.unresolved()) { refuse(editorCopy.publishUnresolved); return; }
+        // Forced languages are in whatever their checkbox says: the primary and a
+        // published secondary can never be left out.
+        const forced = forcedLocales();
+        const selection = Object.freeze(opening.rows
+          .filter((row) => forced.includes(row.locale) || row.input?.checked === true).map((row) => row.locale));
+        if (selection.some((locale) => localeGaps(locale).length > 0)) {
+          // The form changed under the dialog: show it as it is now, with the choices kept.
+          const checked = Object.fromEntries(opening.rows.filter((row) => row.input).map((row) => [row.locale, row.input.checked]));
+          setPublishBusy(opening, false);
+          renderPublishRows(opening, checked);
+          focusPublishDialog(opening);
+          return;
+        }
+        let changed = false;
+        for (const locale of language.locales) {
+          const leftOut = !selection.includes(locale);
+          if (omitted[locale] !== leftOut) { omitted[locale] = leftOut; changed = true; }
+        }
+        if (changed) guard.markDirty();
+        updateLocaleChip();
+        const intent = snapshotIntent();
+        for (const locale of language.locales) intent.payload[locale].omitted = !selection.includes(locale);
+        // This close keeps the flow: it ends when the queued write settles.
+        retirePublishOpening();
+        $('publishBtn').focus();
+        try { await enqueueWrite(() => publishNow(intent, opening.reviewedRouteVersion, selection)); }
+        finally { publishFlow = false; }
+      });
+      // Called only while holding the editor write queue. `selection` is the
+      // frozen set the dialog confirmed; `intent` carries it as `omitted`.
+      async function publishNow(intent, reviewedRouteVersion, selection) {
         const saved = await saveDraftNow(intent);
         if (!saved) return;
+        // The server publishes the rows it has stored. A save acknowledged
+        // with other requested languages (an adopted earlier attempt, a
+        // language mode changed elsewhere) is not what was confirmed.
+        if (savedRequestedLocales.length !== selection.length
+            || savedRequestedLocales.some((locale, index) => locale !== selection[index])) {
+          showErr(editorCopy.publishSelectionMismatch);
+          return;
+        }
         const btn = $('publishBtn');
-        const publishingLocales = [...savedRequestedLocales];
         btn.disabled = true;
         publicationRefresh.beginAction();
         const started = Date.now();
@@ -2583,11 +2792,10 @@
           }
           publicationRefresh.accept({ publication: body.publication });
           if (body.updatedAt) loadedUpdatedAt = body.updatedAt;
-          for (const locale of publishingLocales) {
+          for (const locale of selection) {
             publishedLocales[locale] = true;
             slugFieldFor(locale).disabled = true;
           }
-          syncCoverage();
           // The audit describes the acknowledged publication, not current story liveness.
           renderAltAudit(body.altAudit, true);
           updateLocaleChip();
@@ -2727,6 +2935,9 @@
       // never merges with what was already on screen.
       function populateForm(post) {
         ++formVersion;
+        // An open Publish dialog describes the form it was built from: a
+        // replaced form ends it like Cancel.
+        cancelPublishDialog();
         articleTranslation?.invalidate();
         storyReview?.invalidate();
         excerptAssist?.invalidate();
@@ -2765,15 +2976,18 @@
         // Populate each locale's slug from the loaded data (never re-derive over
         // a stored value): a loaded slug turns derivation off for that locale
         // until the author clears the field (#122).
+        // The primary and a locale with publication history always publish, so
+        // a revision or local draft cannot bring back a coverage value the
+        // Publish gate, the checklist and the server would disagree about.
         for (const locale of ['de', 'en']) {
           const slug = post[locale]?.slug || '';
           slugFieldFor(locale).value = slug;
           slugAuto[locale] = !slug;
-          omitted[locale] = !language.locales.includes(locale) || post[locale]?.omitted === true;
+          omitted[locale] = !language.locales.includes(locale)
+            || (post[locale]?.omitted === true && locale !== language.primary && !publishedLocales[locale]);
         }
 
         for (const locale of ['de', 'en']) slugFieldFor(locale).disabled = publishedLocales[locale];
-        syncCoverage();
         countryCoords.reset();
         updateLocaleChip();
         syncPageTitle($(language.primary + 'Title').value);
@@ -2937,6 +3151,10 @@
         // current live slugs; only the content is restored.
         const keptSlugDe = publishedLocales.de ? $('slugFieldDe').value : null;
         const keptSlugEn = publishedLocales.en ? $('slugFieldEn').value : null;
+        // Coverage is chosen at Publish, never restored. The snapshot takes
+        // the current values before the form is filled, so the tab chips and
+        // the checklist show the coverage that is kept.
+        for (const locale of ['de', 'en']) rev.snapshot[locale] = { ...rev.snapshot[locale], omitted: omitted[locale] };
         populateForm(rev.snapshot);
         if (keptSlugDe !== null) $('slugFieldDe').value = keptSlugDe;
         if (keptSlugEn !== null) $('slugFieldEn').value = keptSlugEn;
@@ -3012,7 +3230,6 @@
               (window.SiteIdentity?.canonicalOrigin ? new URL(window.SiteIdentity.canonicalOrigin).host : '')
               + SiteLanguage.publicPath(language, locale, 'home');
           }
-          syncCoverage();
         } catch (error) {
           loadBlocked = true;
           $('saveDraft').disabled = true;

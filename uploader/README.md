@@ -20,8 +20,10 @@ and editable in Markdown; Visual paste is plain text. Galleries retain their dir
 order, captions and URLs and use the existing Media picker and metadata authority.
 If Visual initialization fails, the Markdown editor remains available.
 
-**Translate with AI** uses the latest unsaved active language to prepare the other enabled,
-non-omitted language of the same story. Configure its independent provider/model/timeout
+**Translate** (accessible name “Translate with AI”) uses the latest unsaved active language
+to prepare the other enabled language of the same story, even when that language is not
+selected for publication; it then stays a private draft. Which languages go live is chosen
+in the Publish dialog. Configure its independent provider/model/timeout
 under Settings → AI models → Article translation. **Advanced settings → Translation
 instructions** sets house style (tone, form of address, glossary, place names, units), up to
 4000 characters. It must contain visible text. Hidden control characters, which pasted text sometimes carries, are refused. **Reset instructions to default** restores the
