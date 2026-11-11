@@ -98,12 +98,9 @@ The app must be running (`docker compose up -d` brings it up with the blog).
 prompts you to create the initial admin account. After signing in, all admin pages work via the
 session cookie — no token to paste.
 
-**Hero image** (one per post) — you can upload it directly from the editor (see Stage 2), or
-use the standalone upload page first:
-
-- `https://simonswanderlust.com/admin/` (locally: `http://localhost:3000/admin/`) — enter a
-  **key** like `trips/<slug>/hero`, alt text, pick the photo, **Upload**.
-- Copy the returned `heroImage:` YAML values to paste into the editor's hero fields.
+**Hero image** (one per post) — upload it to **Media** (`/admin/media.html`) first, then pick it
+in the editor with **Choose from library** (see Stage 2). Hero and title images are chosen
+from the library only; the editor has no direct upload for them.
 
 **Body / gallery photos** (the rest) — upload them inline from the editor's body toolbar:
 each upload inserts a markdown image (`![alt](URL)`) at the cursor and records the photo's
@@ -251,17 +248,18 @@ The audit reflects the last saved draft: save after repairs to refresh it. If a
 photo has since been removed, the editor asks you to save rather than jumping to
 an unrelated photo. These checks are optional and never block publishing.
 Missing-field links select the right language and reveal the field to fix.
-For an existing hero, use **Replace photo** to upload or choose from the library,
-and **Adjust framing** for focal-point controls.
+For the hero, use **Choose from library** to set or change the photo, and **Adjust framing**
+for focal-point controls. Type the hero alt text in the hero alt field; when you pick a photo
+while that field is empty, the photo's Media alt text for this language is copied in.
 
 **Separate wide title image** — in Story details, use **Titelbild (optional)** on the DE tab
-or **Title image (optional)** on the EN tab. Choose a photo from the media library or upload
-a wide photograph, enter its language-specific alt text, and adjust framing if needed.
+or **Title image (optional)** on the EN tab. Choose a wide photograph with **Choose from
+library**, enter its language-specific alt text, and adjust framing if needed.
 This changes only the photograph above the story and in Preview; cards, the homepage cover
 and social images keep the hero. Each language has its own optional selection. **Remove title
 image** restores the hero fallback without deleting either photo from the library.
-Save a draft and preview first; only **Publish** changes the live banner. Upload encoding
-can still be running when the upload returns: wait until the photo is ready before publishing.
+Save a draft and preview first; only **Publish** changes the live banner. A photo uploaded to
+Media may still be encoding: wait until it is ready before publishing.
 
 ### Create a new post
 
@@ -278,8 +276,8 @@ can still be running when the upload returns: wait until the photo is ready befo
    | **Country code** | ISO-3166 alpha-2 (e.g. `GR`) |
    | **Region** | `europe` \| `asia` \| `africa` \| `north-america` \| `south-america` \| `oceania` \| `antarctica` — a region's destination page appears once it has a published story |
    | **Excerpt** | 1-2 sentence summary |
-   | **Hero image** | Open Story details → **Replace photo**, then **Upload hero** or **Choose from library**; edit alt text beside the preview and use **Adjust framing** for the focal point |
-   | **Title image (optional)** | A separate wide photograph for the story header; choose/upload in Story details, add alt text and adjust framing. Leave empty to use the hero |
+   | **Hero image** | Open Story details → **Choose from library**; edit alt text beside the preview and use **Adjust framing** for the focal point |
+   | **Title image (optional)** | A separate wide photograph for the story header; choose it from the library in Story details, add alt text and adjust framing. Leave empty to use the hero |
    | **Coordinates** | `lat`, `lng` decimal |
    | **Body** | Markdown, edited in Visual or in the EasyMDE Markdown source mode. Embed photos via the body toolbar's inline upload — it inserts a markdown image (`![alt](URL)`) and records the dimensions automatically. Pasted `<BodyImage …/>` tags (from an MDX backup or the upload page) also work: they're converted on save. |
 
@@ -331,7 +329,8 @@ generator requests a short plain-text excerpt in the active language from the un
 title and manuscript. It does not need the other language to be complete.
 
 The browser sends this text directly to the configured provider only when requested;
-provider charges and privacy policies apply. The app server never calls a model.
+provider charges and privacy policies apply. The line under the button says so. The app
+server never calls a model.
 Review the suggestion and character count, then choose **Use excerpt** or **Replace
 existing excerpt**. Generate alone never changes the current excerpt, saves, or publishes.
 You can cancel or dismiss a suggestion; edits or a locale switch invalidate stale work.
@@ -341,9 +340,11 @@ manually.
 ### Find waypoint coordinates
 
 In **Story details → Expedition details → Waypoints / stops**, add a stop and enter
-a place name, for example **Cancun**. Click **Find coordinates** (or press Enter
-in the name field), then choose the matching full location from the results.
-Add a country to the name if the results are ambiguous.
+a place name, for example **Cancun**. Click the magnifier button (**Find coordinates**) next to
+**Via point**, or press Enter in the name field, then choose the matching full location from
+the results. Add a country to the name if the results are ambiguous. Results and status
+appear below the stop's controls line. The select after **Via point** is the travel mode
+to the next stop (**Continue by**; hover for its name).
 
 Choosing a result fills that stop's latitude and longitude without changing its
 name. Coordinates remain editable. **Save draft** keeps the change; lookup does
@@ -542,7 +543,7 @@ get back are final, but the responsive AVIF/WebP variants take a few seconds per
 thumbnail appears once it is done. You can close the tab: uploading needs the tab open,
 encoding does not.
 
-**Unknown transfer is not a failed transfer.** Media, hero, body, About and title-image
+**Unknown transfer is not a failed transfer.** Media, story-body and About
 uploads keep a client-generated ID and check its server receipt once after an ambiguous
 response. **Check again** is read-only. Only an explicit retry authorized by definite
 failure or a new server retry generation can send bytes again. A retained original waiting
@@ -640,7 +641,7 @@ not a promise that another author has not changed the story since.
 predate the library, copies existing alt text from posts that already use them (exact URL matches
 only), and flags rows whose files have gone missing without deleting the metadata.
 
-In the post editor, the hero fields now offer **Choose from library** alongside **Upload hero** —
+In the post editor, hero and title images come from the library only (**Choose from library**):
 most heroes already exist, and re-uploading one would just mint a second copy under a new key.
 
 The shared library picker — including **Aus Mediathek wählen** for the title image and
@@ -976,7 +977,7 @@ Notes:
 
 ## Quick checklist
 
-- [ ] Photos uploaded — hero and body images via the editor's inline upload, or pre-uploaded via `/admin/` (hero); snippets/URLs ready.
+- [ ] Photos uploaded — hero and title images to Media, body images via the editor's inline upload (or Media); snippets/URLs ready.
 - [ ] In the editor: DE tab filled — slug (matches live WordPress slug, never renamed), title, date, country, countryCode, region, excerpt, heroImage fields, body photos inserted via the toolbar (or pasted `<BodyImage …/>` tags — converted on save) with DE alt text.
 - [ ] In the editor: EN tab filled — title, country (its own field — does not carry over from DE), excerpt, EN hero alt text, EN body with its own photo inserts (EN alt text).
 - [ ] **Save draft** — both locale rows written to Postgres; the live site is never affected by a save.

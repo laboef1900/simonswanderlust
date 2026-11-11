@@ -20,6 +20,37 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
   `docs/superpowers/specs/2026-11-11-issue-566-posts-bulk-bar-filters-design.md`. Not run:
   VoiceOver, WebKit and Firefox.
 
+- **Implemented locally:** editor clean-up (#569, 2026-11-11; design, AI-approval record and
+  acceptance tracker in `docs/superpowers/specs/2026-11-11-issue-569-editor-cleanup-design.md`).
+  Hero and title image are chosen from the media library only: the Replace-photo disclosure,
+  file inputs, upload buttons, `uploadHero()` and the title-image upload handler are gone, and
+  **Choose from library** is always visible; a missing-hero publish jump focuses it. The hero's
+  Suggest alt text is removed (body photos keep upload and Suggest). The Excerpt help text is
+  removed; the AI disclosure is now a muted line under **Generate excerpt with AI** and that
+  button's `aria-describedby` (new key `editor.chrome.excerptDisclosure`; 11 orphaned keys
+  removed). Each stop row has one controls line that never wraps: an icon **Find
+  coordinates** button · Via point · the travel-mode select (its **Continue by** label is
+  visually hidden), with the profile note, lookup status and results below it. Routing
+  values are unchanged. Client-only: no slug, route, schema or API change.
+
+- **Implemented locally (PR, not merged):** configurable Article translation prompt (#567,
+  2026-11-11, high risk; design, scoped AI-approval exception and review record in
+  `docs/superpowers/specs/2026-11-11-issue-567-translation-prompt.md`).
+  - **Setting.** `settings.json` gains `translationPrompt` (default
+    `DEFAULT_TRANSLATION_PROMPT` in `uploader/src/translation-prompt.ts`). It must be visible
+    plain text of at most 4000 UTF-16 units and is never coerced.
+  - **Settings UI.** Under Article translation → Advanced settings, with a character count,
+    an inline error and **Reset instructions to default**.
+  - **`/ai-config?purpose=translation`** now also returns `prompt`.
+  - **Transport.** `LLM.translateArticle` puts the prompt first, then the code-owned suffix:
+    faithful direction, untrusted-input guard and JSON contract. `parse()` is unchanged. With
+    the default prompt, every pre-#567 sentence is sent byte-identically; only the first two
+    sentences swap places.
+  - **Consent.** A prompt change between disclosure and run shows `translationConfigChanged`.
+  - **Upgrade.** Existing installs read the default with no migration write.
+  - **Release notes:** say that `settings.json` is outside DB dumps and that a downgrade to a
+    pre-#567 version drops `translationPrompt` on its next settings write.
+
 - **Implemented locally:** admin consistency review fixes (2026-11-10, owner-requested
   Impeccable critique + audit; decisions and invariants in
   `docs/superpowers/specs/2026-11-10-admin-consistency-review-fixes.md`). On the road:

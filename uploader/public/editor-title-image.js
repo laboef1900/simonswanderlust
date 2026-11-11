@@ -3,12 +3,12 @@
   'use strict';
 
   function create(options) {
-    const { locale, mount, copy, onChange, onUnauthed, getSlug } = options;
+    const { locale, mount, copy, onChange, onUnauthed } = options;
     const prefix = locale + 'TitleImage';
     // Only fixed markup and the application's own locale are interpolated.
     // The structure mirrors the hero section in editor.html so both image
-    // sections read as one pattern: preview, alt text, status, then the
-    // Replace photo and Adjust framing disclosures.
+    // sections read as one pattern: preview, alt text, status, the library
+    // action, then the Adjust framing disclosure. Library only (#569).
     mount.innerHTML = `
       <summary class="editor-card-title" id="${prefix}Heading">
         <span class="editor-image-section__title" data-copy="heading"></span>
@@ -24,16 +24,10 @@
           <input type="text" id="${prefix}Alt" maxlength="1000" />
         </div>
         <p class="muted" id="${prefix}Status" role="status"></p>
-        <details class="editor-disclosure hero-replace" id="${prefix}Replace">
-          <summary data-copy="replace"></summary>
-          <label for="${prefix}File" data-copy="file"></label>
-          <input type="file" id="${prefix}File" accept="image/*" class="hero-file-input" />
-          <div class="hero-actions-row">
-            <button type="button" class="btn-secondary" id="${prefix}Upload" data-copy="upload"></button>
-            <button type="button" class="btn-secondary" id="${prefix}Library" data-copy="library"></button>
-            <button type="button" class="btn-secondary" id="${prefix}Remove" data-copy="remove" hidden></button>
-          </div>
-        </details>
+        <div class="hero-actions-row">
+          <button type="button" class="btn-secondary" id="${prefix}Library" data-copy="library" aria-describedby="${prefix}Heading"></button>
+          <button type="button" class="btn-secondary" id="${prefix}Remove" data-copy="remove" hidden></button>
+        </div>
         <details class="editor-disclosure hero-focus" id="${prefix}Focus" hidden>
           <summary data-copy="framing"></summary>
           <p class="muted" data-copy="framingHelp"></p>
@@ -51,7 +45,6 @@
     // English chrome; the alt text itself is locale content.
     el('Alt')?.setAttribute('lang', locale);
     let image;
-    let busy = false;
 
     function paintFocus() {
       const x = Number(el('X').value);
@@ -84,7 +77,6 @@
         img.removeAttribute('src');
         thumb.removeAttribute('src');
       }
-      el('File').value = '';
       el('Status').textContent = image ? '' : copy.fallback;
       paintFocus();
     }
@@ -123,51 +115,8 @@
       paintFocus();
       onChange();
     });
-    el('Upload').addEventListener('click', async () => {
-      if (busy) return;
-      const slug = getSlug();
-      if (!slug) { el('Status').textContent = copy.slugRequired; return; }
-      const file = el('File').files[0];
-      if (!file) { el('Status').textContent = copy.pickFile; return; }
-      busy = true;
-      ['Upload', 'Library', 'Remove', 'File'].forEach((name) => { el(name).disabled = true; });
-      el('Status').textContent = copy.uploading;
-      const ownerId = options.recovery.ownerId();
-      const previous = get();
-      const previousAlt = el('Alt').value;
-      try {
-        const result = await root.UploadRecovery.run({
-          file, fields: { key: 'trips/' + slug + '/title' }, ownerId, recovery: options.recovery,
-          status: el('Status'), button: el('Upload'), onUnauthed,
-          copy: root.EditorCopy.en,
-        });
-        if (!result || !options.recovery.canAdopt(ownerId)) return;
-        const current = get();
-        if (current?.src !== previous?.src) {
-          el('Status').textContent = root.EditorCopy.en.uploadNotApplied + ' ' + result.src;
-          return;
-        }
-        const newerAlt = el('Alt').value !== previousAlt ? el('Alt').value : '';
-        const newerFocus = JSON.stringify(current?.focus) !== JSON.stringify(previous?.focus) ? current?.focus : undefined;
-        set({ src: result.src, width: result.width, height: result.height,
-          alt: newerAlt, ...(newerFocus ? { focus: newerFocus } : {}), ...(result.format ? { format: result.format } : {}) });
-        el('Status').textContent = result.status === 'processing' ? copy.processing : copy.selected;
-        onChange();
-      } catch {
-        el('Status').textContent = copy.uploadFailed;
-      } finally {
-        busy = false;
-        ['Upload', 'Library', 'Remove', 'File'].forEach((name) => { el(name).disabled = false; });
-      }
-    });
-    // A loaded story opens the picker only when it has no title image. Author
-    // actions (upload, library, remove) never fold it under the focused control.
-    function load(value) {
-      set(value);
-      el('Replace').open = !image;
-    }
-    load(undefined);
-    return { get, set: load };
+    set(undefined);
+    return { get, set };
   }
 
   root.EditorTitleImage = { create };

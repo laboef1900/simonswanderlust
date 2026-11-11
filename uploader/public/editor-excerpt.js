@@ -15,7 +15,7 @@ window.EditorExcerpt = (function () {
     'excerptLoadingSettings', 'excerptGenerating', 'excerptReady', 'excerptApplied', 'excerptCancelled',
     'excerptStale', 'excerptNeedsBody', 'excerptConfigUnavailable', 'excerptConfigInvalid', 'excerptKeyMissing',
     'excerptTimeout', 'excerptRefused', 'excerptInvalidOutput', 'excerptFailed', 'excerptSettingsLink',
-    'excerptAskAdmin',
+    'excerptAskAdmin', 'excerptDisclosure',
   ];
   const PROVIDERS = ['lm-studio', 'openrouter', 'deepseek', 'anthropic', 'openai', 'custom'];
   const KEYED_PROVIDERS = ['openrouter', 'deepseek', 'anthropic', 'openai'];
@@ -312,6 +312,11 @@ window.EditorExcerpt = (function () {
       const stop = button('btn-link excerpt-assist__cancel', 'cancel', copy.excerptCancel);
       stop.hidden = true;
       actions.append(generate, stop);
+      // The disclosure belongs to the action that sends text (#569): visible,
+      // on its own line so Cancel never moves it, and the button's description.
+      const note = element('p', 'excerpt-assist__note', copy.excerptDisclosure);
+      note.id = 'excerpt-disclosure-' + locale;
+      generate.setAttribute('aria-describedby', note.id);
       const status = element('div', 'excerpt-assist__status');
       status.setAttribute('role', 'status');
       status.setAttribute('aria-live', 'polite');
@@ -327,7 +332,7 @@ window.EditorExcerpt = (function () {
       const drop = button('btn-link', 'dismiss', copy.excerptDismiss);
       choices.append(apply, drop);
       suggestion.append(text, count, choices);
-      root.append(actions, status, suggestion);
+      root.append(actions, note, status, suggestion);
       container.appendChild(root);
       generate.addEventListener('click', () => start(locale));
       stop.addEventListener('click', () => cancel(locale));

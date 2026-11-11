@@ -278,21 +278,11 @@
                   <img id="deHeroPreviewImg" alt="" />
                 </div>
                 <label for="deHeroAlt">Hero alt text (DE)</label>
-                <div class="hero-alt-row">
-                  <input id="deHeroAlt" type="text" maxlength="1000" placeholder="Describe the hero image in German" />
-                  <button type="button" id="deHeroSuggest" class="btn-secondary">Suggest alt text</button>
-                </div>
+                <input id="deHeroAlt" type="text" maxlength="1000" placeholder="Describe the hero image in German" />
                 <p id="deHeroStatus" class="muted" role="status"></p>
-
-                <details class="editor-disclosure hero-replace" id="deHeroReplace" open>
-                  <summary>Replace photo</summary>
-                  <label for="deHeroFile" id="deHeroFileLabel"></label>
-                  <input id="deHeroFile" type="file" accept="image/*" class="hero-file-input" />
-                  <div class="hero-actions-row">
-                    <button type="button" id="deHeroUpload" class="btn-secondary">Upload hero</button>
-                    <button type="button" id="deHeroLibrary" class="btn-secondary">Choose from library</button>
-                  </div>
-                </details>
+                <div class="hero-actions-row">
+                  <button type="button" id="deHeroLibrary" class="btn-secondary" aria-describedby="deHeroLabel">Choose from library</button>
+                </div>
 
                 <details class="editor-disclosure hero-focus" id="deHeroFocus" hidden>
                   <summary>Adjust framing</summary>
@@ -322,7 +312,6 @@
             <div class="editor-inspector-group" id="deStoryDetails">
               <label for="deExcerpt">Excerpt (DE)</label>
               <textarea id="deExcerpt" class="editor-autofit" rows="3" placeholder="Eine kurze Zusammenfassung des Reiseberichts…"></textarea>
-              <p class="muted editor-field-help" id="deExcerptHelp"></p>
               <div id="deExcerptAssist"></div>
               <label for="deCountry">Country (DE)</label>
               <input id="deCountry" type="text" placeholder="z. B. Griechenland" aria-describedby="deCountryHelp" />
@@ -357,21 +346,11 @@
                   <img id="enHeroPreviewImg" alt="" />
                 </div>
                 <label for="enHeroAlt">Hero alt text (EN)</label>
-                <div class="hero-alt-row">
-                  <input id="enHeroAlt" type="text" maxlength="1000" placeholder="Describe the hero image in English" />
-                  <button type="button" id="enHeroSuggest" class="btn-secondary">Suggest alt text</button>
-                </div>
+                <input id="enHeroAlt" type="text" maxlength="1000" placeholder="Describe the hero image in English" />
                 <p id="enHeroStatus" class="muted" role="status"></p>
-
-                <details class="editor-disclosure hero-replace" id="enHeroReplace" open>
-                  <summary>Replace photo</summary>
-                  <label for="enHeroFile" id="enHeroFileLabel"></label>
-                  <input id="enHeroFile" type="file" accept="image/*" class="hero-file-input" />
-                  <div class="hero-actions-row">
-                    <button type="button" id="enHeroUpload" class="btn-secondary">Upload hero</button>
-                    <button type="button" id="enHeroLibrary" class="btn-secondary">Choose from library</button>
-                  </div>
-                </details>
+                <div class="hero-actions-row">
+                  <button type="button" id="enHeroLibrary" class="btn-secondary" aria-describedby="enHeroLabel">Choose from library</button>
+                </div>
 
                 <details class="editor-disclosure hero-focus" id="enHeroFocus" hidden>
                   <summary>Adjust framing</summary>
@@ -401,7 +380,6 @@
             <div class="editor-inspector-group" id="enStoryDetails">
               <label for="enExcerpt">Excerpt (EN)</label>
               <textarea id="enExcerpt" class="editor-autofit" rows="3" placeholder="A short summary of the story…"></textarea>
-              <p class="muted editor-field-help" id="enExcerptHelp"></p>
               <div id="enExcerptAssist"></div>
               <label for="enCountry">Country (EN)</label>
               <input id="enCountry" type="text" placeholder="e.g. Greece" aria-describedby="enCountryHelp" />
@@ -1338,9 +1316,6 @@
       });
       for (const locale of ['de', 'en']) {
         $(locale + 'CountryHelp').textContent = editorCopy.countryHelp;
-        $(locale + 'ExcerptHelp').textContent = editorCopy.excerptHelp;
-        $(locale + 'HeroFileLabel').textContent = editorCopy.heroFile.replace('{locale}', locale.toUpperCase());
-        $(locale + 'Excerpt').setAttribute('aria-describedby', locale + 'ExcerptHelp');
       }
       $('coordinatesHelp').textContent = editorCopy.coordinatesHelp;
       const countryCoords = CountryCoordinates.wire({
@@ -1488,17 +1463,23 @@
           stopRouteEditor.update();
         });
 
+        // One controls line under name and coordinates: Find coordinates,
+        // Via point and Continue by share it on one line that never wraps.
+        const controls = document.createElement('div');
+        controls.className = 'stop-controls';
+
         row.appendChild(nameInput);
         row.appendChild(latInput);
         row.appendChild(lngInput);
         row.appendChild(remove);
+        row.appendChild(controls);
         $('stopsList').appendChild(row);
         stopLookups.set(row, WaypointLookup.attach({
-          row, nameInput, latInput, lngInput, copy: WaypointCopy.en,
+          row, controls, nameInput, latInput, lngInput, copy: WaypointCopy.en,
           onChange: () => { guard.markDirty(); stopRouteEditor.update(); },
           onUnauthed: () => guard.redirectToLogin(),
         }));
-        stopRouteEditor.decorateRow(row, routing);
+        stopRouteEditor.decorateRow(controls, routing);
         stopRouteEditor.update();
       }
 
@@ -1538,7 +1519,7 @@
         return n;
       }
 
-      // ---- hero upload ----
+      // ---- photo status ----
       // A photo's status is a sentence; its library key may follow in mono,
       // never a raw URL (DESIGN.md "Jargon out").
       function photoStatus(statusEl, sentence, key) {
@@ -1549,58 +1530,6 @@
           statusEl.append(' ', code);
         }
       }
-      async function uploadHero(locale) {
-        const slugFieldId = locale === 'de' ? 'slugFieldDe' : 'slugFieldEn';
-        const slug = $(slugFieldId).value.trim();
-        if (!slug) { showErr('Fill in Permalink (' + locale.toUpperCase() + ') before uploading a hero photo.'); return; }
-        const fileInput = $(locale + 'HeroFile');
-        const altInput = $(locale + 'HeroAlt');
-        const statusEl = $(locale + 'HeroStatus');
-        const file = fileInput.files[0];
-        if (!file) { statusEl.textContent = 'Pick a file first.'; return; }
-
-        statusEl.textContent = 'Uploading…';
-        const ownerId = writeRecovery.ownerId();
-        const alt = altInput.value;
-        const previousSrc = $(locale + 'HeroSrc').value;
-        const previousFocus = HeroFocus.read(locale);
-
-        try {
-          const body = await UploadRecovery.run({
-            file, fields: { key: 'trips/' + slug + '/hero', alt }, ownerId, recovery: writeRecovery,
-            status: statusEl, button: $(locale + 'HeroUpload'), copy: editorCopy,
-            onUnauthed: () => guard.redirectToLogin(),
-          });
-          if (!body || !writeRecovery.canAdopt(ownerId)) return;
-          if ($(locale + 'HeroSrc').value !== previousSrc) {
-            photoStatus(statusEl, editorCopy.uploadNotApplied, body.key);
-            return;
-          }
-
-          storyReview?.invalidate();
-          $(locale + 'HeroSrc').value = body.src;
-          $(locale + 'HeroWidth').value = body.width;
-          $(locale + 'HeroHeight').value = body.height;
-          $(locale + 'HeroFormat').value = body.format || '';
-          // Hidden inputs are set programmatically — no input event fires.
-          // Reset only unchanged framing; do not overwrite edits made while sending.
-          const currentFocus = HeroFocus.read(locale);
-          if (currentFocus.x === previousFocus.x && currentFocus.y === previousFocus.y) HeroFocus.set(locale, 50, 50);
-          HeroFocus.sync(locale);
-          guard.markDirty();
-          // Encoding is asynchronous now (see server.ts POST /upload): the URL
-          // and dimensions are final, but the variants land a few seconds later
-          // and Publish refuses until they do. Say so rather than letting the
-          // author wonder why the preview shows a broken image.
-          photoStatus(statusEl, 'Hero photo uploaded.'
-            + (body.status === 'processing' ? ' It is still being processed; Publish waits for it.' : ''), body.key);
-        } catch (e) {
-          statusEl.textContent = refusal('upload the photo', { error: e && e.message });
-        }
-      }
-
-      $('deHeroUpload').addEventListener('click', () => uploadHero('de'));
-      $('enHeroUpload').addEventListener('click', () => uploadHero('en'));
 
       // ---- hero focal point ----
       // @ai-note The reader's hero is a full-bleed `object-fit: cover` box, so
@@ -1721,10 +1650,8 @@
         locale,
         EditorTitleImage.create({
           locale, mount: $(locale + 'TitleImage'), copy: EditorImageCopy.en,
-          getSlug: () => $(locale === 'de' ? 'slugFieldDe' : 'slugFieldEn').value.trim(),
           onChange: () => { guard.markDirty(); storyReview?.invalidate(); },
           onUnauthed: () => guard.redirectToLogin(),
-          recovery: writeRecovery,
         }),
       ]));
 
@@ -1934,9 +1861,8 @@
       }
 
       // ---- pick an existing hero from the media library ----
-      // The library is the other half of "upload": most heroes already exist,
-      // and re-uploading one would mint a second copy of the same photo under
-      // a new content-hash key.
+      // Heroes come only from the library (#569): that is where photos and
+      // their alt text are maintained, and one photo keeps one library key.
       function pickHero(locale) {
         MediaPicker.open({
           onUnauthed: () => guard.redirectToLogin(),
@@ -1952,7 +1878,7 @@
             const libraryAlt = item.alt && item.alt[locale];
             if (libraryAlt && !altInput.value.trim()) altInput.value = libraryAlt;
             // Hidden inputs are set programmatically — no input event fires.
-            // A different photo means a different focal point (see uploadHero).
+            // A different photo means a different focal point.
             HeroFocus.set(locale, 50, 50);
             HeroFocus.sync(locale);
             guard.markDirty();
@@ -2073,8 +1999,6 @@
       // of a raw redirect, matching every other 401 handler in this editor.
       const suggestOn401 = () => guard.redirectToLogin();
       const truncatedText = editorCopy.altSuggestTruncated;
-      AltSuggest.wire({ button: $('deHeroSuggest'), fileInput: $('deHeroFile'), altInput: $('deHeroAlt'), statusEl: $('deHeroStatus'), lang: 'de', on401: suggestOn401, truncatedText });
-      AltSuggest.wire({ button: $('enHeroSuggest'), fileInput: $('enHeroFile'), altInput: $('enHeroAlt'), statusEl: $('enHeroStatus'), lang: 'en', on401: suggestOn401, truncatedText });
       AltSuggest.wire({ button: $('deBodyImgSuggest'), fileInput: $('deBodyImgFile'), altInput: $('deBodyImgAlt'), statusEl: $('deBodyImgStatus'), lang: 'de', on401: suggestOn401, truncatedText });
       AltSuggest.wire({ button: $('enBodyImgSuggest'), fileInput: $('enBodyImgFile'), altInput: $('enBodyImgAlt'), statusEl: $('enBodyImgStatus'), lang: 'en', on401: suggestOn401, truncatedText });
 
@@ -2224,7 +2148,7 @@
           const ids = {
             title: kind + 'Title', slug: kind === 'de' ? 'slugFieldDe' : 'slugFieldEn',
             excerpt: kind + 'Excerpt', country: kind + 'Country', body: kind + 'Body',
-            hero: kind + 'HeroFile', 'hero alt': kind + 'HeroAlt',
+            hero: kind + 'HeroLibrary', 'hero alt': kind + 'HeroAlt',
           };
           const el = $(ids[field] || ids.title);
           const inInspector = ['slug', 'excerpt', 'country', 'hero', 'hero alt'].includes(field);
@@ -2776,8 +2700,6 @@
         $(loc + 'HeroFormat').value = hero.format || '';
         $(loc + 'HeroAlt').value = hero.alt || '';
         $(loc + 'HeroStatus').textContent = '';
-        // A loaded story opens the picker only when it has no hero yet.
-        $(loc + 'HeroReplace').open = !hero.src;
         // Same no-field-resurrection rule as the fields above: a payload with
         // no `focus` must recentre, not keep whatever was last on screen.
         const focus = hero.focus && typeof hero.focus === 'object' ? hero.focus : {};
