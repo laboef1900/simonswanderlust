@@ -95,8 +95,9 @@ the default. This matches `captionPrompt`, not `reviewPrompt`.
 
 ### Browser transport (`uploader/public/llm.js`)
 
-`llm.js` exports one rule for every browser consumer: `TRANSLATION_PROMPT_MAX_LENGTH = 4000`
-and `isTranslationPrompt(value)`.
+`llm.js` exports one rule for every browser consumer: `TRANSLATION_PROMPT_MAX_LENGTH = 4000`,
+`isTranslationPrompt(value)`, and `translationPromptProblem(value)`, which returns `'type'`,
+`'tooLong'`, `'blank'`, `'hidden'` or `null`.
 
 `translateArticle({ baseUrl, model, apiKey, timeoutMs, sourceLocale, targetLocale, prompt, slots, signal })`
 checks `prompt` with that rule before any network access. If the check fails, it throws
@@ -285,6 +286,8 @@ Placement mirrors Review's prompt. Everything goes inside Article translation's 
   3. no request is sent and the pending text is kept.
 - Error messages:
   - `settingsTranslationPromptRequired`: names the problem and points to Reset;
+  - `settingsTranslationPromptHidden`: names a hidden control character from pasted text and
+    the remedy;
   - `settingsTranslationPromptTooLong`: names the limit and the excess.
 - The server's 400 remains authoritative and is shown through the existing save outcome.
 - `AdminField.valid` clears the error on input, on Reset and on a successful load.
@@ -431,3 +434,9 @@ All of these were adopted in the follow-up commit:
 - the Settings tests cover the hidden-control case and the over-limit plus hidden-control case;
 - the spec, `SECURITY.md`, `ARCHITECTURE.md`, `uploader/README.md` and the registry amendment
   are reworded.
+
+**Final re-review (commit `8d52bff`).** Both agents returned **VERDICT: APPROVE**, with no
+CRITICAL or WARNING findings. The security reviewer's last INFO, that the spec's export and
+message lists were missing the classifier and the hidden-control key, is fixed in this
+section's commit. The code reviewer also ran both mirrors over every code point in all
+planes and found zero disagreements.
