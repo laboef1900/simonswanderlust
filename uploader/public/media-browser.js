@@ -1,7 +1,7 @@
 // The media library page (media.html). DOM only — every pure helper lives in
 // media-api.js, which is unit-tested.
 //
-// Three rules, all load-bearing at this size (~1600 lines of vanilla JS with no
+// Three rules, all load-bearing at this size (~1900 lines of vanilla JS with no
 // reactive layer):
 //   1. ONE state object, ONE render(). The grid is rebuilt from state; it is
 //      never mutated ad hoc. Five interacting states (selection × folder ×
@@ -87,17 +87,24 @@
   var detailRefresh = window.PublicationRefresh.create({
     resource: function () { return state.detailKey; },
     read: function (signal) {
-      return window.PublicationRefresh.json('/media/items/' + state.detailKey, signal);
+      // The one read that asks for the variant listing; every other item read keeps its cost.
+      return window.PublicationRefresh.json('/media/items/' + state.detailKey + '?versions=1', signal);
     },
     apply: function (item) {
       // Deliberately do not replace detailItem, form values, or conditional-write expectations.
+      // PATCH responses, a 409's `current` and poll reads carry no `versions`: the last listing stays.
       state.detailObservation = { impact: item.impact, livePending: item.livePending,
-        usedIn: item.usedIn || state.detailObservation?.usedIn || state.detailItem?.usedIn || [] };
+        usedIn: item.usedIn || state.detailObservation?.usedIn || state.detailItem?.usedIn || [],
+        versions: api.versionsOf(item.versions) || state.detailObservation?.versions || null };
       renderImpact();
+      renderVersions();
     },
     unavailable: function () {
-      state.detailObservation = { impact: { availability: 'unavailable' }, livePending: null };
+      // A failed read says nothing about the files: the last listing stays, if there was one.
+      state.detailObservation = { impact: { availability: 'unavailable' }, livePending: null,
+        versions: state.detailObservation?.versions || { availability: 'unavailable' } };
       renderImpact();
+      renderVersions();
     },
     unauthorized: function () { uploads.pause(); say(copy.uploadNeedsAuth); },
   });
@@ -138,6 +145,66 @@
     var box = $('dImpact');
     if (box) window.MediaImpact.render(box, state.detailObservation, state.detailChanged,
       !!state.me?.isAdmin, copy, function () { detailRefresh.refresh(); });
+  }
+
+  /**
+   * A public image URL this page may link to: HTTP(S) on the image origin or
+   * this one, without credentials — the rule MediaAi.photoUrl applies.
+   */
+  function publicImageUrl(src) {
+    try {
+      var url = new URL(src, location.origin);
+      if (['http:', 'https:'].indexOf(url.protocol) === -1 || url.username || url.password) return null;
+      return url.origin === imageOrigin() || url.origin === location.origin ? url.href : null;
+    } catch (_) { return null; }
+  }
+
+  /**
+   * The Versions section: the variant files that exist on disk, from the
+   * panel's observation — never derived from the row. It is rebuilt only when
+   * the listing changed, so the 30 s refresh never pulls a link out from under
+   * a click; when it did change, focus stays on the same version (format and
+   * width), else moves to the first link, else to the panel.
+   */
+  function renderVersions() {
+    var box = $('dVersions');
+    if (!box) return;
+    var versions = state.detailObservation ? state.detailObservation.versions : null;
+    var listing = JSON.stringify(versions);
+    if (box.dataset.listing === listing) return;
+    box.dataset.listing = listing;
+    var focusKey = box.contains(document.activeElement) ? document.activeElement.dataset.versionFocus : undefined;
+    var focusTarget = null;
+    box.innerHTML = '';
+    if (!versions || versions.availability !== 'available' || !versions.items.length) {
+      box.appendChild(el('p', 'muted', !versions ? copy.mediaVersionsLoading
+        : versions.availability === 'processing' ? copy.mediaVersionsProcessing
+        : versions.availability === 'unavailable' ? copy.mediaVersionsUnavailable
+        : copy.mediaVersionsEmpty));
+    } else {
+      var list = el('ul', 'media-versions');
+      list.setAttribute('role', 'list');
+      list.setAttribute('aria-labelledby', 'dVersionsLabel');
+      versions.items.forEach(function (version) {
+        var row = el('li');
+        var href = publicImageUrl(version.src);
+        if (href) {
+          var link = el('a', null, api.versionLabel(version));
+          link.href = href;
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+          link.dataset.versionFocus = version.format + ':' + version.width;
+          link.appendChild(el('span', 'visually-hidden', ' ' + copy.mediaVersionNewTab));
+          if (link.dataset.versionFocus === focusKey) focusTarget = link;
+          row.appendChild(link);
+        } else {
+          row.textContent = api.versionLabel(version);
+        }
+        list.appendChild(row);
+      });
+      box.appendChild(list);
+    }
+    if (focusKey) (focusTarget || box.querySelector('a') || $('detail')).focus({ preventScroll: true });
   }
 
   function say(msg) { $('out').textContent = msg; }
@@ -246,6 +313,14 @@
     return node;
   }
 
+  /** The name a photo goes by in a sentence or a caption: its title, else its file name — never the storage path. */
+  function photoName(item) { return item.title || String(item.key || '').split('/').pop(); }
+
+  /** Fills `{name}` placeholders; a function replacement, so a `$` in a title stays a `$`. */
+  function fill(template, values) {
+    return template.replace(/\{(\w+)\}/g, function (_, name) { return String(values[name]); });
+  }
+
   function renderFolders() {
     var list = $('folderTree');
     list.innerHTML = '';
@@ -287,6 +362,8 @@
       // Roving tabindex: exactly one cell is tabbable at a time.
       cell.tabIndex = index === 0 ? 0 : -1;
       cell.dataset.key = item.key;
+      // F opens the focused photo fullscreen (onGridKey); announced on the tile, where it works.
+      cell.setAttribute('aria-keyshortcuts', 'f');
       fillCell(cell, item);
       cell.addEventListener('click', function (ev) { onCellActivate(item.key, ev); });
       cell.addEventListener('keydown', function (ev) { onGridKey(ev, index); });
@@ -318,8 +395,7 @@
 
     // A title the author gave reads as the photo's name; a bare file name is
     // only a fallback and is set back, so the photograph leads the tile.
-    cell.appendChild(el('span', 'media-cell__title' + (item.title ? '' : ' is-filename'),
-      item.title || item.key.split('/').pop()));
+    cell.appendChild(el('span', 'media-cell__title' + (item.title ? '' : ' is-filename'), photoName(item)));
     if (item.usedIn && item.usedIn.length) {
       // "(published version)": the live post still renders it although the
       // draft dropped it — the admin has to republish before it can go.
@@ -549,6 +625,7 @@
         (isMac() ? '⌘' : 'Ctrl') + '-click adds or removes one photo.',
         (isMac() ? '⌘' : 'Ctrl') + '+A selects every photo on this page.',
         copy.mediaOpenDetailsShortcut,
+        copy.mediaViewerShortcut,
       ].forEach(function (hint) { hints.appendChild(el('li', null, hint)); });
       help.appendChild(hints);
       if (selectionChanged) detailRefresh.endAction();
@@ -576,8 +653,16 @@
     var preview = el('figure', 'media-detail__preview');
     fillPreview(preview, item);
     panel.appendChild(preview);
-    panel.appendChild(el('p', 'media-key', item.key));
-    renderSuggest(panel, item);
+    // What can be done with the photograph sits directly under it. The storage
+    // key is not shown: the author names photos by title, not by path (#570).
+    var actions = el('div', 'media-detail__actions');
+    var view = el('button', 'btn-secondary', copy.mediaViewFullscreen);
+    view.type = 'button';
+    view.id = 'dViewer';
+    view.addEventListener('click', function () { openViewer(item, 'button'); });
+    actions.appendChild(view);
+    panel.appendChild(actions);
+    renderSuggest(actions, item);
 
     var fields = [
       { id: 'dTitle', label: 'Title', value: item.title },
@@ -646,22 +731,32 @@
     if (selectionChanged) detailRefresh.endAction();
 
     // EXIF is read-only. lat/lng are absent entirely for non-admins. Camera,
-    // date and size already sit under the preview.
+    // date and size already sit under the preview; lens and exposure get a row
+    // only where the camera recorded them.
     panel.appendChild(el('p', 'section-label', 'File'));
     var dl = el('dl', 'keyfacts-mini');
-    var rows = [
-      ['Lens', item.exif && item.exif.lens],
-      ['Original', api.formatBytes(item.origBytes)],
-      ['Variants', api.formatBytes(item.variantBytes)],
-    ];
+    var rows = [];
+    if (item.exif && item.exif.lens) rows.push(['Lens', item.exif.lens]);
+    var exposure = api.formatExposure(item.exif, copy.mediaExposureEquivalent);
+    if (exposure) rows.push([copy.mediaExposure, exposure]);
+    rows.push(['Original', api.formatBytes(item.origBytes)], ['Variants', api.formatBytes(item.variantBytes)]);
     if (item.exif && item.exif.lat !== null && item.exif.lat !== undefined) {
       rows.push(['GPS', item.exif.lat.toFixed(4) + ', ' + Number(item.exif.lng).toFixed(4)]);
     }
     rows.forEach(function (r) {
       dl.appendChild(el('dt', null, r[0]));
-      dl.appendChild(el('dd', null, r[1] || '—'));
+      dl.appendChild(el('dd', null, r[1]));
     });
     panel.appendChild(dl);
+
+    // The variant files themselves, read from disk by the observation (renderVersions).
+    var versionsLabel = el('p', 'section-label', copy.mediaVersions);
+    versionsLabel.id = 'dVersionsLabel';
+    panel.appendChild(versionsLabel);
+    var versionsBox = el('div');
+    versionsBox.id = 'dVersions';
+    panel.appendChild(versionsBox);
+    renderVersions();
 
     renderEncodingActions(panel, item);
   }
@@ -677,7 +772,7 @@
       if (item.width && item.height) { previewImg.width = item.width; previewImg.height = item.height; }
       preview.appendChild(previewImg);
     } else {
-      preview.appendChild(el('span', 'thumb-placeholder', api.statusLabel(item) || 'No preview'));
+      preview.appendChild(el('span', 'thumb-placeholder', api.statusLabel(item) || copy.mediaNoPreview));
     }
     // Camera, capture time and pixel size: measurements, set in mono (DESIGN.md).
     var shot = [
@@ -736,6 +831,8 @@
     renderDetail(background);
     if (!background) renderQueue();
     schedulePoll();
+    // An open viewer follows the page it was opened on: position, ends, a photo that left.
+    renderViewer();
   }
 
   // ---- encoding poll ------------------------------------------------------
@@ -771,6 +868,7 @@
     var ready = 0;
     var failed = 0;
     var stop = false;
+    var flipped = false; // the open panel's photo finished encoding in this round
     try {
       var keys = processingKeys();
       for (var i = 0; i < keys.length && !document.hidden; i += 1) {
@@ -783,6 +881,7 @@
           continue;
         }
         var outcome = applyEncoded(keys[i], fresh);
+        if (outcome && keys[i] === state.detailKey) flipped = true;
         if (outcome === 'ready') ready += 1;
         else if (outcome === 'failed' || outcome === 'missing') failed += 1;
       }
@@ -792,6 +891,11 @@
         say([ready ? photos(ready) + ' ready' : '', failed ? (ready ? String(failed) : photos(failed)) + ' failed' : '']
           .filter(Boolean).join(', ') + '.');
       }
+      // applyEncoded asked for the open photo's versions at once, but a background
+      // read that lands while a later photo is still being read is dropped
+      // (PublicationRefresh): ask again now that the round's reads have settled.
+      // A read still in flight is reused, never doubled.
+      if (flipped) detailRefresh.refresh();
       if (!stop) schedulePoll();
     }
   }
@@ -812,10 +916,15 @@
     current.status = fresh.status;
     current.error = fresh.error === undefined ? null : fresh.error;
     current.thumbSrc = fresh.thumbSrc === undefined ? current.thumbSrc : fresh.thumbSrc;
+    current.fullSrc = fresh.fullSrc === undefined ? current.fullSrc : fresh.fullSrc;
     if (typeof fresh.variantBytes === 'number') current.variantBytes = fresh.variantBytes;
     var cell = $('grid').querySelectorAll('.media-cell')[index];
     if (cell && cell.dataset.key === key) fillCell(cell, current);
     updateOpenDetail(current);
+    // A photo that finishes encoding while it is on the viewer's stage appears there.
+    if (viewer.currentKey === key) renderViewer();
+    // Its variant files exist now: list them without waiting for the 30 s cycle.
+    if (state.detailKey === key) detailRefresh.refresh();
     return current.status;
   }
 
@@ -851,8 +960,8 @@
    */
   function whenReplaceable(nextKey, proceed) {
     if (!state.detailDirty || nextKey === state.detailKey) { proceed(); return; }
-    var item = state.detailItem;
-    var name = item ? (item.title || item.key.split('/').pop()) : ($('detail').dataset.key || '');
+    // A panel without its row still knows its key: name the file, never the path.
+    var name = photoName(state.detailItem || { key: $('detail').dataset.key });
     window.AdminConfirm.ask({
       title: 'Discard unsaved details?',
       body: 'The details of "' + name + '" have unsaved changes. Discarding them cannot be undone.',
@@ -890,7 +999,7 @@
     });
   }
 
-  /** Roving tabindex + arrow keys; Space toggles, Shift+Arrow extends. */
+  /** Roving tabindex + arrow keys; Space toggles, Shift+Arrow extends, Enter opens details, F the viewer. */
   function onGridKey(ev, index) {
     var keys = visibleKeys();
     var cols = 1;
@@ -899,6 +1008,14 @@
       cols = Math.max(1, Math.round(grid.clientWidth / grid.firstElementChild.offsetWidth)) || 1;
     }
     var next = null;
+    // F opens the focused photo fullscreen — on a tile only, never in the panel,
+    // where F is select type-ahead and text. Unmodified, so Ctrl/⌘+F stays the
+    // browser's; either case, so Caps Lock does not switch it off; not on repeat.
+    if ((ev.key === 'f' || ev.key === 'F') && !ev.ctrlKey && !ev.metaKey && !ev.altKey && !ev.shiftKey && !ev.repeat) {
+      ev.preventDefault();
+      openViewer(state.items[index], 'tile');
+      return;
+    }
     if (ev.key === 'Enter') {
       ev.preventDefault();
       whenReplaceable(keys[index], function () {
@@ -960,6 +1077,160 @@
     }
   }
 
+  // ---- fullscreen viewer --------------------------------------------------
+  // One photo of the current page at its largest variant (#mediaViewer). It is
+  // read-only and stands outside the page's state: it never changes the
+  // selection, the open details or unsaved edits. It follows the page by KEY —
+  // never a node or an index — because reload(), the encoding poll and the
+  // detail panel all rebuild what it was opened from while it is open.
+
+  var viewer = {
+    currentKey: null,  // the photo on the stage; null while closed
+    openerKey: null,   // the photo it was opened from …
+    openerKind: null,  // … through the panel's 'button' or a grid 'tile'
+    snapshot: null,    // the last row seen for currentKey, shown once it has left the page
+    shown: '',         // what the stage holds, so an unchanged photo is neither reloaded nor un-failed
+  };
+
+  function openViewer(item, kind) {
+    var dialog = $('mediaViewer');
+    if (!item || viewer.currentKey !== null || typeof dialog.showModal !== 'function') return;
+    viewer.currentKey = viewer.openerKey = item.key;
+    viewer.openerKind = kind;
+    viewer.snapshot = item;
+    renderViewer();
+    dialog.showModal();
+    // Close first, so Enter leaves again; ←/→ step from anywhere in the dialog.
+    $('viewerClose').focus();
+  }
+
+  /** Paints the open viewer from state.items: on open, on every step and after any render(). */
+  function renderViewer() {
+    if (viewer.currentKey === null) return;
+    var index = state.items.findIndex(function (i) { return i.key === viewer.currentKey; });
+    // A background reload can take the photo off the page: keep showing what
+    // was last seen of it, without a position and without stepping.
+    var item = index === -1 ? viewer.snapshot : state.items[index];
+    viewer.snapshot = item;
+    var title = $('viewerTitle');
+    title.textContent = photoName(item);
+    // As on a tile, a bare file name is a fallback and is set back.
+    title.className = 'media-viewer__title' + (item.title ? '' : ' is-filename');
+    var alts = $('viewerAlts');
+    alts.innerHTML = '';
+    ['de', 'en'].forEach(function (locale) {
+      var text = item.alt && item.alt[locale];
+      if (!text) return;
+      var row = el('li');
+      row.appendChild(el('span', 'media-viewer__code', locale.toUpperCase()));
+      var words = el('span', null, text);
+      words.lang = locale;
+      row.appendChild(words);
+      alts.appendChild(row);
+    });
+    alts.hidden = !alts.firstElementChild;
+    var position = $('viewerPosition');
+    position.hidden = index === -1;
+    position.textContent = index === -1 ? ''
+      : fill(copy.mediaViewerPosition, { n: index + 1, total: state.items.length });
+    // At an end a step control stays focusable and says so. Never `disabled`:
+    // that would drop a keyboard user's focus to <body> inside the modal.
+    $('viewerPrev').setAttribute('aria-disabled', index > 0 ? 'false' : 'true');
+    $('viewerNext').setAttribute('aria-disabled', index !== -1 && index < state.items.length - 1 ? 'false' : 'true');
+    renderStage(item);
+  }
+
+  /** The photograph — or, in words, why there is none. Never a broken image. */
+  function renderStage(item) {
+    var en = item.alt && item.alt.en;
+    var de = item.alt && item.alt.de;
+    var src = item.status === 'ready' ? item.fullSrc : null;
+    var note = item.status !== 'ready' ? api.statusLabel(item) : src ? '' : copy.mediaNoPreview;
+    var shown = [item.key, src || '', note, en || de || '', en ? 'en' : de ? 'de' : ''].join('\n');
+    if (viewer.shown === shown) return;
+    viewer.shown = shown;
+    var stage = $('viewerStage');
+    stage.innerHTML = '';
+    if (!src) {
+      stage.appendChild(el('p', 'media-viewer__note', note));
+      return;
+    }
+    var img = document.createElement('img');
+    // The English description, else the German one, in its own language.
+    img.alt = en || de || '';
+    if (en || de) img.lang = en ? 'en' : 'de';
+    img.addEventListener('error', function () {
+      // A load that fails after the stage has moved on belongs to no one.
+      if (viewer.shown !== shown) return;
+      stage.innerHTML = '';
+      stage.appendChild(el('p', 'media-viewer__note', copy.mediaViewerLoadError));
+      $('viewerLive').textContent = copy.mediaViewerLoadError;
+    });
+    img.src = src;
+    stage.appendChild(img);
+  }
+
+  /** One photo back or forward in grid order; no wrap. */
+  function stepViewer(delta) {
+    var index = state.items.findIndex(function (i) { return i.key === viewer.currentKey; });
+    var next = index === -1 ? null : state.items[index + delta];
+    if (!next) return;
+    viewer.currentKey = next.key;
+    renderViewer();
+    $('viewerLive').textContent = fill(copy.mediaViewerAnnounce,
+      { n: index + delta + 1, total: state.items.length, title: photoName(next) });
+  }
+
+  /**
+   * Closing hands focus back to where the viewer was opened from, resolved
+   * again by key: the panel's button if the panel still shows that photo, else
+   * the photo's tile, else the panel, else the grid's roving (or first) tile —
+   * and with no photo left on the page, the empty state's upload action.
+   */
+  function onViewerClose() {
+    var key = viewer.openerKey;
+    var fromButton = viewer.openerKind === 'button';
+    if (key === null) return;
+    viewer.currentKey = viewer.openerKey = viewer.openerKind = viewer.snapshot = null;
+    viewer.shown = '';
+    $('viewerStage').innerHTML = '';
+    $('viewerLive').textContent = '';
+    var panel = $('detail');
+    var button = $('dViewer');
+    var cells = $('grid').querySelectorAll('.media-cell');
+    var tile = state.items.findIndex(function (i) { return i.key === key; });
+    if (fromButton && button && !panel.hidden && panel.dataset.key === key) button.focus();
+    else if (cells[tile]) focusCell(tile);
+    else if (!panel.hidden) panel.focus({ preventScroll: true });
+    else if (cells.length) {
+      focusCell(Math.max(0, Array.prototype.findIndex.call(cells, function (cell) { return cell.tabIndex === 0; })));
+    } else $('emptyChoosePhotos').focus();
+  }
+
+  function bindViewer() {
+    var dialog = $('mediaViewer');
+    var previous = $('viewerPrev');
+    var next = $('viewerNext');
+    previous.textContent = copy.mediaViewerPrevious;
+    previous.title = copy.mediaViewerPreviousTitle;
+    next.textContent = copy.mediaViewerNext;
+    next.title = copy.mediaViewerNextTitle;
+    $('viewerClose').textContent = copy.mediaViewerClose;
+    $('viewerAlts').setAttribute('aria-label', copy.mediaViewerAltLabel);
+    previous.addEventListener('click', function () { stepViewer(-1); });
+    next.addEventListener('click', function () { stepViewer(1); });
+    $('viewerClose').addEventListener('click', function () { dialog.close(); });
+    dialog.addEventListener('keydown', function (ev) {
+      // Unmodified only: Alt+← stays the browser's Back.
+      if (ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) return;
+      if (ev.key !== 'ArrowLeft' && ev.key !== 'ArrowRight') return;
+      ev.preventDefault();
+      stepViewer(ev.key === 'ArrowLeft' ? -1 : 1);
+    });
+    // Escape (the dialog's native `cancel`) and Close both end here.
+    dialog.addEventListener('close', onViewerClose);
+  }
+
   // ---- AI suggestion for the photo in the panel ----------------------------
 
   /** The thumbnail a model may be shown, or null while the photo has none (still encoding, failed). */
@@ -967,8 +1238,8 @@
     return window.MediaAi.photoUrl(item, imageOrigin(), location.origin);
   }
 
-  function renderSuggest(panel, item) {
-    var row = el('div', 'media-ai-suggest');
+  /** Suggest with AI and its status line, in the row of actions under the photograph. */
+  function renderSuggest(row, item) {
     var button = el('button', 'btn-secondary', 'Suggest with AI');
     button.id = 'dSuggest';
     button.type = 'button';
@@ -978,7 +1249,6 @@
     status.setAttribute('role', 'status');
     row.appendChild(button);
     row.appendChild(status);
-    panel.appendChild(row);
     refreshSuggest(item);
   }
 
@@ -1593,6 +1863,7 @@
     bindFolderActions();
     bindBulk();
     bindAi();
+    bindViewer();
     // Delegated: the panel's inputs are rebuilt by renderDetail; the panel is not.
     $('detail').addEventListener('input', markDetailDirty);
     $('detail').addEventListener('change', markDetailDirty);

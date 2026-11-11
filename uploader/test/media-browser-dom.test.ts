@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, type Mock } from 'vitest';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { webcrypto } from 'node:crypto';
@@ -26,7 +26,8 @@ const refreshSrc = readFileSync('public/publication-refresh.js', 'utf8');
 const markup = readFileSync('public/media.html', 'utf8');
 const pageIds = [...markup.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]!);
 const checkedIds = new Set([...markup.matchAll(/<input[^>]*\bid="([^"]+)"[^>]*\bchecked\b/g)].map((m) => m[1]!));
-const hiddenIds = new Set([...markup.matchAll(/<[a-z]+\b[^>]*\bid="([^"]+)"[^>]*\bhidden\b/g)].map((m) => m[1]!));
+// A bare `hidden` attribute only: `class="visually-hidden"` is not one.
+const hiddenIds = new Set([...markup.matchAll(/<[a-z]+\b[^>]*\bid="([^"]+)"[^>]*\shidden(?=[\s>])/g)].map((m) => m[1]!));
 const POLL_MS = 3000;
 
 type Listener = (ev: Record<string, unknown>) => void;
@@ -35,6 +36,12 @@ class FakeNode {
   id = '';
   className = '';
   href = '';
+  src = '';
+  alt = '';
+  lang = '';
+  target = '';
+  rel = '';
+  title = '';
   private text = '';
   get textContent(): string { return this.text + this.children.map(child => child.textContent).join(''); }
   set textContent(value: string) { this.text = value; this.detachChildren(); }
@@ -124,10 +131,26 @@ class FakeNode {
   }
 }
 
+/** The camera settings a row carries (MediaExif as JSON). */
+interface Exif {
+  takenAt: string | null; camera: string | null; lens: string | null; lat: number | null; lng: number | null;
+  focalLength: number | null; focalLength35mm: number | null; fNumber: number | null; iso: number | null; exposureTime: number | null;
+}
+const NO_EXIF: Exif = {
+  takenAt: null, camera: null, lens: null, lat: null, lng: null,
+  focalLength: null, focalLength35mm: null, fNumber: null, iso: null, exposureTime: null,
+};
+/** One stored variant file, and the `versions` member of `GET /media/items/*?versions=1`. */
+interface Version { format: 'avif' | 'webp' | 'jpeg'; width: number; height: number | null; bytes: number; src: string }
+type Versions = { availability: 'available'; items: Version[] } | { availability: 'processing' } | { availability: 'unavailable' };
+const version = (key: string, format: Version['format'], width: number, height: number | null, bytes: number): Version =>
+  ({ format, width, height, bytes, src: 'https://img.example/' + key + '-' + width + '.' + format });
+
 interface Item {
-  key: string; title: string; folder: string; status: string; thumbSrc: string;
+  key: string; title: string; folder: string; status: string; thumbSrc: string; fullSrc: string | null;
   alt: { de: string; en: string }; caption: { de: string; en: string };
-  tags: string[]; exif: null; width: number; height: number; origBytes: number; variantBytes: number;
+  tags: string[]; exif: Exif | null; width: number; height: number; origBytes: number; variantBytes: number;
+  error?: string | null;
   impact?: MediaImpact;
   livePending?: ChangedDescriptions | null;
   changedDescriptions?: ChangedDescriptions;
@@ -136,10 +159,14 @@ interface Item {
 function item(key: string, altDe = ''): Item {
   return {
     key, title: key, folder: '', status: 'ready', thumbSrc: 'https://img.example/' + key + '-640.webp',
+    // The largest variant, as the server derives it beside thumbSrc: `${src}-${width}.webp`.
+    fullSrc: 'https://img.example/' + key + '-10.webp',
     alt: { de: altDe, en: '' }, caption: { de: '', en: '' },
     tags: [], exif: null, width: 10, height: 10, origBytes: 1, variantBytes: 1,
   };
 }
+/** An item URL without the panel observation's `?versions=1`, for stubs that answer both kinds of read alike. */
+const itemPath = (url: string): string => url.replace(/\?versions=1$/, '');
 
 interface Details { title: string; altEn: string; altDe: string; captionEn: string; captionDe: string; tags: string[] }
 const DETAILS: Details = {
@@ -178,6 +205,10 @@ interface Page {
   patches: { url: string; body: Record<string, unknown> }[];
   deletions: string[];
   rows: Map<string, Item>;
+  /** What `?versions=1` lists per key; a key without an entry has no variant files. */
+  versions: Map<string, Versions>;
+  /** Every item GET the page sent, with its query string. */
+  itemReads: string[];
   described: string[];
   confirms: string[];
   confirmAnswer: { value: boolean };
@@ -222,6 +253,8 @@ function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' 
   const patches: { url: string; body: Record<string, unknown> }[] = [];
   const deletions: string[] = [];
   const rows = new Map<string, Item>();
+  const versions = new Map<string, Versions>();
+  const itemReads: string[] = [];
   const described: string[] = [];
   const prompts: Prompt[] = [];
   const promptAnswer = { value: opts.prompt === undefined ? null : opts.prompt };
@@ -230,6 +263,7 @@ function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' 
   const confirmAnswer = { value: false };
   const ok = (body: unknown) => Promise.resolve({ status: 200, ok: true, json: async () => body });
   const fetch = (url: string, init?: { method?: string; body?: string }): Promise<unknown> => {
+    if (url.startsWith('/media/items/') && (init?.method ?? 'GET') === 'GET') itemReads.push(url);
     const override = opts.request?.(url, init);
     if (override) return override;
     if (url === '/auth/me') return ok({ authenticated: true, userId: '11111111-1111-4111-8111-111111111111', username: 'simon', isAdmin: opts.isAdmin ?? true });
@@ -253,7 +287,14 @@ function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' 
         en: { alt: base.alt.en !== saved.alt.en, caption: base.caption.en !== saved.caption.en },
       } });
     }
-    if (url.startsWith('/media/items/')) return ok(rows.get(url.slice('/media/items/'.length)));
+    if (url.startsWith('/media/items/')) {
+      // Like the route: only `?versions=1` adds the variant listing.
+      const [path = '', query] = url.split('?');
+      const key = path.slice('/media/items/'.length);
+      const row = rows.get(key);
+      return ok(row && query === 'versions=1'
+        ? { ...row, versions: versions.get(key) ?? { availability: 'available', items: [] } } : row);
+    }
     const { promise, resolve } = Promise.withResolvers<unknown>();
     listRequests.push({
       url,
@@ -355,7 +396,7 @@ function loadPage(opts: { describe?: Describe; isAdmin?: boolean; locale?: 'de' 
   vm.runInContext(impactSrc, ctx);
   vm.runInContext(browserSrc, ctx);
   const flush = async (): Promise<void> => { for (let i = 0; i < 20; i++) await setImmediate(); };
-  return { el, activeElement: () => focusState.activeElement, win: ctx, timers, listRequests, uploadRequests, patches, deletions, rows, described, confirms, confirmAnswer, prompts, promptAnswer, flush,
+  return { el, activeElement: () => focusState.activeElement, win: ctx, timers, listRequests, uploadRequests, patches, deletions, rows, versions, itemReads, described, confirms, confirmAnswer, prompts, promptAnswer, flush,
     urlState: () => { const last = urlWrites.at(-1) ?? ''; return last.includes('?') ? last.slice(last.indexOf('?')) : ''; },
     focus: () => windowEvents.dispatch('focus'),
     lifecycle: (type, persisted) => windowEvents.dispatch(type, { persisted }),
@@ -1603,7 +1644,7 @@ describe('media conditional save recovery in real consumers', () => {
       if (init?.method === 'PATCH') return ++writes === 1
         ? response(409, { error: 'media_changed', current })
         : response(200, { ...current, title: 'Mine', conditionalVersion: 1 });
-      if (url === '/media/items/a') return pending.promise;
+      if (itemPath(url) === '/media/items/a') return pending.promise;
     } });
     await open(page);
     change(page, 'dTitle', 'Mine');
@@ -1659,7 +1700,7 @@ describe('media conditional save recovery in real consumers', () => {
     let writes = 0;
     const page = loadPage({ request: (url, init) => {
       if (init?.method === 'PATCH') { writes++; return Promise.reject(new Error('connection lost')); }
-      if (url === '/media/items/a') {
+      if (itemPath(url) === '/media/items/a') {
         reads++;
         return response(200, { ...item('a'), title: 'Mine', tags: ['someone else'] });
       }
@@ -1695,7 +1736,7 @@ describe('media conditional save recovery in real consumers', () => {
     let reads = 0;
     const page = loadPage({ request: (url, init) => {
       if (init?.method === 'PATCH') return Promise.reject(new Error('lost'));
-      if (url === '/media/items/a') { reads++; return reads === 1 ? response(200, item('a')) : pending.promise; }
+      if (itemPath(url) === '/media/items/a') { reads++; return reads === 1 ? response(200, item('a')) : pending.promise; }
     } });
     await open(page);
     expect(reads).toBe(1); // Initial impact observation must not serve as post-write recovery.
@@ -1717,7 +1758,7 @@ describe('media conditional save recovery in real consumers', () => {
       let reads = 0;
       const page = loadPage({ request: (url, init) => {
         if (init?.method === 'PATCH') return pending.promise;
-        if (url === '/media/items/a') { reads++; return response(200, item('a')); }
+        if (itemPath(url) === '/media/items/a') { reads++; return response(200, item('a')); }
       } });
       await open(page);
       expect(reads).toBe(1); // Isolate save-time reads from initial impact observation.
@@ -1850,7 +1891,7 @@ describe('media conditional save recovery in real consumers', () => {
     let reads = 0;
     const page = loadPage({ request: (url, init) => {
       if (init?.method === 'PATCH') { writes++; return Promise.reject(new Error('lost')); }
-      if (url === '/media/items/a') {
+      if (itemPath(url) === '/media/items/a') {
         reads++;
         return response(200, reads === 1 ? item('a') : {
           ...item('a'), alt: { de: DETAILS.altDe, en: '' }, tags: ['elsewhere'],
@@ -1929,7 +1970,7 @@ describe('conditional media response validation', () => {
     let writes = 0;
     const page = loadPage({ request: (url, init) => {
       if (init?.method === 'PATCH') { writes++; return Promise.reject(new Error('lost')); }
-      if (url === '/media/items/a') { reads++; return response(current); }
+      if (itemPath(url) === '/media/items/a') { reads++; return response(current); }
     } });
     await clearTitle(page, () => {
       expect(reads).toBe(1); // Initial impact read; recovery gets its own one-read budget.
@@ -1958,7 +1999,7 @@ describe('conditional media response validation', () => {
     let writes = 0;
     const page = loadPage({ request: (url, init) => {
       if (init?.method === 'PATCH') { writes++; return response(acknowledgement); }
-      if (url === '/media/items/a') { reads++; return response({}); }
+      if (itemPath(url) === '/media/items/a') { reads++; return response({}); }
     } });
     await clearTitle(page, () => {
       expect(reads).toBe(1); // Initial impact read; recovery gets its own one-read budget.
@@ -2060,7 +2101,7 @@ describe('Media publication impact and bounded refresh', () => {
     let reads = 0;
     const photo = { ...item('a'), impact, usedIn: [{ kind: 'post', key: 'one', title: 'One' }] };
     const page = loadPage({ request: (url, init) => {
-      if (url !== '/media/items/a' || init?.method === 'PATCH') return;
+      if (itemPath(url) !== '/media/items/a' || init?.method === 'PATCH') return;
       if (++reads === 2) return pending.promise;
       return Promise.resolve({ status: 200, ok: true, json: async () => page.rows.get('a') });
     } });
@@ -2099,7 +2140,7 @@ describe('Media publication impact and bounded refresh', () => {
       livePending: { ...unchanged, de: { alt: false, caption: true } } };
     let reads = 0, writes = 0;
     const page = loadPage({ request: (url, init) => {
-      if (url !== '/media/items/a') return;
+      if (itemPath(url) !== '/media/items/a') return;
       if (init?.method === 'PATCH') return ++writes === 1
         ? response({ error: 'media_changed', current: competing }, 409) : saving.promise;
       return ++reads === 1 ? response(original) : older.promise;
@@ -2133,7 +2174,7 @@ describe('Media publication impact and bounded refresh', () => {
       livePending: { ...unchanged, de: { alt: false, caption: true } } };
     let reads = 0, writes = 0;
     const page = loadPage({ request: (url, init) => {
-      if (url !== '/media/items/a') return;
+      if (itemPath(url) !== '/media/items/a') return;
       if (init?.method === 'PATCH') { writes++; return saving.promise; }
       reads++;
     } });
@@ -2163,7 +2204,7 @@ describe('Media publication impact and bounded refresh', () => {
       livePending: { ...unchanged, de: { alt: false, caption: true } } };
     let reads = 0, writes = 0;
     const page = loadPage({ request: (url, init) => {
-      if (url !== '/media/items/a') return;
+      if (itemPath(url) !== '/media/items/a') return;
       if (init?.method === 'PATCH') { writes++; return saving.promise; }
       reads++;
     } });
@@ -2200,7 +2241,7 @@ describe('Media publication impact and bounded refresh', () => {
           otherReads++;
           if (stage === 'checking') return checking.promise;
         }
-        if (url !== '/media/items/a') return;
+        if (itemPath(url) !== '/media/items/a') return;
         if (init?.method === 'PATCH') { writes++; return saving.promise; }
         reads++;
       },
@@ -2245,7 +2286,7 @@ describe('Media publication impact and bounded refresh', () => {
     let expired = false, reads = 0;
     const photo = { ...item('a', 'base'), impact, livePending: unchanged };
     const page = loadPage({ request: (url, init) => {
-      if (url !== '/media/items/a' || init?.method === 'PATCH') return;
+      if (itemPath(url) !== '/media/items/a' || init?.method === 'PATCH') return;
       reads++;
       return Promise.resolve({ status: expired ? 401 : 200, ok: !expired,
         json: async () => expired ? { error: 'unauthorized' } : page.rows.get('a') });
@@ -2342,7 +2383,7 @@ describe('Media publication impact and bounded refresh', () => {
       livePending: { de: { alt: true, caption: false }, en: { alt: false, caption: false } } };
     const response = (body: unknown) => Promise.resolve({ status: 200, ok: true, json: async () => body });
     const page = loadPage({ request: (url, init) => {
-      if (url !== '/media/items/a') return;
+      if (itemPath(url) !== '/media/items/a') return;
       if (init?.method === 'PATCH') {
         writes++;
         return unknown ? Promise.reject(new Error('lost acknowledgement')) : response({
@@ -2427,7 +2468,7 @@ async function runPoll(page: Page): Promise<void> {
 }
 const pollPending = (page: Page): number => page.timers.filter((timer) => timer.ms === POLL_MS && !timer.cleared).length;
 const badges = (page: Page): string[] => page.el('grid').querySelectorAll('.media-cell').map((cell) => cell.querySelectorAll('.media-cell__badge').map((badge) => badge.textContent).join(''));
-const processing = (key: string): Item => ({ ...item(key), status: 'processing', thumbSrc: '' });
+const processing = (key: string): Item => ({ ...item(key), status: 'processing', thumbSrc: '', fullSrc: null });
 const reply = (body: unknown, status = 200) => Promise.resolve({ status, ok: status >= 200 && status < 300, json: async () => body });
 
 describe('media-browser encoding poll', () => {
@@ -2841,5 +2882,661 @@ describe('media-browser URL state', () => {
     first.resolve({ items: [], total: 0 });
     await page.flush();
     expect(page.el('folderTree').querySelectorAll('.is-current').map((button) => button.textContent)).toEqual(['All photos']);
+  });
+});
+
+// ---- #570: camera settings, stored versions, fullscreen viewer, no storage key ----
+
+/** Lists `items` as the library's first page; `page.rows` answers item reads for them. */
+async function showLibrary(page: Page, items: Item[]): Promise<void> {
+  for (const row of items) page.rows.set(row.key, row);
+  await page.flush();
+  page.listRequests.shift()!.resolve({ items, total: items.length });
+  await page.flush();
+}
+const tiles = (page: Page): FakeNode[] => page.el('grid').querySelectorAll('.media-cell');
+/** Replaces the page's listing through a filter change, as any reload behind an open dialog does. */
+async function relist(page: Page, items: Item[]): Promise<void> {
+  page.el('fStatus').dispatch('change');
+  await page.flush();
+  page.listRequests.shift()!.resolve({ items, total: items.length });
+  await page.flush();
+}
+
+describe('media-browser photo details without the storage key (#570)', () => {
+  /** The File list as [label, value] rows. */
+  function fileRows(page: Page): string[][] {
+    const list = page.el('detail').querySelectorAll('dl')[0]!;
+    const values = list.querySelectorAll('dd');
+    return list.querySelectorAll('dt').map((term, index) => [term.textContent, values[index]!.textContent]);
+  }
+
+  it('names the photo by its title and never shows its storage key', async () => {
+    const page = loadPage();
+    await showLibrary(page, [{ ...item('library/2025/sea-lion'), title: 'Sea lion asleep' }]);
+    tiles(page)[0]!.click();
+    await page.flush();
+    expect(page.el('dTitle').value).toBe('Sea lion asleep');
+    expect(page.el('detail').textContent).not.toContain('library/2025');
+    expect(page.el('detail').textContent).not.toContain('sea-lion');
+    expect(page.el('detail').querySelectorAll('.media-key')).toEqual([]);
+  });
+
+  it('lists lens and exposure only where the camera recorded them', async () => {
+    const page = loadPage();
+    await showLibrary(page, [
+      { ...item('full'), exif: { ...NO_EXIF, camera: 'LEICA Q2', lens: 'SUMMILUX 1:1.7/28 ASPH.', focalLength: 28, focalLength35mm: 28, fNumber: 1.7, iso: 100, exposureTime: 0.004 } },
+      { ...item('phone'), exif: { ...NO_EXIF, focalLength: 4.3, focalLength35mm: 24, fNumber: 1.8 } },
+      { ...item('bare'), exif: NO_EXIF },
+      item('none'),
+    ]);
+    const sizes = [['Original', '1 B'], ['Variants', '1 B']];
+    tiles(page)[0]!.click();
+    expect(fileRows(page)).toEqual([
+      ['Lens', 'SUMMILUX 1:1.7/28 ASPH.'],
+      ['Exposure', '28 mm · f/1.7 · 1/250 s · ISO 100'],
+      ...sizes,
+    ]);
+    tiles(page)[1]!.click();
+    expect(fileRows(page)).toEqual([['Exposure', '4.3 mm (24 mm equiv.) · f/1.8'], ...sizes]);
+    // No row and no dash for what was never recorded — with empty EXIF and with none.
+    tiles(page)[2]!.click();
+    expect(fileRows(page)).toEqual(sizes);
+    tiles(page)[3]!.click();
+    expect(fileRows(page)).toEqual(sizes);
+  });
+
+  it('shows exposure to an author as well, and coordinates only when the server sent them', async () => {
+    const exif: Exif = { ...NO_EXIF, fNumber: 8, lat: 64.1466, lng: -21.9426 };
+    const admin = loadPage();
+    await showLibrary(admin, [{ ...item('a'), exif }]);
+    tiles(admin)[0]!.click();
+    expect(fileRows(admin)).toEqual([['Exposure', 'f/8'], ['Original', '1 B'], ['Variants', '1 B'], ['GPS', '64.1466, -21.9426']]);
+    // A non-admin's row arrives with lat/lng already nulled by the server.
+    const author = loadPage({ isAdmin: false });
+    await showLibrary(author, [{ ...item('a'), exif: { ...exif, lat: null, lng: null } }]);
+    tiles(author)[0]!.click();
+    expect(fileRows(author)).toEqual([['Exposure', 'f/8'], ['Original', '1 B'], ['Variants', '1 B']]);
+  });
+
+  it('names an untitled photo by its file name when asking to discard, never by its path', async () => {
+    const page = loadPage();
+    await showLibrary(page, [{ ...item('library/2025/IMG_0042'), title: '' }, item('b')]);
+    tiles(page)[0]!.click();
+    page.el('dAltDe').value = 'Unsaved';
+    page.el('detail').dispatch('input');
+    tiles(page)[1]!.click();
+    await page.flush();
+    expect(page.confirms).toEqual(['The details of "IMG_0042" have unsaved changes. Discarding them cannot be undone.']);
+  });
+
+  it('names the last key segment, not the key, when the panel has no row to name', async () => {
+    const page = loadPage();
+    await showLibrary(page, [item('b')]);
+    // Not reachable through the page (a dirty panel always has its row); pinned
+    // so this fallback can never put a storage path into the question.
+    page.el('detail').dataset.key = 'library/2025/IMG_0042';
+    page.el('detail').dispatch('input');
+    tiles(page)[0]!.click();
+    await page.flush();
+    expect(page.confirms).toEqual(['The details of "IMG_0042" have unsaved changes. Discarding them cannot be undone.']);
+  });
+});
+
+describe('media-browser Versions section (#570)', () => {
+  const kB = 1024;
+  const stored: Versions = { availability: 'available', items: [
+    version('a', 'avif', 640, 427, 38 * kB), version('a', 'webp', 640, 427, 52 * kB),
+    version('a', 'avif', 1920, 1280, 412 * kB), version('a', 'webp', 1920, null, 590 * kB),
+  ] };
+  const NEW_TAB = ' ' + ui.en['editor.chrome.mediaVersionNewTab'];
+  const links = (page: Page): FakeNode[] => page.el('dVersions').querySelectorAll('a');
+  /** Opens the panel on `row`, with `listing` as what the disk holds for it. */
+  async function open(page: Page, row: Item = item('a'), listing?: Versions): Promise<void> {
+    if (listing) page.versions.set(row.key, listing);
+    await showLibrary(page, [row, item('b')]);
+    tiles(page)[0]!.click();
+    await page.flush();
+  }
+  /** The observation's 30 s cycle. */
+  async function refresh(page: Page): Promise<void> {
+    page.timers.find((timer) => timer.ms === 30000 && !timer.cleared)!.fn();
+    await page.flush();
+  }
+
+  it('lists each stored file as a link to the public file that opens a new tab', async () => {
+    const page = loadPage();
+    await open(page, item('a'), stored);
+    expect(page.el('dVersionsLabel').textContent).toBe('Versions');
+    expect(page.el('dVersions').querySelectorAll('ul')[0]!.getAttribute('aria-labelledby')).toBe('dVersionsLabel');
+    expect(links(page).map((link) => [link.textContent, link.href, link.target, link.rel])).toEqual([
+      ['AVIF · 640 × 427 · 38 kB' + NEW_TAB, 'https://img.example/a-640.avif', '_blank', 'noopener noreferrer'],
+      ['WebP · 640 × 427 · 52 kB' + NEW_TAB, 'https://img.example/a-640.webp', '_blank', 'noopener noreferrer'],
+      ['AVIF · 1920 × 1280 · 412 kB' + NEW_TAB, 'https://img.example/a-1920.avif', '_blank', 'noopener noreferrer'],
+      // A file whose header could not be read still lists, with a dash for its height.
+      ['WebP · 1920 × — · 590 kB' + NEW_TAB, 'https://img.example/a-1920.webp', '_blank', 'noopener noreferrer'],
+    ]);
+    // The new tab is announced, not drawn.
+    expect(links(page)[0]!.querySelectorAll('.visually-hidden').map((note) => note.textContent)).toEqual([NEW_TAB]);
+  });
+
+  it('asks for the listing with the panel observation only, and keeps it when a save answers without one', async () => {
+    const page = loadPage();
+    await open(page, item('a'), stored);
+    expect(page.itemReads).toEqual(['/media/items/a?versions=1']);
+    page.el('dTitle').value = 'Named';
+    page.el('detail').dispatch('input');
+    page.el('dSave').click();
+    await page.flush();
+    expect(page.patches.map((patch) => patch.url)).toEqual(['/media/items/a']);
+    // The PATCH response carries no `versions`; the rebuilt panel still lists the files.
+    expect(links(page)).toHaveLength(4);
+    expect(page.itemReads).toEqual(['/media/items/a?versions=1']);
+    await refresh(page);
+    expect(page.itemReads).toEqual(['/media/items/a?versions=1', '/media/items/a?versions=1']);
+  });
+
+  it.each<[string, unknown, string]>([
+    ['a photo without variant files', { availability: 'available', items: [] }, ui.en['editor.chrome.mediaVersionsEmpty']],
+    ['a photo that is still encoding', { availability: 'processing' }, ui.en['editor.chrome.mediaVersionsProcessing']],
+    ['a storage error', { availability: 'unavailable' }, ui.en['editor.chrome.mediaVersionsUnavailable']],
+    ['a listing the route never promised', { availability: 'available', items: [{ format: 'png' }] }, ui.en['editor.chrome.mediaVersionsUnavailable']],
+  ])('says in words what there is to see for %s', async (_label, listing, words) => {
+    const page = loadPage();
+    await open(page, item('a'), listing as Versions);
+    expect(links(page)).toEqual([]);
+    expect(page.el('dVersions').textContent).toBe(words);
+  });
+
+  it('says it is reading until the first observation, and that it could not only when nothing was ever listed', async () => {
+    const first = Promise.withResolvers<unknown>();
+    const page = loadPage({ request: (url) => url === '/media/items/a?versions=1' ? first.promise : undefined });
+    await open(page);
+    expect(page.el('dVersions').textContent).toBe(ui.en['editor.chrome.mediaVersionsLoading']);
+    first.reject(new Error('connection lost'));
+    await page.flush();
+    expect(page.el('dVersions').textContent).toBe(ui.en['editor.chrome.mediaVersionsUnavailable']);
+  });
+
+  it('keeps the last listing when a later read fails', async () => {
+    let down = false;
+    const page = loadPage({ request: (url) => down && url === '/media/items/a?versions=1' ? reply({ error: 'unavailable' }, 503) : undefined });
+    await open(page, item('a'), stored);
+    down = true;
+    await refresh(page);
+    expect(page.el('dImpact').textContent).toContain(ui.en['editor.chrome.mediaImpactUnavailable']);
+    expect(links(page)).toHaveLength(4);
+  });
+
+  it('keeps focus on the same version across a refresh and never takes it from elsewhere', async () => {
+    const page = loadPage();
+    await open(page, item('a'), stored);
+    const webp = links(page)[1]!;
+    webp.focus();
+    // Nothing changed on disk: the link itself stays, so a click in progress still lands.
+    await refresh(page);
+    expect(links(page)[1]).toBe(webp);
+    expect(page.activeElement()).toBe(webp);
+    // A re-encode changed the files: the list is rebuilt and focus follows format and width.
+    page.versions.set('a', { availability: 'available', items: [
+      version('a', 'avif', 320, 213, 12 * kB), version('a', 'avif', 640, 427, 40 * kB), version('a', 'webp', 640, 427, 55 * kB),
+    ] });
+    await refresh(page);
+    expect(links(page)).not.toContain(webp);
+    expect(page.activeElement()).toBe(links(page)[2]);
+    expect(page.activeElement()?.textContent).toBe('WebP · 640 × 427 · 55 kB' + NEW_TAB);
+    // The focused version is gone: the first remaining link takes over …
+    page.versions.set('a', { availability: 'available', items: [version('a', 'avif', 320, 213, 12 * kB)] });
+    await refresh(page);
+    expect(page.activeElement()).toBe(links(page)[0]);
+    // … and with no link left, the panel — never <body>.
+    page.versions.set('a', { availability: 'available', items: [] });
+    await refresh(page);
+    expect(page.activeElement()).toBe(page.el('detail'));
+    // Focus anywhere else is left where it is.
+    page.versions.set('a', stored);
+    page.el('dTitle').focus();
+    await refresh(page);
+    expect(links(page)).toHaveLength(4);
+    expect(page.activeElement()).toBe(page.el('dTitle'));
+  });
+
+  it('lists a file outside the image origin as text, not as a link', async () => {
+    const page = loadPage();
+    await open(page, item('a'), { availability: 'available', items: [
+      { ...version('a', 'avif', 640, 427, 38 * kB), src: 'https://elsewhere.example/a-640.avif' },
+      { ...version('a', 'webp', 640, 427, 52 * kB), src: 'javascript:alert(1)' },
+      version('a', 'avif', 1920, 1280, 412 * kB),
+    ] });
+    expect(page.el('dVersions').querySelectorAll('li').map((row) => row.textContent)).toEqual([
+      'AVIF · 640 × 427 · 38 kB', 'WebP · 640 × 427 · 52 kB', 'AVIF · 1920 × 1280 · 412 kB' + NEW_TAB,
+    ]);
+    expect(links(page).map((link) => link.href)).toEqual(['https://img.example/a-1920.avif']);
+  });
+
+  it('lists the versions as soon as the poll sees the open photo ready', async () => {
+    const page = loadPage();
+    page.versions.set('a', { availability: 'processing' });
+    await showLibrary(page, [processing('a')]);
+    tiles(page)[0]!.click();
+    await page.flush();
+    expect(page.el('dVersions').textContent).toBe(ui.en['editor.chrome.mediaVersionsProcessing']);
+    page.rows.set('a', item('a'));
+    page.versions.set('a', stored);
+    await runPoll(page);
+    expect(links(page)).toHaveLength(4);
+    // One poll read without the listing, then exactly one more observation read with it.
+    expect(page.itemReads).toEqual(['/media/items/a?versions=1', '/media/items/a', '/media/items/a?versions=1']);
+  });
+
+  it('still lists them when that read lands while another photo is being polled', async () => {
+    const other = Promise.withResolvers<unknown>();
+    const page = loadPage({ request: (url) => url === '/media/items/b' ? other.promise : undefined });
+    page.versions.set('a', { availability: 'processing' });
+    await showLibrary(page, [processing('a'), processing('b')]);
+    tiles(page)[0]!.click();
+    await page.flush();
+    page.rows.set('a', item('a'));
+    page.versions.set('a', stored);
+    await runPoll(page);
+    // The listing was asked for the moment a flipped, without waiting for b's read …
+    expect(page.itemReads.toSorted()).toEqual(['/media/items/a', '/media/items/a?versions=1', '/media/items/a?versions=1', '/media/items/b']);
+    // … but that read settled during b's read and was dropped.
+    expect(page.el('dVersions').textContent).toBe(ui.en['editor.chrome.mediaVersionsProcessing']);
+    other.resolve({ status: 200, ok: true, json: async () => processing('b') });
+    await page.flush();
+    expect(links(page)).toHaveLength(4);
+  });
+});
+
+describe('media-browser fullscreen viewer (#570)', () => {
+  const viewer = (page: Page): FakeNode => page.el('mediaViewer');
+  const stageImages = (page: Page): FakeNode[] => page.el('viewerStage').querySelectorAll('img');
+  /** What the stage says instead of a photograph ('' while it shows one). */
+  function stageNote(page: Page): string {
+    return page.el('viewerStage').querySelectorAll('.media-viewer__note').map((note) => note.textContent).join('');
+  }
+  /** Sends a key to `node`; the returned spy tells whether the page claimed it. */
+  function press(node: FakeNode, key: string, modifiers: Record<string, unknown> = {}): Mock {
+    const preventDefault = vi.fn();
+    node.dispatch('keydown', { key, preventDefault, ...modifiers });
+    return preventDefault;
+  }
+  /** Focuses a tile and presses F on it, as a keyboard user does. */
+  function openFromTile(page: Page, index: number): void {
+    const tile = tiles(page)[index]!;
+    tile.focus();
+    press(tile, 'f');
+  }
+  const ends = (page: Page): (string | null)[] =>
+    [page.el('viewerPrev').getAttribute('aria-disabled'), page.el('viewerNext').getAttribute('aria-disabled')];
+
+  it('opens on F from a focused tile, in either case, and says so on the tile', async () => {
+    const page = loadPage();
+    await showLibrary(page, [item('a'), { ...item('b'), title: 'Sea lion asleep' }, item('c')]);
+    const tile = tiles(page)[1]!;
+    expect(tile.getAttribute('aria-keyshortcuts')).toBe('f');
+    tile.focus();
+    expect(press(tile, 'f')).toHaveBeenCalledOnce();
+    expect(viewer(page).open).toBe(true);
+    expect(page.el('viewerTitle').textContent).toBe('Sea lion asleep');
+    // The largest variant, as the server derived it.
+    expect(stageImages(page).map((image) => image.src)).toEqual(['https://img.example/b-10.webp']);
+    expect(page.el('viewerPosition').textContent).toBe('Photo 2 of 3 on this page');
+    expect(page.activeElement()).toBe(page.el('viewerClose'));
+    // Looking is not selecting: nothing is selected and no details open.
+    expect(page.el('grid').querySelectorAll('.is-selected')).toEqual([]);
+    expect(page.el('detail').hidden).toBe(true);
+
+    viewer(page).close();
+    // Caps Lock sends the upper-case key without Shift.
+    press(tiles(page)[0]!, 'F');
+    expect(viewer(page).open).toBe(true);
+    expect(page.el('viewerTitle').textContent).toBe('a');
+  });
+
+  it.each([
+    ['Ctrl+F', { key: 'f', ctrlKey: true }],
+    ['⌘+F', { key: 'f', metaKey: true }],
+    ['Alt+F', { key: 'f', altKey: true }],
+    ['Shift+F', { key: 'F', shiftKey: true }],
+    ['a held F', { key: 'f', repeat: true }],
+  ])('leaves %s to the browser', async (_label, { key, ...modifiers }) => {
+    const page = loadPage();
+    await showLibrary(page, [item('a')]);
+    const tile = tiles(page)[0]!;
+    tile.focus();
+    expect(press(tile, key, modifiers)).not.toHaveBeenCalled();
+    expect(viewer(page).open).toBe(false);
+  });
+
+  it('does nothing for an F typed in the panel: a folder select, a text field, a button', async () => {
+    const page = loadPage({ folders: ['Fjords'] });
+    await showLibrary(page, [item('a')]);
+    tiles(page)[0]!.click();
+    for (const id of ['dFolder', 'dTitle', 'dAltDe', 'dSave', 'dViewer', 'detail']) {
+      page.el(id).focus();
+      expect(press(page.el(id), 'f'), id).not.toHaveBeenCalled();
+      expect(viewer(page).open, id).toBe(false);
+    }
+  });
+
+  it('opens from View fullscreen under the preview, on the photo the panel shows', async () => {
+    const page = loadPage();
+    await showLibrary(page, [item('a'), item('b')]);
+    tiles(page)[1]!.click();
+    const button = page.el('dViewer');
+    expect(button.textContent).toBe('View fullscreen');
+    expect(button.className).toBe('btn-secondary');
+    // The shortcut belongs to the tiles, where it works — not to this button.
+    expect(button.getAttribute('aria-keyshortcuts')).toBeNull();
+    button.focus();
+    button.click();
+    expect(viewer(page).open).toBe(true);
+    expect(page.el('viewerTitle').textContent).toBe('b');
+    expect(page.el('viewerPosition').textContent).toBe('Photo 2 of 2 on this page');
+  });
+
+  it('steps with ←/→ and Previous/Next in grid order, without wrapping, and announces each step', async () => {
+    const page = loadPage();
+    await showLibrary(page, [item('a'), { ...item('b'), title: 'Dinner for $& two' }, item('c')]);
+    openFromTile(page, 0);
+    expect(ends(page)).toEqual(['true', 'false']);
+    // Opening is announced by the dialog and its name, not by the live region.
+    expect(page.el('viewerLive').textContent).toBe('');
+
+    expect(press(viewer(page), 'ArrowRight')).toHaveBeenCalledOnce();
+    expect(page.el('viewerTitle').textContent).toBe('Dinner for $& two');
+    expect(page.el('viewerPosition').textContent).toBe('Photo 2 of 3 on this page');
+    expect(page.el('viewerLive').textContent).toBe('Photo 2 of 3: Dinner for $& two');
+    expect(ends(page)).toEqual(['false', 'false']);
+
+    page.el('viewerNext').click();
+    expect(page.el('viewerTitle').textContent).toBe('c');
+    expect(ends(page)).toEqual(['false', 'true']);
+    // No wrap: a further step changes nothing and announces nothing.
+    press(viewer(page), 'ArrowRight');
+    page.el('viewerNext').click();
+    expect(page.el('viewerTitle').textContent).toBe('c');
+    expect(page.el('viewerLive').textContent).toBe('Photo 3 of 3: c');
+
+    press(viewer(page), 'ArrowLeft');
+    page.el('viewerPrev').click();
+    expect(page.el('viewerTitle').textContent).toBe('a');
+    expect(ends(page)).toEqual(['true', 'false']);
+    page.el('viewerPrev').click();
+    expect(page.el('viewerTitle').textContent).toBe('a');
+
+    // Alt+← is the browser's Back, not a step.
+    press(viewer(page), 'ArrowRight');
+    expect(press(viewer(page), 'ArrowLeft', { altKey: true })).not.toHaveBeenCalled();
+    expect(page.el('viewerTitle').textContent).toBe('Dinner for $& two');
+  });
+
+  it('keeps focus on a step control that reaches an end: aria-disabled, never disabled', async () => {
+    const page = loadPage();
+    await showLibrary(page, [item('a'), item('b')]);
+    openFromTile(page, 0);
+    const next = page.el('viewerNext');
+    next.focus();
+    next.click();
+    expect(page.el('viewerTitle').textContent).toBe('b');
+    expect(next.getAttribute('aria-disabled')).toBe('true');
+    expect(next.disabled).toBe(false);
+    expect(page.el('viewerPrev').disabled).toBe(false);
+    expect(page.activeElement()).toBe(next);
+  });
+
+  it('captions the photo with its title, each alt text under its language code, and describes the image in English first', async () => {
+    const page = loadPage();
+    await showLibrary(page, [
+      { ...item('a'), title: 'Sea lion asleep', alt: { de: 'Ein Seelöwe schläft', en: 'A sea lion sleeps' } },
+      { ...item('library/2025/IMG_0042'), title: '', alt: { de: 'Nur Deutsch', en: '' } },
+      item('c'),
+    ]);
+    openFromTile(page, 0);
+    const alts = (): (string | undefined)[][] => page.el('viewerAlts').children.map((row) =>
+      [row.children[0]?.textContent, row.children[1]?.textContent, row.children[1]?.lang]);
+    const image = (): string[][] => stageImages(page).map((node) => [node.alt, node.lang]);
+    expect(page.el('viewerTitle').className).toBe('media-viewer__title');
+    expect(alts()).toEqual([['DE', 'Ein Seelöwe schläft', 'de'], ['EN', 'A sea lion sleeps', 'en']]);
+    expect(page.el('viewerAlts').hidden).toBe(false);
+    expect(image()).toEqual([['A sea lion sleeps', 'en']]);
+
+    page.el('viewerNext').click();
+    // An untitled photo goes by its file name, set back — never by its path.
+    expect(page.el('viewerTitle').textContent).toBe('IMG_0042');
+    expect(page.el('viewerTitle').className).toBe('media-viewer__title is-filename');
+    expect(page.el('viewerLive').textContent).toBe('Photo 2 of 3: IMG_0042');
+    expect(alts()).toEqual([['DE', 'Nur Deutsch', 'de']]);
+    expect(image()).toEqual([['Nur Deutsch', 'de']]);
+
+    page.el('viewerNext').click();
+    // No alt text in either language: no list, and an image that claims no description.
+    expect(alts()).toEqual([]);
+    expect(page.el('viewerAlts').hidden).toBe(true);
+    expect(image()).toEqual([['', '']]);
+  });
+
+  it.each<[string, Partial<Item>, string]>([
+    ['still encoding', { status: 'processing', thumbSrc: '', fullSrc: null }, 'processing'],
+    ['failed', { status: 'failed', error: 'decode_failed', thumbSrc: '', fullSrc: null }, 'failed: decode_failed'],
+    ['missing on disk', { status: 'missing', fullSrc: null }, 'file missing'],
+    ['ready without a variant to show', { fullSrc: null, width: 0 }, 'No preview'],
+  ])('says in words why a photo that is %s has no image', async (_label, state, words) => {
+    const page = loadPage();
+    await showLibrary(page, [{ ...item('a'), ...state }]);
+    openFromTile(page, 0);
+    expect(stageImages(page)).toEqual([]);
+    expect(stageNote(page)).toBe(words);
+  });
+
+  it('replaces an image that fails to load with a sentence, never a broken image', async () => {
+    const page = loadPage();
+    await showLibrary(page, [item('a'), item('b')]);
+    openFromTile(page, 0);
+    const failed = stageImages(page)[0]!;
+    failed.dispatch('error');
+    expect(stageImages(page)).toEqual([]);
+    expect(stageNote(page)).toBe('This version could not be loaded.');
+    expect(page.el('viewerLive').textContent).toBe('This version could not be loaded.');
+    // A render behind the viewer does not quietly try again …
+    await relist(page, [item('a'), item('b')]);
+    expect(stageNote(page)).toBe('This version could not be loaded.');
+    // … and a failure that arrives after stepping on belongs to the photo that left.
+    page.el('viewerNext').click();
+    failed.dispatch('error');
+    expect(stageImages(page).map((image) => image.src)).toEqual(['https://img.example/b-10.webp']);
+    expect(page.el('viewerLive').textContent).toBe('Photo 2 of 2: b');
+  });
+
+  it('shows a photo that finishes encoding while it is on the stage', async () => {
+    const page = loadPage();
+    await showLibrary(page, [processing('a'), item('b')]);
+    openFromTile(page, 0);
+    expect(stageNote(page)).toBe('processing');
+    page.rows.set('a', item('a'));
+    await runPoll(page);
+    expect(stageImages(page).map((image) => image.src)).toEqual(['https://img.example/a-10.webp']);
+    expect(stageNote(page)).toBe('');
+    expect(viewer(page).open).toBe(true);
+    expect(page.activeElement()).toBe(page.el('viewerClose'));
+  });
+
+  it('follows the page through a background reload, and keeps a photo on screen that left the page', async () => {
+    const page = loadPage();
+    await showLibrary(page, [item('a'), item('b'), item('c')]);
+    openFromTile(page, 1);
+    const shown = stageImages(page)[0]!;
+    // An upload finishes behind the open viewer: the page reloads with one more photo in front.
+    page.el('dropZone').dispatch('drop', { dataTransfer: { files: [{ name: 'new.jpg' }] } });
+    page.uploadRequests[0]!.resolve({ key: 'new', status: 'ready' });
+    await page.flush();
+    runTimers(page.timers);
+    page.listRequests.shift()!.resolve({ items: [item('new'), item('a'), item('b')], total: 4 });
+    await page.flush();
+    expect(page.el('viewerPosition').textContent).toBe('Photo 3 of 3 on this page');
+    expect(ends(page)).toEqual(['false', 'true']);
+    // The same element: an unchanged photo is not loaded again.
+    expect(stageImages(page)[0]).toBe(shown);
+
+    // The photo is deleted elsewhere and the next reload no longer lists it.
+    await relist(page, [item('new'), item('a')]);
+    expect(viewer(page).open).toBe(true);
+    expect(page.el('viewerTitle').textContent).toBe('b');
+    expect(stageImages(page)[0]).toBe(shown);
+    expect(page.el('viewerPosition').hidden).toBe(true);
+    expect(ends(page)).toEqual(['true', 'true']);
+    press(viewer(page), 'ArrowLeft');
+    page.el('viewerNext').click();
+    expect(page.el('viewerTitle').textContent).toBe('b');
+    // Close still works; with the opener's tile gone and no details open, the grid's first tile takes focus.
+    page.el('viewerClose').click();
+    expect(viewer(page).open).toBe(false);
+    expect(page.activeElement()).toBe(tiles(page)[0]);
+  });
+
+  it('returns focus to the opener tile after the grid was rebuilt behind it, by Escape as by Close', async () => {
+    const page = loadPage();
+    await showLibrary(page, [item('a'), item('b')]);
+    openFromTile(page, 1);
+    const before = tiles(page)[1]!;
+    await relist(page, [item('a'), item('b')]);
+    // Escape: the dialog's native cancel closes it.
+    viewer(page).close();
+    expect(tiles(page)[1]).not.toBe(before);
+    expect(page.activeElement()).toBe(tiles(page)[1]);
+    // The stage lets go of the large image.
+    expect(page.el('viewerStage').children).toEqual([]);
+
+    openFromTile(page, 0);
+    page.el('viewerNext').click();
+    page.el('viewerClose').click();
+    // Back to where it was opened from, not to the photo it was left on.
+    expect(page.activeElement()).toBe(tiles(page)[0]);
+  });
+
+  it('returns focus to View fullscreen after the panel was rebuilt, and to the tile once the panel shows another photo', async () => {
+    const page = loadPage();
+    await showLibrary(page, [processing('a'), item('b')]);
+    tiles(page)[0]!.click();
+    const before = page.el('dViewer');
+    before.focus();
+    before.click();
+    expect(stageNote(page)).toBe('processing');
+    // The poll rebuilds the clean panel behind the viewer.
+    page.rows.set('a', item('a'));
+    await runPoll(page);
+    expect(page.el('dViewer')).not.toBe(before);
+    page.el('viewerClose').click();
+    expect(page.activeElement()).toBe(page.el('dViewer'));
+
+    // Not reachable behind a modal; pins the order of the fallback chain.
+    page.el('dViewer').click();
+    tiles(page)[1]!.click();
+    expect(page.el('detail').dataset.key).toBe('b');
+    viewer(page).close();
+    expect(page.activeElement()).toBe(tiles(page)[0]);
+  });
+
+  it('falls back to the open details, then to the empty state\'s upload action, when the opener is gone', async () => {
+    const page = loadPage();
+    await showLibrary(page, [item('a'), item('b')]);
+    tiles(page)[0]!.click();
+    openFromTile(page, 1);
+    await relist(page, [item('a')]);
+    viewer(page).close();
+    expect(page.activeElement()).toBe(page.el('detail'));
+
+    openFromTile(page, 0);
+    await relist(page, []);
+    viewer(page).close();
+    expect(page.el('detail').hidden).toBe(true);
+    expect(page.activeElement()).toBe(page.el('emptyChoosePhotos'));
+  });
+
+  it('never changes the selection, the open details or unsaved edits', async () => {
+    const page = loadPage();
+    await showLibrary(page, [item('a'), item('b'), item('c')]);
+    tiles(page)[0]!.click();
+    tiles(page)[2]!.dispatch('click', { ctrlKey: true });
+    page.el('dAltDe').value = 'Typed before looking';
+    page.el('detail').dispatch('input');
+    const selected = (): (string | undefined)[] => page.el('grid').querySelectorAll('.is-selected').map((cell) => cell.dataset.key);
+    expect(selected()).toEqual(['a', 'c']);
+
+    openFromTile(page, 1);
+    page.el('viewerNext').click();
+    press(viewer(page), 'ArrowLeft');
+    page.el('viewerClose').click();
+
+    expect(selected()).toEqual(['a', 'c']);
+    expect(page.el('selCount').textContent).toBe('2 selected');
+    expect(page.el('detail').dataset.key).toBe('c');
+    expect(page.el('dAltDe').value).toBe('Typed before looking');
+    expect(page.el('dUnsaved').hidden).toBe(false);
+    expect(page.confirms).toEqual([]);
+    expect(page.patches).toEqual([]);
+    expect(page.activeElement()).toBe(tiles(page)[1]);
+  });
+
+  it('lists the F shortcut with the other hints while no photo is selected', async () => {
+    const page = loadPage();
+    await showLibrary(page, [item('a')]);
+    expect(page.el('mediaSelectionHelp').querySelectorAll('li').map((hint) => hint.textContent))
+      .toContain('F opens the focused photo fullscreen.');
+  });
+
+  it('takes every label from the dictionary of the page language', async () => {
+    const page = loadPage({ locale: 'de' });
+    await showLibrary(page, [{ ...item('a'), exif: { ...NO_EXIF, focalLength: 4.3, focalLength35mm: 24 } }, item('b')]);
+    expect(page.el('mediaSelectionHelp').textContent).toContain(ui.de['editor.chrome.mediaViewerShortcut']);
+    tiles(page)[0]!.click();
+    await page.flush();
+    expect(page.el('dViewer').textContent).toBe(ui.de['editor.chrome.mediaViewFullscreen']);
+    expect(page.el('detail').querySelectorAll('dt').map((term) => term.textContent)).toContain(ui.de['editor.chrome.mediaExposure']);
+    expect(page.el('detail').querySelectorAll('dd').map((value) => value.textContent)).toContain('4.3 mm (24 mm KB-äquiv.)');
+    expect(page.el('dVersionsLabel').textContent).toBe(ui.de['editor.chrome.mediaVersions']);
+    expect(page.el('dVersions').textContent).toBe(ui.de['editor.chrome.mediaVersionsEmpty']);
+
+    page.el('dViewer').click();
+    expect(['viewerPrev', 'viewerNext', 'viewerClose'].map((id) => page.el(id).textContent)).toEqual(['Zurück', 'Weiter', 'Schließen']);
+    expect([page.el('viewerPrev').title, page.el('viewerNext').title]).toEqual(['Vorheriges Foto (←)', 'Nächstes Foto (→)']);
+    expect(page.el('viewerAlts').getAttribute('aria-label')).toBe(ui.de['editor.chrome.mediaViewerAltLabel']);
+    expect(page.el('viewerPosition').textContent).toBe('Foto 1 von 2 auf dieser Seite');
+    page.el('viewerNext').click();
+    expect(page.el('viewerLive').textContent).toBe('Foto 2 von 2: b');
+  });
+});
+
+describe('media viewer markup and stylesheet (#570)', () => {
+  const css = readFileSync('public/admin.css', 'utf8');
+  const viewerCss = css.slice(css.indexOf('media library: fullscreen viewer'), css.indexOf('Recovery and connectivity notices'));
+
+  it('is a native dialog named by its caption title, with a polite live region and no disabled step control', () => {
+    expect(markup).toContain('<dialog id="mediaViewer" class="media-viewer" aria-labelledby="viewerTitle">');
+    expect(markup).toContain('<h2 id="viewerTitle" class="media-viewer__title"></h2>');
+    expect(markup).toContain('<p id="viewerLive" class="visually-hidden" role="status"></p>');
+    expect(markup).not.toMatch(/id="viewer(Prev|Next|Close)"[^>]*\sdisabled/);
+  });
+
+  it('sets the caption on an opaque navy plate: no gradient, no blur', () => {
+    expect(viewerCss).toMatch(/\.media-viewer__plate \{[^}]*background: var\(--navy\);/);
+    expect(viewerCss).not.toMatch(/gradient|backdrop-filter|blur\(/);
+  });
+
+  it('draws the focus ring in white, where the studio accent would be 1.9:1', () => {
+    expect(viewerCss).toContain('.media-viewer :focus-visible { outline: 2px solid #fff; outline-offset: 2px; }');
+  });
+
+  it('moves only for visitors who have not asked for reduced motion', () => {
+    const [still = '', moving = ''] = viewerCss.split('@media (prefers-reduced-motion: no-preference)');
+    expect(still).not.toMatch(/\banimation:|\btransition: (?!none)/);
+    expect(moving).toContain('animation: media-viewer-in');
+  });
+
+  it('drops the panel\'s storage-key style and keeps the global one the AI dialog uses', () => {
+    expect(css).not.toContain('.media-detail .media-key');
+    expect(css).toMatch(/^\.media-key \{/m);
   });
 });

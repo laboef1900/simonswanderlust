@@ -25,6 +25,9 @@ interface Api {
   folderTree(paths: string[]): { path: string; name: string; depth: number }[];
   parentOf(path: string): string;
   statusLabel(item: unknown): string;
+  formatExposure(exif: unknown, equivalentLabel?: string): string;
+  versionsOf(value: unknown): { availability: string; items?: unknown[] } | null;
+  versionLabel(version: { format: string; width: number; height: number | null; bytes: number; src: string }): string;
   queueState(item: Record<string, unknown>): string;
   listQuery(state: Record<string, unknown>): string;
   debounce(fn: (...args: unknown[]) => void, ms: number): (...args: unknown[]) => void;
@@ -133,6 +136,120 @@ describe('MediaApi pure helpers', () => {
     expect(api.statusLabel({ status: 'missing' })).toBe('file missing');
     // `error` is a fixed server-side enum, never a libvips message.
     expect(api.statusLabel({ status: 'failed', error: 'decode_failed' })).toBe('failed: decode_failed');
+  });
+
+  describe('formatExposure', () => {
+    const NOTHING = { focalLength: null, focalLength35mm: null, fNumber: null, iso: null, exposureTime: null };
+    const line = (recorded: Record<string, unknown>): string => api.formatExposure({ ...NOTHING, ...recorded }, 'equiv.');
+
+    it('joins the parts the camera recorded and leaves out the rest', () => {
+      expect(line({ focalLength: 28, focalLength35mm: 28, fNumber: 2.8, iso: 200, exposureTime: 0.004 }))
+        .toBe('28 mm · f/2.8 · 1/250 s · ISO 200');
+      expect(line({ fNumber: 8, iso: 100 })).toBe('f/8 · ISO 100');
+      expect(line({ iso: 12800 })).toBe('ISO 12800');
+    });
+
+    it('is empty for no EXIF at all and for EXIF without exposure values', () => {
+      expect(api.formatExposure(null, 'equiv.')).toBe('');
+      expect(api.formatExposure(undefined, 'equiv.')).toBe('');
+      expect(api.formatExposure({}, 'equiv.')).toBe('');
+      expect(line({})).toBe('');
+      // The server stores numbers or null; anything else is not a measurement.
+      expect(line({ focalLength: Number.NaN, focalLength35mm: Infinity, fNumber: '2.8', iso: 0, exposureTime: -1 })).toBe('');
+    });
+
+    it.each([
+      [{ focalLength: 24 }, '24 mm'],
+      [{ focalLength: 4.3, focalLength35mm: 24 }, '4.3 mm (24 mm equiv.)'],
+      [{ focalLength: 50, focalLength35mm: 75 }, '50 mm (75 mm equiv.)'],
+      [{ focalLength35mm: 24 }, '24 mm equiv.'],
+      // The equivalent equals the rounded focal length: saying it twice adds nothing.
+      [{ focalLength: 28, focalLength35mm: 28 }, '28 mm'],
+      [{ focalLength: 23.8, focalLength35mm: 24 }, '24 mm'],
+      // 10 mm and up are whole millimetres; below, one decimal, without a trailing .0.
+      [{ focalLength: 85.4 }, '85 mm'],
+      [{ focalLength: 10.4 }, '10 mm'],
+      [{ focalLength: 9.96 }, '10 mm'],
+      [{ focalLength: 6.86 }, '6.9 mm'],
+      [{ focalLength: 9 }, '9 mm'],
+    ])('focal length %j reads %s', (recorded, expected) => {
+      expect(line(recorded)).toBe(expected);
+    });
+
+    it('takes the word for "equivalent" from the caller, so the module holds no copy', () => {
+      expect(api.formatExposure({ ...NOTHING, focalLength: 4.3, focalLength35mm: 24 }, 'KB-äquiv.')).toBe('4.3 mm (24 mm KB-äquiv.)');
+      expect(api.formatExposure({ ...NOTHING, focalLength35mm: 24 }, 'KB-äquiv.')).toBe('24 mm KB-äquiv.');
+    });
+
+    it.each([
+      [2.8, 'f/2.8'], [8, 'f/8'], [0.95, 'f/0.95'], [1.25, 'f/1.25'], [2.8284, 'f/2.83'], [1.8000001, 'f/1.8'],
+    ])('aperture %f reads %s', (fNumber, expected) => {
+      expect(line({ fNumber })).toBe(expected);
+    });
+
+    it.each([
+      [0.004, '1/250 s'],
+      [1 / 8000, '1/8000 s'],
+      [1 / 60, '1/60 s'],
+      [0.5, '1/2 s'],
+      // Within 1 % of 1/2 it is 1/2; outside, it is the decimal it was stored as (#371).
+      [0.4975, '1/2 s'],
+      [0.49, '0.49 s'],
+      [0.3, '0.3 s'],
+      [0.4, '0.4 s'],
+      [0.6, '0.6 s'],
+      [0.8, '0.8 s'],
+      [0.71234, '0.71 s'],
+      // Just under a second N would be 1: never "1/1 s".
+      [0.99, '0.99 s'],
+      [0.995, '0.99 s'],
+      [0.999, '1 s'],
+      // A second and longer: up to one decimal.
+      [1, '1 s'],
+      [1.5, '1.5 s'],
+      [2, '2 s'],
+      [30, '30 s'],
+    ])('shutter time %f s reads %s', (exposureTime, expected) => {
+      expect(line({ exposureTime })).toBe(expected);
+    });
+  });
+
+  describe('stored versions', () => {
+    const avif = { format: 'avif', width: 1920, height: 1280, bytes: 412 * 1024, src: 'https://img.example/a-1920.avif' };
+
+    it('reads a version as format, pixels and size, with a dash for an unreadable height', () => {
+      expect(api.versionLabel(avif)).toBe('AVIF · 1920 × 1280 · 412 kB');
+      expect(api.versionLabel({ ...avif, format: 'webp', bytes: 3.4 * 1024 * 1024 })).toBe('WebP · 1920 × 1280 · 3.4 MB');
+      expect(api.versionLabel({ ...avif, format: 'jpeg', width: 640, height: null, bytes: 38 * 1024 })).toBe('JPEG · 640 × — · 38 kB');
+    });
+
+    it('passes the three availabilities through and keeps only the fields it renders', () => {
+      expect(api.versionsOf({ availability: 'available', items: [{ ...avif, path: '/data/a-1920.avif' }] }))
+        .toEqual({ availability: 'available', items: [avif] });
+      expect(api.versionsOf({ availability: 'available', items: [] })).toEqual({ availability: 'available', items: [] });
+      expect(api.versionsOf({ availability: 'processing', items: [avif] })).toEqual({ availability: 'processing' });
+      expect(api.versionsOf({ availability: 'unavailable' })).toEqual({ availability: 'unavailable' });
+    });
+
+    it('is null only when the payload carries no versions at all', () => {
+      expect(api.versionsOf(undefined)).toBeNull();
+      expect(api.versionsOf(null)).toBeNull();
+    });
+
+    it.each([
+      ['an unknown availability', { availability: 'ready', items: [] }],
+      ['no list', { availability: 'available' }],
+      ['a format the pipeline never writes', { availability: 'available', items: [{ ...avif, format: 'png' }] }],
+      ['a width of 0', { availability: 'available', items: [{ ...avif, width: 0 }] }],
+      ['a width that is not a number', { availability: 'available', items: [{ ...avif, width: '1920' }] }],
+      ['a negative size', { availability: 'available', items: [{ ...avif, bytes: -1 }] }],
+      ['a missing height', { availability: 'available', items: [{ ...avif, height: undefined }] }],
+      ['no URL', { availability: 'available', items: [{ ...avif, src: null }] }],
+      ['an entry that is not an object', { availability: 'available', items: [null] }],
+      ['a value that is not an object', 'available'],
+    ])('reads %s as unavailable rather than as a shorter list', (_label, value) => {
+      expect(api.versionsOf(value)).toEqual({ availability: 'unavailable' });
+    });
   });
 
   it('names the folder a duplicate already lives in and words a definite failure as a sentence', () => {
