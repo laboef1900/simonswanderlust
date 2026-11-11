@@ -2,15 +2,13 @@
    panel. Reuses admin.css tokens; the leg list echoes the public map's line
    language (solid = along roads, dashed = straight) beside text that says it. */
 
-.stop-routing {
-  grid-column: 1 / -1;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem 1rem;
-  min-width: 0;
-}
-.stop-routing .stop-via-field { margin: 0; }
+/* Via point and Continue by sit on the stop row's controls line after Find
+   coordinates (admin.css .stop-controls). Inspector labels carry a top margin
+   that would push them below the button; the line centres them instead. */
+body.editor-page .editor-inspector .stop-controls label { margin: 0; }
+/* A full-height Via target beside the 44px coarse-pointer controls keeps a
+   near miss off Find coordinates, which sends the place name out. */
+.stop-via-field { min-height: var(--control-h-sm); }
 .stop-leg-field {
   display: inline-flex;
   flex-wrap: wrap;
@@ -25,7 +23,7 @@
 .stop-leg-field select[aria-invalid="true"] { border-color: var(--warn-line); }
 .stop-last { margin: 0; font-size: 0.8125rem; }
 .stop-last[hidden], .stop-profile-note[hidden] { display: none; }
-.stop-profile-note { flex-basis: 100%; margin: 0; color: var(--warn-ink); }
+.stop-profile-note { grid-column: 1 / -1; margin: 0; color: var(--warn-ink); }
 
 .stop-route__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.375rem; margin-top: 0.75rem; }
 .stop-route__legs {

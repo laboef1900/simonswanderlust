@@ -2,9 +2,9 @@
 (function (root) {
   'use strict';
 
-  function attach({ row, nameInput, latInput, lngInput, copy, onChange, onUnauthed }) {
-    const mount = document.createElement('div');
-    mount.className = 'stop-lookup';
+  // The button joins the row's controls line; status and results follow below
+  // that line at full width, never between the button and its neighbours.
+  function attach({ row, controls, nameInput, latInput, lngInput, copy, onChange, onUnauthed }) {
     const search = document.createElement('button');
     search.type = 'button';
     search.className = 'btn-secondary stop-search';
@@ -14,10 +14,9 @@
     status.setAttribute('role', 'status');
     const results = document.createElement('div');
     results.className = 'stop-search-results';
-    mount.appendChild(search);
-    mount.appendChild(status);
-    mount.appendChild(results);
-    row.appendChild(mount);
+    controls.appendChild(search);
+    row.appendChild(status);
+    row.appendChild(results);
 
     let generation = 0;
     let controller;
