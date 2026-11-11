@@ -2595,7 +2595,6 @@
         for (const row of opening.rows) {
           const selected = row.forced || row.input?.checked === true;
           const gaps = selected ? localeGaps(row.locale) : [];
-          row.item.classList.toggle('is-locked', row.forced);
           row.item.classList.toggle('is-excluded', !selected);
           row.item.classList.toggle('is-incomplete', gaps.length > 0);
           row.fix?.remove();
@@ -2704,6 +2703,9 @@
         // Consent is the current opening's Publish click, once.
         if (!opening || opening.busy || !publishDialog.open) return;
         setPublishBusy(opening, true);
+        // Publish is now disabled: keep keyboard and screen-reader focus on the
+        // one live control, which still cancels while the gallery check runs.
+        $('publishDialogCancel').focus();
         let flushError = '';
         const flushed = await flushGalleryEdits((message) => { flushError = message; });
         // A close while the edits settled is a cancel: its opening is retired.

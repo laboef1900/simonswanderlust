@@ -134,7 +134,7 @@ path in all four modes.
    browser-forced close — retires the opening token and clears the latch, in every phase including
    busy; focus returns to `publishBtn` (gap jump: the field). Nothing else happens.
 3. Publish click (current token only): mark the dialog busy (`aria-busy`; Publish and all
-   checkboxes disabled; **Cancel and Escape stay available and cancel**), `await
+   checkboxes disabled; **Cancel and Escape stay available and cancel**; focus moves to Cancel), `await
    flushGalleryEdits()`. On failure, and only if the dialog is still open with the same token: show
    the error in the dialog status line, leave busy state, return focus to Publish, change nothing;
    the author may retry or cancel.
@@ -235,8 +235,10 @@ re-enforced on the server; the client adds no new trust.
 
 - Native modal `<dialog>`: focus trap and inert background; `aria-labelledby` the heading,
   `aria-describedby` the intro; `aria-busy` while flushing.
-- Initial focus: the first enabled (toggleable) checkbox; otherwise Publish. Cancel/Escape focus
-  `publishBtn` explicitly; a gap jump focuses the field (existing `jumpToGap`).
+- Initial focus: the first enabled (toggleable) checkbox; otherwise Publish. While busy, focus is on
+  Cancel (Publish is disabled). Cancel/Escape focus `publishBtn` explicitly; a gap jump focuses the
+  field (existing `jumpToGap`). The translation dialog adds `#translationDraftNote` to its
+  `aria-describedby` while the note is shown.
 - No form submission exists, so Enter on a checkbox does nothing; Space toggles.
 - Every checkbox is described by its note (why it is locked or what deselecting means) and its
   readiness line. The disabled Publish button is described by the status line, which is also a

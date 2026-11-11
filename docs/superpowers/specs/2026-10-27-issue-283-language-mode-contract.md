@@ -676,7 +676,7 @@ region, `/feed`, `/en/feed`, and an identity/domain change with unchanged langua
   explanation (§7.3); any other secondary is selected unless omitted and can be deselected, which
   keeps it as a private draft (`omitted = true`). Confirming applies the selection to `omitted`,
   saves through the normal draft save and then publishes; Cancel changes nothing. Gap checks run for
-  the selected locales only. No route, schema or `posts.omitted` semantics change; the server still
+  the selected locales only, plus the shared Expedition details. No route, schema or `posts.omitted` semantics change; the server still
   derives the publishable set from the saved rows. The editor offers no other coverage control (the
   save API, which any author may call, is unchanged), and restoring a revision keeps the current
   coverage. See

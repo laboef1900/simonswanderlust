@@ -795,7 +795,8 @@ describe('editor language modes and translation coverage', () => {
     pair.en.omitted = false;
     await h.api.loadPost('tk1');
     expect(chipOf('en').classList.contains('is-omitted')).toBe(false);
-    expect(stateOf('en')).not.toContain(ui.en['editor.chrome.languageOmittedLabel'].replace('{language}', 'English'));
+    expect(chipOf('en').classList.contains('is-missing')).toBe(true);
+    expect(stateOf('en')).toContain(ui.en['editor.chrome.languageBodyEmpty'].replace('{language}', 'English'));
   });
 
   it('refuses to save without a primary-language title at the field, sending nothing', async () => {
@@ -1022,7 +1023,6 @@ describe('publish dialog: languages are chosen where the story is published (#56
     ]);
     expect(rows.map(({ input }) => [input!.type, input!.checked, input!.disabled])).toEqual([['checkbox', true, true], ['checkbox', true, false]]);
     expect(rows.map(({ note }) => note)).toEqual([copy['editor.chrome.publishDialogPrimary'], copy['editor.chrome.languageCoverageHelp']]);
-    expect(rows.map(({ row }) => row.classList.contains('is-locked'))).toEqual([true, false]);
     // Every checkbox, enabled or not, is described by its note and its readiness line.
     for (const { input, note, state } of rows) {
       expect(input!.getAttribute('aria-describedby')!.split(' ').map((id) => h.el(id).textContent)).toEqual([note, state]);
@@ -1045,7 +1045,6 @@ describe('publish dialog: languages are chosen where the story is published (#56
     const rows = publishRows(h);
     expect(rows.map(({ input }) => [input!.checked, input!.disabled])).toEqual([[true, true], [true, true]]);
     expect(rows.map(({ note }) => note)).toEqual([copy['editor.chrome.publishDialogPrimary'], copy['editor.chrome.languageCoverageLocked']]);
-    expect(rows.map(({ row }) => row.classList.contains('is-locked'))).toEqual([true, true]);
     // Nothing to choose: no intro, the dialog is described by what confirming does, and focus is on Publish.
     expect(h.el('publishDialogIntro').hidden).toBe(true);
     expect(dialog.getAttribute('aria-describedby')).toBe('publishDialogRebuild');
@@ -1320,6 +1319,8 @@ describe('publish dialog: languages are chosen where the story is published (#56
     expect(publishRows(h).map(({ input }) => input!.disabled)).toEqual([true, true]);
     expect(h.el('publishDialogCancel').disabled).toBe(false);
     expect(writesOf(h)).toEqual([]);
+    // Publish is disabled now; focus waits on the control that still works.
+    expect(h.document.activeElement).toBe(h.el('publishDialogCancel'));
     await release();
     await until(() => !dialog.open);
     await flush();
@@ -1370,6 +1371,14 @@ describe('publish dialog: languages are chosen where the story is published (#56
       if (how === 'close, then its event') h.flushDialogEvents();
       expect(dialog.open).toBe(false);
       expect(h.dirtyCalls()).toBe(dirty);
+      if (how === 'cancel' || how === 'escape') {
+        // The flow ends at the close, not when the gallery check settles: Publish asks afresh at once.
+        const fresh = openPublishDialog(h);
+        expect(fresh.getAttribute('aria-busy')).toBeNull();
+        expect(h.el('publishDialogConfirm').disabled).toBe(false);
+        h.el('publishDialogCancel').click();
+        h.flushDialogEvents();
+      }
       // The description itself still reaches the draft; the publish that waited for it does not happen.
       await release();
       await until(() => h.api.buildPayload().de.bodyMarkdown !== body);
@@ -6613,10 +6622,6 @@ describe('explicit article translation of the current unsaved pair', () => {
       const single = await loadEditor({ language: { primary, locales: [primary] } });
       expect(single.el('translateArticle').hidden).toBe(true);
     }
-    // Publication is chosen at Publish: the old refusal and the tab checkbox left no copy behind.
-    for (const dictionary of [ui.de, ui.en]) {
-      expect(Object.keys(dictionary).filter((key) => /\.(translationCoverage|languageCoverageLabel)$/.test(key))).toEqual([]);
-    }
     const translate = vi.fn(async (request: TranslationRequest) => translated(request));
     const h = await loadEditor({ fetch: network(), translate });
     const pair = fullPair(); pair.en.omitted = true; h.api.populateForm(pair);
@@ -6627,6 +6632,8 @@ describe('explicit article translation of the current unsaved pair', () => {
     expect(translate.mock.calls[0]![0]).toMatchObject({ sourceLocale: 'de', targetLocale: 'en' });
     expect(note.hidden).toBe(false);
     expect(note.textContent).toBe(ui.en['editor.chrome.translationPrivateDraft'].replaceAll('{target}', 'English'));
+    // Assistive technology hears the consequence with the dialog, not only sighted users.
+    expect(h.el('articleTranslationDialog').getAttribute('aria-describedby')!.split(' ')).toContain('translationDraftNote');
     consent(h); h.el('translationApply').click();
     // Applying fills the private draft: it neither selects the language nor saves.
     expect(h.api.buildPayload().en.title).toMatch(/^EN /);

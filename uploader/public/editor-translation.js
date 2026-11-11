@@ -30,6 +30,8 @@ window.EditorTranslation = (function () {
     const result = $('translationResult');
     const consent = $('translationReplace');
     const draftNote = $('translationDraftNote');
+    // The description the markup gives the dialog; the private-draft note joins it while shown.
+    const DESCRIBED_BY = dialog.getAttribute('aria-describedby');
     let epoch = 0;
     let active = null;
     let undoRecord = null;
@@ -116,6 +118,7 @@ window.EditorTranslation = (function () {
       $('translationDestination').textContent = '';
       draftNote.hidden = true;
       draftNote.textContent = '';
+      dialog.setAttribute('aria-describedby', DESCRIBED_BY);
       if (dialog.open) { queuedCloseEvents++; dialog.close(); }
       const target = trigger.hidden || trigger.disabled ? $('tabbtn-' + options.capture().sourceLocale) : trigger;
       target.focus({ preventScroll: true });
@@ -167,6 +170,8 @@ window.EditorTranslation = (function () {
       const privateDraft = snapshot.omitted[snapshot.targetLocale] === true;
       draftNote.hidden = !privateDraft;
       draftNote.textContent = privateDraft ? text('translationPrivateDraft', { target: localeName(snapshot.targetLocale) }) : '';
+      // The consequence is part of what the dialog says, not only what it shows.
+      dialog.setAttribute('aria-describedby', privateDraft ? DESCRIBED_BY + ' translationDraftNote' : DESCRIBED_BY);
       if (!dialog.open) dialog.showModal();
       run.disabled = true;
       if (!eligible(snapshot)) { say(copy.translationUnavailable, 'unavailable'); return; }

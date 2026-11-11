@@ -15,7 +15,7 @@ No repository-wide policy is waived. No merge, deployment, release or published-
 
 ## Decision and historical reconciliation
 
-Translate the current unsaved active locale into the other enabled, non-omitted locale of the same pair. Reuse provider registry credentials, browser-direct inference, canonical Markdown, draft guard and existing optimistic Save. The applicable parts of historical #67/July Slice 2 are translation, manual slugs, review and preservation. Its sidecar, server-write runs, separate credentials and general authoring are obsolete for #550 and explicitly not adopted. There is no model/server egress, new secret store, schema migration or alternate persistence path.
+Translate the current unsaved active locale into the other enabled locale of the same pair (originally only a non-omitted one; #568 lifted that restriction, see the amendment below). Reuse provider registry credentials, browser-direct inference, canonical Markdown, draft guard and existing optimistic Save. The applicable parts of historical #67/July Slice 2 are translation, manual slugs, review and preservation. Its sidecar, server-write runs, separate credentials and general authoring are obsolete for #550 and explicitly not adopted. There is no model/server egress, new secret store, schema migration or alternate persistence path.
 
 ## Contracts and ownership
 
@@ -84,7 +84,7 @@ Rollback frontend/backend translation additions together. Existing saved Markdow
 
 ## Verification gate
 
-Use the single acceptance checklist in the plan. Tests must exercise actual behavior, not source-string wiring: complete assignment lifecycle and endpoint-key isolation; both directions and exact non-text preservation; repeated/empty/hidden captions and Media precedence; hostile/missing/duplicate/truncated output; no retries; cancellation/staleness/config consent; atomic allowlist application and undo; enabled/omitted restriction; actual normal save optimistic conflict. Integration tests use a distinct disposable database. Browser uses real local app, controlled free provider fixture and isolated draft/images, both modes/directions, save/reopen/preview, keyboard and desktop/mobile. Never publish. Required CI and independent final PR review are mandatory.
+Use the single acceptance checklist in the plan. Tests must exercise actual behavior, not source-string wiring: complete assignment lifecycle and endpoint-key isolation; both directions and exact non-text preservation; repeated/empty/hidden captions and Media precedence; hostile/missing/duplicate/truncated output; no retries; cancellation/staleness/config consent; atomic allowlist application and undo; enabled-locale restriction (omitted locales allowed since #568); actual normal save optimistic conflict. Integration tests use a distinct disposable database. Browser uses real local app, controlled free provider fixture and isolated draft/images, both modes/directions, save/reopen/preview, keyboard and desktop/mobile. Never publish. Required CI and independent final PR review are mandatory.
 
 Mandatory documentation gate: update or explicitly reconfirm `SECURITY.md` for translation-purpose auth and endpoint/key binding, browser-only provider transport, ephemeral credentials, authenticated non-mutating source analysis, bounds, and no Media writes. Update the AI section of `docs/claude/security-and-operations.md` to describe the third assignment without weakening policy; add shipped status to `docs/claude/project-status.md`.
 
