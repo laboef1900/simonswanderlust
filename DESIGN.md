@@ -1154,7 +1154,8 @@ criterion (2.5.5 is AAA), so the accessibility commitment in `PRODUCT.md` is una
   sidebar), centred, `--menu-shadow`, and translucent at a measured floor: `--surface` at
   95%, never blurred (ink 13.61:1, accent 5.54:1, outlined-button border 3.04:1 over a black
   thumbnail). Its runway is reserved after the list and never shrinks, so selecting or
-  clearing never moves a row. Row checkboxes fade in on row hover and stay visible when
+  unticking never moves a row; Clear selection scrolls only when no checkbox is in view, to
+  keep focus visible. Row checkboxes fade in on row hover and stay visible when
   focused, checked, while anything is selected, and wherever there is no hover. Media's
   bulk bar stays in flow.
 - **Buttons** have four roles: the unclassed button is the one navy primary per form or
