@@ -113,6 +113,24 @@
       }
     };
   }
+  /**
+   * The first usable candidate whose box lies fully inside `container`'s
+   * visible rect (and the viewport), or null. A focus hand-off that must not
+   * scroll the list picks its target with this, then focuses it with
+   * `preventScroll: true`.
+   */
+  function firstInView(candidates, container) {
+    if (!container) return null;
+    const view = container.getBoundingClientRect();
+    const top = Math.max(view.top, 0);
+    const bottom = Math.min(view.bottom, root.innerHeight || view.bottom);
+    for (const candidate of candidates) {
+      if (!candidate || candidate.disabled || candidate.isConnected === false) continue;
+      const box = candidate.getBoundingClientRect();
+      if (box.height > 0 && box.top >= top && box.bottom <= bottom) return candidate;
+    }
+    return null;
+  }
 
   // ---- one message carried across a navigation -----------------------------
   // An editor that has just deleted its own story, journey or page returns to
@@ -131,7 +149,7 @@
 
   root.AdminFormat = { date, dateTime, time, count, region };
   root.AdminField = { invalid, valid };
-  root.AdminFocus = { hold };
+  root.AdminFocus = { hold, firstInView };
   root.AdminFlash = { set: setFlash, take: takeFlash };
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = { AdminFormat: root.AdminFormat, AdminField: root.AdminField, AdminFocus: root.AdminFocus, AdminFlash: root.AdminFlash };

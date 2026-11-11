@@ -12,7 +12,16 @@ interface Api {
     region(slug: string): string;
   };
   AdminField: { invalid(field: unknown, message: string, options?: { focus?: boolean }): unknown; valid(field: unknown): void };
-  AdminFocus: { hold(control: unknown): (...fallbacks: unknown[]) => void };
+  AdminFocus: {
+    hold(control: unknown): (...fallbacks: unknown[]) => void;
+    firstInView<T extends Box>(candidates: (T | null)[], container: Box | null): T | null;
+  };
+}
+
+interface Box {
+  disabled?: boolean;
+  isConnected?: boolean;
+  getBoundingClientRect(): { top: number; bottom: number; height: number };
 }
 
 function load(markup = '<body></body>') {
@@ -141,5 +150,36 @@ describe('AdminFocus.hold', () => {
     dom.document.body!.focus();
     restore();
     expect(dom.document.activeElement).toBe(dom.document.body);
+  });
+});
+
+describe('AdminFocus.firstInView', () => {
+  const box = (top: number, bottom: number, extra: Partial<Box> = {}): Box & { name: string } => ({
+    name: top + '-' + bottom,
+    getBoundingClientRect: () => ({ top, bottom, height: bottom - top }),
+    ...extra,
+  });
+  const { AdminFocus } = load();
+  const scroller = box(100, 600);
+
+  it('picks the first candidate fully inside the scroller, skipping ones scrolled above or cut at an edge', () => {
+    const above = box(40, 56);
+    const cutAtTop = box(92, 108);
+    const inside = box(300, 316);
+    const later = box(400, 416);
+    expect(AdminFocus.firstInView([above, cutAtTop, inside, later], scroller)).toBe(inside);
+  });
+
+  it('skips disabled, detached and unrendered controls', () => {
+    const disabled = box(200, 216, { disabled: true });
+    const detached = box(220, 236, { isConnected: false });
+    const collapsed = box(240, 240);
+    const usable = box(260, 276);
+    expect(AdminFocus.firstInView([null, disabled, detached, collapsed, usable], scroller)).toBe(usable);
+  });
+
+  it('returns null when nothing is fully in view or there is no scroller', () => {
+    expect(AdminFocus.firstInView([box(590, 606), box(700, 716)], scroller)).toBeNull();
+    expect(AdminFocus.firstInView([box(300, 316)], null)).toBeNull();
   });
 });
