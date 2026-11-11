@@ -78,8 +78,9 @@ the default. This matches `captionPrompt`, not `reviewPrompt`.
 ### HTTP
 
 - `GET /settings` and the `POST /settings` response gain `translationPrompt` and the read-only
-  `translationPromptDefault` (the constant, used by Reset). Both remain admin-only, `no-store`
-  and explicitly serialized.
+  `translationPromptDefault` (the constant, used by Reset). The admin-only `/ai-providers*`
+  mutation responses share the same explicit serializer and carry both fields as well. All of
+  these remain admin-only and `no-store`.
 - `POST /settings` adds `translationPrompt` to the raw allow-list (`Object.hasOwn`, no
   coercion). `translationPromptDefault` is not accepted and is ignored like any other unknown key.
 - **`GET /ai-config?purpose=translation` contract change (amends #550 L24).** It now returns
