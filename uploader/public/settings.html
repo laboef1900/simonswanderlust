@@ -195,10 +195,17 @@
                 <p class="use-case-resolved"><span id="translationResolved"></span> <span id="translationDestination" class="use-case-url"></span></p>
                 <p id="translationProviderWarn" class="notice-warn" role="status" hidden></p>
               </div>
-              <details class="help-details settings-advanced">
+              <details class="help-details settings-advanced" id="translationAdvanced">
                 <summary data-settings-copy="settingsAdvanced"></summary>
                 <label for="translationTimeoutSeconds" data-settings-copy="settingsTranslationTimeout"></label>
                 <input id="translationTimeoutSeconds" type="number" min="5" max="300" step="0.001" />
+                <label for="translationPrompt" id="translationPromptLabel" data-settings-copy="settingsTranslationPrompt"></label>
+                <textarea id="translationPrompt" rows="8" required aria-describedby="translationPromptHelp translationPromptCount"></textarea>
+                <p id="translationPromptHelp" class="muted" data-settings-copy="settingsTranslationPromptHelp"></p>
+                <div class="settings-field-meta">
+                  <p id="translationPromptCount" class="muted"></p>
+                  <button id="translationPromptReset" type="button" class="btn-secondary btn-sm" data-settings-copy="settingsTranslationPromptReset" disabled></button>
+                </div>
               </details>
             </section>
           </fieldset>
@@ -721,6 +728,7 @@
       let form = null;                // { id, busy? }; a new object per opening, id null = Add
       let formPresetKind = 'openrouter';
       let reviewTestController = null;
+      let translationPromptDefault = null; // the server's default instructions from the last settings response, for Reset
       const modelCache = new Map();   // provider id -> { baseUrl, models } listed from this browser
       const modelLookups = new Map(); // provider id -> { baseUrl, promise } while a listing runs
       const modelFailures = new Map(); // provider id -> { baseUrl, reason } of the last failed listing
@@ -1363,6 +1371,32 @@
         });
       }
 
+      // ---- Translation instructions ----------------------------------------------
+      /** Translation-instructions copy with {count}, {max} and {over} filled in from the field. */
+      function translationPromptText(key) {
+        const max = LLM.TRANSLATION_PROMPT_MAX_LENGTH;
+        const count = $('translationPrompt').value.length;
+        const values = { count, max, over: count - max };
+        return copy[key].replace(/\{(count|max|over)\}/g, (_, name) => String(values[name]));
+      }
+      function showTranslationPromptCount() {
+        $('translationPromptCount').textContent = translationPromptText(
+          $('translationPrompt').value.length > LLM.TRANSLATION_PROMPT_MAX_LENGTH ? 'settingsTranslationPromptOver' : 'settingsTranslationPromptCount');
+      }
+      $('translationPrompt').addEventListener('input', () => {
+        AdminField.valid($('translationPrompt'));
+        showTranslationPromptCount();
+      });
+      $('translationPromptReset').addEventListener('click', () => {
+        if (translationPromptDefault === null) return;
+        $('translationPrompt').value = translationPromptDefault;
+        // A real input event: the AI scope's draft watcher marks it unsaved, and the
+        // field's own listener above clears any error and recounts.
+        $('translationPrompt').dispatchEvent(new Event('input', { bubbles: true }));
+        $('translationPrompt').focus();
+        $('aiOut').textContent = copy.settingsTranslationPromptRestored;
+      });
+
       /** Registry state from a settings response; `fillFields` also replaces the AI form's values. */
       function applyAi(s, fillFields) {
         saved = {
@@ -1381,6 +1415,9 @@
           $('captionMaxTokens').value = s.captionMaxTokens ?? '';
           setModel(USE_CASES.translation, s.translationModel);
           $('translationTimeoutSeconds').value = s.translationTimeoutMs / 1000;
+          $('translationPrompt').value = s.translationPrompt;
+          AdminField.valid($('translationPrompt'));
+          showTranslationPromptCount();
           aiDraft.clean();
         }
         renderProviders();
@@ -1389,6 +1426,8 @@
         if ($('providersOut').textContent === copy.settingsRegistryUnavailable) $('providersOut').textContent = '';
         $('saveAi').disabled = false;
         $('testReview').disabled = false;
+        translationPromptDefault = LLM.isTranslationPrompt(s.translationPromptDefault) ? s.translationPromptDefault : null;
+        $('translationPromptReset').disabled = translationPromptDefault === null;
       }
 
       async function reloadSettings() {
@@ -1413,6 +1452,14 @@
 
       $('saveAi').addEventListener('click', async () => {
         if (!saved || $('aiFields').disabled) return;
+        if (!LLM.isTranslationPrompt($('translationPrompt').value)) {
+          // Caught before anything is sent; the text stays for the owner to fix.
+          $('translationAdvanced').open = true;
+          $('aiOut').textContent = '';
+          AdminField.invalid($('translationPrompt'), translationPromptText(
+            $('translationPrompt').value.trim() ? 'settingsTranslationPromptTooLong' : 'settingsTranslationPromptRequired'));
+          return;
+        }
         clearReviewTest();
         const body = {
           reviewProviderId: $('reviewProviderId').value || null,
@@ -1428,6 +1475,7 @@
           translationProviderId: $('translationProviderId').value || null,
           translationModel: USE_CASES.translation.current,
           translationTimeoutMs: Math.round(Number($('translationTimeoutSeconds').value) * 1000),
+          translationPrompt: $('translationPrompt').value,
         };
         const restore = AdminFocus.hold($('saveAi'));
         $('saveAi').disabled = true;

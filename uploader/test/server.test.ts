@@ -22,6 +22,7 @@ import { prepareImport, rehostKey, ImportTooLargeError, ImportInsufficientSpaceE
 import { createImportRunner, memoryImportJobStore, type ImportRunner } from '../src/import-jobs.js';
 import { defaultSettings, validate } from '../src/settings.js';
 import type { Settings, SettingsStore } from '../src/settings.js';
+import { DEFAULT_TRANSLATION_PROMPT, TRANSLATION_PROMPT_MAX_LENGTH } from '../src/translation-prompt.js';
 import { memoryUserStore, hashPassword, type User, type UserStore } from '../src/users.js';
 import { randomUUID } from 'node:crypto';
 import { memorySessionStore, type SessionStore } from '../src/sessions.js';
@@ -1582,7 +1583,10 @@ describe('settings endpoints', () => {
     const admin = await authed(b, { username: 'admin' });
     const res = await b.app.inject({ method: 'GET', url: '/settings', cookies: admin.cookie });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ ...SETTINGS, aiProviders: SETTINGS.aiProviders.map((p) => ({ ...p, hasApiKey: false })) });
+    expect(res.json()).toEqual({
+      ...SETTINGS, aiProviders: SETTINGS.aiProviders.map((p) => ({ ...p, hasApiKey: false })),
+      translationPromptDefault: DEFAULT_TRANSLATION_PROMPT,
+    });
   });
 
   it('POST /settings is admin-only: authors cannot mutate image conversion fields', async () => {
@@ -1762,7 +1766,7 @@ describe('AI provider routes', () => {
     });
     expect(created.statusCode).toBe(201);
     expect(created.body).not.toContain('fixture-first');
-    expect(Object.keys(created.json()).sort()).toEqual(Object.keys(SETTINGS).sort());
+    expect(Object.keys(created.json()).sort()).toEqual([...Object.keys(SETTINGS), 'translationPromptDefault'].sort());
     const view = created.json().aiProviders[1];
     expect(view).toEqual({
       id: expect.stringMatching(/^p-[0-9a-f]{8}$/), name: 'OpenRouter', kind: 'openrouter',
@@ -1975,7 +1979,7 @@ describe('AI credential boundaries', () => {
     expect(saved.statusCode).toBe(200);
     expect(saved.headers['cache-control']).toBe('no-store');
     expect(saved.json()).toMatchObject({ aiDefaultProviderId: 'remote', reviewProviderId: null, captionProviderId: 'lm-studio' });
-    expect(Object.keys(saved.json()).sort()).toEqual(Object.keys(SETTINGS).sort());
+    expect(Object.keys(saved.json()).sort()).toEqual([...Object.keys(SETTINGS), 'translationPromptDefault'].sort());
     expect(settings.get()).not.toHaveProperty('lmBaseUrl');
     expect(settings.get()).not.toHaveProperty('aiProvider');
     expect((await b.app.inject({ method: 'POST', url: '/settings', cookies: (await authed(b, { isAdmin: false, username: 'author' })).cookie, payload: { captionProviderId: 'remote' } })).statusCode).toBe(403);
@@ -2185,6 +2189,164 @@ describe('article translation assignment API', () => {
     } finally { await b.app.close(); }
   });
 
+  const PROMPT_ERROR = 'Translation instructions are required and must be a string of at most 4000 characters.';
+  const PROMPT_MARKER = 'PRIVATE-PROMPT-MARKER';
+  const CUSTOM_PROMPT = "  Use informal 'du' in German.\n\tKeep place names in the local spelling.  ";
+
+  it('serves the translation instructions with their read-only default and saves a custom prompt verbatim for admins only', async () => {
+    const settings = fakeStore();
+    const b = build({ settings });
+    const admin = await authed(b);
+    const author = await authed(b, { username: 'author', isAdmin: false });
+    const save = (payload: Record<string, unknown>) =>
+      b.app.inject({ method: 'POST', url: '/settings', cookies: admin.cookie, payload });
+    const page = () => b.app.inject({ url: '/settings', cookies: admin.cookie });
+    try {
+      expect((await page()).json()).toMatchObject({
+        translationPrompt: DEFAULT_TRANSLATION_PROMPT, translationPromptDefault: DEFAULT_TRANSLATION_PROMPT,
+      });
+      const before = settings.get();
+      for (const cookies of [undefined, author.cookie]) {
+        const refused = await b.app.inject({ method: 'POST', url: '/settings', cookies, payload: { translationPrompt: CUSTOM_PROMPT } });
+        expect(refused.statusCode).toBe(cookies ? 403 : 401);
+        expect(settings.get()).toEqual(before);
+      }
+      const saved = await save({ translationPrompt: CUSTOM_PROMPT });
+      expect(saved.statusCode).toBe(200);
+      expect(saved.headers['cache-control']).toBe('no-store');
+      expect(saved.json()).toMatchObject({ translationPrompt: CUSTOM_PROMPT, translationPromptDefault: DEFAULT_TRANSLATION_PROMPT });
+      expect(settings.get()).toEqual({ ...before, translationPrompt: CUSTOM_PROMPT });
+      const reloaded = await page();
+      expect(reloaded.headers['cache-control']).toBe('no-store');
+      expect(reloaded.json()).toMatchObject({ translationPrompt: CUSTOM_PROMPT, translationPromptDefault: DEFAULT_TRANSLATION_PROMPT });
+      const longest = 'x'.repeat(TRANSLATION_PROMPT_MAX_LENGTH);
+      expect((await save({ translationPrompt: longest })).json().translationPrompt).toBe(longest);
+      // Reset is an ordinary save of the served default.
+      const reset = await save({ translationPrompt: reloaded.json().translationPromptDefault });
+      expect(reset.statusCode).toBe(200);
+      expect(settings.get()).toEqual(before);
+    } finally { await b.app.close(); }
+  });
+
+  it.each([
+    ['a number', 7654321987, '7654321987'],
+    ['null', null, undefined],
+    ['a boolean', true, undefined],
+    ['an array', [PROMPT_MARKER], PROMPT_MARKER],
+    ['an object', { secret: PROMPT_MARKER }, PROMPT_MARKER],
+    ['an empty string', '', undefined],
+    ['whitespace only', ' \n\t ', undefined],
+    ['4001 characters', PROMPT_MARKER + 'x'.repeat(TRANSLATION_PROMPT_MAX_LENGTH + 1 - PROMPT_MARKER.length), PROMPT_MARKER],
+  ] as const)('refuses %s as translation instructions with the fixed 400, storing and echoing nothing', async (_name, value, leak) => {
+    const settings = fakeStore({ ...SETTINGS, translationPrompt: CUSTOM_PROMPT });
+    const b = build({ settings });
+    const { cookie } = await authed(b);
+    try {
+      const before = settings.get();
+      // A valid field in the same request is not saved either.
+      for (const payload of [{ translationPrompt: value }, { translationModel: 'must-not-save', translationPrompt: value }]) {
+        const res = await b.app.inject({ method: 'POST', url: '/settings', cookies: cookie, payload });
+        expect(res.statusCode).toBe(400);
+        expect(res.headers['cache-control']).toBe('no-store');
+        expect(res.json()).toEqual({ error: PROMPT_ERROR });
+        if (leak) expect(res.body).not.toContain(leak);
+        expect(settings.get()).toEqual(before);
+      }
+      expect((await b.app.inject({ url: '/settings', cookies: cookie })).json().translationPrompt).toBe(CUSTOM_PROMPT);
+    } finally { await b.app.close(); }
+  });
+
+  it('ignores a submitted translationPromptDefault: neither the default nor the stored prompt changes', async () => {
+    const settings = fakeStore({ ...SETTINGS, translationPrompt: CUSTOM_PROMPT });
+    const b = build({ settings });
+    const { cookie } = await authed(b);
+    try {
+      const before = settings.get();
+      for (const translationPromptDefault of ['Replaced default.', '', 7, null]) {
+        const res = await b.app.inject({ method: 'POST', url: '/settings', cookies: cookie, payload: { translationPromptDefault } });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toMatchObject({ translationPrompt: CUSTOM_PROMPT, translationPromptDefault: DEFAULT_TRANSLATION_PROMPT });
+        expect(settings.get()).toEqual(before);
+      }
+      const both = await b.app.inject({ method: 'POST', url: '/settings', cookies: cookie,
+        payload: { translationPrompt: 'Saved prompt.', translationPromptDefault: 'Replaced default.' } });
+      expect(both.json()).toMatchObject({ translationPrompt: 'Saved prompt.', translationPromptDefault: DEFAULT_TRANSLATION_PROMPT });
+      expect(settings.get()).toEqual({ ...before, translationPrompt: 'Saved prompt.' });
+      expect((await b.app.inject({ url: '/settings', cookies: cookie })).json()).toMatchObject({
+        translationPrompt: 'Saved prompt.', translationPromptDefault: DEFAULT_TRANSLATION_PROMPT,
+      });
+    } finally { await b.app.close(); }
+  });
+
+  it('returns a saved custom prompt with the provider and key it was resolved with, and only for translation', async () => {
+    const secrets = memorySecretsStore();
+    for (const id of ['review', 'translation']) await secrets.set('ai_provider_key:' + id, 'fixture-' + id);
+    const translator = remote('translation', 'custom', 'https://translator.example/v1');
+    const settings = fakeStore(registry([remote('review'), translator], {
+      aiDefaultProviderId: 'review', translationProviderId: 'translation',
+      translationModel: 'translation-model', translationTimeoutMs: 200000,
+    }));
+    const b = build({ settings, secrets });
+    const admin = await authed(b);
+    const author = await authed(b, { username: 'author', isAdmin: false });
+    const config = (query = '?purpose=translation') => b.app.inject({ url: '/ai-config' + query, cookies: author.cookie });
+    const prompt = PROMPT_MARKER + ": use informal 'du'.\nKeep place names in the local spelling.";
+    try {
+      const remoteShape = {
+        providerId: 'translation', providerName: translator.name, providerKind: 'custom',
+        baseUrl: 'https://translator.example/v1', model: 'translation-model', timeoutMs: 200000,
+      };
+      expect((await config()).json()).toEqual({ ...remoteShape, prompt: DEFAULT_TRANSLATION_PROMPT, apiKey: 'fixture-translation' });
+      const saved = await b.app.inject({ method: 'POST', url: '/settings', cookies: admin.cookie, payload: { translationPrompt: prompt } });
+      expect(saved.statusCode).toBe(200);
+      const remoteConfig = await config();
+      expect(remoteConfig.headers['cache-control']).toBe('no-store');
+      expect(remoteConfig.json()).toEqual({ ...remoteShape, prompt, apiKey: 'fixture-translation' });
+      expect(Object.keys(remoteConfig.json())).toEqual([
+        'providerId', 'providerName', 'providerKind', 'baseUrl', 'model', 'timeoutMs', 'prompt', 'apiKey',
+      ]);
+      // No other /ai-config variant carries the translation instructions.
+      for (const other of [await config(''), await config('?purpose=caption')]) {
+        expect(other.statusCode).toBe(200);
+        expect(other.body).not.toContain(PROMPT_MARKER);
+        expect(other.json()).not.toHaveProperty('prompt');
+      }
+      // A local destination returns the same saved prompt and still never a key.
+      settings.update({ translationProviderId: 'lm-studio' });
+      expect((await config()).json()).toEqual({
+        providerId: 'lm-studio', providerName: 'Local LM Studio', providerKind: 'lm-studio',
+        baseUrl: 'http://localhost:1234/v1', model: 'translation-model', timeoutMs: 200000, prompt, apiKey: null,
+      });
+    } finally { await b.app.close(); }
+  });
+
+  it('binds the remote translation prompt to the settings snapshot committed by a queued save', async () => {
+    const secrets = memorySecretsStore();
+    await secrets.set('ai_provider_key:translation', 'fixture-translation');
+    const originalHas = secrets.has;
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    secrets.has = async key => { entered.resolve(); await release.promise; return originalHas(key); };
+    const b = build({ secrets, settings: fakeStore(registry([remote('translation')], { translationProviderId: 'translation' })) });
+    const { cookie } = await authed(b);
+    try {
+      const saving = b.app.inject({ method: 'POST', url: '/settings', cookies: cookie,
+        payload: { translationPrompt: 'Queued house style.', translationModel: 'queued-model' } }).then(r => r);
+      await entered.promise;
+      let resolved = false;
+      const config = b.app.inject({ url: '/ai-config?purpose=translation', cookies: cookie }).then(r => { resolved = true; return r; });
+      await nextTurn();
+      expect(resolved).toBe(false);
+      release.resolve();
+      expect((await saving).statusCode).toBe(200);
+      expect((await config).json()).toEqual({
+        providerId: 'translation', providerName: 'Remote translation', providerKind: 'openrouter',
+        baseUrl: 'https://openrouter.ai/api/v1', model: 'queued-model', timeoutMs: 120000,
+        prompt: 'Queued house style.', apiKey: 'fixture-translation',
+      });
+    } finally { release.resolve(); await b.app.close(); }
+  });
+
   it('prevents deletion while translation alone is assigned and only removes its key after reassignment', async () => {
     const secrets = memorySecretsStore();
     await secrets.set('ai_provider_key:translation', 'fixture-translation');
@@ -2225,7 +2387,8 @@ describe('article translation assignment API', () => {
       const config = () => b.app.inject({ url: '/ai-config?purpose=translation', cookies: cookie });
       const expected = {
         providerId: translator.id, providerName: translator.name, providerKind: translator.kind,
-        baseUrl: translator.baseUrl, model: 'translation-model', timeoutMs: 200000, apiKey: 'fixture-translation',
+        baseUrl: translator.baseUrl, model: 'translation-model', timeoutMs: 200000,
+        prompt: DEFAULT_TRANSLATION_PROMPT, apiKey: 'fixture-translation',
       };
       const response = await config();
       expect(response.statusCode).toBe(200);
@@ -2278,7 +2441,8 @@ describe('article translation assignment API', () => {
       const local = await b.app.inject({ url: '/ai-config?purpose=translation', cookies: cookie });
       expect(local.json()).toEqual({
         providerId: 'lm-studio', providerName: 'Local LM Studio', providerKind: 'lm-studio',
-        baseUrl: 'http://localhost:1234/v1', model: 'qwen2.5-7b-instruct', timeoutMs: 120000, apiKey: null,
+        baseUrl: 'http://localhost:1234/v1', model: 'qwen2.5-7b-instruct', timeoutMs: 120000,
+        prompt: DEFAULT_TRANSLATION_PROMPT, apiKey: null,
       });
       expect(get).not.toHaveBeenCalled();
       expect(has).not.toHaveBeenCalled();
