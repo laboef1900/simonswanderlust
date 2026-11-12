@@ -19,15 +19,6 @@ window.AdminConfirm = (function () {
     }));
   }
 
-  function urlsPlain(slugs) {
-    const u = liveUrls(slugs);
-    const lines = [];
-    for (const locale of SiteLanguage.config().locales) {
-      if (u[locale]) lines.push(locale.toUpperCase() + '  ' + u[locale]);
-    }
-    return lines.join('\n');
-  }
-
   function ensureDialog() {
     let dlg = document.getElementById('adminConfirm');
     if (dlg) return dlg;
@@ -181,5 +172,5 @@ window.AdminConfirm = (function () {
     });
   }
 
-  return { ask, prompt, liveUrls, urlsPlain };
+  return { ask, prompt, liveUrls };
 })();

@@ -1218,8 +1218,12 @@ criterion (2.5.5 is AAA), so the accessibility commitment in `PRODUCT.md` is una
   Journeys rows and inside every locale tab. Four states, each with a non-colour cue and an
   accessible name: available (solid), missing — nothing written yet (dashed, amber),
   omitted — written or not, but not requested for publication (dashed, struck through,
-  muted) and unknown (dotted). The choice itself is one checkbox with one polarity in both
-  editors: **Publish this story in English** / **Publish this journey in English**.
+  muted) and unknown (dotted). The choice itself has one polarity in both editors: the story
+  editor makes it in the **Publish** dialog (#568) — one checkbox per enabled language when two are enabled (a single-language install shows its one row without a checkbox), the
+  primary and any already-published language checked and locked with their reason, each row with
+  title, resulting URL in mono and readiness in words; selected languages with gaps block Publish
+  with an announced reason and a **Go to** link that closes the dialog. The journey editor keeps
+  its **Publish this journey in English** checkbox.
   The **Pages** catalogue replaces About in the admin sidebar, using flat compact
   rows like Posts — kind, a Draft/Published status pill (or "Not created yet"), language
   chips with the enabled-locale titles and right-aligned **Edit**/**Create** actions — not
@@ -1370,7 +1374,10 @@ criterion (2.5.5 is AAA), so the accessibility commitment in `PRODUCT.md` is una
 - Gallery blocks remain part of the canonical Markdown draft. Visual gallery editing uses
   the existing Media picker and preserves directives, ordering, captions and source URLs;
   Markdown mode exposes the underlying fence.
-- **Translate with AI** stays beside the locale tabs. Its native dialog
+- **Translate** (accessible name **Translate with AI**) stays beside the locale tabs, its label
+  led by the shared 1rem stroke AI icon (`AdminIcons.ai()`, `currentColor`, hidden from assistive
+  technology) and kept on one line at every width. It also works for a language that is not
+  selected for publication; the dialog then says the result stays a private draft. Its native dialog
   names the direction and provider/endpoint/model before an explicit inference action, then
   shows readonly title, excerpt, complete Markdown and article-local image text for review.
   Existing target content requires a separate unchecked replacement confirmation. Apply and
