@@ -19,6 +19,7 @@ import { pgMediaStore } from '../src/media-store.js';
 import sharp from 'sharp';
 import { createSettingsStore, defaultSettings } from '../src/settings.js';
 import { DEFAULT_TRANSLATION_PROMPT } from '../src/translation-prompt.js';
+import { DEFAULT_DRAFTING_PROMPT } from '../src/drafting-prompt.js';
 
 import { seedSiteIdentity, type IdentityRecord } from '../src/site-identity.js';
 const url = process.env.TEST_DATABASE_URL;
@@ -493,6 +494,9 @@ maybe.each(['split', 'loopback'] as const)('production boot (src/main.ts, Postgr
       translationProviderId: null, translationModel: 'qwen2.5-7b-instruct', translationTimeoutMs: 120000,
       // #567: the boot migration's whole-object persist writes the default instructions.
       translationPrompt: DEFAULT_TRANSLATION_PROMPT,
+      // #579: likewise the drafting defaults, following the default provider.
+      draftingProviderId: null, draftingModel: 'qwen2.5-7b-instruct', draftingTimeoutMs: 120000,
+      draftingPrompt: DEFAULT_DRAFTING_PROMPT,
     });
     expect(saved).not.toHaveProperty('aiProvider');
     expect(JSON.parse(await readFile(`${settingsPath}.pre-ai-registry`, 'utf8'))).toMatchObject({ aiProvider: 'openrouter' });
@@ -518,6 +522,13 @@ maybe.each(['split', 'loopback'] as const)('production boot (src/main.ts, Postgr
       providerId: 'openrouter', providerName: 'OpenRouter', providerKind: 'openrouter',
       baseUrl: 'https://openrouter.ai/api/v1', model: 'qwen2.5-7b-instruct', timeoutMs: 120000,
       prompt: DEFAULT_TRANSLATION_PROMPT, apiKey: 'boot-legacy-fixture',
+    });
+    const drafting = await fetch(`${base}/ai-config?purpose=drafting`, { headers: { cookie } });
+    expect(drafting.headers.get('cache-control')).toBe('no-store');
+    expect(await drafting.json()).toEqual({
+      providerId: 'openrouter', providerName: 'OpenRouter', providerKind: 'openrouter',
+      baseUrl: 'https://openrouter.ai/api/v1', model: 'qwen2.5-7b-instruct', timeoutMs: 120000,
+      prompt: DEFAULT_DRAFTING_PROMPT, apiKey: 'boot-legacy-fixture',
     });
   });
 
@@ -586,6 +597,62 @@ maybe.each(['split', 'loopback'] as const)('production boot (src/main.ts, Postgr
       const restored = await fetch(`${base}/settings`, { method: 'POST', headers, body: JSON.stringify({
         translationProviderId: beforeSettings.translationProviderId,
         translationModel: beforeSettings.translationModel, translationTimeoutMs: beforeSettings.translationTimeoutMs,
+      }) });
+      expect(restored.status).toBe(200);
+      expect((await fetch(`${base}/ai-providers/${providerId}`, { method: 'DELETE', headers: { origin: base, cookie } })).status).toBe(200);
+      expect(await pgSecretsStore(pool, encryptionKey).get(`ai_provider_key:${providerId}`)).toBeNull();
+    }
+  });
+
+  it('persists the drafting assignment and serves only its own encrypted key, apart from translation', async () => {
+    const login = await fetch(`${base}/login`, {
+      method: 'POST', headers: { 'content-type': 'application/json', origin: base },
+      body: JSON.stringify({ username, password }),
+    });
+    expect(login.status).toBe(200);
+    const cookie = (login.headers.get('set-cookie') ?? '').split(';')[0]!;
+    const headers = { 'content-type': 'application/json', origin: base, cookie };
+    const beforeSettings = createSettingsStore({ path: settingsPath, defaults: defaultSettings() }).get();
+    const originalKey = await pgSecretsStore(pool, encryptionKey).get('ai_provider_key:openrouter');
+    const added = await fetch(`${base}/ai-providers`, { method: 'POST', headers, body: JSON.stringify({
+      name: 'Drafting fixture', kind: 'custom', baseUrl: 'https://drafting.example/v1', apiKey: 'boot-drafting-fixture',
+    }) });
+    expect(added.status).toBe(201);
+    const addedText = await added.text();
+    expect(addedText).not.toContain('boot-drafting-fixture');
+    const addedBody = JSON.parse(addedText) as { aiProviders: { id: string; name: string }[] };
+    const providerId = addedBody.aiProviders.find(provider => provider.name === 'Drafting fixture')!.id;
+    try {
+      const assignment = {
+        draftingProviderId: providerId, draftingModel: 'drafting-fixture-model', draftingTimeoutMs: 180000,
+        draftingPrompt: 'Boot drafting style.',
+      };
+      const saved = await fetch(`${base}/settings`, { method: 'POST', headers, body: JSON.stringify(assignment) });
+      expect(saved.status).toBe(200);
+      expect(await saved.json()).toMatchObject({ ...assignment, draftingPromptDefault: DEFAULT_DRAFTING_PROMPT });
+      const reloaded = createSettingsStore({ path: settingsPath, defaults: defaultSettings() }).get();
+      expect(reloaded).toMatchObject(assignment);
+      expect(reloaded).toMatchObject({
+        translationProviderId: beforeSettings.translationProviderId, translationModel: beforeSettings.translationModel,
+        translationPrompt: beforeSettings.translationPrompt, reviewProviderId: beforeSettings.reviewProviderId,
+      });
+      const config = await fetch(`${base}/ai-config?purpose=drafting`, { headers: { cookie } });
+      expect(config.headers.get('cache-control')).toBe('no-store');
+      expect(await config.json()).toEqual({
+        providerId, providerName: 'Drafting fixture', providerKind: 'custom', baseUrl: 'https://drafting.example/v1',
+        model: 'drafting-fixture-model', timeoutMs: 180000, prompt: 'Boot drafting style.', apiKey: 'boot-drafting-fixture',
+      });
+      const translationText = await (await fetch(`${base}/ai-config?purpose=translation`, { headers: { cookie } })).text();
+      expect(translationText).not.toContain('boot-drafting-fixture');
+      expect(translationText).not.toContain('Boot drafting style.');
+      expect(await pgSecretsStore(pool, encryptionKey).get('ai_provider_key:openrouter')).toBe(originalKey);
+      const refused = await fetch(`${base}/ai-providers/${providerId}`, { method: 'DELETE', headers: { origin: base, cookie } });
+      expect(refused.status).toBe(409);
+      expect(await refused.json()).toMatchObject({ code: 'provider_in_use', useCases: ['drafting'] });
+    } finally {
+      const restored = await fetch(`${base}/settings`, { method: 'POST', headers, body: JSON.stringify({
+        draftingProviderId: beforeSettings.draftingProviderId, draftingModel: beforeSettings.draftingModel,
+        draftingTimeoutMs: beforeSettings.draftingTimeoutMs, draftingPrompt: beforeSettings.draftingPrompt,
       }) });
       expect(restored.status).toBe(200);
       expect((await fetch(`${base}/ai-providers/${providerId}`, { method: 'DELETE', headers: { origin: base, cookie } })).status).toBe(200);

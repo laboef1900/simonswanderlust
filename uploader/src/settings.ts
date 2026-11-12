@@ -4,6 +4,7 @@ import { DEFAULT_PROMPT } from './caption.js';
 import { DEFAULT_REVIEW_PROMPT } from './editorial-review.js';
 import { DEFAULT_PROCESS_OPTIONS } from './variants.js';
 import { DEFAULT_TRANSLATION_PROMPT, isTranslationPrompt } from './translation-prompt.js';
+import { DEFAULT_DRAFTING_PROMPT, isDraftingPrompt } from './drafting-prompt.js';
 import {
   cleanProviders, defaultProviders, deriveFromLegacy, isLegacyAiSettings, isProviderId, validateProviders,
   type AiProvider,
@@ -40,6 +41,16 @@ export interface Settings {
    * contract are always appended after it. Stored verbatim, never blank.
    */
   translationPrompt: string;
+  /** #579 Story drafting; `null` follows the default independently of other assignments. */
+  draftingProviderId: string | null;
+  draftingModel: string;
+  draftingTimeoutMs: number;
+  /**
+   * #579: owner style and length guidance that leads the drafting system
+   * message; the code-owned language, guard and JSON contract are always
+   * appended after it. Stored verbatim, never blank (the #567 rule).
+   */
+  draftingPrompt: string;
   lmModel: string;
   captionTimeoutMs: number;
   /** Shared output ceiling for alt text and media details, including model reasoning. */
@@ -104,6 +115,10 @@ export function defaultSettings(): Settings {
     translationModel: 'qwen2.5-7b-instruct',
     translationTimeoutMs: 120000,
     translationPrompt: DEFAULT_TRANSLATION_PROMPT,
+    draftingProviderId: null,
+    draftingModel: 'qwen2.5-7b-instruct',
+    draftingTimeoutMs: 120000,
+    draftingPrompt: DEFAULT_DRAFTING_PROMPT,
     lmModel: 'qwen/qwen3-vl-4b',
     captionTimeoutMs: 60000,
     captionMaxTokens: 8000,
@@ -152,6 +167,14 @@ const FIELD_CHECKS: { [K in keyof Settings]: (v: unknown) => string | null } = {
   // Fixed message: the reason is logged and sent to the client, the value never is.
   translationPrompt: (v) => isTranslationPrompt(v)
     ? null : 'Translation instructions are required and must be visible plain text of at most 4000 characters.',
+  draftingProviderId: (v) => (v === null || isProviderId(v)
+    ? null : 'Story drafting provider must be a provider id, or empty to follow the default.'),
+  draftingModel: (v) => typeof v === 'string' && v.length <= 100
+    ? null : 'Drafting model must be a string of at most 100 characters.',
+  draftingTimeoutMs: (v) =>
+    intInRange(v, 5000, 300000) ? null : 'Drafting timeout must be a whole number of milliseconds between 5000 and 300000.',
+  draftingPrompt: (v) => isDraftingPrompt(v)
+    ? null : 'Drafting instructions are required and must be visible plain text of at most 4000 characters.',
   lmModel: (v) => (typeof v === 'string' && v.trim() !== '' ? null : 'Model is required.'),
   captionTimeoutMs: (v) =>
     intInRange(v, 1000, 600000) ? null : 'Timeout must be a whole number of milliseconds between 1000 and 600000.',
@@ -225,6 +248,9 @@ export function validate(s: Settings): Settings {
   }
   if (s.translationProviderId !== null && !ids.has(s.translationProviderId)) {
     throw new SettingsError('Article translation provider must be one of the configured providers.');
+  }
+  if (s.draftingProviderId !== null && !ids.has(s.draftingProviderId)) {
+    throw new SettingsError('Story drafting provider must be one of the configured providers.');
   }
   return s;
 }
@@ -301,7 +327,7 @@ function loadSettings(path: string, defaults: Settings, log: (msg: string) => vo
     log(`settings: "aiDefaultProviderId" in ${path} names no configured provider; using the first provider`);
     loaded.aiDefaultProviderId = loaded.aiProviders[0]!.id;
   }
-  for (const key of ['reviewProviderId', 'captionProviderId', 'translationProviderId'] as const) {
+  for (const key of ['reviewProviderId', 'captionProviderId', 'translationProviderId', 'draftingProviderId'] as const) {
     const id = loaded[key];
     if (id !== null && !ids.has(id)) {
       log(`settings: "${key}" in ${path} names no configured provider; following the default provider`);

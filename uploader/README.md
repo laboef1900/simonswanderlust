@@ -47,6 +47,25 @@ Source limits are 100,000 manuscript characters and 2,000 text slots; the review
 bounded and must preserve the original document structure. See the
 [#550 design](../docs/superpowers/specs/2026-11-07-issue-550-ai-article-translation.md).
 
+**Draft with AI** appears between the title and the story while the active language has no
+title, excerpt or body. List the trip events (one per line, up to 50, each up to 500
+characters), tick any story details to send (date, country, region, the hero photo's Media
+caption, captions of photos you pick from Media, and the first/last stop with a rounded
+straight-line distance; coordinates are never sent), then choose **Generate draft**. The
+result appears as plain text; **Apply to story** fills the empty title, excerpt and story (and
+the permalink only for a story that was never published) and leaves saving and publishing to
+you. Cancel, errors and stale results change nothing and keep your events. Configure the
+independent provider/model/timeout under Settings → AI models → Story drafting; **Advanced
+settings → Drafting instructions** sets voice, person, length and structure (default: a
+first-person story of about 800–1500 words, up to 4000 characters, with **Reset instructions
+to default**). The language, the untrusted-data guard, the no-invention rule and the JSON
+format are always appended by code. Like translation, drafting sends `max_tokens: 32768` and
+`response_format: json_object` with no fallback and no retry, so a provider that rejects either
+fails that one request with the provider error message. With the provider left on
+**Follow default**, every signed-in author's browser receives the default provider's API key for
+drafting requests. See the
+[#579 design](../docs/superpowers/specs/2026-11-12-issue-579-ai-post-drafting.md).
+
 The owner approved a build-only bundler exception for this editor on 2026-11-07:
 `npm run copy:vendor` uses esbuild to bundle its TypeScript into a self-hosted asset.
 Other admin code remains vanilla; there is no editor CDN. Dependency controls and the

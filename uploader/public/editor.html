@@ -108,6 +108,12 @@
               <label for="deTitle">Article title (DE)</label>
               <textarea id="deTitle" rows="1" class="editor-title-input"></textarea>
             </div>
+            <!-- Draft with AI (#579): only while this language is empty, so a
+                 draft never overwrites text. Labels come from EditorCopy. -->
+            <div class="draft-start" id="deDraftStart" hidden>
+              <button id="deDraftAction" type="button" class="btn-secondary btn-icon" aria-haspopup="dialog" aria-controls="storyDraftDialog" aria-describedby="deDraftHelp"></button>
+              <p id="deDraftHelp" class="muted draft-start__help"></p>
+            </div>
 
             <div class="editor-card editor-writing-surface__body">
               <h2 class="editor-card-title">Story (DE)</h2>
@@ -174,6 +180,12 @@
             <div class="editor-card editor-writing-surface__title">
               <label for="enTitle">Article title (EN)</label>
               <textarea id="enTitle" rows="1" class="editor-title-input"></textarea>
+            </div>
+            <!-- Draft with AI (#579): only while this language is empty, so a
+                 draft never overwrites text. Labels come from EditorCopy. -->
+            <div class="draft-start" id="enDraftStart" hidden>
+              <button id="enDraftAction" type="button" class="btn-secondary btn-icon" aria-haspopup="dialog" aria-controls="storyDraftDialog" aria-describedby="enDraftHelp"></button>
+              <p id="enDraftHelp" class="muted draft-start__help"></p>
             </div>
 
             <div class="editor-card editor-writing-surface__body">
@@ -591,6 +603,54 @@
       </footer>
     </dialog>
 
+    <!-- Draft with AI (#579). Outside <main> on purpose: its events and
+         checkboxes never reach dirty tracking, the local stash or the save
+         payload. Every text is set with textContent/.value (I10). -->
+    <dialog id="storyDraftDialog" class="article-translation story-draft" aria-labelledby="draftHeading" aria-describedby="draftPrivacy">
+      <header class="article-translation__header">
+        <h2 id="draftHeading"></h2>
+        <button id="draftClose" type="button" class="btn-secondary"></button>
+      </header>
+      <div class="article-translation__body">
+        <p id="draftDestination" class="article-translation__destination"></p>
+        <label id="draftEventsLabel" for="draftEvents"></label>
+        <textarea id="draftEvents" rows="10" autofocus aria-describedby="draftEventsHelp draftEventsCount"></textarea>
+        <p id="draftEventsHelp" class="muted story-draft__help"></p>
+        <p id="draftEventsCount" class="muted story-draft__count"></p>
+        <fieldset class="story-draft__context">
+          <legend id="draftContextLegend"></legend>
+          <p id="draftContextEmpty" class="muted"></p>
+          <div id="draftContextItems"></div>
+          <button id="draftPickPhotos" type="button" class="btn-secondary story-draft__pick"></button>
+          <div id="draftPhotoItems"></div>
+        </fieldset>
+        <p id="draftPrivacy" class="muted story-draft__privacy"></p>
+        <div class="story-draft__status">
+          <span id="draftSpinner" class="review-spinner" aria-hidden="true" hidden></span>
+          <p id="draftStatus" role="status" aria-live="polite" aria-atomic="true"></p>
+        </div>
+        <p id="draftSettingsRow" class="story-draft__settings" hidden>
+          <a id="draftSettings" href="/admin/settings.html#ai-models" target="_blank" rel="noopener"></a>
+          <span id="draftAskAdmin"></span>
+        </p>
+        <section id="draftResult" class="story-draft__result" hidden>
+          <label id="draftResultTitleLabel" for="draftResultTitle"></label>
+          <textarea id="draftResultTitle" rows="2" readonly></textarea>
+          <label id="draftResultExcerptLabel" for="draftResultExcerpt"></label>
+          <textarea id="draftResultExcerpt" rows="3" readonly></textarea>
+          <label id="draftResultBodyLabel" for="draftResultBody"></label>
+          <textarea id="draftResultBody" class="article-translation__source" rows="16" readonly></textarea>
+          <p id="draftResultNote" class="muted"></p>
+        </section>
+      </div>
+      <footer class="article-translation__footer">
+        <button id="draftGenerate" type="button" aria-describedby="draftDestination draftPrivacy" disabled></button>
+        <button id="draftApply" type="button" hidden disabled></button>
+        <button id="draftAgain" type="button" class="btn-secondary" hidden></button>
+        <button id="draftCancel" type="button" class="btn-secondary" hidden></button>
+      </footer>
+    </dialog>
+
     <dialog id="storyReviewDialog" class="story-review" aria-labelledby="storyReviewHeading" aria-describedby="reviewAdvisory">
       <header class="story-review__header">
         <div>
@@ -696,6 +756,7 @@
     <script src="/admin/editor-linter.js"></script>
     <script src="/admin/editor-review.js"></script>
     <script src="/admin/editor-translation.js"></script>
+    <script src="/admin/editor-draft.js"></script>
     <script src="/admin/editor-alt-audit.js"></script>
     <script src="/admin/editor-excerpt.js"></script>
     <script src="/admin/country-centers.js"></script>
@@ -735,7 +796,10 @@
       let storyReview = null;
       let excerptAssist = null;
       let articleTranslation = null;
-      let translationApplying = false;
+      let storyDraft = null;
+      // Title/excerpt/body are being written by one atomic AI commit (translation
+      // or drafting): dirty tracking and invalidations wait for its didCommit.
+      let fieldsApplying = false;
       let translationGalleryChange = false;
       let reviewIsAdmin = false;
       let pendingSaves = 0;
@@ -748,6 +812,7 @@
         const epoch = writeEpoch;
         pendingSaves += 1;
         articleTranslation?.invalidate();
+        storyDraft?.changed();
         renderDraftState();
         const result = writeTail.then(() => epoch === writeEpoch && !loadBlocked ? write() : false).finally(() => {
           pendingSaves -= 1;
@@ -849,6 +914,7 @@
         collect: () => recoveryDraft || collectDraft(),
         onChange: (dirty) => {
           articleTranslation?.changed(translationGalleryChange);
+          storyDraft?.changed();
           if (dirty && !pendingSaves) setStatus('');
           renderDraftState();
         },
@@ -903,10 +969,11 @@
         resourceId: () => currentTk || initialTk, base: () => loadedUpdatedAt,
         collect: () => recoveryDraft || buildPayload(),
         describe: describeVersion,
-        restoreBase: (value) => { loadedUpdatedAt = value; articleTranslation?.invalidate(); },
+        restoreBase: (value) => { loadedUpdatedAt = value; articleTranslation?.invalidate(); storyDraft?.changed(); },
         error: (body, status) => showErr(SiteLanguage.error(body) || refusal('save', body, status)),
         adopt: async (body, attempt, acknowledgement) => {
           articleTranslation?.invalidate();
+          storyDraft?.changed();
           // Gallery diagnostics ride only on this tab's own acknowledgement, never a probe.
           if (acknowledgement) galleryMetadataWarnings.saved(acknowledgement.galleryWarnings, attempt.sentPayload);
           if (!currentTk) {
@@ -932,6 +999,7 @@
         },
         rebase: (body) => {
           articleTranslation?.invalidate();
+          storyDraft?.changed();
           currentTk = body.translationKey;
           loadedUpdatedAt = body.updatedAt;
           loadedSlugs.de = body.de?.slug || '';
@@ -963,6 +1031,7 @@
         const el = $('draftSaveState');
         if (el.textContent !== editorCopy[state]) el.textContent = editorCopy[state];
         articleTranslation?.refresh();
+        storyDraft?.refresh();
       }
       renderDraftState();
       const publicationLine = document.createElement('p');
@@ -1014,14 +1083,14 @@
       // the EasyMDE bodies live in CodeMirror and need their own change hooks.
       const mainEl = document.querySelector('main');
       mainEl.addEventListener('input', (event) => {
-        if (translationApplying) return;
+        if (fieldsApplying) return;
         if (event.target.closest('#altAudit') || event.target.closest('.rich-text-editor')) return;
         guard.markDirty();
         storyReview?.invalidate();
         excerptAssist?.invalidate();
       });
       function onBodyChange(_cm, change) {
-        if (translationApplying) return;
+        if (fieldsApplying) return;
         translationGalleryChange = change?.origin === '+gallery-alt';
         try { if (!populatingBody) guard.markDirty(); }
         finally { translationGalleryChange = false; }
@@ -1213,6 +1282,7 @@
         excerptAssist?.invalidate();
         activeTab = tab;
         articleTranslation?.invalidate();
+        storyDraft?.changed();
         syncInspectorLocale(tab);
         (tab === 'en' ? enMDE : deMDE).codemirror.refresh();
         fitTextarea($(tab + 'Title'));
@@ -2224,6 +2294,7 @@
       }
       function updateLocaleChip() {
         articleTranslation?.refresh();
+        storyDraft?.refresh();
         syncLocaleTabs();
         const chip = $('localeChip');
         const mobileChip = $('mobileLocaleChip');
@@ -2387,31 +2458,37 @@
             .map((field) => [field.id, field.value, field.checked]),
         };
       }
-      function commitTranslation(locale, patch) {
+      // The one atomic AI field transaction (#550, #579): title, excerpt and the
+      // whole body in one source transaction, so CodeMirror history stays and a
+      // failure restores every field. `images` is optional: a patch without it
+      // leaves the locale's image map exactly as it was.
+      function commitFields(locale, patch, origin = 'article-translation') {
         const cm = mdeFor(locale).codemirror;
         const title = $(locale + 'Title');
         const excerpt = $(locale + 'Excerpt');
         const images = locale === 'de' ? deImages : enImages;
+        const withImages = Object.hasOwn(patch, 'images');
         const before = { title: title.value, excerpt: excerpt.value, bodyMarkdown: cm.getValue(), images: structuredClone(images) };
         const assignFields = (value) => {
           title.value = value.title;
           excerpt.value = value.excerpt;
+          if (!withImages) return;
           for (const key of Object.keys(images)) delete images[key];
           Object.assign(images, value.images);
         };
-        translationApplying = true;
+        fieldsApplying = true;
         try {
           bodyEditors[locale].sourceTransaction(() => {
             assignFields(patch);
             if (cm.getValue() !== patch.bodyMarkdown) {
-              cm.replaceRange(patch.bodyMarkdown, { line: 0, ch: 0 }, cm.posFromIndex(cm.getValue().length), 'article-translation');
+              cm.replaceRange(patch.bodyMarkdown, { line: 0, ch: 0 }, cm.posFromIndex(cm.getValue().length), origin);
             }
           }, () => assignFields(before));
-        } finally { translationApplying = false; }
+        } finally { fieldsApplying = false; }
         return before;
       }
       articleTranslation = EditorTranslation.create({
-        copy: editorCopy, capture: translationSnapshot, flush: flushGalleryEdits, commit: commitTranslation,
+        copy: editorCopy, capture: translationSnapshot, flush: flushGalleryEdits, commit: (locale, patch) => commitFields(locale, patch),
         availability: () => ({ locales: language?.locales || [], blocked: loadBlocked || pendingSaves > 0 || writeRecovery.unresolved() }),
         didCommit: (locale) => {
           storyReview?.invalidate();
@@ -2427,6 +2504,82 @@
           return backedUp;
         },
         notice: setStatus, on401: () => guard.redirectToLogin(),
+      });
+
+      // ---- Draft with AI (#579) ----
+      // The snapshot an Apply must still match: the whole form's generation
+      // plus the active language's fields, slug and publication facts.
+      function draftSnapshot() {
+        const locale = activeTab;
+        return {
+          identity: currentTk, formVersion, base: loadedUpdatedAt, generation: guard.snapshot(), locale,
+          locales: [...(language?.locales || [])],
+          blocked: loadBlocked || pendingSaves > 0 || writeRecovery.unresolved(),
+          title: $(locale + 'Title').value, excerpt: $(locale + 'Excerpt').value, body: mdeFor(locale).value(),
+          slug: slugFieldFor(locale).value,
+          neverPublished: !publishedLocales.de && !publishedLocales.en, slugAuto: slugAuto[locale],
+        };
+      }
+      storyDraft = EditorDraft.create({
+        copy: editorCopy,
+        snapshot: draftSnapshot,
+        // Candidates only, each exactly as it would be sent; the stops'
+        // coordinates stay in routeSummary(). A form whose country code is the
+        // server placeholder XX offers no date or default region (describeShared).
+        details: (locale) => {
+          const untouched = $('fmCountryCode').value.trim().toUpperCase() === 'XX';
+          const date = $('fmDate').value;
+          const region = $('fmRegion').value;
+          return {
+            date: date && !untouched ? { value: date, label: AdminFormat.date(date) } : null,
+            country: $(locale + 'Country').value,
+            region: region && !(untouched && region === 'europe') ? AdminFormat.region(region) : '',
+            route: EditorDraft.routeSummary(collectStops()),
+          };
+        },
+        heroCaption: (locale) => {
+          const src = $(locale + 'HeroSrc').value;
+          if (!src) return Promise.resolve('');
+          return galleryLibrary.lookup([src], { fresh: true }).then((entries) => {
+            const entry = entries.get(src);
+            return entry && entry.row ? GalleryLibrary.describe(entry.row, locale).caption : '';
+          });
+        },
+        pickPhotos: ({ preselect, onPick }) => MediaPicker.open({
+          multiple: true,
+          preselect,
+          resolve: (srcs) => galleryLibrary.lookup(srcs, { fresh: true }).then((entries) => {
+            const rows = [];
+            let failed = 0;
+            entries.forEach((entry) => { if (entry.row) rows.push(entry.row); else if (entry.error) failed += 1; });
+            return { rows, failed };
+          }),
+          confirmLabel: editorCopy.draftPickConfirm,
+          emptyHint: editorCopy.draftPickEmpty,
+          onUnauthed: () => guard.redirectToLogin(),
+          onPick,
+        }),
+        // Exactly title, excerpt and body; the slug follows a generated title
+        // only for a never-published story whose slug is still automatic (#122).
+        commit: (locale, patch) => {
+          commitFields(locale, { title: patch.title, excerpt: patch.excerpt, bodyMarkdown: patch.bodyMarkdown }, 'story-draft');
+          AdminField.valid($(locale + 'Title'));
+          if (!publishedLocales.de && !publishedLocales.en && slugAuto[locale]) slugFieldFor(locale).value = slugify(patch.title);
+          return { chooseSlug: !slugFieldFor(locale).value.trim() };
+        },
+        didCommit: (locale) => {
+          storyReview?.invalidate();
+          excerptAssist?.invalidate();
+          articleTranslation?.invalidate();
+          galleryEditors[locale].refresh();
+          guard.markDirty();
+          const backedUp = guard.stashNow();
+          fitTextarea($(locale + 'Title'));
+          fitTextarea($(locale + 'Excerpt'));
+          updateLocaleChip();
+          return backedUp;
+        },
+        notice: setStatus, on401: () => guard.redirectToLogin(), isAdmin: () => reviewIsAdmin,
       });
       function snapshotIntent() {
         return { snap: guard.snapshot(), payload: structuredClone(buildPayload()), skipped: partialStopCount() };
@@ -2869,7 +3022,11 @@
 
       document.addEventListener('keydown', (e) => {
         if ((e.metaKey || e.ctrlKey) && (e.key === 's' || e.key === 'S')) {
+          // Always swallowed, so the browser's own "Save page" never opens. While
+          // Draft with AI is open (its Media picker included) nothing saves: that
+          // is not the dialog's job, and the save would make its request stale.
           e.preventDefault();
+          if ($('storyDraftDialog').open) return;
           doSaveDraft();
         }
       });
@@ -2944,6 +3101,7 @@
         // replaced form ends it like Cancel.
         cancelPublishDialog();
         articleTranslation?.invalidate();
+        storyDraft?.changed();
         storyReview?.invalidate();
         excerptAssist?.invalidate();
         Object.values(galleryEditors).forEach((editor) => editor.reset());
@@ -3004,6 +3162,7 @@
       // true otherwise — even on a failed load, so a local stash can still be offered.
       async function loadPost(tk, { snapshot, deferRouteRefresh = false } = {}) {
         articleTranslation?.invalidate();
+        storyDraft?.changed();
         publicationRefresh.beginAction();
         const controller = new AbortController();
         const deadline = setTimeout(() => controller.abort(), 10000);
@@ -3322,6 +3481,7 @@
         if (!loadBlocked && !await gpxEditor.refresh()) loadBlocked = true;
         document.querySelector('main').addEventListener('input', updateLocaleChip);
         articleTranslation.refresh();
+        storyDraft.refresh();
         updateLocaleChip();
       })();
     </script>

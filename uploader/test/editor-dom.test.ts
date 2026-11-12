@@ -9,7 +9,7 @@ import type { RouteStop, StoredStopRoute } from '../public/stop-route.js';
 import { storedRouteFor } from './stop-route-fixture.js';
 import type { EditorialReviewResult } from '../src/editorial-review.js';
 import { editorDocument, EditorElement, EditorEvent, publishThroughDialog } from './editor-dom-harness.js';
-import { ui } from '../../site/src/i18n/ui.js';
+import { ui, type UIKey } from '../../site/src/i18n/ui.js';
 import { normalizeGalleryFences } from '../src/body-content.js';
 import { analyzeGallerySource } from '../../site/src/lib/gallery-source.js';
 import { readCaptionsVisible } from '../../site/src/lib/gallery-layout.js';
@@ -21,6 +21,7 @@ import { publication } from './publication-client-fixture.js';
 import { publishTokens } from './publish-tokens.js';
 import { prepareTranslation, validateTranslation } from '../../site/src/lib/article-translation.js';
 import { TRANSLATION_PROMPT_MAX_LENGTH } from '../src/translation-prompt.js';
+import { geometryStats } from '../public/gpx-geometry.js';
 
 
 beforeAll(async () => { await analyzeGallerySource(''); });
@@ -54,6 +55,15 @@ interface TranslationRequest {
   slots: { id: string; text: string }[]; signal: AbortSignal;
 }
 type TranslationOutput = { translations: { id: string; text: string }[] };
+interface DraftContext {
+  date?: string; country?: string; region?: string; heroCaption?: string; photoCaptions?: string[];
+  route?: { start: string; end: string; straightLineKm: number };
+}
+interface DraftRequest {
+  baseUrl: string; model: string; apiKey: string | null; timeoutMs: number; locale: 'de' | 'en';
+  prompt: string; events: string[]; context: DraftContext; signal: AbortSignal;
+}
+interface DraftOutput { title: string; excerpt: string; bodyMarkdown: string }
 /** What editor.html passes to AltSuggest.wire, as far as these tests read it. */
 interface AltSuggestWire { button: Element | null; fileInput: Element | null; altInput: Element | null; statusEl: Element | null; lang: string }
 
@@ -68,6 +78,8 @@ interface EditorOptions {
   galleryFetch?: Fetch;
   review?: Review;
   translate?: (request: TranslationRequest) => Promise<TranslationOutput>;
+  /** LLM.draftArticle; default: the real browser transport against `fetch`. */
+  draft?: (request: DraftRequest) => Promise<DraftOutput>;
   isAdmin?: boolean;
   richText?: 'missing' | 'throws';
   mobile?: boolean;
@@ -102,7 +114,11 @@ interface ConfirmPrompt { title: string; body: string; confirmLabel?: string }
 interface GalleryPicker {
   multiple: true;
   captions?: { locale: 'de' | 'en'; visible: boolean; overrides: Record<string, string>; fallback: Record<string, string> };
-  onPick(items: unknown[], options: { layout: string | null; captions?: { visible: boolean; overrides: Record<string, string> } }): Promise<void>;
+  onPick(items: unknown[], options: { layout: string | null; captions?: { visible: boolean; overrides: Record<string, string> } }): Promise<void> | void;
+  preselect?: { src: string; width?: number; height?: number }[];
+  confirmLabel?: string;
+  emptyHint?: string;
+  onUnauthed?: () => void;
 }
 type PickerSettings = GalleryPicker | { multiple?: false; onPick?: (item: EditorOptions['pickImage']) => void };
 interface EditorApi {
@@ -558,7 +574,7 @@ async function loadEditor(options: EditorOptions = {}) {
     guard.redirectToLogin = () => { redirects += 1; redirect(); };
     return guard;
   };
-  for (const file of ['journeys-ui.js', 'waypoint-lookup.js', 'editor-stop-route.js', 'posts-filter.js', 'editor-title-image.js', 'gallery-fence.js', 'gallery-metadata-warnings.js', 'media-api.js', 'gallery-library.js', 'editor-galleries.js', 'editor-linter.js', 'llm.js', 'editor-excerpt.js', 'country-centers.js', 'country-coordinates.js', 'tabs.js', 'editor-review.js', 'editor-translation.js', 'editor-alt-audit.js', 'editor-inspector.js', 'image-markdown.js']) {
+  for (const file of ['journeys-ui.js', 'waypoint-lookup.js', 'editor-stop-route.js', 'posts-filter.js', 'editor-title-image.js', 'gallery-fence.js', 'gallery-metadata-warnings.js', 'media-api.js', 'gallery-library.js', 'editor-galleries.js', 'editor-linter.js', 'llm.js', 'editor-excerpt.js', 'country-centers.js', 'country-coordinates.js', 'tabs.js', 'editor-review.js', 'editor-translation.js', 'editor-draft.js', 'editor-alt-audit.js', 'editor-inspector.js', 'image-markdown.js']) {
     vm.runInContext(browserScript(file), ctx, {
       filename: resolve('public/' + file),
       importModuleDynamically: vm.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER,
@@ -566,6 +582,7 @@ async function loadEditor(options: EditorOptions = {}) {
   }
   if (options.review) (ctx.LLM as { reviewStory: Review }).reviewStory = options.review;
   if (options.translate && ctx.LLM && typeof ctx.LLM === 'object') Reflect.set(ctx.LLM, 'translateArticle', options.translate);
+  if (options.draft && ctx.LLM && typeof ctx.LLM === 'object') Reflect.set(ctx.LLM, 'draftArticle', options.draft);
   await vm.runInContext(script, ctx);
   const api = vm.runInContext('({ populateForm, buildPayload, loadPost, doSaveDraft, renderAltAudit })', ctx) as EditorApi;
   return {
@@ -6840,5 +6857,721 @@ describe('explicit article translation of the current unsaved pair', () => {
     expect(h.api.buildPayload()).toEqual(before);
     expect(captions()).toEqual(['Aussicht', 'Old caption']);
     expect(alts()).toEqual(['Ein Berg', 'Old alt']);
+  });
+});
+
+describe('Draft with AI in the real editor (#579)', () => {
+  type Harness = Awaited<ReturnType<typeof loadEditor>>;
+  interface ProviderBody { model: string; messages: { role: string; content: string }[] }
+  interface DraftNetwork {
+    configuration?: () => unknown;
+    configReply?: () => Promise<Response> | null;
+    configStatus?: () => number;
+    provider?: (body: ProviderBody) => Response | Promise<Response>;
+    media?: MediaRow[];
+    other?: Fetch;
+  }
+  const copy = ui.en;
+  const t = (key: UIKey, values: Record<string, string | number> = {}) =>
+    Object.entries(values).reduce((text, [name, value]) => text.replaceAll('{' + name + '}', String(value)), copy[key]);
+  const draftConfig = { providerId: 'local', providerName: 'Local text', providerKind: 'lm-studio',
+    baseUrl: 'http://localhost:1234/v1', model: 'draft-model', timeoutMs: 120000,
+    prompt: 'Write warmly and plainly about the trip.', apiKey: null };
+  const drafted: DraftOutput = { title: 'Drei Tage in Lissabon', excerpt: 'Ein kurzer Teaser über drei Tage in Lissabon.',
+    bodyMarkdown: '## Ankunft\n\nWir kamen am Abend an und liefen zum Fluss.' };
+  const lisbon = { name: 'Lisbon', lat: 38.7223, lng: -9.1393 };
+  const sintra = { name: 'Sintra', lat: 38.8029, lng: -9.3817 };
+  const routeKm = Math.round(geometryStats({ version: 1, segments: [{ points: [lisbon, sintra].map(({ lat, lng }) => ({ lat, lng })) }] }).distanceMetres / 1000);
+  const flush = async () => { for (let i = 0; i < 15; i++) await settle(); };
+  const providerReply = (content: string) => response({ choices: [{ finish_reason: 'stop', message: { content } }] });
+
+  function draftNetwork(options: DraftNetwork = {}): Fetch {
+    const media = mediaNetwork(options.media ?? []);
+    return async (url, init = {}) => {
+      if (url === '/ai-config?purpose=drafting') {
+        const pending = options.configReply?.();
+        if (pending) return pending;
+        const status = options.configStatus?.() ?? 200;
+        return response(status === 200 ? options.configuration?.() ?? draftConfig : { error: 'unavailable' }, status);
+      }
+      if (url.endsWith('/chat/completions')) {
+        const body = JSON.parse(String(init.body)) as ProviderBody;
+        return options.provider ? options.provider(body) : providerReply(JSON.stringify(drafted));
+      }
+      if (url.startsWith('/media')) return media(url, init);
+      return options.other ? options.other(url, init) : response([]);
+    };
+  }
+  /** A saved story whose two languages are still empty, with every kind of story detail filled in. */
+  function emptyStory(): PostPair {
+    const pair = fullPair();
+    for (const locale of ['de', 'en'] as const) {
+      pair[locale] = { ...pair[locale], title: '', excerpt: '', bodyMarkdown: '', slug: '', keyFacts: {}, country: 'Portugal' };
+    }
+    pair.shared = { ...pair.shared, date: '2024-10-03', countryCode: 'PT', region: 'europe', stops: [lisbon, sintra] };
+    return pair;
+  }
+  async function editor(options: EditorOptions = {}): Promise<Harness> {
+    const h = await loadEditor({ fetch: draftNetwork(), ...options });
+    await flush();
+    return h;
+  }
+  async function openDraft(h: Harness, locale: 'de' | 'en' = 'de') {
+    h.el(locale + 'DraftAction').click();
+    await flush();
+  }
+  function typeEvents(h: Harness, value: string) {
+    const field = h.el('draftEvents');
+    field.value = value;
+    field.fire('input');
+  }
+  async function generate(h: Harness, button = 'draftGenerate') {
+    h.el(button).click();
+    await flush();
+  }
+  const detailRows = (h: Harness) => h.el('storyDraftDialog').querySelectorAll('.story-draft__item');
+  function detailBox(h: Harness, prefix: string): Element {
+    const row = detailRows(h).find((item) => item.textContent.startsWith(prefix));
+    if (!row) throw new Error('no story detail "' + prefix + '" in: ' + detailRows(h).map((item) => item.textContent).join(' | '));
+    return required(row, 'input');
+  }
+  const status = (h: Harness) => h.el('draftStatus').textContent;
+  const sentContext = (body: ProviderBody) => (JSON.parse(body.messages[1]!.content) as { context: DraftContext }).context;
+
+  it('offers Draft with AI only for the active, enabled and empty language, and disables it while the story is blocked', async () => {
+    const pending = Promise.withResolvers<Response>();
+    const h = await editor({ fetch: draftNetwork({ other: async (url) => url === '/posts/tk1' ? pending.promise : response([]) }) });
+    const trigger = h.el('deDraftAction');
+    expect([h.el('deDraftStart').hidden, h.el('enDraftStart').hidden, trigger.disabled]).toEqual([false, true, false]);
+    expect(required(trigger, '.btn-icon__label').textContent).toBe(copy['editor.chrome.draftAction']);
+    // The visible words lead the accessible name (WCAG 2.5.3).
+    expect(trigger.getAttribute('aria-label')).toBe('Draft with AI (DE)');
+    expect(trigger.getAttribute('aria-label')!.startsWith(trigger.textContent)).toBe(true);
+    expect([trigger.getAttribute('aria-haspopup'), trigger.getAttribute('aria-controls'), trigger.getAttribute('aria-describedby')])
+      .toEqual(['dialog', 'storyDraftDialog', 'deDraftHelp']);
+    expect(h.el('deDraftHelp').textContent).toBe(copy['editor.chrome.draftStartHelp']);
+    for (const id of ['deTitle', 'deExcerpt']) {
+      h.el(id).value = '   '; h.el(id).fire('input');
+      expect(h.el('deDraftStart').hidden).toBe(false);
+      h.el(id).value = 'Something'; h.el(id).fire('input');
+      expect(h.el('deDraftStart').hidden, id).toBe(true);
+      h.el(id).value = ''; h.el(id).fire('input');
+      expect(h.el('deDraftStart').hidden).toBe(false);
+    }
+    h.editors[0]!.codemirror.replaceRange('A first line', { line: 0, ch: 0 }, { line: 0, ch: 0 }, '+input');
+    expect(h.el('deDraftStart').hidden).toBe(true);
+    h.editors[0]!.value('');
+    expect(h.el('deDraftStart').hidden).toBe(false);
+    h.el('tabbtn-en').click();
+    expect([h.el('deDraftStart').hidden, h.el('enDraftStart').hidden]).toEqual([true, false]);
+    // A reload holds the story blocked: the row stays, its button cannot start a draft.
+    const pair = emptyStory();
+    pair.de = { ...pair.de, title: 'Lissabon', bodyMarkdown: 'Schon geschrieben.' };
+    const loading = h.api.loadPost('tk1');
+    await settle();
+    expect([h.el('enDraftStart').hidden, h.el('enDraftAction').disabled]).toEqual([false, true]);
+    pending.resolve(response(pair));
+    await loading; await flush();
+    expect([h.el('enDraftStart').hidden, h.el('enDraftAction').disabled]).toEqual([false, false]);
+    h.el('tabbtn-de').click();
+    expect(h.el('deDraftStart').hidden).toBe(true);
+    for (const primary of ['de', 'en'] as const) {
+      const single = await editor({ language: { primary, locales: [primary] } });
+      const other = primary === 'de' ? 'en' : 'de';
+      expect([single.el(primary + 'DraftStart').hidden, single.el(other + 'DraftStart').hidden]).toEqual([false, true]);
+    }
+  });
+
+  it('opens a labelled dialog outside <main>, focuses the events and discloses the destination before any model call', async () => {
+    const config = Promise.withResolvers<Response>();
+    let hold = true;
+    const draft = vi.fn(async (request: DraftRequest) => { expect(request.apiKey).toBe('draft-only-key'); return drafted; });
+    const keyed = { ...draftConfig, providerId: 'remote', providerName: 'Remote', providerKind: 'openai', baseUrl: 'https://api.example/v1', apiKey: 'draft-only-key' };
+    const h = await editor({ draft, fetch: draftNetwork({ configuration: () => keyed, configReply: () => hold ? config.promise : null }) });
+    await openDraft(h);
+    const dialog = h.el('storyDraftDialog');
+    expect(dialog.open).toBe(true);
+    expect(dialog.closest('main')).toBeNull();
+    expect([dialog.getAttribute('aria-labelledby'), dialog.getAttribute('aria-describedby')]).toEqual(['draftHeading', 'draftPrivacy']);
+    expect(h.el('draftHeading').textContent).toBe(t('editor.chrome.draftHeading', { language: 'German' }));
+    expect(h.document.activeElement).toBe(h.el('draftEvents'));
+    expect(h.el('draftEventsLabel').textContent).toBe(copy['editor.chrome.draftEventsLabel']);
+    expect(h.el('draftEvents').getAttribute('aria-describedby')).toBe('draftEventsHelp draftEventsCount');
+    expect(h.el('draftPrivacy').textContent).toBe(copy['editor.chrome.draftPrivacy']);
+    expect(h.el('draftGenerate').getAttribute('aria-describedby')).toBe('draftDestination draftPrivacy');
+    expect(status(h)).toBe(copy['editor.chrome.draftLoadingSettings']);
+    expect(h.el('draftGenerate').disabled).toBe(true);
+    hold = false;
+    config.resolve(response(keyed));
+    await flush();
+    expect(h.el('draftDestination').textContent).toBe(t('editor.chrome.draftDestination',
+      { provider: 'Remote', kind: 'openai', endpoint: 'https://api.example/v1', model: 'draft-model', timeout: 120 }));
+    expect(status(h)).toBe(copy['editor.chrome.draftReady']);
+    expect(h.el('draftGenerate').disabled).toBe(false);
+    expect(dialog.textContent).not.toContain('draft-only-key');
+    expect(dialog.textContent).not.toContain(draftConfig.prompt);
+    expect(draft).not.toHaveBeenCalled();
+    typeEvents(h, 'Arrived in Lisbon\n\nTram 28 to the castle');
+    expect(h.el('draftEventsCount').textContent).toBe(t('editor.chrome.draftEventsCount', { count: 2, max: 50, length: 500 }));
+    typeEvents(h, 'Arrived in Lisbon');
+    expect(h.el('draftEventsCount').textContent).toBe(t('editor.chrome.draftEventsCountOne', { max: 50, length: 500 }));
+    await generate(h);
+    expect(draft).toHaveBeenCalledTimes(1);
+    expect(draft.mock.calls[0]![0]).toMatchObject({ locale: 'de', events: ['Arrived in Lisbon'], context: {}, prompt: draftConfig.prompt,
+      model: 'draft-model', baseUrl: 'https://api.example/v1', timeoutMs: 120000 });
+    expect(h.requests.filter(({ url }) => url === '/ai-config?purpose=drafting')).toHaveLength(2);
+    expect(dialog.dataset.state).toBe('review');
+    expect(JSON.stringify(stashRecords(h.local))).not.toContain('draft-only-key');
+  });
+
+  it.each(['providerId', 'providerName', 'providerKind', 'baseUrl', 'model', 'timeoutMs', 'prompt'] as const)(
+    'asks for renewed consent when %s changes between disclosure and Generate', async (field) => {
+      const fresh: Record<string, unknown> = { ...draftConfig };
+      const draft = vi.fn(async (_request: DraftRequest) => drafted);
+      const h = await editor({ draft, fetch: draftNetwork({ configuration: () => fresh }) });
+      await openDraft(h);
+      typeEvents(h, 'Arrived in Lisbon');
+      fresh[field] = field === 'timeoutMs' ? 60000 : field === 'providerKind' ? 'custom' : field === 'baseUrl' ? 'https://another.example/v1' : 'changed';
+      await generate(h);
+      expect(draft).not.toHaveBeenCalled();
+      expect(status(h)).toBe(copy['editor.chrome.draftConfigChanged']);
+      expect(h.document.activeElement).toBe(h.el('draftGenerate'));
+      await generate(h);
+      expect(draft).toHaveBeenCalledTimes(1);
+      expect(h.el('storyDraftDialog').dataset.state).toBe('review');
+    },
+  );
+
+  it.each([
+    ['an empty list', '\n   \n', 'editor.chrome.draftEventsRequired', {}],
+    ['51 events', Array.from({ length: 51 }, (_, index) => 'Event ' + (index + 1)).join('\n'), 'editor.chrome.draftEventsTooMany', { max: 50, count: 51 }],
+    ['a 501-character event', 'Arrived\n\n' + 'x'.repeat(501), 'editor.chrome.draftEventTooLong', { line: 2, count: 501, max: 500 }],
+  ] as const)('refuses %s inline, with zero requests and the text kept', async (_label, value, key, values) => {
+    const draft = vi.fn(async (_request: DraftRequest) => drafted);
+    const h = await editor({ draft });
+    await openDraft(h);
+    typeEvents(h, value);
+    const before = h.requests.length;
+    await generate(h);
+    expect(draft).not.toHaveBeenCalled();
+    expect(h.requests).toHaveLength(before);
+    const error = h.el('draftEventsError');
+    expect([error.textContent, error.hidden, error.className]).toEqual([t(key, values), false, 'field-error']);
+    expect(h.el('draftEvents').getAttribute('aria-invalid')).toBe('true');
+    expect(h.el('draftEvents').getAttribute('aria-describedby')!.split(' ')).toContain('draftEventsError');
+    expect(h.document.activeElement).toBe(h.el('draftEvents'));
+    expect(h.el('draftEvents').value).toBe(value);
+    expect(h.el('draftGenerate').disabled).toBe(false);
+    // Typing answers the refusal.
+    typeEvents(h, 'Arrived in Lisbon');
+    expect(h.el('draftEvents').hasAttribute('aria-invalid')).toBe(false);
+  });
+
+  it('measures each event after trimming and accepts exactly the limits', async () => {
+    const draft = vi.fn(async (_request: DraftRequest) => drafted);
+    const h = await editor({ draft });
+    await openDraft(h);
+    typeEvents(h, '   ' + 'x'.repeat(500) + '\t \n' + Array.from({ length: 49 }, (_, index) => 'Event ' + index).join('\r\n'));
+    await generate(h);
+    expect(draft).toHaveBeenCalledTimes(1);
+    const events = draft.mock.calls[0]![0].events;
+    expect(events).toHaveLength(50);
+    expect(events[0]).toBe('x'.repeat(500));
+  });
+
+  it('Cancel aborts the one request, changes nothing and keeps the events and this opening’s ticks', async () => {
+    const pending = Promise.withResolvers<DraftOutput>();
+    let request: DraftRequest | undefined;
+    const h = await editor({ draft: (value) => { request = value; return pending.promise; } });
+    h.api.populateForm(emptyStory());
+    const before = h.api.buildPayload();
+    await openDraft(h);
+    setChecked(detailBox(h, 'Country:'), true);
+    typeEvents(h, 'Arrived in Lisbon');
+    await generate(h);
+    const dialog = h.el('storyDraftDialog');
+    expect(request!.context).toEqual({ country: 'Portugal' });
+    expect([dialog.getAttribute('aria-busy'), h.el('draftSpinner').hidden, h.el('draftGenerate').hidden, h.el('draftCancel').hidden])
+      .toEqual(['true', false, true, false]);
+    expect(h.document.activeElement).toBe(h.el('draftCancel'));
+    expect([h.el('draftEvents').disabled, h.el('draftPickPhotos').disabled, detailBox(h, 'Country:').disabled]).toEqual([true, true, true]);
+    expect(status(h)).toBe(copy['editor.chrome.draftGenerating']);
+    h.el('draftCancel').click();
+    expect(request!.signal.aborted).toBe(true);
+    expect(status(h)).toBe(copy['editor.chrome.draftCancelled']);
+    expect(dialog.getAttribute('aria-busy')).toBe('false');
+    expect(h.document.activeElement).toBe(h.el('draftGenerate'));
+    expect([h.el('draftEvents').value, h.el('draftEvents').disabled]).toEqual(['Arrived in Lisbon', false]);
+    expect([detailBox(h, 'Country:').checked, detailBox(h, 'Country:').disabled]).toEqual([true, false]);
+    pending.resolve(drafted);
+    await flush();
+    expect(h.api.buildPayload()).toEqual(before);
+    expect(h.el('draftResult').hidden).toBe(true);
+    expect(dialog.dataset.state).toBe('cancelled');
+  });
+
+  it.each([
+    ['a timeout', 'editor.chrome.draftTimedOut', false],
+    ['a refused key', 'editor.chrome.draftAuthentication', true],
+    ['a provider error', 'editor.chrome.draftProviderFailed', false],
+    ['invalid output', 'editor.chrome.draftInvalidOutput', false],
+    ['unavailable settings at Generate', 'editor.chrome.draftConfigFailed', true],
+  ] as const)('reports %s in fixed words, sends one request at most and keeps the story and the events', async (label, key, settings) => {
+    const providerCalls: ProviderBody[] = [];
+    let configReads = 0;
+    const timeout = label === 'a timeout'
+      ? async () => { throw Object.assign(new Error('Story draft timed out'), { name: 'TimeoutError' }); }
+      : undefined;
+    const h = await editor({ isAdmin: true, draft: timeout, fetch: draftNetwork({
+      configStatus: () => (++configReads > 1 && label === 'unavailable settings at Generate' ? 503 : 200),
+      provider: (body) => {
+        providerCalls.push(body);
+        if (label === 'a refused key') return response({ error: { message: 'private provider detail' } }, 401);
+        if (label === 'a provider error') return response({ error: { message: 'private provider detail' } }, 500);
+        return providerReply(JSON.stringify({ ...drafted, bodyMarkdown: 'See https://example.com for more.' }));
+      },
+    }) });
+    const before = h.api.buildPayload();
+    await openDraft(h);
+    typeEvents(h, 'Arrived in Lisbon\nTram 28');
+    await generate(h);
+    expect(status(h)).toBe(copy[key]);
+    expect(h.el('storyDraftDialog').dataset.state).toBe('error');
+    expect(h.el('storyDraftDialog').textContent).not.toContain('private');
+    expect(h.el('draftSettingsRow').hidden).toBe(!settings);
+    if (settings) expect([h.el('draftSettings').hidden, h.el('draftAskAdmin').hidden]).toEqual([false, true]);
+    expect(providerCalls.length).toBe(label === 'a refused key' || label === 'a provider error' || label === 'invalid output' ? 1 : 0);
+    expect(h.api.buildPayload()).toEqual(before);
+    expect(h.el('draftEvents').value).toBe('Arrived in Lisbon\nTram 28');
+    expect(h.el('draftResult').hidden).toBe(true);
+    expect([h.el('draftGenerate').hidden, h.el('draftGenerate').disabled]).toEqual([false, false]);
+    expect(h.document.activeElement).toBe(h.el('draftGenerate'));
+  });
+
+  it.each([
+    ['a keyed provider without a key', { ...draftConfig, providerKind: 'openrouter', apiKey: null }, 200, 'editor.chrome.draftMissingKey'],
+    ['invalid drafting instructions', { ...draftConfig, prompt: ' \n ' }, 200, 'editor.chrome.draftConfigFailed'],
+    ['a refused settings read', draftConfig, 400, 'editor.chrome.draftConfigFailed'],
+  ] as const)('never offers Generate after %s, and points authors to an admin', async (_label, configuration, configStatus, key) => {
+    const draft = vi.fn(async (_request: DraftRequest) => drafted);
+    const h = await editor({ draft, isAdmin: false, fetch: draftNetwork({ configuration: () => configuration, configStatus: () => configStatus }) });
+    await openDraft(h);
+    expect(status(h)).toBe(copy[key]);
+    expect(h.el('draftDestination').textContent).toBe('');
+    expect(h.el('draftGenerate').disabled).toBe(true);
+    expect([h.el('draftSettingsRow').hidden, h.el('draftSettings').hidden, h.el('draftAskAdmin').hidden]).toEqual([false, true, false]);
+    expect(h.el('draftAskAdmin').textContent).toBe(copy['editor.chrome.draftAskAdmin']);
+    h.el('draftGenerate').click(); await flush();
+    expect(draft).not.toHaveBeenCalled();
+  });
+
+  it('sends a signed-out author to login from the settings read', async () => {
+    const h = await editor({ fetch: draftNetwork({ configStatus: () => 401 }) });
+    await openDraft(h);
+    expect(h.redirects()).toBe(1);
+    expect(h.el('storyDraftDialog').open).toBe(false);
+  });
+
+  it.each(['close', 'escape', 'changed'] as const)('drops a late response after %s and mutates nothing', async (kind) => {
+    const pending = Promise.withResolvers<DraftOutput>();
+    let request: DraftRequest | undefined;
+    const h = await editor({ draft: (value) => { request = value; return pending.promise; } });
+    await openDraft(h);
+    typeEvents(h, 'Arrived in Lisbon');
+    await generate(h);
+    if (kind === 'close') h.el('draftClose').click();
+    else if (kind === 'escape') h.el('draftCancel').fire('keydown', { key: 'Escape' });
+    else { h.el('enTitle').value = 'Another language moved on'; h.el('enTitle').fire('input'); }
+    expect(request!.signal.aborted).toBe(true);
+    const newer = h.api.buildPayload();
+    pending.resolve(drafted);
+    await flush(); h.flushDialogEvents();
+    expect(h.api.buildPayload()).toEqual(newer);
+    expect(h.el('draftResult').hidden).toBe(true);
+    expect(h.el('draftEvents').value).toBe('Arrived in Lisbon');
+    if (kind === 'changed') {
+      expect(h.el('storyDraftDialog').open).toBe(true);
+      expect(status(h)).toBe(copy['editor.chrome.draftStale']);
+      expect(h.document.activeElement).toBe(h.el('draftGenerate'));
+    } else {
+      expect(h.el('storyDraftDialog').open).toBe(false);
+      expect(h.document.activeElement).toBe(h.el('deDraftAction'));
+    }
+  });
+
+  it('re-checks the whole snapshot at Apply and discards a stale result, keeping the events', async () => {
+    const draft = vi.fn(async (_request: DraftRequest) => drafted);
+    const h = await editor({ draft });
+    await openDraft(h);
+    typeEvents(h, 'Arrived in Lisbon');
+    await generate(h);
+    expect(h.document.activeElement).toBe(h.el('draftResultTitle'));
+    expect([h.el('draftApply').hidden, h.el('draftAgain').hidden, h.el('draftGenerate').hidden]).toEqual([false, false, true]);
+    // No input event: only the Apply-time comparison can see it.
+    h.el('slugFieldDe').value = 'silently-changed';
+    const before = h.api.buildPayload();
+    h.el('draftApply').click();
+    expect(h.api.buildPayload()).toEqual(before);
+    expect(status(h)).toBe(copy['editor.chrome.draftStale']);
+    expect(h.el('draftResult').hidden).toBe(true);
+    expect(h.document.activeElement).toBe(h.el('draftGenerate'));
+    expect(h.el('draftEvents').value).toBe('Arrived in Lisbon');
+    // A shown result also goes when the editor changes while it is open.
+    await generate(h);
+    expect(h.el('draftResult').hidden).toBe(false);
+    h.editors[1]!.value('An English line arrives');
+    expect(h.el('draftResult').hidden).toBe(true);
+    expect(status(h)).toBe(copy['editor.chrome.draftStale']);
+    h.el('draftApply').click();
+    expect(h.api.buildPayload().de.title).toBe('');
+    expect(draft).toHaveBeenCalledTimes(2);
+  });
+
+  it('starts one request for a double click', async () => {
+    const pending = Promise.withResolvers<DraftOutput>();
+    const draft = vi.fn((_request: DraftRequest) => pending.promise);
+    const h = await editor({ draft });
+    await openDraft(h);
+    typeEvents(h, 'Arrived in Lisbon');
+    h.el('draftGenerate').click();
+    h.el('draftGenerate').click();
+    await flush();
+    h.el('draftGenerate').click();
+    await flush();
+    expect(draft).toHaveBeenCalledTimes(1);
+    expect(h.requests.filter(({ url }) => url === '/ai-config?purpose=drafting')).toHaveLength(2);
+    pending.resolve(drafted);
+    await flush();
+    expect(h.el('storyDraftDialog').dataset.state).toBe('review');
+  });
+
+  it('asks for consent at every opening: details start unchecked, nothing is sent unless ticked, and what is sent is what was shown', async () => {
+    const draft = vi.fn(async (_request: DraftRequest) => drafted);
+    const h = await editor({ draft });
+    h.api.populateForm(emptyStory());
+    await openDraft(h);
+    expect(detailRows(h).map((row) => row.textContent)).toEqual([
+      'Date: 3 Oct 2024', 'Country: Portugal', 'Region: Europe',
+      t('editor.chrome.draftContextRoute', { start: 'Lisbon', end: 'Sintra', km: routeKm }),
+    ]);
+    expect(detailRows(h).map((row) => required(row, 'input').checked)).toEqual([false, false, false, false]);
+    // Measurements are mono spans written as text.
+    expect(detailRows(h)[0]!.querySelector('.story-draft__mono')!.textContent).toBe('3 Oct 2024');
+    expect(detailRows(h)[3]!.querySelector('.story-draft__mono')!.textContent).toBe(String(routeKm));
+    for (const row of detailRows(h)) setChecked(required(row, 'input'), true);
+    h.el('storyDraftDialog').fire('keydown', { key: 'Escape' });
+    h.flushDialogEvents();
+    await openDraft(h);
+    expect(detailRows(h).map((row) => required(row, 'input').checked)).toEqual([false, false, false, false]);
+    typeEvents(h, 'Arrived in Lisbon');
+    await generate(h);
+    expect(draft.mock.calls[0]![0].context).toEqual({});
+    h.el('draftClose').click();
+    await openDraft(h);
+    for (const prefix of ['Date:', 'Country:', 'Region:', 'Route:']) setChecked(detailBox(h, prefix), true);
+    // A change the editor never announced: the sent value is the one shown.
+    h.el('deCountry').value = 'Spain';
+    await generate(h);
+    expect(draft.mock.calls[1]![0].context).toEqual({
+      date: '2024-10-03', country: 'Portugal', region: 'Europe', route: { start: 'Lisbon', end: 'Sintra', straightLineKm: routeKm },
+    });
+    expect(JSON.stringify(draft.mock.calls[1]![0])).not.toMatch(/38\.7|9\.13|9\.38/);
+  });
+
+  it('offers no date or default region for a story whose details were never touched', async () => {
+    const h = await editor();
+    const pair = emptyStory();
+    pair.shared = { ...pair.shared, countryCode: 'XX', region: 'europe', stops: [lisbon] };
+    h.api.populateForm(pair);
+    await openDraft(h);
+    expect(detailRows(h).map((row) => row.textContent)).toEqual(['Country: Portugal']);
+    h.api.populateForm({ ...pair, de: { ...pair.de, country: '' }, en: { ...pair.en, country: '' } });
+    h.el('draftClose').click();
+    await openDraft(h);
+    expect(detailRows(h)).toHaveLength(0);
+    expect(h.el('draftContextEmpty').textContent).toBe(copy['editor.chrome.draftContextEmpty']);
+  });
+
+  it('uses picked photos for their captions only: no coordinates, image addresses or Media fields leave, and nothing enters the story', async () => {
+    const providerCalls: ProviderBody[] = [];
+    const h = await editor({ fetch: draftNetwork({ provider: (body) => { providerCalls.push(body); return providerReply(JSON.stringify(drafted)); } }) });
+    h.api.populateForm(emptyStory());
+    const tagus = { key: 'trip/tejo.jpg', src: 'https://img/trip/tejo.jpg', width: 1200, height: 800, title: 'Tagus at dusk',
+      alt: { de: 'Fluss im Abendlicht', en: 'River at dusk' }, caption: { de: 'Abend am Tejo', en: 'Evening by the Tagus' },
+      tags: ['lisbon-secret-tag'], exif: { gps: { lat: 38.70712, lng: -9.13654 }, model: 'Leica Q2' } };
+    const tram = { key: 'trip/tram.jpg', src: 'https://img/trip/tram.jpg', width: 900, height: 600, title: 'Tram 28',
+      alt: { de: '', en: '' }, caption: { de: '', en: 'Tram 28 uphill' }, exif: { gps: { lat: 38.71, lng: -9.13 } } };
+    await openDraft(h);
+    h.el('draftPickPhotos').click();
+    const picker = h.galleryPickers.at(-1)!;
+    expect([picker.multiple, picker.confirmLabel, picker.emptyHint, picker.preselect, typeof picker.onUnauthed])
+      .toEqual([true, copy['editor.chrome.draftPickConfirm'], copy['editor.chrome.draftPickEmpty'], [], 'function']);
+    void picker.onPick([tagus, tram], { layout: null });
+    const photoRows = () => h.el('draftPhotoItems').children.map((row) => [row.textContent, row.querySelector('input')?.checked ?? null]);
+    expect(photoRows()).toEqual([
+      ['Caption of Tagus at dusk: Abend am Tejo', true],
+      [t('editor.chrome.draftContextPhotoEmpty', { title: 'Tram 28', code: 'DE' }), null],
+    ]);
+    expect(h.document.activeElement).toBe(h.el('draftPickPhotos'));
+    setChecked(detailBox(h, 'Route:'), true);
+    typeEvents(h, 'Arrived in Lisbon');
+    await generate(h);
+    expect(providerCalls).toHaveLength(1);
+    const sent = JSON.stringify(providerCalls[0]);
+    expect(sentContext(providerCalls[0]!)).toEqual({ photoCaptions: ['Abend am Tejo'], route: { start: 'Lisbon', end: 'Sintra', straightLineKm: routeKm } });
+    for (const leak of ['38.7', '9.13', '9.38', 'img/', 'trip/', 'tejo', 'Leica', 'Fluss', 'lisbon-secret-tag', 'Tagus at dusk', 'Tram 28']) {
+      expect(sent, leak).not.toContain(leak);
+    }
+    h.el('draftApply').click();
+    expect(h.api.buildPayload().de.bodyMarkdown).toBe(drafted.bodyMarkdown);
+    expect(JSON.stringify(h.api.buildPayload())).not.toContain('tejo');
+  });
+
+  it('keeps picked photos with the events, unchecked at the next opening and captioned in the active language', async () => {
+    const draft = vi.fn(async (_request: DraftRequest) => drafted);
+    const h = await editor({ draft });
+    const tagus = { key: 'trip/tejo.jpg', src: 'https://img/trip/tejo.jpg', width: 1200, height: 800, title: 'Tagus at dusk',
+      alt: { de: '', en: '' }, caption: { de: 'Abend am Tejo', en: 'Evening by the Tagus' } };
+    await openDraft(h);
+    h.el('draftPickPhotos').click();
+    void h.galleryPickers.at(-1)!.onPick([tagus], { layout: null });
+    // More than 20 photos are refused and the previous selection stays.
+    h.el('draftPickPhotos').click();
+    void h.galleryPickers.at(-1)!.onPick(Array.from({ length: 21 }, (_, index) => ({ ...tagus, src: 'https://img/p' + index, key: 'p' + index })), { layout: null });
+    expect(status(h)).toBe(t('editor.chrome.draftPhotosTooMany', { max: 20 }));
+    expect(h.el('draftPhotoItems').children.map((row) => row.textContent)).toEqual(['Caption of Tagus at dusk: Abend am Tejo']);
+    // A picker answer after the editor changed is dropped, and said so.
+    h.el('draftPickPhotos').click();
+    const late = h.galleryPickers.at(-1)!;
+    h.el('enExcerpt').value = 'Moved on'; h.el('enExcerpt').fire('input');
+    void late.onPick([], { layout: null });
+    expect(status(h)).toBe(copy['editor.chrome.draftStale']);
+    expect(h.el('draftPhotoItems').children.map((row) => row.querySelector('input')!.checked)).toEqual([false]);
+    h.el('enExcerpt').value = ''; h.el('enExcerpt').fire('input');
+    h.el('draftClose').click();
+    h.el('tabbtn-en').click();
+    await openDraft(h, 'en');
+    expect(h.el('draftHeading').textContent).toBe(t('editor.chrome.draftHeading', { language: 'English' }));
+    expect(h.el('draftPhotoItems').children.map((row) => [row.textContent, row.querySelector('input')!.checked]))
+      .toEqual([['Caption of Tagus at dusk: Evening by the Tagus', false]]);
+    h.el('draftPickPhotos').click();
+    expect(h.galleryPickers.at(-1)!.preselect).toEqual([{ src: tagus.src, width: 1200, height: 800 }]);
+    typeEvents(h, 'Arrived in Lisbon');
+    await generate(h);
+    expect(draft.mock.calls[0]![0]).toMatchObject({ locale: 'en', context: {} });
+  });
+
+  it('shows the hero photo caption from a fresh Media read, unchecked, for the active language', async () => {
+    const hero = mediaRow('hero', { de: '', en: '' }, { de: 'Blick über die Alfama', en: 'View over Alfama' });
+    const draft = vi.fn(async (_request: DraftRequest) => drafted);
+    const h = await editor({ draft, fetch: draftNetwork({ media: [hero] }) });
+    const pair = emptyStory();
+    pair.de.heroImage = { src: hero.src, width: 1200, height: 800, alt: 'Alfama' };
+    h.api.populateForm(pair);
+    const lookups = () => h.requests.filter(({ url }) => url === '/media/items/hero').length;
+    const before = lookups();
+    await openDraft(h);
+    expect(detailBox(h, 'Hero photo caption: Blick über die Alfama').checked).toBe(false);
+    expect(detailRows(h).map((row) => row.textContent.split(':')[0])).toEqual(['Date', 'Country', 'Region', 'Hero photo caption', 'Route']);
+    h.el('draftClose').click();
+    await openDraft(h);
+    // Read fresh at every opening, never from an earlier answer.
+    expect(lookups() - before).toBe(2);
+    setChecked(detailBox(h, 'Hero photo caption:'), true);
+    typeEvents(h, 'Arrived in Lisbon');
+    await generate(h);
+    expect(draft.mock.calls[0]![0].context).toEqual({ heroCaption: 'Blick über die Alfama' });
+  });
+
+  it('Apply fills title, excerpt and story, derives the slug of a never-published story, and saves nothing', async () => {
+    const h = await editor({ draft: async () => drafted, fetch: draftNetwork() });
+    h.api.populateForm(emptyStory());
+    vm.runInContext('deImages["https://img/keep"] = { width: 10, height: 10, alt: "kept" }', h.ctx);
+    const images = vm.runInContext('JSON.stringify(deImages)', h.ctx) as string;
+    // The earlier "give the story a title" refusal is answered by the applied title.
+    await h.api.doSaveDraft();
+    expect(h.el('deTitle').getAttribute('aria-invalid')).toBe('true');
+    const before = h.api.buildPayload();
+    await openDraft(h);
+    typeEvents(h, 'Arrived in Lisbon');
+    await generate(h);
+    expect([h.el('draftResultTitle').value, h.el('draftResultExcerpt').value, h.el('draftResultBody').value])
+      .toEqual([drafted.title, drafted.excerpt, drafted.bodyMarkdown]);
+    expect([h.el('draftResultTitle').getAttribute('lang'), h.el('draftResultBody').readOnly || h.el('draftResultBody').hasAttribute('readonly')]).toEqual(['de', true]);
+    const sent = h.requests.length;
+    h.el('draftApply').click();
+    const after = h.api.buildPayload();
+    expect([after.de.title, after.de.excerpt, after.de.bodyMarkdown, after.de.slug])
+      .toEqual([drafted.title, drafted.excerpt, drafted.bodyMarkdown, 'drei-tage-in-lissabon']);
+    const { title: _t, excerpt: _e, bodyMarkdown: _b, slug: _s, ...rest } = after.de;
+    const { title: _bt, excerpt: _be, bodyMarkdown: _bb, slug: _bs, ...restBefore } = before.de;
+    expect(rest).toEqual(restBefore);
+    expect([after.en, after.shared]).toEqual([before.en, before.shared]);
+    expect(vm.runInContext('JSON.stringify(deImages)', h.ctx)).toBe(images);
+    expect(h.el('deTitle').hasAttribute('aria-invalid')).toBe(false);
+    expect(h.el('actionStatus').textContent).toBe(t('editor.chrome.draftApplied', { language: 'German' }));
+    expect(h.el('storyDraftDialog').open).toBe(false);
+    expect(h.document.activeElement).toBe(h.el('deTitle'));
+    expect(h.el('deDraftStart').hidden).toBe(true);
+    expect(h.el('draftEvents').value).toBe('');
+    expect(h.el('draftSaveState').textContent).toBe(copy['editor.chrome.saveUnsaved']);
+    expect(latestStash(h.local, 'new')!.payload.de.bodyMarkdown).toBe(drafted.bodyMarkdown);
+    expect(h.requests.slice(sent).some(({ url, options }) => options.method === 'POST' || options.method === 'PUT' || /publish|rebuild|preview/.test(url))).toBe(false);
+  });
+
+  it('leaves the slug alone for a story published before or a permalink chosen by hand', async () => {
+    const pair = emptyStory();
+    pair.de = { ...pair.de, title: 'Lissabon', bodyMarkdown: 'Schon live.', slug: 'lissabon', publishedAt: new Date('2026-10-01T00:00:00Z') };
+    const published = await editor({ search: '?tk=tk1', draft: async () => drafted,
+      fetch: draftNetwork({ other: async (url) => response(url === '/posts/tk1' ? pair : []) }) });
+    await flush();
+    published.el('tabbtn-en').click();
+    await openDraft(published, 'en');
+    typeEvents(published, 'Arrived in Lisbon');
+    await generate(published);
+    published.el('draftApply').click();
+    expect([published.api.buildPayload().en.title, published.api.buildPayload().en.slug]).toEqual([drafted.title, '']);
+    expect(published.el('actionStatus').textContent).toBe(t('editor.chrome.draftApplied', { language: 'English' }) + ' ' + copy['editor.chrome.draftAppliedChooseSlug']);
+    const manual = await editor({ draft: async () => drafted });
+    manual.el('slugFieldDe').value = 'my-own-permalink'; manual.el('slugFieldDe').fire('input');
+    await openDraft(manual);
+    typeEvents(manual, 'Arrived in Lisbon');
+    await generate(manual);
+    manual.el('draftApply').click();
+    expect([manual.api.buildPayload().de.title, manual.api.buildPayload().de.slug]).toEqual([drafted.title, 'my-own-permalink']);
+    expect(manual.el('actionStatus').textContent).toBe(t('editor.chrome.draftApplied', { language: 'German' }));
+  });
+
+  it('restores every field when the commit fails', async () => {
+    const h = await editor({ draft: async () => drafted });
+    await openDraft(h);
+    typeEvents(h, 'Arrived in Lisbon');
+    await generate(h);
+    const before = h.api.buildPayload();
+    let fail = true;
+    h.editors[0]!.codemirror.on('change', () => { if (fail) { fail = false; throw new Error('injected synchronous commit failure'); } });
+    h.el('draftApply').click();
+    expect(h.api.buildPayload()).toEqual(before);
+    expect(status(h)).toBe(copy['editor.chrome.draftApplyFailed']);
+    expect(h.el('storyDraftDialog').open).toBe(true);
+  });
+
+  it.each(['ctrlKey', 'metaKey'] as const)('swallows %s+S while the dialog or its Media picker is open, and saves again once it closes', async (modifier) => {
+    const pair = emptyStory();
+    pair.de = { ...pair.de, title: 'Lissabon', bodyMarkdown: 'Schon geschrieben.', slug: 'lissabon' };
+    const posts = memoryPostStore();
+    await posts.upsertDraft(pair);
+    const h = await editor({ search: '?tk=tk1', fetch: draftNetwork({ other: storeFetch(posts) }) });
+    await flush();
+    h.el('tabbtn-en').click();
+    await openDraft(h, 'en');
+    const saves = () => h.requests.filter(({ options }) => options.method === 'PUT').length;
+    const press = (target: Element) => {
+      const event = new EditorEvent('keydown', { bubbles: true, cancelable: true, key: 's', ...(modifier === 'ctrlKey' ? { ctrlKey: true } : { metaKey: true }) });
+      target.dispatchEvent(event);
+      return event;
+    };
+    expect(press(h.el('draftEvents')).defaultPrevented).toBe(true);
+    h.el('draftPickPhotos').click();
+    expect(press(h.document.body!).defaultPrevented).toBe(true);
+    await flush();
+    expect(saves()).toBe(0);
+    h.el('draftClose').click();
+    expect(press(h.el('enTitle')).defaultPrevented).toBe(true);
+    await flush();
+    expect(saves()).toBe(1);
+  });
+
+  it('never lets typing or ticking in the dialog reach dirty tracking, the stash or the payload', async () => {
+    const h = await editor({ storage: new Map() });
+    h.api.populateForm(emptyStory());
+    await openDraft(h);
+    const generation = vm.runInContext('guard.snapshot()', h.ctx) as number;
+    const dirty = h.dirtyCalls();
+    const stash = JSON.stringify(stashRecords(h.local));
+    const before = h.api.buildPayload();
+    typeEvents(h, 'Arrived in Lisbon\nTram 28');
+    setChecked(detailBox(h, 'Country:'), true);
+    expect(vm.runInContext('guard.snapshot()', h.ctx)).toBe(generation);
+    expect(h.dirtyCalls()).toBe(dirty);
+    expect(JSON.stringify(stashRecords(h.local))).toBe(stash);
+    expect(h.api.buildPayload()).toEqual(before);
+    expect(JSON.stringify(h.api.buildPayload())).not.toContain('Tram 28');
+  });
+
+  it('keeps the events across a first save of the same story and drops them for another story', async () => {
+    const posts = memoryPostStore();
+    const other = emptyStory();
+    other.translationKey = 'tk2';
+    other.de = { ...other.de, title: 'Andere Reise', bodyMarkdown: 'Schon geschrieben.' };
+    await posts.upsertDraft(other);
+    const h = await editor({ fetch: draftNetwork({ other: storeFetch(posts) }) });
+    h.el('deTitle').value = 'Erste Reise'; h.el('deTitle').fire('input');
+    h.el('tabbtn-en').click();
+    await openDraft(h, 'en');
+    typeEvents(h, 'Arrived in Lisbon');
+    h.el('draftClose').click();
+    expect(await h.api.doSaveDraft()).toBe(true);
+    await flush();
+    await openDraft(h, 'en');
+    expect(h.el('draftEvents').value).toBe('Arrived in Lisbon');
+    h.el('draftClose').click();
+    await h.api.loadPost('tk2');
+    await flush();
+    await openDraft(h, 'en');
+    expect(h.el('draftEvents').value).toBe('');
+  });
+
+  it('writes hostile captions, names, provider fields and model output as text only', async () => {
+    const hostile = '<img src=x onerror=alert(1)>';
+    const hero = mediaRow('hero', { de: '', en: '' }, { de: hostile, en: '' });
+    const h = await editor({
+      draft: async () => ({ title: hostile, excerpt: hostile, bodyMarkdown: hostile }),
+      fetch: draftNetwork({ media: [hero], configuration: () => ({ ...draftConfig, providerName: hostile, model: hostile }) }),
+    });
+    const pair = emptyStory();
+    pair.de = { ...pair.de, country: hostile, heroImage: { src: hero.src, width: 10, height: 10, alt: '' } };
+    pair.shared = { ...pair.shared, stops: [{ ...lisbon, name: hostile }, sintra] };
+    h.api.populateForm(pair);
+    const images = () => h.document.querySelectorAll('img').length;
+    const imagesBefore = images();
+    await openDraft(h);
+    h.el('draftPickPhotos').click();
+    void h.galleryPickers.at(-1)!.onPick([{ src: 'https://img/x', width: 1, height: 1, title: hostile, caption: { de: hostile, en: '' } }], { layout: null });
+    typeEvents(h, hostile);
+    await generate(h);
+    const dialog = h.el('storyDraftDialog');
+    expect(dialog.querySelector('img')).toBeNull();
+    expect(images()).toBe(imagesBefore);
+    expect(h.created.some((node) => node.tagName === 'IMG' && dialog.contains(node))).toBe(false);
+    expect(h.el('draftDestination').textContent).toContain(hostile);
+    for (const prefix of ['Country: ' + hostile, 'Hero photo caption: ' + hostile, 'Route: ' + hostile, 'Caption of ' + hostile + ': ' + hostile]) {
+      expect(detailRows(h).some((row) => row.textContent.startsWith(prefix)), prefix).toBe(true);
+    }
+    expect(h.el('draftResultTitle').value).toBe(hostile);
+    expect(h.el('draftResult').querySelector('img')).toBeNull();
+  });
+
+  it('Translate still never derives a slug', async () => {
+    const h = await editor({
+      translate: async (request) => ({ translations: request.slots.map(({ id, text }) => ({ id, text: 'EN ' + text })) }),
+      fetch: draftNetwork({ other: async (url, init = {}) => {
+        if (url === '/ai-config?purpose=translation') return response({ ...draftConfig, prompt: 'Translate faithfully.' });
+        if (url === '/translation/prepare') return response(await prepareTranslation(JSON.parse(String(init.body))));
+        if (url === '/translation/validate') {
+          const { output, ...input } = JSON.parse(String(init.body));
+          return response(await validateTranslation(input, output));
+        }
+        return response([]);
+      } }),
+    });
+    h.el('deTitle').value = 'Erste Reise'; h.el('deTitle').fire('input');
+    h.editors[0]!.value('Ein Absatz.');
+    expect(h.api.buildPayload().de.slug).toBe('erste-reise');
+    h.el('translateArticle').click(); await flush();
+    h.el('translationRun').click(); await flush();
+    h.el('translationApply').click();
+    expect(h.api.buildPayload().en.title).toBe('EN Erste Reise');
+    expect(h.api.buildPayload().en.slug).toBe('');
   });
 });

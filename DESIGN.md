@@ -1404,6 +1404,19 @@ criterion (2.5.5 is AAA), so the accessibility commitment in `PRODUCT.md` is una
   returns it to the trigger, and scrolls within a narrow phone viewport without horizontal
   overflow. A nearby **Undo translation** restores the complete applied patch until intervening
   edits invalidate it. Save, Preview and Publish retain their existing meanings.
+- **Draft with AI** (#579; accessible name **Draft with AI (DE)** / **(EN)**) is a compact row
+  between the title and the story card of a language that has no title, excerpt or body: a
+  secondary button led by the AI icon and one muted line. It hides once the language has text
+  (the issue allows hidden or disabled; a permanently disabled row would be clutter) and is
+  disabled while the story loads, saves or needs recovery. Its native dialog reuses the
+  translation dialog frame: destination line, **Trip events (one per line)** with a quiet
+  counter, an **Also send (optional)** fieldset whose checkboxes show exactly the value sent
+  (date and kilometres in mono) and start unchecked on every opening, **Add photo captions from
+  Media…** (the Media picker, captions only), a visible privacy line after the controls, a polite
+  atomic status line, then a readonly plain-text preview. One navy primary per state: **Generate
+  draft**, then **Apply to story** beside **Generate again**; **Cancel** appears only while
+  generating and receives focus. Input errors use the inline `.field-error` pattern. Apply
+  closes the dialog and focuses the title; nothing is saved or published.
 - Story details sits beside the manuscript on desktop as a tinted column (`--canvas`,
   divided by `--line-strong`) so white fields read against it.
   It pins flush under the command bar and scrolls on its own. Its header carries one

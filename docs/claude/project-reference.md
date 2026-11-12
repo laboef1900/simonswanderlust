@@ -42,6 +42,12 @@ content. Explicit consent, full review, replacement confirmation and atomic draf
 normal Save/Preview pipeline. Gallery identities, occurrence overrides, Media authority,
 manual slugs and unrelated target fields remain unchanged; whole-field Undo is available.
 See `docs/superpowers/specs/2026-11-07-issue-550-ai-article-translation.md`.
+Story drafting (#579) independently assigns provider/model/timeout/instructions and, for an
+empty story language only, turns an author's list of trip events plus opt-in context (date,
+place, Media captions, coarse route; never coordinates) into a title, excerpt and Markdown body.
+The browser-direct output is strictly validated, previewed as plain text and applied only by an
+explicit Apply that re-checks emptiness; it never saves or publishes. See
+`docs/superpowers/specs/2026-11-12-issue-579-ai-post-drafting.md`.
 See `docs/superpowers/specs/2026-07-05-ai-alt-text-editor-integration-design.md`. (An earlier
 standalone batch-uploader variant was removed in July 2026 and restored in this slimmer,
 editor-integrated form; the 2026-06-22 spec is historical.) See `uploader/README.md`,

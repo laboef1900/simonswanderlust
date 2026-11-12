@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { parseCaption as serverParseCaption } from '../src/caption.js';
+import { DEFAULT_DRAFTING_PROMPT, DRAFTING_PROMPT_MAX_LENGTH, isDraftingPrompt } from '../src/drafting-prompt.js';
+import { TRANSLATION_PROMPT_MAX_LENGTH, isTranslationPrompt } from '../src/translation-prompt.js';
 
 // Load the browser llm.js in Node (its top-level body only assigns window.LLM;
 // the fetch/canvas/Image calls live inside method bodies, so no DOM is needed).
@@ -10,6 +12,11 @@ const win: {
   LLM?: {
     parseCaption(content: string): { altEn: string; altDe: string };
     mixedContentWarning(baseUrl: string, pageProtocol: string): string;
+    DRAFTING_PROMPT_MAX_LENGTH: number;
+    isDraftingPrompt(value: unknown): boolean;
+    draftingPromptProblem(value: unknown): string | null;
+    isTranslationPrompt(value: unknown): boolean;
+    translationPromptProblem(value: unknown): string | null;
   };
 } = {};
 // eslint-disable-next-line no-new-func
@@ -287,5 +294,49 @@ describe('browser caption replies', () => {
   it('keeps the generic failure for an unclosed thought that finished normally', async () => {
     await expect(replying(DRAFT_THOUGHT, 'stop').caption('http://localhost:1234/v1', 'm', 'p', IMAGE, 5000, 256))
       .rejects.toThrow(/^Caption request failed\. Check the provider/);
+  });
+});
+
+describe('owner instruction rule parity (#567, #579)', () => {
+  const llm = win.LLM!;
+  const limit = DRAFTING_PROMPT_MAX_LENGTH;
+
+  it('applies the same drafting rule in the browser as on the server, at the same cap', () => {
+    expect(llm.DRAFTING_PROMPT_MAX_LENGTH).toBe(limit);
+    expect(limit).toBe(TRANSLATION_PROMPT_MAX_LENGTH);
+    const cases: [unknown, boolean][] = [
+      [undefined, false], [null, false], [4000, false], [true, false], [['a'], false], [{}, false],
+      ['', false], [' ', false], ['\n\t', false], ['\u200b', false], ['\u3164\ufe0f\u2800', false],
+      ['a', true], ['line one\nline two\t', true], [DEFAULT_DRAFTING_PROMPT, true], ['a\r\nb', true], ['Wander\u00adlust', true],
+      ['x'.repeat(limit), true], ['x'.repeat(limit + 1), false], [' '.repeat(limit) + 'x', false],
+      ['😀'.repeat(limit / 2), true], ['😀'.repeat(limit / 2) + 'x', false],
+      ['a\u0000', false], ['a\u0085', false], ['a\u001b', false], ['a\ud800', false], ['a\udc00b', false],
+    ];
+    for (const [value, valid] of cases) {
+      expect(llm.isDraftingPrompt(value), JSON.stringify(value)?.slice(0, 40)).toBe(valid);
+      expect(isDraftingPrompt(value), JSON.stringify(value)?.slice(0, 40)).toBe(valid);
+    }
+  });
+
+  it('names the same problem for drafting and translation, so Settings shows the matching message', () => {
+    const problems: [unknown, string | null][] = [
+      [7, 'type'], ['x'.repeat(limit + 1), 'tooLong'], [' \u200b ', 'blank'], ['Write.\u0000', 'hidden'], ['Write.\ud800', 'hidden'],
+      ['Write warmly.', null],
+    ];
+    for (const [value, problem] of problems) {
+      expect(llm.draftingPromptProblem(value)).toBe(problem);
+      expect(llm.translationPromptProblem(value)).toBe(problem);
+    }
+  });
+
+  it('agrees with the server on every BMP code unit, alone and beside visible text, for both rules', () => {
+    const disagreements: string[] = [];
+    for (let unit = 0; unit <= 0xffff; unit++) {
+      for (const value of [String.fromCharCode(unit), 'a' + String.fromCharCode(unit)]) {
+        if (llm.isDraftingPrompt(value) !== isDraftingPrompt(value)) disagreements.push('drafting ' + JSON.stringify(value));
+        if (llm.isTranslationPrompt(value) !== isTranslationPrompt(value)) disagreements.push('translation ' + JSON.stringify(value));
+      }
+    }
+    expect(disagreements).toEqual([]);
   });
 });

@@ -7,6 +7,7 @@ import {
   deriveFromLegacy, newProviderId, resolveProvider, slotFor, type AiProvider, type LegacyDerivation,
 } from '../src/ai-providers.js';
 import { DEFAULT_TRANSLATION_PROMPT, TRANSLATION_PROMPT_MAX_LENGTH } from '../src/translation-prompt.js';
+import { DEFAULT_DRAFTING_PROMPT, DRAFTING_PROMPT_MAX_LENGTH, isDraftingPrompt } from '../src/drafting-prompt.js';
 
 const DEFAULTS: Settings = defaultSettings();
 
@@ -24,6 +25,8 @@ describe('defaultSettings', () => {
     expect(d.captionPrompt.length).toBeGreaterThan(0);
     expect(d).toMatchObject({ translationProviderId: null, translationModel: 'qwen2.5-7b-instruct', translationTimeoutMs: 120000 });
     expect(d.translationPrompt).toBe('Preserve meaning, facts, names and detail; do not summarize, omit or invent content.');
+    expect(d).toMatchObject({ draftingProviderId: null, draftingModel: 'qwen2.5-7b-instruct', draftingTimeoutMs: 120000 });
+    expect(d.draftingPrompt).toBe(DEFAULT_DRAFTING_PROMPT);
     expect(d.backupSchedule).toBe('off');
     expect(d.backupRetention).toBe(14);
   });
@@ -649,6 +652,137 @@ describe('article translation instructions (#567)', () => {
     // Reset is an ordinary save of the default.
     store.update({ translationPrompt: DEFAULT_TRANSLATION_PROMPT });
     expect(createSettingsStore({ path, defaults: DEFAULTS }).get()).toEqual(DEFAULTS);
+  });
+});
+
+describe('story drafting assignment (#579)', () => {
+  const MESSAGE = 'Drafting instructions are required and must be visible plain text of at most 4000 characters.';
+  const MARKER = 'PRIVATE-DRAFT-MARKER';
+  const failure = (run: () => unknown): unknown => {
+    try { run(); } catch (e) { return e; }
+    return null;
+  };
+  /** Every invalid prompt shape; the fixed message proves none of them is echoed. */
+  const INVALID_PROMPTS: [string, unknown][] = [
+    ['a number', 7654321987], ['null', null], ['a boolean', true],
+    ['an array', [MARKER]], ['an object', { secret: MARKER }],
+    ['an empty string', ''], ['whitespace only', ' \n\t '],
+    ['4001 characters', MARKER + 'x'.repeat(DRAFTING_PROMPT_MAX_LENGTH + 1 - MARKER.length)],
+    ['only invisible format characters', '\u200b\u2060\u00ad\ufeff'],
+    ['a NUL control character', 'Write warmly.\u0000'], ['a C1 control character', 'Write warmly.\u0085'],
+    ['a lone surrogate', 'Write warmly.\ud800'],
+  ];
+
+  it('ships the owner-approved default instructions, which pass their own rule', () => {
+    expect(DEFAULT_DRAFTING_PROMPT).toBe('Write a first draft of a personal travel story in the first person, in a warm, observant and honest voice. Follow the events in the order given and connect them into one readable narrative with a few descriptive subheadings. Aim for about 800–1500 words. Mention practical details only where the events or story details give them. Make the excerpt a short teaser for story cards and search results.');
+    expect(isDraftingPrompt(DEFAULT_DRAFTING_PROMPT)).toBe(true);
+    expect(DRAFTING_PROMPT_MAX_LENGTH).toBe(4000);
+    expect(() => validate(DEFAULTS)).not.toThrow();
+  });
+
+  it('persists an explicit drafting assignment independently of translation and the default provider', async () => {
+    const path = join(dir, 'settings.json');
+    const review = provider('review');
+    const translation = provider('translation');
+    const drafting = provider('drafting');
+    await writeFile(path, JSON.stringify({
+      aiProviders: [LOCAL, review, translation, drafting], aiDefaultProviderId: 'review',
+      translationProviderId: 'translation', translationModel: 'translate-only',
+    }));
+    const store = createSettingsStore({ path, defaults: DEFAULTS });
+    expect(store.get()).toMatchObject({
+      draftingProviderId: null, draftingModel: 'qwen2.5-7b-instruct', draftingTimeoutMs: 120000, draftingPrompt: DEFAULT_DRAFTING_PROMPT,
+    });
+    // Follow-default resolves to the default provider, never to translation's assignment.
+    expect(resolveProvider(store.get(), store.get().draftingProviderId)).toEqual(review);
+    store.update({ draftingProviderId: 'drafting', draftingModel: 'draft-only', draftingTimeoutMs: 300000, draftingPrompt: 'Short, plain.' });
+    store.update({ aiDefaultProviderId: 'lm-studio' });
+    const persisted = createSettingsStore({ path, defaults: DEFAULTS }).get();
+    expect(persisted).toMatchObject({
+      translationProviderId: 'translation', translationModel: 'translate-only', translationTimeoutMs: 120000,
+      translationPrompt: DEFAULT_TRANSLATION_PROMPT,
+      draftingProviderId: 'drafting', draftingModel: 'draft-only', draftingTimeoutMs: 300000, draftingPrompt: 'Short, plain.',
+    });
+    expect(resolveProvider(persisted, persisted.draftingProviderId)).toEqual(drafting);
+    store.update({ draftingProviderId: null });
+    expect(resolveProvider(store.get(), store.get().draftingProviderId)).toEqual(LOCAL);
+    expect(store.get()).toMatchObject({ draftingModel: 'draft-only', draftingTimeoutMs: 300000 });
+  });
+
+  it('refuses wrong types, ranges and dangling providers atomically with fixed messages, never coercing', async () => {
+    const path = join(dir, 'settings.json');
+    const store = createSettingsStore({ path, defaults: DEFAULTS });
+    store.update({ aiProviders: [LOCAL, provider('remote')], draftingProviderId: 'remote', draftingModel: 'chosen-model' });
+    const before = await readFile(path, 'utf8');
+    const cases: [Record<string, unknown>, string][] = [
+      [{ draftingProviderId: 'gone' }, 'Story drafting provider must be one of the configured providers.'],
+      [{ draftingProviderId: 7 }, 'Story drafting provider must be a provider id, or empty to follow the default.'],
+      [{ draftingProviderId: '' }, 'Story drafting provider must be a provider id, or empty to follow the default.'],
+      [{ draftingProviderId: 'Bad Id' }, 'Story drafting provider must be a provider id, or empty to follow the default.'],
+      ...[null, 7, 'x'.repeat(101)].map((draftingModel): [Record<string, unknown>, string] =>
+        [{ draftingModel }, 'Drafting model must be a string of at most 100 characters.']),
+      ...[4999, 300001, 5000.5, NaN, Infinity, null, '120000'].map((draftingTimeoutMs): [Record<string, unknown>, string] =>
+        [{ draftingTimeoutMs }, 'Drafting timeout must be a whole number of milliseconds between 5000 and 300000.']),
+      ...INVALID_PROMPTS.map(([, draftingPrompt]): [Record<string, unknown>, string] => [{ draftingPrompt }, MESSAGE]),
+    ];
+    for (const [partial, message] of cases) {
+      const error = failure(() => store.update(partial as Partial<Settings>));
+      expect(error, JSON.stringify(partial)).toBeInstanceOf(SettingsError);
+      expect((error as Error).message, JSON.stringify(partial)).toBe(message);
+      expect(await readFile(path, 'utf8')).toBe(before);
+      expect(store.get()).toMatchObject({ draftingProviderId: 'remote', draftingModel: 'chosen-model', draftingPrompt: DEFAULT_DRAFTING_PROMPT });
+    }
+    for (const draftingTimeoutMs of [5000, 300000]) {
+      expect(store.update({ draftingTimeoutMs }).draftingTimeoutMs).toBe(draftingTimeoutMs);
+    }
+    expect(store.update({ draftingModel: 'x'.repeat(100) }).draftingModel).toHaveLength(100);
+    const longest = 'x'.repeat(DRAFTING_PROMPT_MAX_LENGTH);
+    expect(store.update({ draftingPrompt: longest }).draftingPrompt).toBe(longest);
+    const multiline = '  Write in the first person.\n\tKeep it short.\r\n\n- no lists  ';
+    expect(store.update({ draftingPrompt: multiline }).draftingPrompt).toBe(multiline);
+    expect(createSettingsStore({ path, defaults: DEFAULTS }).get().draftingPrompt).toBe(multiline);
+    // Reset is an ordinary save of the default.
+    expect(store.update({ draftingPrompt: DEFAULT_DRAFTING_PROMPT }).draftingPrompt).toBe(DEFAULT_DRAFTING_PROMPT);
+  });
+
+  it('load repairs each invalid drafting field and a dangling provider by field name, never logging values', async () => {
+    const path = join(dir, 'settings.json');
+    await writeFile(path, JSON.stringify({
+      aiProviders: [LOCAL, provider('remote')], aiDefaultProviderId: 'remote', translationProviderId: 'remote',
+      draftingProviderId: 'removed-secret-value', draftingModel: { secret: 'do-not-log' }, draftingTimeoutMs: 4999,
+      draftingPrompt: MARKER + '\u0000', backupSchedule: 'daily',
+    }));
+    const log = vi.fn();
+    const repaired = createSettingsStore({ path, defaults: DEFAULTS, log }).get();
+    expect(repaired).toMatchObject({
+      aiDefaultProviderId: 'remote', translationProviderId: 'remote', backupSchedule: 'daily',
+      draftingProviderId: null, draftingModel: DEFAULTS.draftingModel, draftingTimeoutMs: 120000, draftingPrompt: DEFAULT_DRAFTING_PROMPT,
+    });
+    const lines = log.mock.calls.map((call) => String(call[0]));
+    expect(lines).toEqual([
+      expect.stringContaining('"draftingModel"'), expect.stringContaining('"draftingTimeoutMs"'),
+      expect.stringContaining('"draftingPrompt"'), expect.stringContaining('"draftingProviderId"'),
+    ]);
+    expect(lines.join(' ')).not.toMatch(/removed-secret-value|do-not-log|PRIVATE-DRAFT-MARKER/);
+    expect(() => validate(repaired)).not.toThrow();
+  });
+
+  it('reads the defaults from a file without the drafting keys and does not rewrite it on load', async () => {
+    const path = join(dir, 'settings.json');
+    const bytes = JSON.stringify({ aiProviders: [LOCAL, provider('remote')], aiDefaultProviderId: 'remote', backupSchedule: 'daily' });
+    await writeFile(path, bytes);
+    const log = vi.fn();
+    const store = createSettingsStore({ path, defaults: DEFAULTS, log });
+    expect(store.get()).toMatchObject({
+      draftingProviderId: null, draftingModel: 'qwen2.5-7b-instruct', draftingTimeoutMs: 120000, draftingPrompt: DEFAULT_DRAFTING_PROMPT,
+    });
+    expect(await readFile(path, 'utf8')).toBe(bytes);
+    expect(await readdir(dir)).toEqual(['settings.json']);
+    expect(log).not.toHaveBeenCalled();
+    store.update({ backupRetention: 5 });
+    expect(JSON.parse(await readFile(path, 'utf8'))).toMatchObject({
+      draftingProviderId: null, draftingPrompt: DEFAULT_DRAFTING_PROMPT, backupRetention: 5,
+    });
   });
 });
 

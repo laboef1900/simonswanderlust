@@ -30,6 +30,7 @@ import {
 } from './authn.js';
 import { SettingsError, validate as validateSettings, type Settings, type SettingsStore } from './settings.js';
 import { DEFAULT_TRANSLATION_PROMPT } from './translation-prompt.js';
+import { DEFAULT_DRAFTING_PROMPT } from './drafting-prompt.js';
 import { SecretsError, type SecretsStore } from './secrets.js';
 import {
   isProviderId, isProviderKind, isRemoteKind, newProviderId, providerNameError, providerUrlError, resolveProvider, slotFor,
@@ -865,12 +866,47 @@ export function buildServer(cfg: ServerConfig): AppServer {
       captionProvider: provider.kind, captionBaseUrl: provider.baseUrl,
     };
   }
-  function translationConfig(s: Settings, provider: AiProvider) {
+  /**
+   * Translation (#550) and story drafting (#579) read one assignment each:
+   * the provider (null follows the default), model, timeout and owner prompt.
+   * One table, one helper: the key binding cannot drift between purposes.
+   */
+  const ASSIGNMENTS = {
+    translation: (s: Settings) => ({
+      providerId: s.translationProviderId, model: s.translationModel, timeoutMs: s.translationTimeoutMs, prompt: s.translationPrompt,
+    }),
+    drafting: (s: Settings) => ({
+      providerId: s.draftingProviderId, model: s.draftingModel, timeoutMs: s.draftingTimeoutMs, prompt: s.draftingPrompt,
+    }),
+  } as const;
+  type AssignmentPurpose = keyof typeof ASSIGNMENTS;
+  function assignmentConfig(s: Settings, purpose: AssignmentPurpose) {
+    const assignment = ASSIGNMENTS[purpose](s);
+    const provider = resolveProvider(s, assignment.providerId);
     return {
-      providerId: provider.id, providerName: provider.name, providerKind: provider.kind,
-      baseUrl: provider.baseUrl, model: s.translationModel, timeoutMs: s.translationTimeoutMs,
-      prompt: s.translationPrompt,
+      provider,
+      config: {
+        providerId: provider.id, providerName: provider.name, providerKind: provider.kind,
+        baseUrl: provider.baseUrl, model: assignment.model, timeoutMs: assignment.timeoutMs,
+        prompt: assignment.prompt,
+      },
     };
+  }
+  /** `{ …config, apiKey }`: only the resolved provider's slot, from the same settings snapshot. */
+  function sendAssignmentConfig(reply: FastifyReply, purpose: AssignmentPurpose) {
+    const local = assignmentConfig(cfg.settings.get(), purpose);
+    if (!isRemoteKind(local.provider.kind)) return reply.send({ ...local.config, apiKey: null });
+    return settingsOperation(async () => {
+      // Re-resolve inside the mutation queue to bind the key and destination
+      // to the same committed provider; unrelated keys are never read.
+      const { provider, config } = assignmentConfig(cfg.settings.get(), purpose);
+      try {
+        const apiKey = isRemoteKind(provider.kind) ? await cfg.secrets.get(slotFor(provider.id)) : null;
+        return reply.send({ ...config, apiKey });
+      } catch (e) {
+        return reply.code(503).send(secretFailure(e));
+      }
+    });
   }
   type ProviderView = AiProvider & { hasApiKey: boolean };
   /**
@@ -896,6 +932,9 @@ export function buildServer(cfg: ServerConfig): AppServer {
       translationProviderId: s.translationProviderId, translationModel: s.translationModel,
       translationTimeoutMs: s.translationTimeoutMs,
       translationPrompt: s.translationPrompt, translationPromptDefault: DEFAULT_TRANSLATION_PROMPT,
+      draftingProviderId: s.draftingProviderId, draftingModel: s.draftingModel,
+      draftingTimeoutMs: s.draftingTimeoutMs,
+      draftingPrompt: s.draftingPrompt, draftingPromptDefault: DEFAULT_DRAFTING_PROMPT,
       lmModel: s.lmModel, captionPrompt: s.captionPrompt,
       captionTimeoutMs: s.captionTimeoutMs, captionMaxTokens: s.captionMaxTokens, captionMaxEdge: s.captionMaxEdge,
       backupSchedule: s.backupSchedule, backupRetention: s.backupRetention,
@@ -1094,6 +1133,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     for (const field of [
       'aiDefaultProviderId', 'reviewProviderId', 'captionProviderId', 'aiModel', 'reviewPrompt', 'reviewTimeoutMs',
       'translationProviderId', 'translationModel', 'translationTimeoutMs', 'translationPrompt',
+      'draftingProviderId', 'draftingModel', 'draftingTimeoutMs', 'draftingPrompt',
     ] as const) {
       if (Object.hasOwn(b, field)) partial[field] = b[field];
     }
@@ -1183,10 +1223,11 @@ export function buildServer(cfg: ServerConfig): AppServer {
     if (existing.id === current.aiDefaultProviderId) {
       return reply.code(409).send({ code: 'provider_is_default', error: 'The default AI provider cannot be deleted. Choose another default first.' });
     }
-    const useCases: ('review' | 'caption' | 'translation')[] = [];
+    const useCases: ('review' | 'caption' | 'translation' | 'drafting')[] = [];
     if (current.reviewProviderId === existing.id) useCases.push('review');
     if (current.captionProviderId === existing.id) useCases.push('caption');
     if (current.translationProviderId === existing.id) useCases.push('translation');
+    if (current.draftingProviderId === existing.id) useCases.push('drafting');
     if (useCases.length) {
       return reply.code(409).send({ code: 'provider_in_use', error: 'This AI provider is assigned to a use case. Assign another provider first.', useCases });
     }
@@ -1226,23 +1267,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
   // provider that owns it (spec §4.2); the consumer response shape is pinned.
   app.get('/ai-config', { preHandler: requireAuth }, async (req, reply) => {
     const purpose = (req.query as Record<string, unknown>).purpose;
-    if (purpose === 'translation') {
-      const current = cfg.settings.get();
-      const local = resolveProvider(current, current.translationProviderId);
-      if (!isRemoteKind(local.kind)) return reply.send({ ...translationConfig(current, local), apiKey: null });
-      return settingsOperation(async () => {
-        // Re-resolve inside the mutation queue to bind the key and destination
-        // to the same committed provider; unrelated keys are never read.
-        const s = cfg.settings.get();
-        const provider = resolveProvider(s, s.translationProviderId);
-        try {
-          const apiKey = isRemoteKind(provider.kind) ? await cfg.secrets.get(slotFor(provider.id)) : null;
-          return reply.send({ ...translationConfig(s, provider), apiKey });
-        } catch (e) {
-          return reply.code(503).send(secretFailure(e));
-        }
-      });
-    }
+    if (purpose === 'translation' || purpose === 'drafting') return sendAssignmentConfig(reply, purpose);
     if (purpose === 'caption') {
       const current = cfg.settings.get();
       const local = resolveProvider(current, current.captionProviderId);
