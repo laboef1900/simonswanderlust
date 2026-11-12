@@ -86,7 +86,10 @@ interface Element {
   removeAttribute(name: string): void;
   toggleAttribute(name: string, force?: boolean): boolean;
   querySelectorAll(selector: string): Element[];
-  focus(): void;
+  querySelector(selector: string): Element | null;
+  /** No stub sits inside the admin shell, so there is never a `.cms-workspace` ancestor. */
+  closest(selector: string): Element | null;
+  focus(options?: { preventScroll?: boolean }): void;
 }
 
 function element(): Element {
@@ -159,6 +162,8 @@ function element(): Element {
         ...child.querySelectorAll(selector),
       ]);
     },
+    querySelector(selector) { return this.querySelectorAll(selector)[0] ?? null; },
+    closest() { return null; },
     focus() { this.focused = true; },
   };
   let markup = '';
@@ -331,9 +336,20 @@ function realPostsFilter() {
   return windowStub.PostsFilter as Record<string, unknown>;
 }
 
+// The menus' own behaviour is admin-select.test.ts's; here a stub records
+// each `sync()` (with the select's value at that moment) so a test can see
+// that a programmatic write reached every menu.
+function menuStub(syncs: string[] = []) {
+  return {
+    enhance: (select: Element) => ({ sync: () => { syncs.push(select.id + '=' + select.value); }, close() {}, trigger: select }),
+  };
+}
+
 function loadPosts(extraGlobals: Record<string, unknown> = {}, languageRead?: () => Promise<Response>) {
   const request = extraGlobals.fetch as ((url: string, init?: RequestInit) => unknown) | undefined;
   const page: PageSurface = loadPage('public/posts.html', {
+    AdminSelect: menuStub(),
+    ResizeObserver: class { observe() {} disconnect() {} },
     PostsFilter: {
       apply: (posts: unknown[]) => posts,
       REGIONS: [],
@@ -876,6 +892,120 @@ describe('posts.html selection, recovery and disclosures', () => {
     await el('clearSelection').click();
     expect(vm.runInContext('selected.size', ctx)).toBe(0);
     expect(el('bulkBar').hidden).toBe(true);
+  });
+
+  // The floating bar (#566): selecting shows it and puts the table in selection
+  // mode without taking focus; it is inert whenever hidden, so a fading bar can
+  // never hold focus; the runway is reserved before anything is selected.
+  async function selectablePage() {
+    const page = loadPosts({ PostsFilter: filterStub });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const rows = [{ ...post, translationKey: 'a', title: 'Alpha' }, { ...post, translationKey: 'b', title: 'Beta' }];
+    vm.runInContext(`me = { isAdmin: true }; allPosts = ${JSON.stringify(rows)}; render();`, page.ctx);
+    const box = (index: number) => {
+      const found = page.el('postsList').querySelectorAll('input')[index];
+      if (!found) throw new Error('row checkbox ' + index + ' missing');
+      return found;
+    };
+    return { ...page, box };
+  }
+
+  it('shows the bar and selection mode on the first tick without moving focus, and reverts both on Clear selection', async () => {
+    const { ctx, el, box } = await selectablePage();
+    const doc = documentOf({ ctx, el, windowListeners: {} });
+    expect(el('bulkBarSlot').classList.contains('is-reserved')).toBe(true);
+    expect(el('bulkBar').hidden).toBe(true);
+    expect(el('postsTable').classList.contains('is-selecting')).toBe(false);
+
+    const first = box(0);
+    first.focus();
+    first.checked = true;
+    await first.fire('change');
+    expect(el('bulkBar').hidden).toBe(false);
+    expect((el('bulkBar') as Element & { inert?: boolean }).inert).toBe(false);
+    expect(el('postsTable').classList.contains('is-selecting')).toBe(true);
+    expect(el('bulkCount').textContent).toBe('1 selected · 0 outside current view');
+    expect(doc.activeElement).toBe(first);
+
+    let focusOptions: unknown;
+    el('selectAll').focus = (options) => { focusOptions = options; };
+    await el('clearSelection').click();
+    expect(vm.runInContext('selected.size', ctx)).toBe(0);
+    expect(el('bulkBar').hidden).toBe(true);
+    expect((el('bulkBar') as Element & { inert?: boolean }).inert).toBe(true);
+    expect(el('postsTable').classList.contains('is-selecting')).toBe(false);
+    // Outside the shell no checkbox is "in view", so focus falls back to
+    // select-all and is scrolled into view: visible focus outranks a still list.
+    expect(focusOptions).toEqual({ preventScroll: false });
+    expect(el('bulkBarSlot').classList.contains('is-reserved')).toBe(true);
+  });
+
+  it('Clear selection hands focus to a checkbox already in view, without scrolling', async () => {
+    const { el, box } = await selectablePage();
+    // The workspace shows y 0–500; select-all has scrolled away above it and
+    // every row checkbox (re-created by render()) sits on screen at y 120.
+    const at = (top: number) => () => ({ top, bottom: top + 16, height: 16 });
+    const workspace = { getBoundingClientRect: () => ({ top: 0, bottom: 500, height: 500 }) };
+    el('postsTable').closest = () => workspace as unknown as Element;
+    let focused: { label: string | null; options: unknown } | null = null;
+    const track = (node: Element) => Object.assign(node, {
+      getBoundingClientRect: node === el('selectAll') ? at(-60) : at(120),
+      focus: (options?: { preventScroll?: boolean }) => { focused = { label: node.getAttribute('aria-label'), options }; },
+    });
+    track(el('selectAll'));
+    const rows = el('postsList');
+    const find = rows.querySelectorAll.bind(rows);
+    rows.querySelectorAll = (selector: string) => find(selector).map(track);
+
+    const first = box(0);
+    first.checked = true;
+    await first.fire('change');
+    await el('clearSelection').click();
+
+    expect(focused).toEqual({ label: 'Select Alpha', options: { preventScroll: true } });
+  });
+
+  it('Escape in the bar closes Review selection first, ignores a held key, then clears like Clear selection', async () => {
+    const { ctx, el } = await selectablePage();
+    vm.runInContext("selected.add('a'); selected.add('b'); render();", ctx);
+    el('selectionReview').open = true;
+
+    await el('bulkBar').fire('keydown', { key: 'Escape' });
+    expect(el('selectionReview').open).toBe(false);
+    expect(el('selectionReviewSummary').focused).toBe(true);
+    expect(vm.runInContext('selected.size', ctx)).toBe(2);
+
+    await el('bulkBar').fire('keydown', { key: 'Escape', repeat: true });
+    await el('bulkBar').fire('keydown', { key: 'Escape', defaultPrevented: true });
+    expect(vm.runInContext('selected.size', ctx)).toBe(2);
+
+    await el('bulkBar').fire('keydown', { key: 'Escape' });
+    expect(vm.runInContext('selected.size', ctx)).toBe(0);
+    expect(el('bulkBar').hidden).toBe(true);
+    expect(el('selectAll').focused).toBe(true);
+  });
+
+  it('a click on a checkbox label toggles the box once and focuses it without scrolling', async () => {
+    const { ctx, el, box } = await selectablePage();
+    const first = box(0);
+    const label = first.parentElement;
+    if (!label) throw new Error('row checkbox has no label');
+    let focusOptions: unknown;
+    first.focus = (options) => { focusOptions = options; };
+    // The browser's own checkbox activation: toggle, then change.
+    first.click = async () => { first.checked = !first.checked; await first.fire('change'); };
+    let prevented = false;
+
+    await el('postsTable').fire('click', { target: label, preventDefault() { prevented = true; } });
+    expect(prevented).toBe(true);
+    expect(focusOptions).toEqual({ preventScroll: true });
+    expect(vm.runInContext('[...selected]', ctx)).toEqual(['a']);
+
+    // A click on the box itself is the browser's to handle.
+    prevented = false;
+    await el('postsTable').fire('click', { target: first, preventDefault() { prevented = true; } });
+    expect(prevented).toBe(false);
+    expect(vm.runInContext('[...selected]', ctx)).toEqual(['a']);
   });
 
   it('sends the immutable key snapshot and names every confirmed story', async () => {
@@ -1963,6 +2093,29 @@ describe('posts.html status views and language states', () => {
     el('fStatus').value = 'missing-secondary';
     await el('fStatus').fire('input');
     expect(views(el).map((v) => v.pressed)).toEqual(['false', 'false', 'false', 'false', 'true']);
+  });
+
+  it('re-syncs every filter menu after writes that fire no event: URL restore, a status view, Clear filters', async () => {
+    const syncs: string[] = [];
+    const search = '?country=Romania&status=published&sort=title';
+    const page = loadPosts({
+      AdminSelect: menuStub(syncs),
+      PostsFilter: realFilter(),
+      location: { href: 'http://localhost/admin/posts.html' + search, origin: 'http://localhost', pathname: '/admin/posts.html', search, protocol: 'http:' },
+      fetch: async () => ({ status: 200, ok: true, json: async () => library }),
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    vm.runInContext('me = { isAdmin: true }', page.ctx);
+    await (vm.runInContext('load', page.ctx) as () => Promise<void>)();
+    expect(syncs.slice(-5)).toEqual(['fStatus=published', 'fSort=title', 'fRegion=', 'fCountry=Romania', 'fOrder=desc']);
+
+    const draftView = page.el('statusViews').children[1];
+    if (!draftView) throw new Error('Draft status view is missing');
+    await draftView.click();
+    expect(syncs.slice(-5)).toEqual(['fStatus=draft', 'fSort=title', 'fRegion=', 'fCountry=Romania', 'fOrder=desc']);
+
+    await page.el('fReset').click();
+    expect(syncs.slice(-5)).toEqual(['fStatus=', 'fSort=updated', 'fRegion=', 'fCountry=', 'fOrder=desc']);
   });
 
   it('retains filter context on a failed refresh while disabling stale publication actions', async () => {

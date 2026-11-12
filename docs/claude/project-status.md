@@ -4,6 +4,23 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Implemented (PR for #566, 2026-11-11):** Posts bulk actions float in a bar fixed at the
+  foot of the workspace (centred over it, never the sidebar; `--menu-shadow`; `--surface` at a
+  measured 95% floor, no blur — 13.58:1 ink, 5.53:1 accent, 3.03:1 outline over a black
+  thumbnail, sampled in Chrome). Its runway is a slot after the list reserved from the first
+  admin render and never shrinking, so selecting or unticking never moves a row (Δ = 0 measured
+  at 1440, 844×390, 390 and 320×256); `inert` travels with `hidden`, Escape closes Review
+  selection then clears, and Clear selection focuses a checkbox already in view without
+  scrolling (only when none is in view does it scroll select-all into view). The
+  five filters use the new reusable `admin-select.js` (APG select-only combobox over the hidden
+  native `<select>`, which stays the source of truth and receives `input` + `change`). Row
+  checkboxes fade in on hover and stay when focused, checked, in selection mode, or without
+  hover. Media's bulk bar is unchanged (scoped to `.posts-page`). Design, five-round
+  independent AI review (`anthropic/claude-fable-5-2`, approved) and the scoped
+  design-approval exception:
+  `docs/superpowers/specs/2026-11-11-issue-566-posts-bulk-bar-filters-design.md`. Not run:
+  VoiceOver, WebKit and Firefox.
+
 - **Implemented locally:** editor clean-up (#569, 2026-11-11; design, AI-approval record and
   acceptance tracker in `docs/superpowers/specs/2026-11-11-issue-569-editor-cleanup-design.md`).
   Hero and title image are chosen from the media library only: the Replace-photo disclosure,

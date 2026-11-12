@@ -92,11 +92,10 @@
      must sit just above its neighbour adds to its token with calc(). Dialogs
      use the browser's top layer and need none. */
   --z-raised: 1;       /* a pinned header or badge inside its own panel */
-  --z-popover: 20;     /* a row menu that scrolls with the list */
   --z-toolbar: 30;     /* the manuscript toolbar under the command bar */
   --z-topbar: 50;      /* the page header */
-  --z-commandbar: 70;  /* an editor's command bar */
-  --z-menu: 80;        /* a menu opened from a bar */
+  --z-commandbar: 70;  /* an editor's command bar; the Posts bulk-action bar */
+  --z-menu: 80;        /* a floating menu: from a bar, a list row or a filter */
   --z-scrim: 90;       /* the dimmer behind a drawer */
   --z-drawer: 100;     /* the navigation drawer; the story-details drawer sits 10 above */
   --z-skip: 300;       /* the skip link */
@@ -669,6 +668,116 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   gap: 0.75rem;
 }
 
+/* ---- In-label select menu (admin-select.js, #566) ----
+   A select-only combobox over a hidden native <select>: the caption sits in
+   the trigger ("Status: All"), the panel is the row menus' floating panel and
+   the chevron is the menus' drawn one. A filter set away from its default
+   reads in the accent and a heavier weight, so the state never rests on
+   colour alone. */
+.admin-select { position: relative; min-width: 0; }
+.admin-select__trigger {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  width: 100%;
+  min-height: var(--control-h);
+  padding: 0.375rem 0.75rem 0.375rem 0.6875rem;
+  border: 1px solid var(--line-control);
+  border-radius: var(--control-radius);
+  background: var(--surface);
+  color: var(--ink);
+  font: 400 var(--control-font)/1.4 var(--sans);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+.admin-select__trigger::after {
+  content: '';
+  flex: none;
+  width: 0.35rem;
+  height: 0.35rem;
+  margin: -0.15rem 0.125rem 0 auto;
+  border-right: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted);
+  transform: rotate(45deg);
+}
+.admin-select.is-open .admin-select__trigger::after { margin-top: 0.15rem; transform: rotate(225deg); }
+.admin-select__trigger:hover { border-color: var(--studio-accent); background: var(--studio-accent-soft); }
+/* The box is the visual control; focus sits on the combobox inside it (which
+   holds only the value, so the caption is never read as part of it), and the
+   ring is drawn on the box, as a focused select draws it. */
+.admin-select__trigger:focus-within { border-color: var(--studio-accent); outline: var(--focus-ring); outline-offset: -1px; }
+.admin-select__control { display: flex; flex: 1 1 auto; align-items: center; min-width: 0; outline: none; }
+.admin-select__control:focus-visible { outline: none; }
+.admin-select__trigger:has([aria-disabled='true']) { opacity: 0.5; cursor: not-allowed; }
+.admin-select__label { flex: none; color: var(--muted); font-weight: 500; }
+.admin-select__value { min-width: 0; max-width: 18rem; overflow: hidden; text-overflow: ellipsis; }
+.admin-select.is-set .admin-select__trigger { border-color: var(--studio-accent); }
+.admin-select.is-set .admin-select__value { color: var(--studio-accent-hover); font-weight: 600; }
+.admin-select__panel {
+  position: absolute;
+  z-index: var(--z-menu);
+  top: calc(100% + 0.25rem);
+  left: 0;
+  display: grid;
+  gap: 0.125rem;
+  width: max-content;
+  min-width: 100%;
+  max-height: 20rem;
+  margin: 0;
+  padding: 0.375rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  list-style: none;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--menu-shadow);
+}
+.admin-select.is-above .admin-select__panel { top: auto; bottom: calc(100% + 0.25rem); }
+.admin-select.is-end .admin-select__panel { right: 0; left: auto; }
+.admin-select.is-open .admin-select__panel { animation: admin-select-in 120ms ease-out; }
+.admin-select.is-open.is-above .admin-select__panel { animation-name: admin-select-in-above; }
+@keyframes admin-select-in { from { opacity: 0; translate: 0 -0.25rem; } }
+@keyframes admin-select-in-above { from { opacity: 0; translate: 0 0.25rem; } }
+.admin-select__option {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: var(--control-h-sm);
+  padding: 0.25rem 2rem 0.25rem 0.625rem;
+  border-radius: var(--control-radius);
+  color: var(--ink);
+  font-size: 0.8125rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+/* Focus stays on the trigger (aria-activedescendant), so the active option
+   carries its own indicator: a fill and an inset accent outline (5.39:1). */
+.admin-select__option.is-active { background: var(--studio-accent-soft); outline: 2px solid var(--studio-accent); outline-offset: -2px; }
+.admin-select__option.is-selected { font-weight: 600; }
+.admin-select__option.is-selected::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  right: 0.8rem;
+  width: 0.3rem;
+  height: 0.6rem;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: translateY(-60%) rotate(45deg);
+}
+.admin-select__option[aria-disabled='true'] { color: var(--muted); cursor: not-allowed; }
+@media (forced-colors: active) {
+  .admin-select__option.is-active { outline-color: Highlight; }
+  .admin-select__option.is-selected::after { border-color: CanvasText; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .admin-select__trigger { transition: none; }
+  .admin-select.is-open .admin-select__panel { animation: none; }
+}
+
 /* Bulk selection bar — only shown while something is selected */
 .bulk-bar {
   display: flex;
@@ -799,10 +908,98 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .posts-page #loadMsg { overflow-wrap: anywhere; }
 
 .posts-page #bulkCount { flex: 0 1 auto; overflow-wrap: anywhere; }
-.posts-page .selection-review { flex: 1 1 14rem; min-width: 0; }
-.posts-page .selection-review > summary { padding: 0.25rem 0; color: var(--ink); font-weight: 600; }
-.posts-page .selection-review ul { margin: 0.25rem 0 0; padding-inline-start: 1.25rem; }
+.posts-page .selection-review { flex: none; min-width: 0; }
+.posts-page .selection-review > summary { padding: 0.25rem 0; color: var(--ink); font-weight: 600; cursor: pointer; }
+/* The bar floats at the foot of the workspace, so the list it reviews opens
+   upward as a floating panel, like the row menus. It is anchored to the bar
+   (the review itself is not positioned), so it never runs past the bar's
+   right edge, wherever the summary sits. */
+.posts-page .selection-review ul {
+  position: absolute;
+  bottom: calc(100% + 0.75rem);
+  left: 0.75rem;
+  width: max-content;
+  min-width: 14rem;
+  max-width: min(28rem, calc(100% - 1.5rem));
+  max-height: min(40vh, 18rem);
+  margin: 0;
+  padding: 0.5rem 0.75rem 0.5rem 1.75rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--menu-shadow);
+}
 .posts-page .selection-review li { padding-block: 0.15rem; overflow-wrap: anywhere; }
+
+/* ---- Posts: floating bulk-action bar (#566) ----
+   Fixed over the workspace (never the sidebar), centred between its edges,
+   so selecting never pushes the list down. Translucent at a measured floor,
+   never blurred: at 95% surface over the worst case (a black thumbnail) ink
+   is 13.61:1, the accent link 5.54:1, the outlined buttons' border 3.04:1 and
+   the Publish fill 4.26:1 (spec 2026-11-11-issue-566, §6). The slot after the
+   list is the runway: reserved from the first admin render at the bar's
+   tallest height, never shrinking, so neither showing nor hiding the bar
+   moves a row. */
+/* The runway's floor before the bar is first measured: one row of compact
+   controls, two rows where the bar can wrap (below 64rem, long counts
+   included), the stacked bar below 40rem, each larger at the coarse-pointer
+   control height. */
+.posts-page { --bulk-bar-min: 3.5rem; }
+@media (pointer: coarse) { .posts-page { --bulk-bar-min: 4rem; } }
+@media (max-width: 64rem) { .posts-page { --bulk-bar-min: 5.5rem; } }
+@media (max-width: 64rem) and (pointer: coarse) { .posts-page { --bulk-bar-min: 7.5rem; } }
+.posts-page .cms-workspace { scrollbar-gutter: stable; }
+.posts-page:has(.bulk-bar-slot.is-reserved) .cms-workspace {
+  scroll-padding-bottom: calc(max(var(--bulk-bar-min), var(--bulk-bar-h, 0px)) + 1.5rem);
+}
+.posts-page .bulk-bar-slot.is-reserved { min-height: max(var(--bulk-bar-min), var(--bulk-bar-h, 0px)); }
+.posts-page .bulk-bar {
+  position: fixed;
+  z-index: var(--z-commandbar);
+  right: calc(var(--cms-shell-gutter) + 1rem);
+  bottom: calc(var(--cms-shell-gutter) + 0.75rem);
+  left: calc(var(--cms-sidebar-w) + 1rem);
+  width: fit-content;
+  margin: 0 auto;
+  padding: 0.5rem 0.75rem;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--surface) 95%, transparent);
+  box-shadow: var(--menu-shadow);
+  transition: opacity 160ms ease-out, translate 160ms ease-out, display 160ms allow-discrete;
+}
+.posts-page .bulk-bar[hidden] { opacity: 0; translate: 0 0.5rem; pointer-events: none; }
+@starting-style {
+  .posts-page .bulk-bar:not([hidden]) { opacity: 0; translate: 0 0.5rem; }
+}
+@media (max-width: 900px) {
+  .posts-page .bulk-bar { left: calc(var(--cms-shell-gutter) + 1rem); }
+}
+@media (max-width: 40rem) {
+  .posts-page { --bulk-bar-min: 9rem; }
+  .posts-page .bulk-bar {
+    right: calc(var(--cms-shell-gutter) + 0.5rem);
+    left: calc(var(--cms-shell-gutter) + 0.5rem);
+    width: auto;
+  }
+  .posts-page #bulkCount,
+  .posts-page .selection-review { flex-basis: 100%; }
+  .posts-page .bulk-bar > button { flex: 1 1 7rem; }
+  /* Review selection spans the bar, so its panel matches the bar's width. */
+  .posts-page .selection-review ul { right: 0.75rem; width: auto; min-width: 0; max-width: none; }
+}
+@media (max-width: 40rem) and (pointer: coarse) { .posts-page { --bulk-bar-min: 11rem; } }
+/* Short and narrow (a small landscape phone, 400% zoom): a fixed bar would
+   cover most of the workspace, so it sits in its reserved slot instead. */
+@media (max-height: 30rem) and (max-width: 40rem) {
+  /* The bar sits in flow at the end of the list, so Review selection opens
+     from its own row, as low as it can, to stay on screen. */
+  .posts-page .bulk-bar { position: relative; inset: auto; }
+  .posts-page .selection-review { position: relative; }
+  .posts-page .selection-review ul { right: 0; left: 0; }
+  .posts-page:has(.bulk-bar-slot.is-reserved) .cms-workspace { scroll-padding-bottom: 0; }
+}
 
 .posts-page .posts-table { table-layout: fixed; }
 .posts-page .posts-table th,
@@ -857,17 +1054,22 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   margin: 0;
   cursor: pointer;
 }
-.posts-page .post-select-all { justify-content: flex-start; gap: 0.5rem; }
-.posts-page .post-select-all span {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
+/* Row checkboxes appear on hover, like Notion's (#566): faded, never removed,
+   so they keep their place, their tab stop and their accessible name. They
+   stay when focused, checked or while anything is selected, and always where
+   there is no hover to reveal them. */
+.posts-page :is(.post-select-all, .post-row-select) input { opacity: 0; transition: opacity 120ms ease; }
+.posts-page .posts-table:hover .post-select-all input,
+.posts-page .posts-table thead tr:focus-within .post-select-all input,
+.posts-page .posts-table tbody tr:is(:hover, :focus-within) .post-row-select input,
+.posts-page :is(.post-select-all, .post-row-select) input:is(:checked, :indeterminate, :focus),
+.posts-page .posts-table.is-selecting :is(.post-select-all, .post-row-select) input { opacity: 1; }
+@media (hover: none), (pointer: coarse), (any-pointer: coarse), (forced-colors: active) {
+  .posts-page :is(.post-select-all, .post-row-select) input { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .posts-page .bulk-bar,
+  .posts-page :is(.post-select-all, .post-row-select) input { transition: none; }
 }
 .posts-page .post-title-link {
   display: inline-block;
@@ -952,7 +1154,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .posts-page .post-more:not([open]) > .post-more-actions { display: none; }
 .posts-page .post-more-actions {
   position: absolute;
-  z-index: var(--z-popover);
+  z-index: var(--z-menu);
   top: calc(100% + 0.375rem);
   right: 0;
   display: grid;
@@ -1012,15 +1214,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
     white-space: normal;
     border-bottom: 0;
   }
-  .posts-page .post-select-all span {
-    position: static;
-    width: auto;
-    height: auto;
-    margin: 0;
-    overflow: visible;
-    clip: auto;
-    white-space: normal;
-  }
   /* Title row, then status + languages on one line, then date, then actions. */
   .posts-page .posts-table tbody tr {
     display: grid;
@@ -1046,9 +1239,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   .posts-page .posts-table tbody .col-updated:not(:empty)::before { content: attr(data-label) ': '; font-family: var(--sans); }
   .posts-page .posts-table tbody td.col-actions { grid-row: 4; }
   .posts-page .posts-table tbody .posts-empty { grid-column: 1 / -1; padding: 1.25rem 0; }
-  .posts-page #bulkCount,
-  .posts-page .selection-review { flex-basis: 100%; }
-  .posts-page .bulk-bar > button { flex: 1 1 7rem; }
 }
 @media (max-width: 480px) {
   .posts-page .posts-filters-extra > .filter-field { flex: 1 1 100%; }
@@ -1797,9 +1987,10 @@ body.login-page #submit { width: 100%; margin-top: 1.5rem; }
 .cms-app-shell {
   --cms-masthead-h: 3rem;
   --cms-shell-gutter: 1rem;
+  --cms-sidebar-w: 13rem;
   --cms-workspace-h: calc(100dvh - var(--cms-masthead-h) - var(--cms-shell-gutter));
   display: grid;
-  grid-template-columns: 13rem minmax(0, 1fr);
+  grid-template-columns: var(--cms-sidebar-w) minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
   height: 100dvh;
   overflow: hidden;
