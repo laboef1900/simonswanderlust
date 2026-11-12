@@ -202,12 +202,18 @@ Output validation (`parseDraft`, exported for tests; any failure throws
 2. The value is a non-null, non-array object whose own keys are **exactly** `title`, `excerpt`,
    `bodyMarkdown` (`Object.keys` set equality, so `__proto__`, `constructor`, any extra or
    missing key rejects), each a string.
-3. `title`, `excerpt`: whitespace runs collapse to one space and trim; then non-empty, no
-   `\p{Cc}`, no lone surrogates, no bidi controls (U+202A–U+202E, U+2066–U+2069), and none of
-   the body's forbidden substrings below; title ≤ 200, excerpt ≤ 300.
+3. `title`, `excerpt`: no invisible characters (below, checked before folding, because
+   JavaScript's `\s` also matches U+FEFF); whitespace runs collapse to one space and trim; then
+   at least one visible character (the #567 visibility rule), no `\p{Cc}`, no lone surrogates,
+   and none of the body's forbidden substrings below; title ≤ 200, excerpt ≤ 300.
+   *Invisible characters* are those the plain-text preview would hide or reorder: bidi controls
+   and marks (U+061C, U+200E, U+200F, U+202A–U+202E, U+2066–U+2069), zero-width and invisible
+   operators (U+200B, U+2060–U+2064), U+FEFF and Unicode tag characters (U+E0000–U+E007F).
+   ZWNJ/ZWJ (U+200C/U+200D) stay allowed for emoji sequences and scripts that need them.
 4. `bodyMarkdown`: CRLF/CR normalized to LF, trailing whitespace at the end of the whole string
    trimmed (leading text and per-line whitespace unchanged); non-empty; ≤ 100 000;
-   no C0/C1 controls other than tab and newline, no lone surrogates, no bidi controls.
+   at least one visible character; no C0/C1 controls other than tab and newline, no lone
+   surrogates, no invisible characters.
 5. **Forbidden substrings, anywhere in the text** (not line-anchored, so blockquote, list and
    other container nesting cannot hide them). These are deliberate over-approximations, not
    Markdown classification; a false positive costs only the one explicit request. CommonMark

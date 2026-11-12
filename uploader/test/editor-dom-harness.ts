@@ -266,7 +266,9 @@ export function editorDocument(markup: string) {
     document: {
       hidden: false,
       documentElement: { lang: root.querySelector('html')?.getAttribute('lang') || 'en' },
-      get activeElement() { return state.activeElement; },
+      // A browser moves focus away from an element that leaves the document;
+      // a removed or replaced node must not keep reading as focused.
+      get activeElement() { return state.activeElement && root.contains(state.activeElement) ? state.activeElement : null; },
       get body() { return root.querySelector('body'); },
       getElementById: (id: string) => root.querySelector('#' + id),
       querySelector: (selector: string) => root.querySelector(selector),

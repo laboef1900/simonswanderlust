@@ -70,6 +70,9 @@ const BENIGN = [
   '- [ ] pack the bag\n- [x] book the train',
   'Prices: 12.50 EUR, 3.5 km, 08:15 departure, e.g. by bus; i.e. slowly.',
   'Unicode: Ελλάδα, 日本, emoji 🚋, NBSP\u00a0here, tab\tthere.',
+  // Shapes the validator leaves open, pinned to what the real renderer does with them.
+  'Old mirror at ftp://files.example/tram.txt, a note[^1] without a definition, and sms:+351 tel:+351 irc://x.y.',
+  'Non-ASCII mail shapes stay text: é@x.de, café@münchen.de and a@ü.de.',
 ];
 
 const HOSTILE = [
@@ -136,7 +139,7 @@ describe('story draft output against the real renderer', () => {
       'http', 'https', 'www', 'mailto', 'xmpp', 'ftp', 'javascript', 'example', 'com', 'cd', 'a', 'b', 'x1', '42', 'lt', 'amp',
       ' ', ' ', ' ', '\n', '\n', '\n\n', '\t', '    ', '> ', '- ', '1. ', '* ', '+ ', '```', '~~~', '``', '~~', '---', '+++', '===',
       'gallery', 'math', '\uFEFF', '\u00a0', '\uFF1C', '\uFF3B', '\uFF3D', '\uFF08', '\uFF09', '\uFF20', '\uFF0E', '\uFF1A',
-      '\uFF0F', '\uFF01', '\u3002', '\u2024', '\u2215',
+      '\uFF0F', '\uFF01', '\u3002', '\u2024', '\u2215', 'ftp://', '[^1]', 'é', 'ü',
     ];
     const deadline = performance.now() + 20000;
     let cases = 0;

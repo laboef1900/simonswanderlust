@@ -137,14 +137,15 @@ describe('buildContext', () => {
 });
 
 describe('Draft with AI controller against the real dialog markup', () => {
-  function controller(details: () => Details) {
+  function controller(details: () => Details, overrides: { heroCaption?: () => Promise<string>; config?: Record<string, unknown>; blocked?: () => boolean } = {}) {
     const dom = editorDocument(markup);
     const el = (id: string): EditorElement => {
       const node = dom.document.getElementById(id);
       if (!node) throw new Error('no #' + id);
       return node;
     };
-    const { context, draft } = browser(dom.document, async (url) => new Response(JSON.stringify(url === '/ai-config?purpose=drafting' ? draftConfig : [])));
+    const config = overrides.config ?? draftConfig;
+    const { context, draft } = browser(dom.document, async (url) => new Response(JSON.stringify(url === '/ai-config?purpose=drafting' ? config : [])));
     const requests: DraftRequest[] = [];
     Reflect.set(context.LLM as object, 'draftArticle', async (request: DraftRequest) => {
       requests.push(request);
@@ -154,11 +155,12 @@ describe('Draft with AI controller against the real dialog markup', () => {
       title: '', excerpt: '', body: '', slug: '', neverPublished: true, slugAuto: true };
     const read = vi.fn(details);
     const api = draft.create({
-      copy: editorCopy, snapshot: () => ({ ...snapshot }), details: read, heroCaption: async () => '', pickPhotos() {},
+      copy: editorCopy, snapshot: () => ({ ...snapshot, blocked: overrides.blocked ? overrides.blocked() : false }), details: read,
+      heroCaption: overrides.heroCaption ?? (async () => ''), pickPhotos() {},
       commit: () => ({ chooseSlug: false }), didCommit: () => true, notice() {}, on401() {}, isAdmin: () => false,
     });
     api.refresh();
-    return { el, api, read, requests, snapshot };
+    return { el, api, read, requests, snapshot, document: dom.document };
   }
   const rows = (el: (id: string) => EditorElement) => el('draftContextItems').children;
 
@@ -187,16 +189,85 @@ describe('Draft with AI controller against the real dialog markup', () => {
     expect(h.el('draftStatus').textContent).toBe(editorCopy.draftStale);
   });
 
-  it('lists an over-long detail with its reason and without a checkbox, never truncated', async () => {
+  it('lists an over-long detail with its reason and without a checkbox, never truncated, and offers no route beyond the cap', async () => {
     const long = 'P'.repeat(201);
     const h = controller(() => ({ date: null, country: long, region: '', route: { start: 'Lisbon', end: 'Sintra', straightLineKm: 100001 } }));
     h.el('deDraftAction').click();
     await flush();
-    const [country, route] = rows(h.el);
+    const [country, ...rest] = rows(h.el);
     expect(country!.querySelector('input')).toBeNull();
     expect(country!.textContent).toBe('Country: ' + long + ui.en['editor.chrome.draftContextTooLong'].replace('{max}', '200'));
-    expect(route!.querySelector('input')).toBeNull();
-    expect(route!.textContent).toContain(ui.en['editor.chrome.draftContextTooLong'].replace('{max}', '100000'));
+    expect(rest).toEqual([]);
+  });
+
+  it('keeps keyboard focus on the same detail checkbox when the hero caption arrives and re-renders the list', async () => {
+    const hero = Promise.withResolvers<string>();
+    const h = controller(() => ({ date: null, country: 'Portugal', region: '',
+      route: { start: 'Lisbon', end: 'Sintra', straightLineKm: 22 } }), { heroCaption: () => hero.promise });
+    h.el('deDraftAction').click();
+    await flush();
+    const route = rows(h.el)[1]!.querySelector('input')!;
+    route.focus();
+    expect(h.document.activeElement).toBe(route);
+    hero.resolve('Rooftops at dusk');
+    await flush();
+    expect(rows(h.el).map((row) => row.textContent)).toEqual([
+      'Country: Portugal', 'Hero photo caption: Rooftops at dusk', 'Route: Lisbon → Sintra, about 22 km in a straight line between stops',
+    ]);
+    const focused = h.document.activeElement as EditorElement | null;
+    expect(focused).not.toBeNull();
+    expect(focused).toBe(rows(h.el)[2]!.querySelector('input'));
+  });
+
+  it('drops a hero caption lookup that resolves after changed() or a reopening, and never lists two hero rows', async () => {
+    const lookups: PromiseWithResolvers<string>[] = [];
+    const h = controller(() => ({ date: null, country: 'Portugal', region: '', route: null }), {
+      heroCaption: () => { const lookup = Promise.withResolvers<string>(); lookups.push(lookup); return lookup.promise; },
+    });
+    const heroRows = () => rows(h.el).filter((row) => row.textContent.startsWith('Hero photo caption:')).map((row) => row.textContent);
+    h.el('deDraftAction').click();
+    await flush();
+    h.api.changed();
+    await flush();
+    expect(lookups).toHaveLength(2);
+    lookups[0]!.resolve('Old hero');
+    await flush();
+    expect(heroRows()).toEqual([]);
+    lookups[1]!.resolve('New hero');
+    await flush();
+    expect(heroRows()).toEqual(['Hero photo caption: New hero']);
+    h.el('draftClose').click();
+    h.el('deDraftAction').click();
+    await flush();
+    expect(lookups).toHaveLength(3);
+    h.el('draftClose').click();
+    h.el('deDraftAction').click();
+    await flush();
+    lookups[2]!.resolve('Closed opening');
+    lookups[3]!.resolve('Current opening');
+    await flush();
+    expect(heroRows()).toEqual(['Hero photo caption: Current opening']);
+  });
+
+  it('shows a provider name or model containing a placeholder verbatim in the destination line', async () => {
+    const h = controller(() => ({ date: null, country: '', region: '', route: null }),
+      { config: { ...draftConfig, providerName: 'Lab {endpoint}', model: 'm-{timeout}' } });
+    h.el('deDraftAction').click();
+    await flush();
+    expect(h.el('draftDestination').textContent)
+      .toBe('Provider: Lab {endpoint} (lm-studio) · Endpoint: http://localhost:1234/v1 · Model: m-{timeout} · Timeout: 120 s');
+  });
+
+  it('does not announce ready or offer Generate when the editor became unavailable before the settings arrived', async () => {
+    let blocked = false;
+    const h = controller(() => ({ date: null, country: '', region: '', route: null }), { blocked: () => blocked });
+    // The configuration read is still pending when the editor starts saving.
+    h.el('deDraftAction').click();
+    blocked = true;
+    h.api.changed();
+    await flush();
+    expect(h.el('draftStatus').textContent).toBe(editorCopy.draftUnavailable);
+    expect(h.el('draftGenerate').hidden).toBe(true);
   });
 
   it('Escape on a shown result discards it and the next opening starts unchecked', async () => {

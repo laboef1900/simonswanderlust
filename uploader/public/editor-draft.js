@@ -126,7 +126,8 @@ window.EditorDraft = (function () {
     let identity = null;
     let applying = false;
     let queuedCloseEvents = 0;
-    const text = (key, values = {}) => Object.entries(values).reduce((value, [name, replacement]) => value.replaceAll('{' + name + '}', String(replacement)), copy[key]);
+    // One pass, so a provider name or model that contains `{model}` is shown verbatim.
+    const text = (key, values = {}) => copy[key].replace(/\{(\w+)\}/g, (match, name) => (Object.hasOwn(values, name) ? String(values[name]) : match));
     const localeName = (locale) => copy[locale === 'de' ? 'translationGerman' : 'translationEnglish'];
     const isEmpty = (snapshot) => !snapshot.title.trim() && !snapshot.excerpt.trim() && !snapshot.body.trim();
     const eligible = (snapshot, locale) => snapshot.locale === locale && snapshot.locales.includes(locale) && !snapshot.blocked && isEmpty(snapshot);
@@ -253,10 +254,12 @@ window.EditorDraft = (function () {
       const region = typeof details.region === 'string' ? details.region.trim() : '';
       if (region) list.push(candidate('region', region, 'draftContextRegion', { value: region }, [[region.length, max.region]]));
       const route = details.route;
-      if (route && typeof route.start === 'string' && typeof route.end === 'string' && Number.isInteger(route.straightLineKm)) {
+      // A straight-line sum beyond the cap is not a coarse route worth sending.
+      if (route && typeof route.start === 'string' && typeof route.end === 'string' && Number.isInteger(route.straightLineKm) &&
+          route.straightLineKm >= 0 && route.straightLineKm <= max.routeKm) {
         const value = { start: route.start, end: route.end, straightLineKm: route.straightLineKm };
         list.push(candidate('route', value, 'draftContextRoute', { start: value.start, end: value.end, km: value.straightLineKm },
-          [[value.start.length, max.place], [value.end.length, max.place], [value.straightLineKm, max.routeKm]], ['km']));
+          [[value.start.length, max.place], [value.end.length, max.place]], ['km']));
       }
       return list;
     }
@@ -272,11 +275,15 @@ window.EditorDraft = (function () {
       });
     }
     function lookupHero(op) {
+      // The token this derivation was asked for: changed() re-derives the same
+      // opening under a new token, and an older lookup must then be dropped.
+      const token = op.token;
       Promise.resolve().then(() => options.heroCaption(op.locale)).then((caption) => {
-        if (op !== opening || op.token !== openings || typeof caption !== 'string' || !caption.trim()) return;
+        if (op !== opening || token !== op.token || token !== openings || typeof caption !== 'string' || !caption.trim()) return;
         const value = caption.trim();
         const hero = candidate('heroCaption', value, 'draftContextHero', { value }, [[value.length, limits().caption]]);
-        // After date/country/region, before the route: the dialog's fixed order.
+        // One hero row at most; after date/country/region, before the route: the dialog's fixed order.
+        op.candidates = op.candidates.filter((item) => item.key !== 'heroCaption');
         const at = op.candidates.findIndex((item) => item.key === 'route');
         op.candidates.splice(at === -1 ? op.candidates.length : at, 0, hero);
         renderCandidates();
@@ -301,7 +308,9 @@ window.EditorDraft = (function () {
       const label = element('label', 'check-field story-draft__item');
       const box = element('input');
       box.type = 'checkbox';
-      box.id = 'draftContext-' + group + '-' + index;
+      // Detail ids follow the item, not its position: the hero caption arrives
+      // later and is inserted before the route, which must keep its id.
+      box.id = 'draftContext-' + group + '-' + (group === 'detail' ? item.key : index);
       box.checked = item.checked;
       box.disabled = !!active;
       box.addEventListener('change', () => { item.checked = box.checked; });
@@ -312,9 +321,17 @@ window.EditorDraft = (function () {
     function renderCandidates() {
       const items = opening ? opening.candidates : [];
       const photoItems = opening ? opening.photoItems : [];
-      $('draftContextItems').replaceChildren(...items.map((item, index) => row(item, index, 'detail')));
-      $('draftPhotoItems').replaceChildren(...photoItems.map((item, index) => row(item, index, 'photo')));
+      // Re-rendering replaces the rows; a focused checkbox must not drop focus to the page.
+      const focused = document.activeElement;
+      const lists = [$('draftContextItems'), $('draftPhotoItems')];
+      const refocus = focused && focused.id && lists.some((list) => list.contains(focused)) ? focused.id : '';
+      lists[0].replaceChildren(...items.map((item, index) => row(item, index, 'detail')));
+      lists[1].replaceChildren(...photoItems.map((item, index) => row(item, index, 'photo')));
       $('draftContextEmpty').textContent = items.length || photoItems.length ? '' : copy.draftContextEmpty;
+      if (refocus && dialog.open) {
+        const again = $(refocus);
+        (again && !again.disabled ? again : pickButton).focus({ preventScroll: true });
+      }
     }
     function copyPhoto(item) {
       const prior = photos.find((photo) => photo.src === item.src);
@@ -408,7 +425,7 @@ window.EditorDraft = (function () {
         if (loaded.unauthorized) { closeDialog(); options.on401(); return; }
         loaded.apiKey = null;
         disclose(loaded.prepared);
-        if (!shown && !active) {
+        if (!shown && !active && op.available) {
           say(copy.draftReady, 'ready');
           showControls();
         }

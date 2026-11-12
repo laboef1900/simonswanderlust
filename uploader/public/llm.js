@@ -539,18 +539,25 @@ window.LLM = (function () {
     /[A-Za-z0-9._+-]@[A-Za-z0-9._-]/,
     /```|~~~/,
   ];
-  const DRAFT_BIDI = /[\u202a-\u202e\u2066-\u2069]/;
+  // Characters that hide or reorder text in the plain-text preview the author
+  // reviews: bidi controls and marks, zero-width and invisible operators, BOM and
+  // Unicode tag characters. ZWNJ/ZWJ stay allowed (emoji sequences, some scripts).
+  const DRAFT_INVISIBLE = /[\u061c\u200b\u200e\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff\u{e0000}-\u{e007f}]/u;
+  // The #567 visibility rule: at least one character a reader can see.
+  const DRAFT_VISIBLE = /[^\s\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}\u2800]/u;
   // Front matter the renderer would swallow: the first line alone, BOM and trailing blanks allowed.
   const DRAFT_FRONT_MATTER = /^\uFEFF?(?:---|\+\+\+)[ \t]*$/;
 
   function draftForbidden(text) {
-    return DRAFT_BIDI.test(text) || /\p{Cs}/u.test(text) || DRAFT_FORBIDDEN.some((pattern) => pattern.test(text));
+    return DRAFT_INVISIBLE.test(text) || /\p{Cs}/u.test(text) || DRAFT_FORBIDDEN.some((pattern) => pattern.test(text));
   }
 
   // Title/excerpt: one single-spaced line within `max`, plain text only.
   function draftLine(value, max) {
+    // Checked before whitespace folding: JavaScript's \s also matches U+FEFF.
+    if (DRAFT_INVISIBLE.test(value)) return null;
     const text = value.replace(/\s+/gu, ' ').trim();
-    if (!text || text.length > max || /\p{Cc}/u.test(text) || draftForbidden(text)) return null;
+    if (!DRAFT_VISIBLE.test(text) || text.length > max || /\p{Cc}/u.test(text) || draftForbidden(text)) return null;
     return text;
   }
 
@@ -572,7 +579,7 @@ window.LLM = (function () {
     const excerpt = draftLine(value.excerpt, DRAFT_LIMITS.excerpt);
     if (title === null || excerpt === null) return invalid();
     const bodyMarkdown = value.bodyMarkdown.replace(/\r\n?/g, '\n').trimEnd();
-    if (!bodyMarkdown || bodyMarkdown.length > DRAFT_LIMITS.body ||
+    if (!DRAFT_VISIBLE.test(bodyMarkdown) || bodyMarkdown.length > DRAFT_LIMITS.body ||
         /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/.test(bodyMarkdown) || draftForbidden(bodyMarkdown) ||
         DRAFT_FRONT_MATTER.test(bodyMarkdown.split('\n', 1)[0])) return invalid();
     return { title, excerpt, bodyMarkdown };

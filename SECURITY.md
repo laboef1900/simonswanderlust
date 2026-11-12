@@ -1150,7 +1150,8 @@ persistence path. See the issue-specific design and scoped approval exception in
 Story drafting (#579) is offered only while the active language of a story has no title,
 excerpt or body. Its user message is exactly `{ locale, events, context }`: up to 50 author
 events of at most 500 UTF-16 units each, plus only the context items the author ticked in that
-dialog opening, each shown with the exact value sent — the date, the language's country text,
+dialog opening, each shown with the value sent (the date in display format, sent as ISO) — the
+date, the language's country text,
 the region label, the Media caption of the hero photo, Media captions of photos picked in the
 dialog (at most 20) and a coarse route (first and last stop name and a whole-kilometre
 straight-line distance). The browser transport rejects any other key or type before fetch, so
@@ -1162,9 +1163,11 @@ language, the untrusted-data guard, a no-invention rule and the JSON contract. O
 click makes at most one bounded, abortable request (no format fallback, no retry, 2 MiB
 response cap, `max_tokens` 32768, completion must stop). The output must be a JSON object with
 exactly `title`, `excerpt` and `bodyMarkdown` strings (own-key set equality, so `__proto__` or
-`constructor` reject), within caps and free of controls and bidi overrides, and none of them
-may contain HTML, character references, backslash escapes, images, links, reference
-definitions, GFM autolink literals (including e-mail shapes), code fences or front matter; a
+`constructor` reject), within caps, each with a visible character and free of controls, bidi
+controls and marks, zero-width and invisible operators, BOM and Unicode tag characters (text
+the plain-text preview would hide). None of them may contain HTML, character references,
+backslash escapes, images, links, reference definitions, GFM autolink literals (including
+e-mail shapes) or code fences, and the body may not start with front matter; a
 renderer-backed differential test (fixed corpus plus a seeded randomized one) checks that no
 accepted body renders a link, image or classed code block. These checks are defense in depth;
 the rendering boundary stays the Visual editor's allow-list and `safeLink`, `rehype-sanitize`,

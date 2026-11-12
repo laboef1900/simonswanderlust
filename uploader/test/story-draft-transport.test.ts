@@ -376,17 +376,29 @@ describe('parseDraft', () => {
     rejects(content);
   });
 
-  it('refuses controls, lone surrogates and bidi controls in every field', () => {
+  it('refuses controls, lone surrogates, bidi controls and invisible characters in every field', () => {
     for (const bad of ['\u0000', '\u0007', '\u001b', '\u007f', '\u0085', '\u009f', '\ud800', '\udfff',
-      '\u202a', '\u202b', '\u202c', '\u202d', '\u202e', '\u2066', '\u2067', '\u2068', '\u2069']) {
+      '\u202a', '\u202b', '\u202c', '\u202d', '\u202e', '\u2066', '\u2067', '\u2068', '\u2069',
+      // Hidden from the plain-text preview: marks, zero-width/invisible operators, BOM, tag characters.
+      '\u061c', '\u200b', '\u200e', '\u200f', '\u2060', '\u2061', '\u2062', '\u2063', '\u2064', '\ufeff',
+      '\u{e0000}', '\u{e0041}', '\u{e007f}']) {
       for (const field of ['title', 'excerpt', 'bodyMarkdown'] as const) {
         rejects(draftJson({ ...DRAFT, [field]: 'Lisbon ' + bad + ' tram' }));
       }
     }
     // Vertical tab and form feed are not tab or newline: refused in the body.
     for (const bad of ['\u000b', '\u000c']) rejects(asBody('Line' + bad + 'line'));
-    // A well-formed astral pair is text.
+    // A well-formed astral pair is text, and ZWJ sequences keep working.
     expect(parseDraft(draftJson({ ...DRAFT, title: 'Lisbon 🚋' })).title).toBe('Lisbon 🚋');
+    expect(parseDraft(draftJson({ ...DRAFT, excerpt: 'Family trip 👨\u200d👩\u200d👧' })).excerpt).toBe('Family trip 👨\u200d👩\u200d👧');
+  });
+
+  it('refuses a field that has no visible character, so an invisible title is never applied', () => {
+    for (const field of ['title', 'excerpt', 'bodyMarkdown'] as const) {
+      for (const invisible of ['\u00ad', '\u034f', '\u3164', '\u2800', '\u180e', '\u00ad\u034f']) {
+        rejects(draftJson({ ...DRAFT, [field]: invisible }));
+      }
+    }
   });
 });
 
