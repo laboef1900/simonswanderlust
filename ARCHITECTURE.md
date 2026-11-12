@@ -636,6 +636,14 @@ time. This contract is mirrored on the blog side in `site/src/lib/images.ts`.
   EXIF and how many carry GPS, and (when any do) which storage keys and whether each has a
   retained `-orig` to re-encode from. Gates whether a remediation pass is needed at all; nothing
   is written. `docker compose exec app node --import tsx src/cli.ts audit-exif`.
+- `backfill-exif` — fills the #570 exposure columns (`focal_length`, `focal_length_35mm`,
+  `f_number`, `iso`, `exposure_time`) for existing photos from their retained `-orig` originals.
+  Writes only those five columns, idempotently (a second run reports `updated: 0`); a missing
+  original leaves them NULL. Run once after upgrading, with the upgraded app running so the schema
+  is migrated: `docker compose exec app node --import tsx src/cli.ts backfill-exif`. Exit 0 when
+  only originals are missing, 2 when any key was unreadable, ambiguous or unsafe, 1 on an
+  unmigrated schema. Rows that reconcile inserts later (a rescan after a WordPress import or a
+  restored image archive) also start empty; re-run it then — it is idempotent.
 - `strip-gps` — **not built, and its trigger never fired.** It would remediate the historical
   corpus (a lossy re-encode for the keys with no retained original), scoped to be added only if
   an `audit-exif` run found GPS-carrying variants. Audits found 102 variant files with EXIF and
@@ -748,7 +756,9 @@ Spec: `docs/superpowers/specs/2026-11-03-issue-513-stop-routing-design.md`.
 
 ## AI alt-text (browser-direct providers)
 
-The post editor and photo uploader offer a "Suggest alt text" button per alt field.
+The post editor's body-photo panels and the photo uploader offer a "Suggest alt text" button
+per alt field; hero alt text is typed by hand, and a library pick copies the photo's Media alt
+only into an empty field (#569).
 The browser downscales the photo and calls the selected OpenAI-compatible vision
 provider directly; the app server never contacts a model. Which provider that is comes
 from the **AI provider registry** (below): `captionProviderId` (or the default provider)
@@ -793,11 +803,16 @@ authoritative. Unsupported source and locally targeted headings remain unchanged
 
 `public/editor-translation.js` owns explicit consent, current-draft/configuration checks,
 review and replacement confirmation. `LLM.translateArticle` sends only text slots from the
-browser in one bounded attempt. Application uses a deferred-sync source transaction in
+browser in one bounded attempt. Its system message is the admin-editable `translationPrompt`
+(`settings.json`, #567; default in `src/translation-prompt.ts`; visible plain text of at most
+4000 characters), followed by a code-owned suffix: the faithful-translation direction, the
+untrusted-input guard and the JSON slot contract. The prompt is part of the consent descriptor,
+so a change requires a new explicit click. Application uses a deferred-sync source transaction in
 `editor-rich-bridge.js`, updates only the target allowlist, and preserves failed-commit
 histories. Whole-field Undo and existing dirty/recovery/optimistic-save paths are reused.
 No new persistence model, autosave, publication, Media write or upload is introduced.
-See the [issue design](docs/superpowers/specs/2026-11-07-issue-550-ai-article-translation.md).
+See the [issue design](docs/superpowers/specs/2026-11-07-issue-550-ai-article-translation.md)
+and the [prompt design](docs/superpowers/specs/2026-11-11-issue-567-translation-prompt.md).
 
 ### AI provider registry (2026-10-19)
 
@@ -816,7 +831,7 @@ per remote provider under `ai_provider_key:<id>`; local providers never hold one
 | `POST /ai-providers`, `PUT` / `DELETE /ai-providers/:id` | admin | provider CRUD with optional key set/replace/remove |
 | `GET /ai-providers/:id/credential` | admin | key for Settings' model lookup and **Test** (browser calls only `<baseUrl>/models`) |
 | `GET /ai-config[?purpose=caption]` | author | resolved review/caption provider + its key; existing consumer shape unchanged |
-| `GET /ai-config?purpose=translation` | author | only translation provider identity/endpoint, model, timeout and request-local key |
+| `GET /ai-config?purpose=translation` | author | only translation provider identity/endpoint, model, timeout, translation prompt and request-local key |
 
 Default `GET /ai-config` returns the review provider's `kind` as `aiProvider`, its base URL as
 `aiBaseUrl`, and its own key. Local caption and translation configs never query or decrypt
@@ -901,8 +916,9 @@ Created idempotently by `uploader/src/db.ts` (`ensureSchema`):
 - **`comments`** — reader comments (#204, [spec](docs/superpowers/specs/2026-09-14-comments-design.md)): `id`, `translation_key` (one flat thread per post pair, no FK — `posts` has no single-column pair key), `locale` (the locale the reader posted from), `name`, `body` (plain text, 1–2000 chars, control characters stripped), `status` (`pending`/`approved`/`rejected`/`spam`; every reader row is born `pending`), `is_author` (an admin reply — born `approved`), `sender_hash` (keyed HMAC of the IP for rate limiting, never the raw IP), `created_at`. The legacy `email` column is always `NULL` — no email is collected. `pgPostStore.remove` deletes the thread in the same transaction as the post, and `ensureSchema` sweeps orphans on boot. **Runtime data, not build input:** the Astro build never reads this table — the blog fetches approved comments from `GET /comments?tk=…` at page load, so approving a comment needs no rebuild.
 - **`media`** — one row per storage key: `folder` (virtual, decoupled from the key), `title`,
   bilingual `alt_*`/`caption_*`, `tags` (`text[]`), dimensions, byte sizes, `status`
-  (`processing`/`ready`/`failed`/`missing`), EXIF (`taken_at`, `camera`, `lens`, `lat`, `lng`)
-  and `uploaded_by` (FK, `ON DELETE SET NULL`).
+  (`processing`/`ready`/`failed`/`missing`), EXIF (`taken_at`, `camera`, `lens`, `lat`, `lng`,
+  and since #570 the nullable numeric exposure columns `focal_length`, `focal_length_35mm`,
+  `f_number`, `iso`, `exposure_time`) and `uploaded_by` (FK, `ON DELETE SET NULL`).
 - **`media_folders`** — `path` primary key; the single source of truth for the folder tree
   (every write that sets a `folder` upserts the row and its ancestors).
 - **`import_jobs`** — one row per WordPress import (#92): `status` (`running` / `done` /
@@ -1182,6 +1198,10 @@ disposable `/data` host path and the credential-free database target printed by 
   **before** `users` (`media.uploaded_by` is `ON DELETE SET NULL`, so the other order silently
   nulls every attribution), and `tags` is `text[]`, which cannot round-trip through the
   `JSON.stringify` path every other non-scalar column uses — it needs a `$n::text[]` bind.
+  #570's five `media` exposure columns ride in the existing v15 format without a version bump —
+  a deliberate deviation from the v9 rule above: they are derived metadata, fully re-derivable
+  from retained originals by `backfill-exif`, not author intent. Older dumps restore them as
+  NULL; present values are validated against the parser's bounds before any write.
 - **Schedule** — admin-configurable in settings: `backupSchedule` (`off` / `daily` / `weekly`,
   default `off`) and `backupRetention` (1–100 files, default 14). An hourly in-process tick (same
   pattern as the session sweep) runs a backup in the first tick of each new calendar window —

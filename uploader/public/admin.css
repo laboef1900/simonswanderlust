@@ -92,11 +92,10 @@
      must sit just above its neighbour adds to its token with calc(). Dialogs
      use the browser's top layer and need none. */
   --z-raised: 1;       /* a pinned header or badge inside its own panel */
-  --z-popover: 20;     /* a row menu that scrolls with the list */
   --z-toolbar: 30;     /* the manuscript toolbar under the command bar */
   --z-topbar: 50;      /* the page header */
-  --z-commandbar: 70;  /* an editor's command bar */
-  --z-menu: 80;        /* a menu opened from a bar */
+  --z-commandbar: 70;  /* an editor's command bar; the Posts bulk-action bar */
+  --z-menu: 80;        /* a floating menu: from a bar, a list row or a filter */
   --z-scrim: 90;       /* the dimmer behind a drawer */
   --z-drawer: 100;     /* the navigation drawer; the story-details drawer sits 10 above */
   --z-skip: 300;       /* the skip link */
@@ -383,6 +382,12 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   text-underline-offset: 0.18em;
 }
 .btn-link:where(:not(:disabled)):hover { background: none; color: var(--studio-accent-hover); }
+/* The shared stroke glyphs (AdminIcons in admin-ui.js): 1rem, in the colour of
+   the text they lead. A button that carries one keeps icon and label on one
+   line; neither part is squeezed. */
+.admin-icon { flex: none; width: 1rem; height: 1rem; }
+.btn-icon { display: inline-flex; align-items: center; justify-content: center; gap: 0.375rem; white-space: nowrap; }
+.btn-icon__label { flex: none; }
 /* A link that is a command ("New post", "New trip"). */
 .btn-new {
   display: inline-flex;
@@ -663,6 +668,116 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   gap: 0.75rem;
 }
 
+/* ---- In-label select menu (admin-select.js, #566) ----
+   A select-only combobox over a hidden native <select>: the caption sits in
+   the trigger ("Status: All"), the panel is the row menus' floating panel and
+   the chevron is the menus' drawn one. A filter set away from its default
+   reads in the accent and a heavier weight, so the state never rests on
+   colour alone. */
+.admin-select { position: relative; min-width: 0; }
+.admin-select__trigger {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  width: 100%;
+  min-height: var(--control-h);
+  padding: 0.375rem 0.75rem 0.375rem 0.6875rem;
+  border: 1px solid var(--line-control);
+  border-radius: var(--control-radius);
+  background: var(--surface);
+  color: var(--ink);
+  font: 400 var(--control-font)/1.4 var(--sans);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+.admin-select__trigger::after {
+  content: '';
+  flex: none;
+  width: 0.35rem;
+  height: 0.35rem;
+  margin: -0.15rem 0.125rem 0 auto;
+  border-right: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted);
+  transform: rotate(45deg);
+}
+.admin-select.is-open .admin-select__trigger::after { margin-top: 0.15rem; transform: rotate(225deg); }
+.admin-select__trigger:hover { border-color: var(--studio-accent); background: var(--studio-accent-soft); }
+/* The box is the visual control; focus sits on the combobox inside it (which
+   holds only the value, so the caption is never read as part of it), and the
+   ring is drawn on the box, as a focused select draws it. */
+.admin-select__trigger:focus-within { border-color: var(--studio-accent); outline: var(--focus-ring); outline-offset: -1px; }
+.admin-select__control { display: flex; flex: 1 1 auto; align-items: center; min-width: 0; outline: none; }
+.admin-select__control:focus-visible { outline: none; }
+.admin-select__trigger:has([aria-disabled='true']) { opacity: 0.5; cursor: not-allowed; }
+.admin-select__label { flex: none; color: var(--muted); font-weight: 500; }
+.admin-select__value { min-width: 0; max-width: 18rem; overflow: hidden; text-overflow: ellipsis; }
+.admin-select.is-set .admin-select__trigger { border-color: var(--studio-accent); }
+.admin-select.is-set .admin-select__value { color: var(--studio-accent-hover); font-weight: 600; }
+.admin-select__panel {
+  position: absolute;
+  z-index: var(--z-menu);
+  top: calc(100% + 0.25rem);
+  left: 0;
+  display: grid;
+  gap: 0.125rem;
+  width: max-content;
+  min-width: 100%;
+  max-height: 20rem;
+  margin: 0;
+  padding: 0.375rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  list-style: none;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--menu-shadow);
+}
+.admin-select.is-above .admin-select__panel { top: auto; bottom: calc(100% + 0.25rem); }
+.admin-select.is-end .admin-select__panel { right: 0; left: auto; }
+.admin-select.is-open .admin-select__panel { animation: admin-select-in 120ms ease-out; }
+.admin-select.is-open.is-above .admin-select__panel { animation-name: admin-select-in-above; }
+@keyframes admin-select-in { from { opacity: 0; translate: 0 -0.25rem; } }
+@keyframes admin-select-in-above { from { opacity: 0; translate: 0 0.25rem; } }
+.admin-select__option {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: var(--control-h-sm);
+  padding: 0.25rem 2rem 0.25rem 0.625rem;
+  border-radius: var(--control-radius);
+  color: var(--ink);
+  font-size: 0.8125rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+/* Focus stays on the trigger (aria-activedescendant), so the active option
+   carries its own indicator: a fill and an inset accent outline (5.39:1). */
+.admin-select__option.is-active { background: var(--studio-accent-soft); outline: 2px solid var(--studio-accent); outline-offset: -2px; }
+.admin-select__option.is-selected { font-weight: 600; }
+.admin-select__option.is-selected::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  right: 0.8rem;
+  width: 0.3rem;
+  height: 0.6rem;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: translateY(-60%) rotate(45deg);
+}
+.admin-select__option[aria-disabled='true'] { color: var(--muted); cursor: not-allowed; }
+@media (forced-colors: active) {
+  .admin-select__option.is-active { outline-color: Highlight; }
+  .admin-select__option.is-selected::after { border-color: CanvasText; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .admin-select__trigger { transition: none; }
+  .admin-select.is-open .admin-select__panel { animation: none; }
+}
+
 /* Bulk selection bar — only shown while something is selected */
 .bulk-bar {
   display: flex;
@@ -793,10 +908,98 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .posts-page #loadMsg { overflow-wrap: anywhere; }
 
 .posts-page #bulkCount { flex: 0 1 auto; overflow-wrap: anywhere; }
-.posts-page .selection-review { flex: 1 1 14rem; min-width: 0; }
-.posts-page .selection-review > summary { padding: 0.25rem 0; color: var(--ink); font-weight: 600; }
-.posts-page .selection-review ul { margin: 0.25rem 0 0; padding-inline-start: 1.25rem; }
+.posts-page .selection-review { flex: none; min-width: 0; }
+.posts-page .selection-review > summary { padding: 0.25rem 0; color: var(--ink); font-weight: 600; cursor: pointer; }
+/* The bar floats at the foot of the workspace, so the list it reviews opens
+   upward as a floating panel, like the row menus. It is anchored to the bar
+   (the review itself is not positioned), so it never runs past the bar's
+   right edge, wherever the summary sits. */
+.posts-page .selection-review ul {
+  position: absolute;
+  bottom: calc(100% + 0.75rem);
+  left: 0.75rem;
+  width: max-content;
+  min-width: 14rem;
+  max-width: min(28rem, calc(100% - 1.5rem));
+  max-height: min(40vh, 18rem);
+  margin: 0;
+  padding: 0.5rem 0.75rem 0.5rem 1.75rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--menu-shadow);
+}
 .posts-page .selection-review li { padding-block: 0.15rem; overflow-wrap: anywhere; }
+
+/* ---- Posts: floating bulk-action bar (#566) ----
+   Fixed over the workspace (never the sidebar), centred between its edges,
+   so selecting never pushes the list down. Translucent at a measured floor,
+   never blurred: at 95% surface over the worst case (a black thumbnail) ink
+   is 13.61:1, the accent link 5.54:1, the outlined buttons' border 3.04:1 and
+   the Publish fill 4.26:1 (spec 2026-11-11-issue-566, §6). The slot after the
+   list is the runway: reserved from the first admin render at the bar's
+   tallest height, never shrinking, so neither showing nor hiding the bar
+   moves a row. */
+/* The runway's floor before the bar is first measured: one row of compact
+   controls, two rows where the bar can wrap (below 64rem, long counts
+   included), the stacked bar below 40rem, each larger at the coarse-pointer
+   control height. */
+.posts-page { --bulk-bar-min: 3.5rem; }
+@media (pointer: coarse) { .posts-page { --bulk-bar-min: 4rem; } }
+@media (max-width: 64rem) { .posts-page { --bulk-bar-min: 5.5rem; } }
+@media (max-width: 64rem) and (pointer: coarse) { .posts-page { --bulk-bar-min: 7.5rem; } }
+.posts-page .cms-workspace { scrollbar-gutter: stable; }
+.posts-page:has(.bulk-bar-slot.is-reserved) .cms-workspace {
+  scroll-padding-bottom: calc(max(var(--bulk-bar-min), var(--bulk-bar-h, 0px)) + 1.5rem);
+}
+.posts-page .bulk-bar-slot.is-reserved { min-height: max(var(--bulk-bar-min), var(--bulk-bar-h, 0px)); }
+.posts-page .bulk-bar {
+  position: fixed;
+  z-index: var(--z-commandbar);
+  right: calc(var(--cms-shell-gutter) + 1rem);
+  bottom: calc(var(--cms-shell-gutter) + 0.75rem);
+  left: calc(var(--cms-sidebar-w) + 1rem);
+  width: fit-content;
+  margin: 0 auto;
+  padding: 0.5rem 0.75rem;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--surface) 95%, transparent);
+  box-shadow: var(--menu-shadow);
+  transition: opacity 160ms ease-out, translate 160ms ease-out, display 160ms allow-discrete;
+}
+.posts-page .bulk-bar[hidden] { opacity: 0; translate: 0 0.5rem; pointer-events: none; }
+@starting-style {
+  .posts-page .bulk-bar:not([hidden]) { opacity: 0; translate: 0 0.5rem; }
+}
+@media (max-width: 900px) {
+  .posts-page .bulk-bar { left: calc(var(--cms-shell-gutter) + 1rem); }
+}
+@media (max-width: 40rem) {
+  .posts-page { --bulk-bar-min: 9rem; }
+  .posts-page .bulk-bar {
+    right: calc(var(--cms-shell-gutter) + 0.5rem);
+    left: calc(var(--cms-shell-gutter) + 0.5rem);
+    width: auto;
+  }
+  .posts-page #bulkCount,
+  .posts-page .selection-review { flex-basis: 100%; }
+  .posts-page .bulk-bar > button { flex: 1 1 7rem; }
+  /* Review selection spans the bar, so its panel matches the bar's width. */
+  .posts-page .selection-review ul { right: 0.75rem; width: auto; min-width: 0; max-width: none; }
+}
+@media (max-width: 40rem) and (pointer: coarse) { .posts-page { --bulk-bar-min: 11rem; } }
+/* Short and narrow (a small landscape phone, 400% zoom): a fixed bar would
+   cover most of the workspace, so it sits in its reserved slot instead. */
+@media (max-height: 30rem) and (max-width: 40rem) {
+  /* The bar sits in flow at the end of the list, so Review selection opens
+     from its own row, as low as it can, to stay on screen. */
+  .posts-page .bulk-bar { position: relative; inset: auto; }
+  .posts-page .selection-review { position: relative; }
+  .posts-page .selection-review ul { right: 0; left: 0; }
+  .posts-page:has(.bulk-bar-slot.is-reserved) .cms-workspace { scroll-padding-bottom: 0; }
+}
 
 .posts-page .posts-table { table-layout: fixed; }
 .posts-page .posts-table th,
@@ -851,17 +1054,22 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   margin: 0;
   cursor: pointer;
 }
-.posts-page .post-select-all { justify-content: flex-start; gap: 0.5rem; }
-.posts-page .post-select-all span {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
+/* Row checkboxes appear on hover, like Notion's (#566): faded, never removed,
+   so they keep their place, their tab stop and their accessible name. They
+   stay when focused, checked or while anything is selected, and always where
+   there is no hover to reveal them. */
+.posts-page :is(.post-select-all, .post-row-select) input { opacity: 0; transition: opacity 120ms ease; }
+.posts-page .posts-table:hover .post-select-all input,
+.posts-page .posts-table thead tr:focus-within .post-select-all input,
+.posts-page .posts-table tbody tr:is(:hover, :focus-within) .post-row-select input,
+.posts-page :is(.post-select-all, .post-row-select) input:is(:checked, :indeterminate, :focus),
+.posts-page .posts-table.is-selecting :is(.post-select-all, .post-row-select) input { opacity: 1; }
+@media (hover: none), (pointer: coarse), (any-pointer: coarse), (forced-colors: active) {
+  .posts-page :is(.post-select-all, .post-row-select) input { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .posts-page .bulk-bar,
+  .posts-page :is(.post-select-all, .post-row-select) input { transition: none; }
 }
 .posts-page .post-title-link {
   display: inline-block;
@@ -946,7 +1154,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .posts-page .post-more:not([open]) > .post-more-actions { display: none; }
 .posts-page .post-more-actions {
   position: absolute;
-  z-index: var(--z-popover);
+  z-index: var(--z-menu);
   top: calc(100% + 0.375rem);
   right: 0;
   display: grid;
@@ -1006,15 +1214,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
     white-space: normal;
     border-bottom: 0;
   }
-  .posts-page .post-select-all span {
-    position: static;
-    width: auto;
-    height: auto;
-    margin: 0;
-    overflow: visible;
-    clip: auto;
-    white-space: normal;
-  }
   /* Title row, then status + languages on one line, then date, then actions. */
   .posts-page .posts-table tbody tr {
     display: grid;
@@ -1040,9 +1239,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   .posts-page .posts-table tbody .col-updated:not(:empty)::before { content: attr(data-label) ': '; font-family: var(--sans); }
   .posts-page .posts-table tbody td.col-actions { grid-row: 4; }
   .posts-page .posts-table tbody .posts-empty { grid-column: 1 / -1; padding: 1.25rem 0; }
-  .posts-page #bulkCount,
-  .posts-page .selection-review { flex-basis: 100%; }
-  .posts-page .bulk-bar > button { flex: 1 1 7rem; }
 }
 @media (max-width: 480px) {
   .posts-page .posts-filters-extra > .filter-field { flex: 1 1 100%; }
@@ -1148,7 +1344,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .media-sidebar,
 .media-main,
 .media-detail { min-width: 0; }
-.media-detail .media-key { margin: 0.5rem 0 0; color: var(--muted); }
 .media-detail > label:first-of-type { margin-top: 1rem; }
 .media-detail > button { margin-top: 1rem; }
 .media-detail > button + button { margin-left: 0.25rem; }
@@ -1172,8 +1367,15 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   color: var(--muted);
   font-size: 0.8125rem;
 }
-/* Camera · capture time · pixel size: measurements, in mono like the key beneath. */
+/* Camera · capture time · pixel size: measurements, set in mono. */
 .media-detail__shot { margin-top: 0.5rem; color: var(--ink); font-family: var(--mono); font-size: 0.75rem; }
+/* What can be done with the photograph, directly under it: View fullscreen and
+   Suggest with AI share one row, so the fields stay close to the photo; the
+   suggestion's status takes the full line beneath them. */
+.media-detail__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-top: 0.75rem; }
+.media-detail__actions > button { min-height: var(--control-h-sm); padding: 0.25rem 0.75rem; font-size: 0.75rem; }
+.media-detail__actions > .muted { flex-basis: 100%; margin: 0; }
+.media-detail__actions > .muted:empty { display: none; }
 .media-detail__empty { margin: 0; color: var(--ink); font-size: 0.875rem; }
 .media-detail__hints { margin: 0.75rem 0 0; padding-left: 1.1rem; font-size: 0.8125rem; line-height: 1.6; }
 
@@ -1236,8 +1438,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   font-size: 0.6875rem;
   font-weight: 500;
 }
-/* File-name titles run long; two lines each keeps the grid's rows level. The
-   detail panel shows the full key. */
+/* File-name titles run long; two lines each keeps the grid's rows level. */
 .media-cell__title,
 .media-cell__used {
   display: -webkit-box;
@@ -1261,6 +1462,13 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .keyfacts-mini { display: grid; grid-template-columns: auto 1fr; gap: 0.25rem 0.75rem; margin: 0.375rem 0 0; }
 .keyfacts-mini dt { color: var(--muted); font-size: 0.75rem; }
 .keyfacts-mini dd { margin: 0; font-size: 0.8125rem; overflow-wrap: anywhere; }
+/* Versions: one row per variant file on disk. Format · pixels · size are
+   measurements, so the rows are set in mono like the shot line. Every row is a
+   link with its own 24px target; touch gets the 44px control height. */
+.media-versions { list-style: none; margin: 0.25rem 0 0; padding: 0; font-family: var(--mono); font-size: 0.75rem; }
+.media-versions li { overflow-wrap: anywhere; }
+.media-versions a { display: inline-flex; align-items: center; min-height: 1.5rem; }
+@media (pointer: coarse) { .media-versions a { min-height: var(--control-h-sm); } }
 
 /* First native <dialog> in the admin — same choice as the blog lightbox, for
    the same reasons: focus trap, Esc, inert background and ::backdrop for free. */
@@ -1436,10 +1644,38 @@ dialog.media-picker[open] { display: grid; grid-template-rows: auto minmax(0, 1f
 .stop-lat { grid-column: 1; grid-row: 2; }
 .stop-lng { grid-column: 2 / 4; grid-row: 2; }
 .stop-row .btn-remove { grid-column: 3; grid-row: 1; }
-.stop-lookup { grid-column: 1 / -1; min-width: 0; }
-.stop-search-status { margin-block: 0.5rem; }
+/* One controls line: Find coordinates (icon), Via point, Continue by (or the
+   last stop's note). It never wraps; editor-stop-route.css names the item that
+   shrinks. Lookup status, results and the profile note follow below (#569). */
+.stop-controls {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+/* Find coordinates: a square the size of the × remove, in the same stroke. */
+.stop-row .stop-search {
+  flex: none;
+  width: var(--control-h-sm);
+  min-height: var(--control-h-sm);
+  padding: 0;
+  line-height: 1;
+}
+.stop-search svg {
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+.stop-search-status { grid-column: 1 / -1; margin: 0; }
 .stop-search-status:empty { display: none; }
-.stop-search-results { display: grid; gap: 0.5rem; margin-top: 0.5rem; }
+.stop-search-results { grid-column: 1 / -1; display: grid; gap: 0.5rem; }
+.stop-search-results:empty { display: none; }
 .stop-search-result { justify-content: flex-start; width: 100%; text-align: left; white-space: normal; overflow-wrap: anywhere; }
 .stops-notes { margin-top: 0.75rem; font-size: 0.75rem; line-height: 1.45; }
 .stops-notes p { margin: 0 0 0.375rem; }
@@ -1751,9 +1987,10 @@ body.login-page #submit { width: 100%; margin-top: 1.5rem; }
 .cms-app-shell {
   --cms-masthead-h: 3rem;
   --cms-shell-gutter: 1rem;
+  --cms-sidebar-w: 13rem;
   --cms-workspace-h: calc(100dvh - var(--cms-masthead-h) - var(--cms-shell-gutter));
   display: grid;
-  grid-template-columns: 13rem minmax(0, 1fr);
+  grid-template-columns: var(--cms-sidebar-w) minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
   height: 100dvh;
   overflow: hidden;
@@ -2452,6 +2689,11 @@ body.settings-page .settings-layout {
 .settings-feature + .settings-feature { margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid var(--line); }
 .settings-advanced { margin-top: 1rem; }
 .settings-advanced > summary { min-height: var(--control-h); }
+/* A long field's character count beside its one command (translation instructions).
+   The pair wraps instead of overflowing a narrow panel. */
+.settings-field-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0.375rem 0.75rem; }
+.help-details > .settings-field-meta { margin-top: 0.5rem; }
+.settings-field-meta > .muted { margin: 0; font-variant-numeric: tabular-nums; }
 /* Site & backups: the section jump links are navigation within the tab, a quiet
    inline list of .action-link anchors separated by middle dots. */
 .settings-jumps { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 0.5rem; margin: 0 0 1.5rem; padding: 0; list-style: none; font-size: 0.8125rem; }
@@ -2829,6 +3071,8 @@ body.editor-page .lang-switch-bar .tab-btn {
   padding: 0.2rem 0.65rem;
   font-size: 0.8125rem;
 }
+/* Translate sits in the nav row and keeps the command bar's 2rem on every
+   pointer (DESIGN.md, command-bar controls). */
 body.editor-page #translateArticle {
   min-height: 2rem;
   padding: 0.25rem 0.65rem;
@@ -3162,7 +3406,7 @@ body.editor-page .editor-disclosure[open] > summary::after {
 }
 
 /* Hero image and title image share one box: white on the tinted inspector,
-   preview first, then alt text, status and the two disclosures. */
+   preview first, then alt text, status, the library action and framing. */
 body.editor-page .hero-banner-zone {
   display: grid;
   gap: 0.5rem;
@@ -3177,13 +3421,6 @@ body.editor-page .hero-fields > label { margin: 0.25rem 0 0; }
 body.editor-page .hero-banner-zone > .muted { margin: 0; }
 body.editor-page .hero-banner-zone > .muted:empty { display: none; }
 body.editor-page .hero-fields { display: grid; justify-items: start; gap: 0.5rem; }
-
-/* The alt text gets the inspector's full width; its suggest action follows. */
-body.editor-page .hero-alt-row {
-  display: grid;
-  justify-items: start;
-  gap: 0.5rem;
-}
 
 body.editor-page .keyfacts-editor,
 body.editor-page #stopsContainer { margin-top: 1.25rem; }
@@ -3201,16 +3438,14 @@ body.editor-page .hero-actions-row > button {
   padding-inline: 0.5rem;
 }
 
-/* Both image disclosures lay out only when open: a closed <details> still
+/* The framing disclosure lays out only when open: a closed <details> still
    hands its hidden content slot to a grid, which would add an empty gap. */
-body.editor-page :is(.hero-replace, .hero-focus)[open] {
+body.editor-page .hero-focus[open] {
   display: grid;
   justify-items: start;
   gap: 0.5rem;
   padding-bottom: 0.25rem;
 }
-
-body.editor-page .hero-replace > label { margin: 0; }
 
 /* A native file input accepts a dropped file; the dashed edge says so. */
 body.editor-page .hero-file-input {
@@ -3822,6 +4057,7 @@ body.editor-page .editor-field-help:empty { display: none; }
   background: var(--studio-accent-soft);
   color: var(--ink);
 }
+.excerpt-assist__note { margin: 0.375rem 0 0; color: var(--muted); font-size: 0.75rem; line-height: 1.45; }
 .excerpt-assist__status { margin-top: 0.375rem; font-size: 0.75rem; overflow-wrap: anywhere; }
 .excerpt-assist__status:empty { display: none; }
 .excerpt-assist__status p { margin: 0; }
@@ -4083,12 +4319,16 @@ body.editor-page .locale-chip-link:where(:not(:disabled)):hover { background: no
   }
 
   /* The story-details opener stays beside the locale switch, leaving the
-     action row for Save, Publish, Save & preview and More. */
+     action row for Save, Publish, Save & preview and More. It is out of
+     flow, so the nav row keeps its width free: the locale tabs and Translate
+     wrap to a second row before they could run under it. */
   body.editor-page #inspectorToggle {
     position: absolute;
     top: 0.4rem;
     right: max(0.4rem, env(safe-area-inset-right));
   }
+
+  body.editor-page .editor-commandbar__nav { padding-inline-end: 6.5rem; }
 
   body.editor-page .editor-actions-menu__trigger {
     width: 3rem;
@@ -4276,9 +4516,6 @@ body.editor-page .locale-chip-link:where(:not(:disabled)):hover { background: no
    A suggestion offered beside text the author already wrote reads as a note,
    never as a saved value: tinted, ruled, with its own explicit Use. */
 .posts-filters > .media-ai-open { flex: none; margin-left: auto; }
-.media-ai-suggest { margin-top: 0.75rem; }
-.media-ai-suggest > button { width: auto; min-height: var(--control-h-sm); padding: 0.25rem 0.75rem; font-size: 0.75rem; }
-.media-ai-suggest > .muted:empty { display: none; }
 .media-ai-hint {
   margin: 0.375rem 0 0;
   padding: 0.375rem 0.5rem;
@@ -4300,6 +4537,150 @@ dialog.media-ai { max-width: min(38rem, calc(100vw - 2rem)); }
 .media-ai__summary:empty { display: none; }
 .media-ai__failures { max-height: 12rem; margin: 0.75rem 0 0; padding-left: 1.25rem; overflow-y: auto; font-size: 0.8125rem; }
 .media-ai__failures li + li { margin-top: 0.25rem; }
+
+/* ---- media library: fullscreen viewer (media-browser.js, #mediaViewer) ----
+   The photograph on a solid dark stage, its caption on an opaque navy plate
+   beneath it — never over it, no scrim, no blur (DESIGN.md, The Opaque Plate
+   Rule). Measured on --navy: white type 11.5:1, the softened lines (white at
+   72%) 6.8:1, the control edge (white at 55%) 4.7:1. The studio-accent focus
+   ring is 1.9:1 there, so inside the viewer the ring is white. */
+dialog.media-viewer {
+  --viewer-soft: rgb(255 255 255 / 72%);
+  --viewer-edge: rgb(255 255 255 / 55%);
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  background: #0f141a;
+  color: #fff;
+  color-scheme: dark;
+}
+dialog.media-viewer[open] { display: grid; grid-template: minmax(0, 1fr) auto / minmax(0, 1fr); }
+dialog.media-viewer::backdrop { background: #0f141a; }
+.media-viewer__stage { position: relative; display: grid; place-items: center; min-width: 0; min-height: 0; }
+.media-viewer__stage img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+/* No photograph to show (still encoding, failed, no variant, a failed load):
+   the reason in words, in the dashed frame the panel's placeholder uses. */
+.media-viewer__note {
+  display: grid;
+  place-items: center;
+  width: min(26rem, calc(100% - 2rem));
+  max-height: calc(100% - 2rem);
+  aspect-ratio: 4 / 3;
+  margin: 0;
+  padding: 1rem;
+  border: 1px dashed var(--viewer-edge);
+  border-radius: var(--radius-lg);
+  font-size: 0.875rem;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+/* The plate takes at most 60% of the height, so the photograph always keeps
+   the rest. A caption longer than that scrolls inside the plate, under the
+   controls, which stay pinned to its foot. */
+.media-viewer__plate {
+  display: flex;
+  flex-direction: column;
+  max-height: 60dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--viewer-edge) transparent;
+  background: var(--navy);
+}
+.media-viewer__caption { min-width: 0; padding: 0.75rem 0.875rem 0; }
+.media-viewer__title { max-width: 36rem; margin: 0; color: #fff; font-size: 1rem; line-height: 1.35; overflow-wrap: anywhere; }
+/* As on a tile, a bare file name is a fallback and is set back. */
+.media-viewer__title.is-filename { color: var(--viewer-soft); font-weight: 500; }
+.media-viewer__alts {
+  display: grid;
+  gap: 0.25rem;
+  max-width: 56ch;
+  margin: 0.375rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+.media-viewer__alts li {
+  display: grid;
+  grid-template-columns: 1.625rem minmax(0, 1fr);
+  column-gap: 0.5rem;
+  align-items: baseline;
+  overflow-wrap: anywhere;
+}
+/* The language code is data, set in mono like every other code in the admin. */
+.media-viewer__code { color: var(--viewer-soft); font-family: var(--mono); font-size: 0.6875rem; font-weight: 600; }
+.media-viewer__position { margin: 0.375rem 0 0; color: var(--viewer-soft); font-size: 0.75rem; font-variant-numeric: tabular-nums; }
+/* Previous and Next sit together; Close stands apart at the far end, so a
+   repeated Next never lands on it. The row is the plate's foot, so the
+   controls do not move when a caption grows or shrinks between photos. */
+.media-viewer__controls {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 0.875rem;
+  background: var(--navy);
+}
+.media-viewer__controls #viewerClose { margin-left: auto; }
+/* The outlined secondary button on dark material: same shape and height (44px
+   on touch), white edge and label instead of the white surface. */
+.media-viewer .btn-secondary {
+  min-width: 5.5rem;
+  border-color: var(--viewer-edge);
+  background-color: transparent;
+  color: #fff;
+  transition: none;
+}
+.media-viewer .btn-secondary:where(:not([aria-disabled='true'])):hover {
+  border-color: #fff;
+  background-color: rgb(255 255 255 / 12%);
+  color: #fff;
+}
+.media-viewer .btn-secondary:where(:not([aria-disabled='true'])):active { background-color: rgb(255 255 255 / 20%); }
+/* At the first and last photo a step control stays focusable (aria-disabled,
+   never disabled) and holds its resting look under hover. */
+.media-viewer .btn-secondary[aria-disabled='true'] {
+  border-color: var(--viewer-edge);
+  background-color: transparent;
+  color: #fff;
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.media-viewer :focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+@media (min-width: 48rem) {
+  .media-viewer__stage img { padding: 1rem; }
+  .media-viewer__plate { flex-direction: row; align-items: flex-end; justify-content: space-between; }
+  .media-viewer__caption { padding: 0.875rem 0 0.875rem 1.25rem; }
+  .media-viewer__controls { flex: none; flex-wrap: nowrap; padding: 0.875rem 1.25rem 0.875rem 1.5rem; }
+  .media-viewer__controls #viewerClose { margin-left: 0.5rem; }
+}
+/* A short, wide viewport — a phone on its side, a zoomed laptop — has no height
+   to give: the plate stands beside the photograph instead of under it. */
+@media (max-height: 30rem) and (min-aspect-ratio: 5/4) {
+  dialog.media-viewer[open] { grid-template: minmax(0, 1fr) / minmax(0, 1fr) minmax(16.5rem, 36%); }
+  .media-viewer__stage img { padding: 0; }
+  .media-viewer__plate { flex-direction: column; align-items: stretch; justify-content: space-between; max-height: none; }
+  .media-viewer__caption { padding: 0.75rem 0.875rem 0; }
+  .media-viewer__controls { flex-wrap: wrap; padding: 0.75rem 0.875rem; }
+  .media-viewer__controls #viewerClose { margin-left: auto; }
+  .media-viewer .btn-secondary { min-width: 0; padding-inline: 0.625rem; }
+}
+/* Motion only for those who have not asked for less: the viewer and each new
+   photograph fade in once; nothing else moves. */
+@media (prefers-reduced-motion: no-preference) {
+  dialog.media-viewer[open],
+  .media-viewer__stage img { animation: media-viewer-in 180ms cubic-bezier(0.16, 1, 0.3, 1); }
+  .media-viewer .btn-secondary { transition: background-color 150ms ease, border-color 150ms ease; }
+}
+@keyframes media-viewer-in { from { opacity: 0; } }
 
 /* Recovery and connectivity notices stay in the workspace, never inside the
    sticky command bar; they carry .notice-warn and only get placed here. On the
@@ -4323,7 +4704,6 @@ body.editor-page .write-recovery, body.editor-page .write-connectivity { margin-
 
 /* Translation protects consent and full-draft review without leaving the desk. */
 body.editor-page .editor-commandbar__nav { flex-wrap: wrap; }
-body.editor-page #translateArticle { white-space: normal; }
 body.editor-page #translationUndo { margin: 0; min-height: var(--control-h-sm); }
 dialog.article-translation {
   width: min(54rem, calc(100vw - 2rem));
@@ -4364,5 +4744,67 @@ dialog.article-translation {
   .article-translation__header, .article-translation__footer { padding: 0.75rem 1rem; }
   .article-translation__body { padding-inline: 1rem; }
   .article-translation__footer button { width: 100%; }
-  body.editor-page #translateArticle { font-size: 0.75rem; padding-inline: 0.5rem; }
+  /* Icon and "Translate" stay on one line beside the tabs at 320px. */
+  body.editor-page #translateArticle { padding-inline: 0.375rem; }
+}
+
+/* ---- publish dialog (story editor) ----
+   The confirmation is where the published languages are chosen: a borderless
+   fieldset of flat, ruled rows, one per enabled language. On a short viewport
+   the dialog stays inside it and its content scrolls. */
+dialog.publish-dialog {
+  max-width: min(36rem, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.publish-dialog:has(.publish-languages[aria-busy='true']) { cursor: progress; }
+/* Busy Publish keeps focus (a repeated key press must not reach Cancel) but reads as unavailable. */
+.publish-dialog #publishDialogConfirm[aria-disabled='true'],
+.publish-dialog #publishDialogConfirm[aria-disabled='true']:hover { background-color: var(--red); opacity: 0.5; cursor: progress; }
+.publish-dialog > h2 { margin: 0; }
+.publish-dialog__intro { margin: 0.5rem 0 0; font-size: 0.875rem; }
+.publish-languages { margin-top: 1.25rem; }
+.publish-languages > legend { font-size: 0.875rem; font-weight: 650; }
+.publish-languages__list { list-style: none; margin: 0.5rem 0 0; padding: 0; border-bottom: 1px solid var(--line); }
+.publish-lang { padding-block: 0.75rem; border-top: 1px solid var(--line); }
+.publish-lang > * { max-width: none; margin: 0; }
+/* The row's lines sit under the language name, not under the box (24px on
+   coarse pointers). */
+.publish-lang__choice ~ * { margin-left: 1.5rem; }
+@media (pointer: coarse) { .publish-lang__choice ~ * { margin-left: 2rem; } }
+.publish-lang__choice,
+.publish-lang__name { font-size: 0.875rem; font-weight: 600; }
+/* A language that must publish, or any row while the dialog is busy. */
+.publish-lang__choice:has(:disabled) { cursor: default; }
+.publish-lang__note { color: var(--muted); font-size: 0.8125rem; line-height: 1.5; }
+.publish-lang__title { margin-top: 0.375rem; font-size: 0.875rem; overflow-wrap: anywhere; }
+.publish-lang__url { font-family: var(--mono); font-size: 0.75rem; line-height: 1.5; overflow-wrap: anywhere; }
+.publish-lang__state { margin-top: 0.375rem; color: var(--muted); font-size: 0.8125rem; line-height: 1.5; }
+/* Gaps wear the readiness chip's incomplete colour; the line names them. */
+.publish-lang.is-incomplete .publish-lang__state { color: var(--status-warn-ink); }
+/* Not selected: what would have gone live recedes, and the state line says
+   the language stays a private draft. */
+.publish-lang.is-excluded :is(.publish-lang__title, .publish-lang__url) { color: var(--muted); }
+/* "Go to …" reads as a link and stays a button (the .btn-link shape) with the
+   small control height as its target: 44px on coarse pointers. */
+.publish-lang__fix {
+  justify-content: flex-start;
+  min-height: var(--control-h-sm);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--studio-accent);
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+}
+.publish-lang__fix:where(:not(:disabled)):hover { background: none; color: var(--studio-accent-hover); }
+/* Why Publish is disabled, or what stopped it. Empty, the live region takes no
+   room but stays in the accessibility tree, so its next message is announced. */
+.publish-dialog__status { margin: 0.75rem 0 0; color: var(--status-warn-ink); font-size: 0.8125rem; font-weight: 500; line-height: 1.5; overflow-wrap: anywhere; }
+.publish-dialog__status:empty { margin: 0; }
+.publish-dialog__rebuild { max-width: none; margin: 0.75rem 0 0; color: var(--muted); font-size: 0.8125rem; line-height: 1.5; }
+@media (max-width: 40rem) {
+  .publish-dialog > .admin-modal__foot { flex-direction: column; }
 }

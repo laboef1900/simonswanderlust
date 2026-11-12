@@ -33,10 +33,12 @@ fields in bulk — the one AI path that saves, with opt-in overwrite
 (`docs/superpowers/specs/2026-10-18-media-ai-details-design.md`). The server never
 contacts a model.
 Article translation (#550) independently assigns provider/model/timeout and translates the
-latest unsaved active locale into the other enabled, non-omitted side of the same pair.
-Browser-direct inference receives only bounded article-local text slots; authenticated
-prepare/validate endpoints preserve source structure without writing content. Explicit
-consent, full review, replacement confirmation and atomic draft application precede the
+latest unsaved active locale into the other enabled side of the same pair, including a side not
+selected for publication, which stays a private draft (#568).
+Browser-direct inference receives bounded article-local text slots as the user message, plus
+the admin-editable translation instructions (#567) ahead of a code-owned suffix in the system
+message. Authenticated prepare/validate endpoints preserve source structure without writing
+content. Explicit consent, full review, replacement confirmation and atomic draft application precede the
 normal Save/Preview pipeline. Gallery identities, occurrence overrides, Media authority,
 manual slugs and unrelated target fields remain unchanged; whole-field Undo is available.
 See `docs/superpowers/specs/2026-11-07-issue-550-ai-article-translation.md`.
@@ -198,7 +200,7 @@ blog/
     │                              #   media-files (disk) · media-store (database) · media-sync (reconcile) · encode-queue · work-lock · disk · exif
     │                              #   journeys · journey-cleanup · journeys-admin (working copies, snapshots and language-first cleanup)
     ├── public/                    #   index.html (hero upload) · import.html (WordPress import) · editor/posts/about/settings/users
-    │                              #   media.html + media-api/media-ai/media-ai-dialog/media-browser/media-picker.js · posts-filter.js
+    │                              #   media.html + media-api/media-ai/media-ai-dialog/media-browser/media-picker.js · posts-filter.js · admin-select.js (in-label filter menus)
     │                              #   journeys.html · journey-editor.html (ordered, bilingual journey authoring)
     ├── test/                      #   Vitest suites (integration suites run when TEST_DATABASE_URL is set)
     └── .env.example · README.md

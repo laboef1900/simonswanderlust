@@ -2,30 +2,29 @@
    panel. Reuses admin.css tokens; the leg list echoes the public map's line
    language (solid = along roads, dashed = straight) beside text that says it. */
 
-.stop-routing {
-  grid-column: 1 / -1;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem 1rem;
-  min-width: 0;
-}
-.stop-routing .stop-via-field { margin: 0; }
+/* Via point and Continue by sit on the stop row's controls line after Find
+   coordinates (admin.css .stop-controls). Inspector labels carry a top margin
+   that would push them below the button; the line centres them instead. */
+body.editor-page .editor-inspector .stop-controls label { margin: 0; }
+/* A full-height Via target beside the 44px coarse-pointer controls keeps a
+   near miss off Find coordinates, which sends the place name out. */
+.stop-via-field { flex: none; min-height: var(--control-h-sm); }
+/* The controls line never wraps (#569): Continue by and its select give up width
+   first; the select ellipsizes its option before anything leaves the line. The
+   "Continue by" text stays as the select's label, visually hidden. */
 .stop-leg-field {
   display: inline-flex;
-  flex-wrap: wrap;
+  flex: 0 1 auto;
   align-items: center;
-  gap: 0.5rem;
   min-width: 0;
-  color: var(--muted);
-  font-size: 0.8125rem;
 }
 .stop-leg-field[hidden] { display: none; }
-.stop-leg-field select { width: auto; min-width: 9.5rem; min-height: var(--control-h-sm); padding-block: 0.25rem; font-size: 0.75rem; color: var(--ink); }
+.stop-leg-field select { width: auto; min-width: 0; min-height: var(--control-h-sm); padding-block: 0.25rem; font-size: 0.75rem; color: var(--ink); }
 .stop-leg-field select[aria-invalid="true"] { border-color: var(--warn-line); }
-.stop-last { margin: 0; font-size: 0.8125rem; }
+/* The last stop's note takes the select's slot and wraps inside it. */
+.stop-last { flex: 1 1 0; min-width: 0; margin: 0; font-size: 0.8125rem; line-height: 1.25; }
 .stop-last[hidden], .stop-profile-note[hidden] { display: none; }
-.stop-profile-note { flex-basis: 100%; margin: 0; color: var(--warn-ink); }
+.stop-profile-note { grid-column: 1 / -1; margin: 0; color: var(--warn-ink); }
 
 .stop-route__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.375rem; margin-top: 0.75rem; }
 .stop-route__legs {

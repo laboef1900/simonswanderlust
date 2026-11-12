@@ -6,6 +6,7 @@ import { buildServer, type ServerConfig } from '../src/server.js';
 import { memoryJourneyStore, type JourneyDraft } from '../src/journeys.js';
 import { memoryPostStore } from '../src/posts.js';
 import { memoryPageStore } from '../src/pages.js';
+import { emptyMediaExif } from '../src/exif.js';
 import { memoryMediaStore } from '../src/media-store.js';
 import { memoryUserStore } from '../src/users.js';
 import { memorySessionStore } from '../src/sessions.js';
@@ -55,7 +56,7 @@ async function fixture() {
     const post = await posts.upsertDraft({ translationKey: '', status: 'draft', shared: { date: '2026-01-01', countryCode: 'DE', region: 'europe', coordinates: { lat: 1, lng: 1 } }, de: loc('de'), en: loc('en') }); keys.push(post.translationKey);
   }
   await media.upsert({ key: 'hero', width: 640, height: 400, origBytes: 1, status: 'ready',
-    exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null }, uploadedBy: null });
+    exif: emptyMediaExif(), uploadedBy: null });
   const locale = { title: 'Journey', slug: 'journey', intro: 'A plain intro', heroImage: { src: imageBase + '/hero', width: 640, height: 400, alt: 'Landscape', focus: { x: 20, y: 80 } }, omitted: false };
   const draft: JourneyDraft = { de: structuredClone(locale), en: structuredClone(locale), members: keys };
   return { app, journeys, posts, media, cookies, draft, build, fence() { writable = false; } };

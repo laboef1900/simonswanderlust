@@ -26,65 +26,46 @@
               <span>Search</span>
               <input id="fSearch" type="search" placeholder="Title, slug or country" autocomplete="off" />
             </label>
-            <label class="filter-field">
-              <span>Status</span>
-              <select id="fStatus">
-                <option value="">All statuses</option>
+            <div class="filter-field filter-field--menu">
+              <select id="fStatus" aria-label="Status">
+                <option value="">All</option>
                 <option value="draft">Draft</option>
                 <option value="published">Published</option>
                 <option id="unpublishedOption" value="unpublished"></option>
                 <option id="missingSecondaryOption" value="missing-secondary" data-language-copy="MissingTranslation"></option>
               </select>
-            </label>
-            <label class="filter-field">
-              <span>Sort</span>
-              <select id="fSort">
+            </div>
+            <div class="filter-field filter-field--menu">
+              <select id="fSort" aria-label="Sort">
                 <option value="updated">Updated</option>
                 <option value="date">Trip date</option>
                 <option value="title">Title</option>
               </select>
-            </label>
+            </div>
           </div>
           <div class="posts-filters-actions">
             <button type="button" id="fMore" class="btn-link filter-reset" aria-expanded="false" aria-controls="fExtra">More filters</button>
             <button id="fReset" class="btn-link filter-reset" type="button">Clear filters</button>
           </div>
           <div class="posts-filters-extra" id="fExtra" hidden>
-            <label class="filter-field">
-              <span>Region</span>
-              <select id="fRegion"><option value="">All</option></select>
-            </label>
-            <label class="filter-field">
-              <span>Country</span>
-              <select id="fCountry"><option value="">All</option></select>
-            </label>
-            <label class="filter-field">
-              <span>Order</span>
-              <select id="fOrder">
+            <div class="filter-field filter-field--menu">
+              <select id="fRegion" aria-label="Region"><option value="">All</option></select>
+            </div>
+            <div class="filter-field filter-field--menu">
+              <select id="fCountry" aria-label="Country"><option value="">All</option></select>
+            </div>
+            <div class="filter-field filter-field--menu">
+              <select id="fOrder" aria-label="Order">
                 <option value="desc">Descending</option>
                 <option value="asc">Ascending</option>
               </select>
-            </label>
+            </div>
           </div>
         </div>
         <!-- Status views are toggle buttons over the same state as #fStatus,
              filled by the script; hidden with the filters while nothing is loaded. -->
         <div id="statusViews" class="posts-status-tabs" role="group" hidden></div>
         <p id="resultsCount" class="posts-results" role="status"></p>
-
-
-        <div class="bulk-bar" id="bulkBar" hidden>
-          <span id="bulkCount" aria-live="polite"></span>
-          <details id="selectionReview" class="selection-review">
-            <summary>Review selection</summary>
-            <ul id="selectionList"></ul>
-          </details>
-          <button id="clearSelection" type="button" class="btn-link">Clear selection</button>
-          <button id="bulkPublish" type="button" class="btn-primary">Publish</button>
-          <button id="bulkUnpublish" type="button" class="btn-secondary">Unpublish</button>
-          <button id="bulkDelete" type="button" class="btn-remove">Delete</button>
-        </div>
-
         <p id="loadMsg" class="muted" role="status">Loading stories…</p>
         <button id="retryLoad" type="button" class="btn-secondary" hidden>Retry</button>
         <table id="postsTable" class="posts-table" role="table" hidden>
@@ -92,8 +73,7 @@
             <tr role="row">
               <th class="col-select" scope="col" role="columnheader">
                 <label id="selectAllControl" class="post-select-all">
-                  <input id="selectAll" type="checkbox" aria-label="Select all visible stories" />
-                  <span>Select visible</span>
+                  <input id="selectAll" type="checkbox" aria-label="Select all visible posts" />
                 </label>
               </th>
               <th class="col-thumb" scope="col" role="columnheader">Hero</th>
@@ -108,6 +88,23 @@
         </table>
       </section>
 
+      <!-- The bulk actions float over the workspace (admin.css, .posts-page
+           .bulk-bar). The slot after the list is their reserved runway: it is
+           sized for the bar from the first admin render and never shrinks, so
+           showing or hiding the bar never moves the rows (#566). -->
+      <div id="bulkBarSlot" class="bulk-bar-slot">
+        <div class="bulk-bar" id="bulkBar" role="region" aria-label="Bulk actions" hidden inert>
+          <span id="bulkCount" aria-live="polite"></span>
+          <details id="selectionReview" class="selection-review">
+            <summary id="selectionReviewSummary">Review selection</summary>
+            <ul id="selectionList" tabindex="0" aria-label="Selected stories"></ul>
+          </details>
+          <button id="clearSelection" type="button" class="btn-link">Clear selection</button>
+          <button id="bulkPublish" type="button" class="btn-primary">Publish</button>
+          <button id="bulkUnpublish" type="button" class="btn-secondary">Unpublish</button>
+          <button id="bulkDelete" type="button" class="btn-remove">Delete</button>
+        </div>
+      </div>
     </main>
 
     <script src="/admin/editor-image-copy.js"></script>
@@ -120,6 +117,7 @@
     <script src="/admin/admin-ui.js"></script>
     <script src="/admin/admin-confirm.js"></script>
     <script src="/admin/posts-filter.js"></script>
+    <script src="/admin/admin-select.js"></script>
     <script>
       const $ = (id) => document.getElementById(id);
       let me = null; // session from Auth.ensureAuthed(); buttons are hidden for
@@ -171,6 +169,12 @@
         $('statusViews').appendChild(button);
         return { view, button, count, label };
       });
+
+      // The five filters are in-label menus over their native selects (#566):
+      // the select stays the one source of truth, so everything above and
+      // below keeps reading and writing `.value`. A programmatic write fires no
+      // event, so render() re-syncs every menu at its end.
+      const filterMenus = ['fStatus', 'fSort', 'fRegion', 'fCountry', 'fOrder'].map((id) => AdminSelect.enhance($(id)));
 
       function syncStatusViews() {
         const filters = currentFilters();
@@ -341,16 +345,27 @@
         return post && post.title ? post.title : '(untitled)';
       }
 
+      // The bar floats over the workspace; while anything is selected the table
+      // is in selection mode, which keeps every row checkbox visible (admin.css).
+      // `inert` goes with `hidden`: a bar fading out can take neither focus nor
+      // clicks, so runBulk's focus hand-off still moves on to the Edit link.
       function refreshBulkBar() {
         const bar = $('bulkBar');
-        if (!me || !me.isAdmin || selected.size === 0) {
+        const isAdmin = Boolean(me && me.isAdmin);
+        // The runway is reserved from the first admin render and never released.
+        if (isAdmin) $('bulkBarSlot').classList.toggle('is-reserved', true);
+        const selecting = isAdmin && selected.size > 0;
+        $('postsTable').classList.toggle('is-selecting', selecting);
+        if (!selecting) {
           bar.hidden = true;
+          bar.inert = true;
           $('selectionReview').open = false;
           return;
         }
         const visibleKeys = new Set(visiblePosts().map((p) => p.translationKey));
         const outsideView = [...selected].filter((key) => !visibleKeys.has(key)).length;
         bar.hidden = false;
+        bar.inert = false;
         $('bulkCount').textContent = selected.size + ' selected · ' +
           outsideView + ' outside current view';
         const list = $('selectionList');
@@ -360,6 +375,18 @@
           item.textContent = postTitle(key);
           list.appendChild(item);
         }
+      }
+
+      // Clearing happens from wherever the author is in the list, so focus goes
+      // to a checkbox already on screen (select-all first) without scrolling.
+      // Only when none is fully in view does it go to select-all, scrolled into
+      // view: visible focus outranks a still list.
+      function clearSelection() {
+        selected.clear();
+        render();
+        const candidates = [$('selectAll'), ...$('postsList').querySelectorAll('input')];
+        const inView = AdminFocus.firstInView(candidates, $('postsTable').closest('.cms-workspace'));
+        (inView || $('selectAll')).focus({ preventScroll: Boolean(inView) });
       }
 
       // Bulk DELETE is irreversible and has no undo — revisions are per-save
@@ -584,10 +611,13 @@
         });
       }
 
-      // The open panel floats over the rows below it, so it closes like a menu:
-      // a click anywhere outside it dismisses it (Escape is handled per row above).
+      // An open panel floats over the rows below it, so it closes like a menu:
+      // a click anywhere outside it dismisses it (Escape is handled per row
+      // above, and for Review selection by the bar below).
       document.addEventListener('click', (event) => {
         if (openMoreActions && !openMoreActions.contains(event.target)) openMoreActions.open = false;
+        const review = $('selectionReview');
+        if (review.open && !review.contains(event.target)) review.open = false;
       });
 
       // Story key → its row's Edit link, from the latest render: the control a
@@ -833,6 +863,7 @@
         const selectionUnavailable = allPosts.some((post) => selected.has(post.translationKey) && post.publication?.availability !== 'available');
         for (const id of ['bulkPublish', 'bulkUnpublish', 'bulkDelete']) $(id).disabled = listStale || listMutating || selectionUnavailable;
         $('selectAll').disabled = listStale || listMutating;
+        for (const menu of filterMenus) menu.sync();
       }
 
       function fillOptions(select, values) {
@@ -953,11 +984,42 @@
         render();
       });
 
-      $('clearSelection').addEventListener('click', () => {
-        selected.clear();
-        render();
-        $('selectAll').focus();
+      $('clearSelection').addEventListener('click', clearSelection);
+      // Escape inside the bar closes Review selection first, then clears the
+      // selection like Clear selection. A held key (repeat) or an Escape a menu
+      // or dialog already handled does nothing.
+      $('bulkBar').addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape' || event.repeat || event.defaultPrevented) return;
+        event.preventDefault();
+        const review = $('selectionReview');
+        if (review.open) {
+          review.open = false;
+          $('selectionReviewSummary').focus();
+          return;
+        }
+        clearSelection();
       });
+      // A checkbox's label is its hit area. Its default would focus the box with
+      // a scroll, and the bar's scroll padding counts the bottom strip as out of
+      // view, so a click on the label (not the box) toggles without scrolling.
+      $('postsTable').addEventListener('click', (event) => {
+        const label = event.target;
+        if (!label || !label.classList || !(label.classList.contains('post-row-select') || label.classList.contains('post-select-all'))) return;
+        const box = label.querySelector('input');
+        if (!box) return;
+        event.preventDefault();
+        box.focus({ preventScroll: true });
+        box.click();
+      });
+      // The runway follows the tallest the bar has been (it wraps on narrow
+      // screens); it never shrinks, so hiding the bar cannot move the list.
+      let bulkBarHeight = 0;
+      new ResizeObserver(() => {
+        const height = $('bulkBar').offsetHeight;
+        if (height <= bulkBarHeight) return;
+        bulkBarHeight = height;
+        document.body.style.setProperty('--bulk-bar-h', height + 'px');
+      }).observe($('bulkBar'));
       $('retryLoad').addEventListener('click', () => load());
 
       $('bulkPublish').addEventListener('click', () => runBulk('publish'));

@@ -791,7 +791,8 @@ The photograph can be an independently selected **title image**, with its own al
 and focal point. If absent, the existing hero is used. This does not alter the opening's
 geometry or introduce text over the photograph; homepage covers, cards, pagination and
 social images keep the hero. Selection is per locale in the editor's existing inspector,
-using the same media picker, upload and framing controls rather than a new visual pattern.
+using the same media picker and framing controls rather than a new visual pattern; like
+the hero, it is chosen from the library only (#569).
 
 Story openings and About use one 3rem, extra-bold red drop cap on the article's
 first **direct-child paragraph**. A preceding heading does not suppress it.
@@ -1126,7 +1127,8 @@ criterion (2.5.5 is AAA), so the accessibility commitment in `PRODUCT.md` is una
 **One control vocabulary.** Every page uses the same primitives; page CSS only places them.
 
 - **Labels** sit above their field in the body face (13px, 600, ink) — the old mono
-  uppercase labels are gone from the admin. A checkbox sits beside its label
+  uppercase labels are gone from the admin. The exception is a **filter menu**, whose
+  caption sits inside its trigger (below). A checkbox sits beside its label
   (`.check-field`), and its help text indents under the label. A label that names a
   language appends the code in parentheses — Excerpt (DE), Permalink (EN), Tagline (DE) —
   never the language name; only the locale tabs spell the language out.
@@ -1139,6 +1141,23 @@ criterion (2.5.5 is AAA), so the accessibility commitment in `PRODUCT.md` is una
 - **Inputs, selects and textareas** share one height, `--line-control` border, 6px radius
   and accent focus ring. Selects draw their own chevron so they match inputs exactly. File
   inputs use a quiet outlined picker button, not a filled mono one.
+- **Filter menus** (`admin-select.js`, #566; Posts only so far) replace a list filter's
+  native popup with an in-label trigger — `Status: All`, caption in muted 500, value in
+  ink — at the field height and radius, with the menus' drawn chevron. A filter set away
+  from its default reads in `--studio-accent-hover` at 600 with an accent border. The panel
+  is the row-menu panel (`--surface`, `--menu-shadow`); the selected option carries a drawn
+  check and 600 weight, the active one a soft fill plus an inset accent outline. It is an
+  APG select-only combobox over a hidden native `<select>`, which stays the source of truth
+  and receives `input` + `change`. Spec:
+  `docs/superpowers/specs/2026-11-11-issue-566-posts-bulk-bar-filters-design.md`.
+- **Posts bulk actions float** in a bar fixed at the foot of the workspace (never over the
+  sidebar), centred, `--menu-shadow`, and translucent at a measured floor: `--surface` at
+  95%, never blurred (ink 13.61:1, accent 5.54:1, outlined-button border 3.04:1 over a black
+  thumbnail). Its runway is reserved after the list and never shrinks, so selecting or
+  unticking never moves a row; Clear selection scrolls only when no checkbox is in view, to
+  keep focus visible. Row checkboxes fade in on row hover and stay visible when
+  focused, checked, while anything is selected, and wherever there is no hover. Media's
+  bulk bar stays in flow.
 - **Buttons** have four roles: the unclassed button is the one navy primary per form or
   section (Save, Add user, Import, Sign in); `.btn-secondary` is outlined and auxiliary
   (Test connection, Insert image, Review story, Cancel); `.btn-remove` is outlined red for
@@ -1202,10 +1221,11 @@ criterion (2.5.5 is AAA), so the accessibility commitment in `PRODUCT.md` is una
   a consequence the author must see before acting ("discards your edits to them") and a
   privacy disclosure stay visible, after the controls rather than above them.
 - **Menus and disclosures** share one shape: outlined trigger with a drawn chevron and a
-  floating panel (the editor's More actions, the Posts row's admin-only More actions); inline
-  disclosures (alt-text review, bulk selection, picker folders, help details) use the same
-  chevron in place of the UA triangle. A floating panel closes like a menu: Escape returns
-  focus to its trigger, and a click outside it dismisses it.
+  floating panel (the editor's More actions, the Posts row's admin-only More actions, the
+  Posts filter menus, Review selection in the floating bulk bar); inline disclosures
+  (alt-text review, picker folders, help details) use the same chevron in place of the UA
+  triangle. A floating panel closes like a menu: Escape returns focus to its trigger, and a
+  click outside it dismisses it.
 - **Advisories** that never block anything (the editor's alt-text review before a publish)
   use the neutral `.notice-info`; `.notice-warn` is for results with a consequence (a live
   story missing alt text, backups off, an incomplete import).
@@ -1217,8 +1237,12 @@ criterion (2.5.5 is AAA), so the accessibility commitment in `PRODUCT.md` is una
   Journeys rows and inside every locale tab. Four states, each with a non-colour cue and an
   accessible name: available (solid), missing — nothing written yet (dashed, amber),
   omitted — written or not, but not requested for publication (dashed, struck through,
-  muted) and unknown (dotted). The choice itself is one checkbox with one polarity in both
-  editors: **Publish this story in English** / **Publish this journey in English**.
+  muted) and unknown (dotted). The choice itself has one polarity in both editors: the story
+  editor makes it in the **Publish** dialog (#568) — one checkbox per enabled language when two are enabled (a single-language install shows its one row without a checkbox), the
+  primary and any already-published language checked and locked with their reason, each row with
+  title, resulting URL in mono and readiness in words; selected languages with gaps block Publish
+  with an announced reason and a **Go to** link that closes the dialog. The journey editor keeps
+  its **Publish this journey in English** checkbox.
   The **Pages** catalogue replaces About in the admin sidebar, using flat compact
   rows like Posts — kind, a Draft/Published status pill (or "Not created yet"), language
   chips with the enabled-locale titles and right-aligned **Edit**/**Create** actions — not
@@ -1369,7 +1393,10 @@ criterion (2.5.5 is AAA), so the accessibility commitment in `PRODUCT.md` is una
 - Gallery blocks remain part of the canonical Markdown draft. Visual gallery editing uses
   the existing Media picker and preserves directives, ordering, captions and source URLs;
   Markdown mode exposes the underlying fence.
-- **Translate with AI** stays beside the locale tabs. Its native dialog
+- **Translate** (accessible name **Translate with AI**) stays beside the locale tabs, its label
+  led by the shared 1rem stroke AI icon (`AdminIcons.ai()`, `currentColor`, hidden from assistive
+  technology) and kept on one line at every width. It also works for a language that is not
+  selected for publication; the dialog then says the result stays a private draft. Its native dialog
   names the direction and provider/endpoint/model before an explicit inference action, then
   shows readonly title, excerpt, complete Markdown and article-local image text for review.
   Existing target content requires a separate unchecked replacement confirmation. Apply and
@@ -1397,10 +1424,11 @@ criterion (2.5.5 is AAA), so the accessibility commitment in `PRODUCT.md` is una
   Below 52rem the audit-to-title gap, title-field margin and title-to-body gap are reduced
   without shrinking the touch targets or changing the manuscript's reading size.
 - Hero image and title image are collapsible inspector sections (closed by default) with
-  one box: a white panel with preview, alt text, status, then **Replace photo** (native
-  file input with a dashed drop edge, upload, library) and **Adjust framing**. A closed
-  section shows a small thumbnail of its photo beside Show. A loaded story opens Replace
-  photo only when that image is missing; author actions never fold it under focus.
+  one box: a white panel with preview, alt text, status, then **Choose from library**
+  (always visible, no upload; the title image adds **Remove title image**) and **Adjust
+  framing**. A closed section shows a small thumbnail of its photo beside Show. Hero alt text
+  is typed here (a pick copies the photo's Media alt only into an empty field); the hero has
+  no AI alt suggestion (body photos keep theirs).
 - Excerpts grow with their text; no inner scrollbar or resize grip.
 - The slug's site prefix sits above the slug in the inspector, so neither half truncates.
   A published, disabled permalink is styled as a quiet reference; editable slugs retain a field boundary.
@@ -1425,7 +1453,12 @@ criterion (2.5.5 is AAA), so the accessibility commitment in `PRODUCT.md` is una
   ("3 Oct 2024 · RO · Europe · 1 stop") or what is missing ("Missing date"), and never
   forces itself open — the readiness chip's Trip link is the way in to a gap.
 - Waypoints show their stops and **Add stop** first; the via-point note, the geocoding
-  privacy note and the routing privacy note follow together below them.
+  privacy note and the routing privacy note follow together below them. Each stop row is
+  name · remove, lat · lng, then one controls line that never wraps: a square magnifier
+  button (**Find coordinates**, named by `aria-label` and tooltip, the size of the ×) ·
+  **Via point** · the travel-mode select (labelled **Continue by**, visually hidden, tooltip),
+  or the last stop's note in that slot. The select gives up width first. The profile warning,
+  lookup status and result buttons follow below at full width.
 - **Route along stops** and **GPX route** fold like the sections around them; each
   summary carries its live status line, so the state reads without opening them. A GPX
   error opens its section before taking focus.
@@ -1460,7 +1493,8 @@ criterion (2.5.5 is AAA), so the accessibility commitment in `PRODUCT.md` is una
 - Country assistance and excerpt generation sit next to the relevant fields in Story
   details. Coordinate approximation is explicit. Excerpt suggestions have a plain-text
   preview, character count, and separate accept/dismiss actions; generation never looks
-  like a saved edit.
+  like a saved edit. The Excerpt field carries no help text; the provider disclosure is a
+  muted line under **Generate excerpt with AI** and is that button's description.
 - **Media leads with the photograph.** The library grid uses larger tiles (≥10.5rem, two
   columns on a phone) captioned with the photo's title; a photo without one shows its file
   name set back in muted, one-line type. Tiles carry no alt-text tag (owner decision,
@@ -1470,8 +1504,21 @@ criterion (2.5.5 is AAA), so the accessibility commitment in `PRODUCT.md` is una
   back. With no detail selected the grid takes the inspector's
   space; selection guidance and keyboard shortcuts live under Folders. The detail panel
   (20rem) has a quiet **Photo details / Back to photos** header, then the photo itself,
-  camera · date · pixel size and the key in mono, then fields; lens and file sizes
-  stay under **File**. The laptop inspector pins within the workspace and scrolls independently.
+  camera · date · pixel size in mono (the storage key is not shown, #570), then **View
+  fullscreen** beside **Suggest with AI** in one compact row, then fields. **File** lists Lens
+  and Exposure (`28 mm · f/2.8 · 1/250 s · ISO 200`) only when recorded — no dash — then the
+  original and variant sizes. **Versions** follows: one mono, underlined link per stored
+  variant file (`AVIF · 1920 × 1280 · 412 kB`), opening a new tab; the original is size-only
+  and never linked. The fullscreen viewer is a native `<dialog>` on a solid `#0f141a` stage with
+  the photo at `object-fit: contain`; its caption sits **under** the photo on an opaque navy
+  plate (white title, DE/EN alt texts with mono codes, "Photo n of N on this page") with
+  outlined white Previous / Next / Close (white focus ring; the accent ring fails on navy).
+  Previous/Next stay focusable at the ends (`aria-disabled`); ←/→ step, Escape closes and focus
+  returns to the opener. At 320px the plate stacks under the photo with the three controls on
+  one row; on short wide screens it stands beside the photo. A photo without a ready variant
+  shows its status in a dashed frame, never a broken image. Only a fade, and only without a
+  reduced-motion preference. **F** on a focused tile opens it fullscreen; the hint sits with
+  the other shortcuts. The laptop inspector pins within the workspace and scrolls independently.
   Enter opens the focused photo without changing bulk selection; **Photo details** also moves
   focus into the panel. On phones an unmodified photo tap reveals the panel from its top.
   Back to photos asks before discarding unsaved metadata and restores the photo's grid focus.

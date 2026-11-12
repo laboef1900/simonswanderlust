@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ensureSchema, type DbPool } from '../src/db.js';
 import { pgPostStore, type PostPair } from '../src/posts.js';
 import { pgLanguageStore } from '../src/language.js';
+import { emptyMediaExif } from '../src/exif.js';
 import { memoryMediaStore } from '../src/media-store.js';
 import { pgJourneyStore, type JourneyDraft, type StoredJourney } from '../src/journeys.js';
 
@@ -44,7 +45,7 @@ function barrier(pool: DbPool, match: (sql: string) => boolean, fail?: (sql: str
   beforeEach(async () => {
     owner = new pg.Pool({ connectionString: url }); schema = `journey_race_${randomUUID().replaceAll('-', '')}`;
     await owner.query(`CREATE SCHEMA ${schema}`); pool = new pg.Pool({ connectionString: url, options: `-c search_path=${schema}` }); await ensureSchema(pool);
-    await media.upsert({ key: 'photo', width: 800, height: 600, origBytes: 1, status: 'ready', exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null }, uploadedBy: null });
+    await media.upsert({ key: 'photo', width: 800, height: 600, origBytes: 1, status: 'ready', exif: emptyMediaExif(), uploadedBy: null });
   });
   afterEach(async () => { await pool?.end(); if (schema) await owner.query(`DROP SCHEMA ${schema} CASCADE`); await owner?.end(); });
   async function story(): Promise<string> {
@@ -124,7 +125,7 @@ function barrier(pool: DbPool, match: (sql: string) => boolean, fail?: (sql: str
       const locale = (locale: 'de' | 'en') => ({ locale, slug: `story-${locale}-${id}`, title: 'Story', country: 'Test', excerpt: 'Excerpt', bodyMarkdown: 'Body', images: {}, heroImage: { src: `${base}/photo`, width: 800, height: 600, alt: 'Photo' } });
       const story = await posts.upsertDraft({ translationKey: '', status: 'draft', shared: { date: '2026-10-28', countryCode: 'DE', region: 'europe', coordinates: { lat: 1, lng: 2 } }, de: locale('de'), en: locale('en') });
       const media = memoryMediaStore({ baseUrl: base });
-      await media.upsert({ key: 'photo', width: 800, height: 600, origBytes: 1, status: 'ready', exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null }, uploadedBy: null });
+      await media.upsert({ key: 'photo', width: 800, height: 600, origBytes: 1, status: 'ready', exif: emptyMediaExif(), uploadedBy: null });
       const journeys = pgJourneyStore(pool, media, base);
       const row = await journeys.create(draft([story.translationKey]));
       const held = barrier(pool, (sql) => sql.startsWith('UPDATE site_language SET locked_at'));

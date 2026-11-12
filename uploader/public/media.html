@@ -168,6 +168,27 @@
         </div>
       </dialog>
 
+      <!-- Fullscreen viewer (media-browser.js): one photo of the current page at
+           its largest variant. Read-only — it never changes the selection, the
+           open details or unsaved edits. The caption sits on its own opaque
+           plate under the photograph, never over it; labels come from ui.ts. -->
+      <dialog id="mediaViewer" class="media-viewer" aria-labelledby="viewerTitle">
+        <div id="viewerStage" class="media-viewer__stage"></div>
+        <div class="media-viewer__plate">
+          <div class="media-viewer__caption">
+            <h2 id="viewerTitle" class="media-viewer__title"></h2>
+            <ul id="viewerAlts" class="media-viewer__alts" role="list" hidden></ul>
+            <p id="viewerPosition" class="media-viewer__position"></p>
+          </div>
+          <div class="media-viewer__controls">
+            <button type="button" id="viewerPrev" class="btn-secondary" aria-keyshortcuts="ArrowLeft"></button>
+            <button type="button" id="viewerNext" class="btn-secondary" aria-keyshortcuts="ArrowRight"></button>
+            <button type="button" id="viewerClose" class="btn-secondary"></button>
+          </div>
+        </div>
+        <p id="viewerLive" class="visually-hidden" role="status"></p>
+      </dialog>
+
     </main>
 
     <script src="/admin/editor-image-copy.js"></script>

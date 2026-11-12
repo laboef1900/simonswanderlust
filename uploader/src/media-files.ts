@@ -1,10 +1,12 @@
-import { readdir, unlink } from 'node:fs/promises';
+import { lstat, readdir, unlink } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
+import sharp from 'sharp';
 import { assertSafeKey } from './storage.js';
 import type { PostUsageRow } from './posts.js';
 import type { PagePair } from './pages.js';
 import { assertWorkWritable, type WorkCancellationOptions } from './work-cancellation.js';
 import type { StoredJourney } from './journeys.js';
+import type { ImageFormat } from './variants.js';
 
 // The variant filename contract: `${key}-${width}.${format}` (see storage.ts /
 // variants.ts). Everything under storageDir that matches this is a variant of
@@ -140,4 +142,97 @@ export async function deleteMedia(storageDir: string, key: string, opts: WorkCan
     }
   }
   return removed;
+}
+
+/** One variant file of a photo as it exists on disk (#570, the Versions list). */
+export interface VariantFile {
+  format: ImageFormat;
+  /** From the filename — the variant contract. */
+  width: number;
+  /** From the file header; null when the file cannot be read as an image. */
+  height: number | null;
+  /** lstat size. */
+  bytes: number;
+}
+
+/** A variant file plus its public URL, `${item.src}-${width}.${format}`. */
+export interface MediaVersion extends VariantFile {
+  src: string;
+}
+
+/**
+ * What `GET /media/items/*?versions=1` adds as `versions`. `available` with no
+ * items means the key has no variant files; `processing` rows are not read
+ * (their set is in flux); `unavailable` is an unsafe stored key or a storage
+ * error other than ENOENT.
+ */
+export type MediaVersions =
+  | { availability: 'available'; items: MediaVersion[] }
+  | { availability: 'processing' }
+  | { availability: 'unavailable' };
+
+/** The order versions of one width are listed in. */
+const VARIANT_FORMAT_ORDER: readonly ImageFormat[] = ['avif', 'webp', 'jpeg'];
+
+/** A variant's pixel height from its header; null when sharp cannot read it. */
+async function headerHeight(file: string): Promise<number | null> {
+  try {
+    const { height } = await sharp(file).metadata(); // header only, no pixel decode
+    return typeof height === 'number' && Number.isInteger(height) && height > 0 ? height : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The variant files that exist for `key`, sorted by width and then AVIF, WebP,
+ * JPEG. The DISK is the authoritative source (media-store.ts), so legacy,
+ * partial and JPEG-only sets list exactly what is there.
+ *
+ * @ai-warning `key` comes from a database row here, and a row can be
+ * hand-edited or restored from a dump: `assertSafeKey` is re-asserted BEFORE
+ * any path is built, like `deleteMedia`, and its exact-base match keeps `hero`
+ * from listing `hero-b`. Regular files only — `Dirent.isFile()` and then
+ * `lstat().isFile()` — so a symlink is never followed and its target's size or
+ * dimensions are never reported. The private original (`-orig.*`) cannot match
+ * `VARIANT_FILE_RE` and is never listed.
+ *
+ * A missing directory (ENOENT) is an empty list. Every other error is THROWN:
+ * the caller reports it as unavailable and must not log it with the path.
+ */
+export async function listVariantFiles(storageDir: string, key: string): Promise<VariantFile[]> {
+  assertSafeKey(key);
+  const dir = join(resolve(storageDir), dirname(key));
+  const base = basename(key);
+  let entries;
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw e;
+  }
+  const files: VariantFile[] = [];
+  for (const d of entries) {
+    if (!d.isFile()) continue;
+    const match = VARIANT_FILE_RE.exec(d.name);
+    if (!match || d.name.replace(VARIANT_FILE_RE, '') !== base) continue;
+    const format = VARIANT_FORMAT_ORDER.find((f) => f === match[2]);
+    const width = Number(match[1]);
+    // The public URL is rebuilt from the parsed width (`${src}-${width}.${format}`),
+    // so a name that does not round-trip (`hero-0640.webp`, a width past the safe
+    // integers) is not a variant the site can address and is left out.
+    if (!format || String(width) !== match[1]) continue;
+    const file = join(dir, d.name);
+    let stat;
+    try {
+      stat = await lstat(file);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') continue; // deleted since the listing
+      throw e;
+    }
+    if (!stat.isFile()) continue;
+    files.push({ format, width, height: await headerHeight(file), bytes: stat.size });
+  }
+  return files.sort((a, b) =>
+    a.width - b.width || VARIANT_FORMAT_ORDER.indexOf(a.format) - VARIANT_FORMAT_ORDER.indexOf(b.format));
 }

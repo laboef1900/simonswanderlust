@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import vm from 'node:vm';
 import { createSettingsStore, defaultSettings } from '../src/settings.js';
+import { DEFAULT_TRANSLATION_PROMPT } from '../src/translation-prompt.js';
 import { buildServer } from '../src/server.js';
 import { memoryUserStore } from '../src/users.js';
 import { memorySessionStore } from '../src/sessions.js';
@@ -70,6 +71,10 @@ interface Element {
   removeEventListener(type: string, fn: (event?: Record<string, unknown>) => Promise<void> | void): void;
   click(): Promise<void>;
   fire(type: string, event?: Record<string, unknown>): Promise<void>;
+  /** A browser-dispatched event: runs this node's listeners, then each ancestor's when it bubbles. */
+  dispatchEvent(event: { type: string; bubbles?: boolean }): boolean;
+  /** Where a bubbling event goes next; `loadPage` continues past the flat stub tree along the real markup. */
+  bubbleParent(): Element | null;
   appendChild(child?: Element): void;
   append(...children: Element[]): void;
   after(...nodes: Element[]): void;
@@ -81,7 +86,10 @@ interface Element {
   removeAttribute(name: string): void;
   toggleAttribute(name: string, force?: boolean): boolean;
   querySelectorAll(selector: string): Element[];
-  focus(): void;
+  querySelector(selector: string): Element | null;
+  /** No stub sits inside the admin shell, so there is never a `.cms-workspace` ancestor. */
+  closest(selector: string): Element | null;
+  focus(options?: { preventScroll?: boolean }): void;
 }
 
 function element(): Element {
@@ -116,6 +124,13 @@ function element(): Element {
     async fire(type, event = {}) {
       for (const fn of listeners[type] ?? []) await fn({ preventDefault() {}, ...event });
     },
+    dispatchEvent(event) {
+      for (let node: Element | null = this; node; node = event.bubbles ? node.bubbleParent() : null) {
+        for (const fn of node.listeners[event.type] ?? []) void fn({ preventDefault() {}, type: event.type, target: this });
+      }
+      return true;
+    },
+    bubbleParent() { return this.parentElement; },
     appendChild(child) { if (child) { child.remove(); child.parentElement = this; this.children.push(child); } },
     append(...children) { for (const child of children) this.appendChild(child); },
     after(...nodes) {
@@ -147,6 +162,8 @@ function element(): Element {
         ...child.querySelectorAll(selector),
       ]);
     },
+    querySelector(selector) { return this.querySelectorAll(selector)[0] ?? null; },
+    closest() { return null; },
     focus() { this.focused = true; },
   };
   let markup = '';
@@ -172,6 +189,16 @@ type Listener = (event?: Record<string, unknown>) => Promise<void> | void;
 interface PageSurface {
   ctx: Record<string, unknown>; el: (id: string) => Element; windowListeners: Record<string, Listener[]>;
 }
+
+/** Each markup id with its nearest ancestor's id (null at the top), read from the real HTML. */
+function markupParents(markup: string): Map<string, string | null> {
+  const window = new Window();
+  const parsed = new window.DOMParser().parseFromString(markup, 'text/html');
+  const parents = new Map<string, string | null>();
+  for (const node of parsed.querySelectorAll('[id]')) parents.set(node.id, node.parentElement?.closest('[id]')?.id ?? null);
+  void window.happyDOM.close();
+  return parents;
+}
 function loadPage(file: string, extraGlobals: Record<string, unknown>, scripts: string[] = []): PageSurface {
   const html = readFileSync(file, 'utf8');
   const scriptStart = html.lastIndexOf('<script>');
@@ -183,7 +210,17 @@ function loadPage(file: string, extraGlobals: Record<string, unknown>, scripts: 
   const createElement = (tag = 'div'): Element => {
     const node = Object.assign(element(), { tagName: tag.toUpperCase() });
     node.focus = () => { node.focused = true; activeElement = node; };
+    node.bubbleParent = () => node.parentElement ?? markupParent(node);
     return node;
+  };
+  // The stub tree is flat, so an event bubbling out of a markup element follows the
+  // real document instead: its nearest ancestor with an id, then the document.
+  let parents: Map<string, string | null> | undefined;
+  const markupParent = (node: Element): Element | null => {
+    if (elements.get(node.id) !== node) return null;
+    parents ??= markupParents(markup);
+    const parent = parents.get(node.id);
+    return parent ? el(parent) : documentStub;
   };
   const el = (id: string): Element => {
     if (!ids.has(id)) throw new Error('no element #' + id + ' in ' + file);
@@ -269,7 +306,7 @@ function loadPage(file: string, extraGlobals: Record<string, unknown>, scripts: 
       locale, Object.fromEntries(Object.entries(strings).filter(([key]) => key.startsWith('admin.build.'))
         .map(([key, value]) => [key.slice('admin.build.'.length), value])),
     ])),
-    AdminConfirm: { ask: async () => true, liveUrls: () => ({ de: '', en: '' }), urlsPlain: () => '' },
+    AdminConfirm: { ask: async () => true, liveUrls: () => ({ de: '', en: '' }) },
     ...extraGlobals,
   };
   // Focus tracking follows `focus()`; the comments cases also assign it directly.
@@ -299,9 +336,20 @@ function realPostsFilter() {
   return windowStub.PostsFilter as Record<string, unknown>;
 }
 
+// The menus' own behaviour is admin-select.test.ts's; here a stub records
+// each `sync()` (with the select's value at that moment) so a test can see
+// that a programmatic write reached every menu.
+function menuStub(syncs: string[] = []) {
+  return {
+    enhance: (select: Element) => ({ sync: () => { syncs.push(select.id + '=' + select.value); }, close() {}, trigger: select }),
+  };
+}
+
 function loadPosts(extraGlobals: Record<string, unknown> = {}, languageRead?: () => Promise<Response>) {
   const request = extraGlobals.fetch as ((url: string, init?: RequestInit) => unknown) | undefined;
   const page: PageSurface = loadPage('public/posts.html', {
+    AdminSelect: menuStub(),
+    ResizeObserver: class { observe() {} disconnect() {} },
     PostsFilter: {
       apply: (posts: unknown[]) => posts,
       REGIONS: [],
@@ -844,6 +892,120 @@ describe('posts.html selection, recovery and disclosures', () => {
     await el('clearSelection').click();
     expect(vm.runInContext('selected.size', ctx)).toBe(0);
     expect(el('bulkBar').hidden).toBe(true);
+  });
+
+  // The floating bar (#566): selecting shows it and puts the table in selection
+  // mode without taking focus; it is inert whenever hidden, so a fading bar can
+  // never hold focus; the runway is reserved before anything is selected.
+  async function selectablePage() {
+    const page = loadPosts({ PostsFilter: filterStub });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const rows = [{ ...post, translationKey: 'a', title: 'Alpha' }, { ...post, translationKey: 'b', title: 'Beta' }];
+    vm.runInContext(`me = { isAdmin: true }; allPosts = ${JSON.stringify(rows)}; render();`, page.ctx);
+    const box = (index: number) => {
+      const found = page.el('postsList').querySelectorAll('input')[index];
+      if (!found) throw new Error('row checkbox ' + index + ' missing');
+      return found;
+    };
+    return { ...page, box };
+  }
+
+  it('shows the bar and selection mode on the first tick without moving focus, and reverts both on Clear selection', async () => {
+    const { ctx, el, box } = await selectablePage();
+    const doc = documentOf({ ctx, el, windowListeners: {} });
+    expect(el('bulkBarSlot').classList.contains('is-reserved')).toBe(true);
+    expect(el('bulkBar').hidden).toBe(true);
+    expect(el('postsTable').classList.contains('is-selecting')).toBe(false);
+
+    const first = box(0);
+    first.focus();
+    first.checked = true;
+    await first.fire('change');
+    expect(el('bulkBar').hidden).toBe(false);
+    expect((el('bulkBar') as Element & { inert?: boolean }).inert).toBe(false);
+    expect(el('postsTable').classList.contains('is-selecting')).toBe(true);
+    expect(el('bulkCount').textContent).toBe('1 selected · 0 outside current view');
+    expect(doc.activeElement).toBe(first);
+
+    let focusOptions: unknown;
+    el('selectAll').focus = (options) => { focusOptions = options; };
+    await el('clearSelection').click();
+    expect(vm.runInContext('selected.size', ctx)).toBe(0);
+    expect(el('bulkBar').hidden).toBe(true);
+    expect((el('bulkBar') as Element & { inert?: boolean }).inert).toBe(true);
+    expect(el('postsTable').classList.contains('is-selecting')).toBe(false);
+    // Outside the shell no checkbox is "in view", so focus falls back to
+    // select-all and is scrolled into view: visible focus outranks a still list.
+    expect(focusOptions).toEqual({ preventScroll: false });
+    expect(el('bulkBarSlot').classList.contains('is-reserved')).toBe(true);
+  });
+
+  it('Clear selection hands focus to a checkbox already in view, without scrolling', async () => {
+    const { el, box } = await selectablePage();
+    // The workspace shows y 0–500; select-all has scrolled away above it and
+    // every row checkbox (re-created by render()) sits on screen at y 120.
+    const at = (top: number) => () => ({ top, bottom: top + 16, height: 16 });
+    const workspace = { getBoundingClientRect: () => ({ top: 0, bottom: 500, height: 500 }) };
+    el('postsTable').closest = () => workspace as unknown as Element;
+    let focused: { label: string | null; options: unknown } | null = null;
+    const track = (node: Element) => Object.assign(node, {
+      getBoundingClientRect: node === el('selectAll') ? at(-60) : at(120),
+      focus: (options?: { preventScroll?: boolean }) => { focused = { label: node.getAttribute('aria-label'), options }; },
+    });
+    track(el('selectAll'));
+    const rows = el('postsList');
+    const find = rows.querySelectorAll.bind(rows);
+    rows.querySelectorAll = (selector: string) => find(selector).map(track);
+
+    const first = box(0);
+    first.checked = true;
+    await first.fire('change');
+    await el('clearSelection').click();
+
+    expect(focused).toEqual({ label: 'Select Alpha', options: { preventScroll: true } });
+  });
+
+  it('Escape in the bar closes Review selection first, ignores a held key, then clears like Clear selection', async () => {
+    const { ctx, el } = await selectablePage();
+    vm.runInContext("selected.add('a'); selected.add('b'); render();", ctx);
+    el('selectionReview').open = true;
+
+    await el('bulkBar').fire('keydown', { key: 'Escape' });
+    expect(el('selectionReview').open).toBe(false);
+    expect(el('selectionReviewSummary').focused).toBe(true);
+    expect(vm.runInContext('selected.size', ctx)).toBe(2);
+
+    await el('bulkBar').fire('keydown', { key: 'Escape', repeat: true });
+    await el('bulkBar').fire('keydown', { key: 'Escape', defaultPrevented: true });
+    expect(vm.runInContext('selected.size', ctx)).toBe(2);
+
+    await el('bulkBar').fire('keydown', { key: 'Escape' });
+    expect(vm.runInContext('selected.size', ctx)).toBe(0);
+    expect(el('bulkBar').hidden).toBe(true);
+    expect(el('selectAll').focused).toBe(true);
+  });
+
+  it('a click on a checkbox label toggles the box once and focuses it without scrolling', async () => {
+    const { ctx, el, box } = await selectablePage();
+    const first = box(0);
+    const label = first.parentElement;
+    if (!label) throw new Error('row checkbox has no label');
+    let focusOptions: unknown;
+    first.focus = (options) => { focusOptions = options; };
+    // The browser's own checkbox activation: toggle, then change.
+    first.click = async () => { first.checked = !first.checked; await first.fire('change'); };
+    let prevented = false;
+
+    await el('postsTable').fire('click', { target: label, preventDefault() { prevented = true; } });
+    expect(prevented).toBe(true);
+    expect(focusOptions).toEqual({ preventScroll: true });
+    expect(vm.runInContext('[...selected]', ctx)).toEqual(['a']);
+
+    // A click on the box itself is the browser's to handle.
+    prevented = false;
+    await el('postsTable').fire('click', { target: first, preventDefault() { prevented = true; } });
+    expect(prevented).toBe(false);
+    expect(vm.runInContext('[...selected]', ctx)).toEqual(['a']);
   });
 
   it('sends the immutable key snapshot and names every confirmed story', async () => {
@@ -1933,6 +2095,29 @@ describe('posts.html status views and language states', () => {
     expect(views(el).map((v) => v.pressed)).toEqual(['false', 'false', 'false', 'false', 'true']);
   });
 
+  it('re-syncs every filter menu after writes that fire no event: URL restore, a status view, Clear filters', async () => {
+    const syncs: string[] = [];
+    const search = '?country=Romania&status=published&sort=title';
+    const page = loadPosts({
+      AdminSelect: menuStub(syncs),
+      PostsFilter: realFilter(),
+      location: { href: 'http://localhost/admin/posts.html' + search, origin: 'http://localhost', pathname: '/admin/posts.html', search, protocol: 'http:' },
+      fetch: async () => ({ status: 200, ok: true, json: async () => library }),
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    vm.runInContext('me = { isAdmin: true }', page.ctx);
+    await (vm.runInContext('load', page.ctx) as () => Promise<void>)();
+    expect(syncs.slice(-5)).toEqual(['fStatus=published', 'fSort=title', 'fRegion=', 'fCountry=Romania', 'fOrder=desc']);
+
+    const draftView = page.el('statusViews').children[1];
+    if (!draftView) throw new Error('Draft status view is missing');
+    await draftView.click();
+    expect(syncs.slice(-5)).toEqual(['fStatus=draft', 'fSort=title', 'fRegion=', 'fCountry=Romania', 'fOrder=desc']);
+
+    await page.el('fReset').click();
+    expect(syncs.slice(-5)).toEqual(['fStatus=', 'fSort=updated', 'fRegion=', 'fCountry=', 'fOrder=desc']);
+  });
+
   it('retains filter context on a failed refresh while disabling stale publication actions', async () => {
     const { ctx, el } = await loadedPage('?country=Romania&sort=title');
     const before = views(el);
@@ -2150,6 +2335,8 @@ interface SettingsResponse {
   translationProviderId: string | null;
   translationModel: string;
   translationTimeoutMs: number;
+  translationPrompt: string;
+  translationPromptDefault: string;
   aiModel: string;
   reviewPrompt: string;
   reviewTimeoutMs: number;
@@ -2179,6 +2366,7 @@ function settingsResponse(overrides: Partial<SettingsResponse> = {}): SettingsRe
   return {
     aiProviders: [LOCAL], aiDefaultProviderId: 'lm-studio', reviewProviderId: null, captionProviderId: null,
     translationProviderId: null, translationModel: 'translation-model', translationTimeoutMs: 120000,
+    translationPrompt: 'Translation prompt', translationPromptDefault: DEFAULT_TRANSLATION_PROMPT,
     aiModel: 'review-model', reviewPrompt: 'Review prompt', reviewTimeoutMs: 60000,
     lmModel: 'vision-model', captionPrompt: 'Caption prompt', captionTimeoutMs: 60000, captionMaxTokens: 8000, captionMaxEdge: 768,
     backupSchedule: 'off', backupRetention: 14, convertJpeg: true, webpQuality: 75, avifQuality: 55,
@@ -2188,10 +2376,23 @@ function settingsResponse(overrides: Partial<SettingsResponse> = {}): SettingsRe
   };
 }
 
+// Settings checks translation instructions with the browser's own rule, so the
+// harness takes it from the real llm.js rather than restating it (its top-level
+// body only assigns window.LLM).
+const browserLlm: { LLM?: {
+  TRANSLATION_PROMPT_MAX_LENGTH: number; isTranslationPrompt(value: unknown): boolean; translationPromptProblem(value: unknown): string | null;
+} } = {};
+vm.runInNewContext(readFileSync('public/llm.js', 'utf8'), { window: browserLlm });
+const TRANSLATION_PROMPT_RULE = {
+  TRANSLATION_PROMPT_MAX_LENGTH: browserLlm.LLM!.TRANSLATION_PROMPT_MAX_LENGTH,
+  isTranslationPrompt: browserLlm.LLM!.isTranslationPrompt,
+  translationPromptProblem: browserLlm.LLM!.translationPromptProblem,
+};
+
 function loadSettingsPage(extra: Record<string, unknown> = {}) {
   return loadPage('public/settings.html', {
-    LLM: { mixedContentWarning: () => '', listModels: async () => [] },
-    AbortController, AbortSignal, setTimeout, clearTimeout,
+    LLM: { mixedContentWarning: () => '', listModels: async () => [], ...TRANSLATION_PROMPT_RULE },
+    AbortController, AbortSignal, Event, setTimeout, clearTimeout,
     ...extra,
   }, ['public/tabs.js', 'public/settings-drafts.js']);
 }
@@ -2284,7 +2485,7 @@ async function apiPage(initial: SettingsResponse, opts: {
   const page = loadSettingsPage({
     fetch: fetcher,
     localStorage: { setItem: storageWrite }, sessionStorage: { setItem: storageWrite },
-    LLM: { mixedContentWarning: opts.mixedContentWarning ?? (() => ''), listModels },
+    LLM: { mixedContentWarning: opts.mixedContentWarning ?? (() => ''), listModels, ...TRANSLATION_PROMPT_RULE },
     AdminConfirm: {
       ask: async (question: Question) => { questions.push(question); return opts.confirm ? opts.confirm(question) : true; },
     },
@@ -3414,6 +3615,7 @@ describe('settings.html use case assignments', () => {
       reviewPrompt: 'Review prompt', reviewTimeoutMs: 60000, captionPrompt: 'Caption prompt',
       captionTimeoutMs: 60000, captionMaxEdge: 768, captionMaxTokens: 8000,
       translationProviderId: 'deepseek', translationModel: 'translation-2', translationTimeoutMs: 130123,
+      translationPrompt: 'Translation prompt',
     });
     expect(el('translationModel').value).toBe('translation-2');
     expect(el('translationModelOther').hidden).toBe(true);
@@ -3542,6 +3744,7 @@ describe('settings.html use case assignments', () => {
       reviewPrompt: 'R', reviewTimeoutMs: 45123, captionPrompt: 'C', captionTimeoutMs: 30001, captionMaxEdge: 1024,
       captionMaxTokens: 4096,
       translationProviderId: null, translationModel: 'translation-model', translationTimeoutMs: 120000,
+      translationPrompt: 'Translation prompt',
     });
     // The saved values come back as the new "saved" models; Other closes.
     expect(el('aiModel').value).toBe('review-2');
@@ -3585,6 +3788,162 @@ describe('settings.html use case assignments', () => {
     page.el('backupSchedule').value = 'weekly';
     await page.el('save').click();
     expect(Object.keys(page.requests[0]!.body ?? {}).sort()).toEqual(['backupRetention', 'backupSchedule', 'importDelayMs', 'importRetries']);
+  });
+});
+
+describe('settings.html translation instructions', () => {
+  const MAX = TRANSLATION_PROMPT_RULE.TRANSLATION_PROMPT_MAX_LENGTH;
+  const DESCRIBED_BY = 'translationPromptHelp translationPromptCount';
+  const counted = (length: number) => length + ' of ' + MAX + ' characters';
+
+  /**
+   * The stub tree is flat, so the textarea is hung under its real disclosure:
+   * AdminField places its error line beside it, and events bubble on from there.
+   */
+  async function promptPage(overrides: Partial<SettingsResponse> = {}) {
+    const page = await apiPage(settingsResponse(overrides));
+    const advanced = page.el('translationAdvanced');
+    const field = page.el('translationPrompt');
+    advanced.appendChild(field);
+    /** The line AdminField adds directly under the field, once it has refused a value. */
+    const error = () => advanced.children[advanced.children.indexOf(field) + 1];
+    return { ...page, field, advanced, error, doc: documentOf(page) };
+  }
+  /** One edit as a browser reports it: the value changes, then a bubbling input event. */
+  const type = (field: Element, value: string) => {
+    field.value = value;
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+
+  it('shows the saved instructions with their character count and makes Reset available', async () => {
+    const saved = 'Use informal “du” in German.\n\tKeep place names in the local spelling.';
+    const page = loadSettingsPage();
+    const { el } = page;
+    el('translationPromptReset').disabled = true; // as the markup ships it, until settings arrive
+    await callPage(page.ctx, 'fill', settingsResponse({ translationPrompt: saved }));
+    expect(el('translationPrompt').value).toBe(saved);
+    expect(el('translationPromptCount').textContent).toBe(counted(saved.length));
+    // The count is read with the field, never announced while typing.
+    expect(el('translationPrompt').getAttribute('aria-describedby')).toBe(DESCRIBED_BY);
+    expect(el('translationPromptCount').getAttribute('role')).toBeNull();
+    expect(el('translationPromptReset').disabled).toBe(false);
+    expect(el('settingsDraftBar').hidden).toBe(true);
+  });
+
+  it('keeps Reset unavailable when the settings response carries no usable default', async () => {
+    const page = await promptPage({ translationPrompt: 'Custom house style', translationPromptDefault: ' ' });
+    expect(page.el('translationPromptReset').disabled).toBe(true);
+    await page.el('translationPromptReset').click();
+    expect(page.field.value).toBe('Custom house style');
+    expect(page.el('aiOut').textContent).toBe('');
+    expect(page.el('settingsDraftBar').hidden).toBe(true);
+  });
+
+  it('marks the AI section unsaved while typing and reports an over-limit count in words', async () => {
+    const page = await promptPage();
+    const { el, field } = page;
+    type(field, 'x'.repeat(MAX));
+    expect(el('translationPromptCount').textContent).toBe(counted(MAX));
+    expect(el('settingsDraftBar').hidden).toBe(false);
+    expect(el('settingsDraftStatus').textContent).toContain(EDITOR_COPY.settingsAiSection);
+    type(field, 'x'.repeat(MAX + 12));
+    expect(el('translationPromptCount').textContent).toBe((MAX + 12) + ' of ' + MAX + ' characters, 12 too many');
+    expect(field.value).toHaveLength(MAX + 12); // nothing is cut off
+    type(field, 'Kurz.');
+    expect(el('translationPromptCount').textContent).toBe(counted(5));
+    expect(page.doc.activeElement).not.toBe(field); // typing never moves focus
+    expect(page.requests).toEqual([]);
+  });
+
+  it.each([
+    ['multi-line instructions with surrounding whitespace', '  Use informal “du” in German.\n\tKeep place names in the local spelling.\n'],
+    ['instructions at exactly the limit', 'x'.repeat(MAX)],
+  ])('Save AI settings sends %s verbatim', async (_name, custom) => {
+    const page = await promptPage();
+    const { el, field } = page;
+    type(field, custom);
+    await el('saveAi').click();
+    expect(calls(page.requests)).toEqual(['POST /settings']);
+    expect(page.requests[0]!.body).toMatchObject({ translationPrompt: custom });
+    expect(field.value).toBe(custom);
+    expect(field.getAttribute('aria-invalid')).toBeNull();
+    expect(el('translationPromptCount').textContent).toBe(counted(custom.length));
+    expect(el('aiOut').textContent).toBe(EDITOR_COPY.writingSaved);
+    expect(el('settingsDraftBar').hidden).toBe(true);
+  });
+
+  it('Reset restores the default in the field only: unsaved, focused, announced, nothing sent', async () => {
+    const page = await promptPage({ translationPrompt: 'Custom house style' });
+    const { el, field } = page;
+    await el('translationPromptReset').click();
+    expect(field.value).toBe(DEFAULT_TRANSLATION_PROMPT);
+    expect(el('translationPromptCount').textContent).toBe(counted(DEFAULT_TRANSLATION_PROMPT.length));
+    expect(el('settingsDraftBar').hidden).toBe(false);
+    expect(el('settingsDraftStatus').textContent).toContain(EDITOR_COPY.settingsAiSection);
+    expect(page.doc.activeElement).toBe(field);
+    expect(el('aiOut').textContent).toBe(EDITOR_COPY.settingsTranslationPromptRestored);
+    expect(page.requests).toEqual([]);
+    // Only Save AI settings applies it.
+    await el('saveAi').click();
+    expect(calls(page.requests)).toEqual(['POST /settings']);
+    expect(page.requests[0]!.body).toMatchObject({ translationPrompt: DEFAULT_TRANSLATION_PROMPT });
+    expect(el('settingsDraftBar').hidden).toBe(true);
+  });
+
+  it.each([
+    ['blank', '', EDITOR_COPY.settingsTranslationPromptRequired],
+    ['whitespace-only', ' \n\t ', EDITOR_COPY.settingsTranslationPromptRequired],
+    ['invisible-only', '\u200b\u2060', EDITOR_COPY.settingsTranslationPromptRequired],
+    ['hidden-control', 'Line one\u000bLine two', EDITOR_COPY.settingsTranslationPromptHidden],
+    ['over-limit with a hidden control', '\u000b' + 'x'.repeat(MAX),
+      EDITOR_COPY.settingsTranslationPromptTooLong!.replace('{max}', String(MAX)).replace('{over}', '1')],
+    ['over-limit', 'x'.repeat(MAX + 1),
+      EDITOR_COPY.settingsTranslationPromptTooLong!.replace('{max}', String(MAX)).replace('{over}', '1')],
+  ])('refuses %s instructions under the field without a request, and typing clears the error', async (_name, value, message) => {
+    const page = await promptPage();
+    const { el, field, advanced } = page;
+    type(field, value);
+    el('aiOut').textContent = EDITOR_COPY.writingSaved!; // a stale success must not sit beside the refusal
+    expect(advanced.open).toBe(false);
+    await el('saveAi').click();
+    expect(page.requests).toEqual([]);
+    expect(advanced.open).toBe(true);
+    const error = page.error()!;
+    expect(error.id).toBe('translationPromptError');
+    expect(error.classList.contains('field-error')).toBe(true);
+    expect(error.textContent).toBe(message);
+    expect(error.textContent).not.toMatch(/[{}]/);
+    expect(error.hidden).toBe(false);
+    expect(field.getAttribute('aria-invalid')).toBe('true');
+    expect(field.getAttribute('aria-describedby')).toBe(DESCRIBED_BY + ' translationPromptError');
+    expect(page.doc.activeElement).toBe(field);
+    expect(field.value).toBe(value);
+    expect(el('aiOut').textContent).toBe('');
+    expect(el('saveAi').disabled).toBe(false);
+    expect(el('settingsDraftStatus').textContent).toContain(EDITOR_COPY.settingsAiSection);
+
+    type(field, 'Keep place names in the local spelling.');
+    expect(field.getAttribute('aria-invalid')).toBeNull();
+    expect(error.hidden).toBe(true);
+    expect(field.getAttribute('aria-describedby')).toBe(DESCRIBED_BY);
+    await el('saveAi').click();
+    expect(calls(page.requests)).toEqual(['POST /settings']);
+    expect(page.requests[0]!.body).toMatchObject({ translationPrompt: 'Keep place names in the local spelling.' });
+  });
+
+  it.each(['Reset', 'a fresh settings load'] as const)('%s clears a refused value’s error', async (recovery) => {
+    const page = await promptPage();
+    const { el, field } = page;
+    type(field, '');
+    await el('saveAi').click();
+    expect(field.getAttribute('aria-invalid')).toBe('true');
+    if (recovery === 'Reset') await el('translationPromptReset').click();
+    else await callPage(page.ctx, 'fill', settingsResponse());
+    expect(field.value).toBe(recovery === 'Reset' ? DEFAULT_TRANSLATION_PROMPT : 'Translation prompt');
+    expect(field.getAttribute('aria-invalid')).toBeNull();
+    expect(page.error()!.hidden).toBe(true);
+    expect(field.getAttribute('aria-describedby')).toBe(DESCRIBED_BY);
+    expect(page.requests).toEqual([]);
   });
 });
 
@@ -3884,7 +4243,7 @@ describe('settings.html against the real settings and provider routes', () => {
     const assignedTranslation = (await app.inject({ url: '/ai-config?purpose=translation', cookies })).json();
     expect(assignedTranslation).toEqual({
       providerId: created!.id, providerName: 'Anthropic', providerKind: 'anthropic', baseUrl: created!.baseUrl,
-      model: 'remote-model', timeoutMs: 180000, apiKey: 'fixture-created-key',
+      model: 'remote-model', timeoutMs: 180000, prompt: DEFAULT_TRANSLATION_PROMPT, apiKey: 'fixture-created-key',
     });
     expect(settings.get()).toMatchObject({ aiModel: 'remote-model', lmModel: defaultSettings().lmModel });
   });
@@ -3939,9 +4298,36 @@ describe('settings.html against the real settings and provider routes', () => {
     const assignedTranslation = (await app.inject({ url: '/ai-config?purpose=translation', cookies })).json();
     expect(assignedTranslation).toEqual({
       providerId: created!.id, providerName: 'OpenAI', providerKind: 'openai', baseUrl: created!.baseUrl,
-      model: 'remote-model', timeoutMs: 180000, apiKey: 'fixture-created-key',
+      model: 'remote-model', timeoutMs: 180000, prompt: DEFAULT_TRANSLATION_PROMPT, apiKey: 'fixture-created-key',
     });
     expect(settings.get()).toMatchObject({ aiModel: 'remote-model', lmModel: defaultSettings().lmModel });
+  });
+
+  it('saves custom translation instructions verbatim, hands them to the translator and shows them again after a reload', async () => {
+    const { el, app, cookies, settings, refill, fetcher } = await realPage();
+    expect(el('translationPrompt').value).toBe(DEFAULT_TRANSLATION_PROMPT);
+    const custom = '  Use informal “du” in German.\n\tKeep place names in the local spelling.\n';
+    el('translationPrompt').value = custom;
+    await el('translationPrompt').fire('input');
+    await el('saveAi').click();
+    expect(el('aiOut').textContent).toBe(EDITOR_COPY.writingSaved);
+    expect(settings.get().translationPrompt).toBe(custom);
+    expect((await app.inject({ url: '/ai-config?purpose=translation', cookies })).json().prompt).toBe(custom);
+
+    el('translationPrompt').value = '';
+    await refill();
+    expect(el('translationPrompt').value).toBe(custom);
+    expect(el('translationPromptCount').textContent).toBe(custom.length + ' of 4000 characters');
+
+    // Reset works from the server's own default and saves nothing by itself.
+    const before = fetcher.mock.calls.length;
+    await el('translationPromptReset').click();
+    expect(el('translationPrompt').value).toBe(DEFAULT_TRANSLATION_PROMPT);
+    expect(fetcher.mock.calls).toHaveLength(before);
+    expect(settings.get().translationPrompt).toBe(custom);
+    await el('saveAi').click();
+    expect(settings.get().translationPrompt).toBe(DEFAULT_TRANSLATION_PROMPT);
+    expect((await app.inject({ url: '/ai-config?purpose=translation', cookies })).json().prompt).toBe(DEFAULT_TRANSLATION_PROMPT);
   });
 
   it('saves the photo output budget, refuses an invalid one without saving, and reloads the saved value', async () => {

@@ -3,11 +3,12 @@ import { mkdtemp, mkdir, writeFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BacklogFullError, createEncodeQueue } from '../src/encode-queue.js';
+import { emptyMediaExif } from '../src/exif.js';
 import { memoryMediaStore, type MediaStore } from '../src/media-store.js';
 import { createWorkLock } from '../src/work-lock.js';
 
 const BASE = 'https://img.example.com';
-const noExif = { takenAt: null, camera: null, lens: null, lat: null, lng: null };
+const noExif = emptyMediaExif();
 
 function deferred<T = void>() {
   let resolve!: (v: T) => void;

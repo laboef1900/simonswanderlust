@@ -317,6 +317,11 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
       lens          text,
       lat           double precision,
       lng           double precision,
+      focal_length      double precision,
+      focal_length_35mm integer,
+      f_number          double precision,
+      iso               integer,
+      exposure_time     double precision,
       format        text CHECK (format IS NULL OR format = 'jpeg'),
       encoding      jsonb,
       CONSTRAINT media_encoding_check
@@ -642,5 +647,19 @@ export async function ensureSchema(pool: DbPool): Promise<void> {
   // both rows of a pair. Never part of POST_SNAPSHOT_SQL: Publish merges only its
   // public projection, and only while fresh. See the 2026-11-03 stop-routing spec.
   await pool.query('ALTER TABLE posts ADD COLUMN IF NOT EXISTS stop_route jsonb');
+  // #570: the photo's exposure settings, parsed from EXIF at upload and filled
+  // for older rows by the `backfill-exif` CLI — never here: nullable, no default,
+  // no index, no rewrite of existing rows.
+  // @ai-warning Deliberately NO CHECK on the ranges. A CHECK is write-once (see
+  // the media note above) and would need a byte-exact mirror in
+  // onboarding-bootstrap.ts BOOTSTRAP_CHECKS; the bounds are applied at every
+  // write point instead (`normalizeExposure` in media-store.ts upsert/setExposure,
+  // `exposureValue` in the backup restore). `double precision` accepts NaN, so a
+  // new write path MUST go through one of those.
+  await pool.query('ALTER TABLE media ADD COLUMN IF NOT EXISTS focal_length double precision');
+  await pool.query('ALTER TABLE media ADD COLUMN IF NOT EXISTS focal_length_35mm integer');
+  await pool.query('ALTER TABLE media ADD COLUMN IF NOT EXISTS f_number double precision');
+  await pool.query('ALTER TABLE media ADD COLUMN IF NOT EXISTS iso integer');
+  await pool.query('ALTER TABLE media ADD COLUMN IF NOT EXISTS exposure_time double precision');
   await ensureOnboardingSchema(pool);
 }

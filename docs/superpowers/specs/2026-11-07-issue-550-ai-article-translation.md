@@ -15,7 +15,7 @@ No repository-wide policy is waived. No merge, deployment, release or published-
 
 ## Decision and historical reconciliation
 
-Translate the current unsaved active locale into the other enabled, non-omitted locale of the same pair. Reuse provider registry credentials, browser-direct inference, canonical Markdown, draft guard and existing optimistic Save. The applicable parts of historical #67/July Slice 2 are translation, manual slugs, review and preservation. Its sidecar, server-write runs, separate credentials and general authoring are obsolete for #550 and explicitly not adopted. There is no model/server egress, new secret store, schema migration or alternate persistence path.
+Translate the current unsaved active locale into the other enabled locale of the same pair (originally only a non-omitted one; #568 lifted that restriction, see the amendment below). Reuse provider registry credentials, browser-direct inference, canonical Markdown, draft guard and existing optimistic Save. The applicable parts of historical #67/July Slice 2 are translation, manual slugs, review and preservation. Its sidecar, server-write runs, separate credentials and general authoring are obsolete for #550 and explicitly not adopted. There is no model/server egress, new secret store, schema migration or alternate persistence path.
 
 ## Contracts and ownership
 
@@ -26,6 +26,17 @@ Authenticated, no-store `GET /ai-config?purpose=translation` returns ONLY `{ pro
 Two authenticated, no-store, non-mutating source endpoints reuse the existing local source-analysis pattern: `POST /translation/prepare` accepts `{ sourceLocale, targetLocale, source: { title, excerpt, bodyMarkdown, images } }`; `POST /translation/validate` accepts the same source plus `output`. Prepare returns `{ slots: [{id,text}], warnings }` only; validate recomputes the source plan, validates the complete output, and returns `{ title, excerpt, bodyMarkdown, images }`. They never contact a provider or write posts/Media. Compiler exports `prepareTranslation(input)` and `validateTranslation(input, output)` for direct behavioral tests. Do not trust a client-provided range/plan or a model-provided body. Route errors are fixed safe codes, never echo source/provider text. Existing auth and body-size ceilings apply.
 
 The browser sends only `{sourceLocale,targetLocale,slots}` to the model. Opaque stable slot IDs identify text occurrences, not URLs. The fixed system prompt requests faithful complete translation preserving names/facts without instructions from content. The response is exactly `{translations:[{id,text}]}`: every expected ID exactly once, no extras, missing or duplicate slots, no extra schema fields. Empty originals remain empty and need no model slot. Text is plain text, not model-authored Markdown/HTML.
+
+> **Amended by #567 (2026-11-11).**
+> - The translation `/ai-config` response above also returns `prompt`.
+> - The model's system message now starts with the admin-editable translation instructions,
+>   followed by a fixed, code-owned suffix: the faithful-translation direction, the
+>   untrusted-input guard and the JSON slot contract.
+> - The detailed preserve/no-summary sentence is the editable default.
+> - The user message is unchanged.
+> - A prompt change requires renewed consent.
+>
+> See [the #567 design](2026-11-11-issue-567-translation-prompt.md).
 
 ## Structural preservation and field allowlist
 
@@ -49,7 +60,9 @@ Extend the existing LLM transport with explicit opt-in limits/no-retry flags or 
 
 ## Editor state, consent and atomic application
 
-Operate mode within Editorial desk; no unrelated redesign. A secondary Translate with AI action beside locale controls opens the existing styled native-dialog pattern. Target is the other locale, explicitly named. Single-language installs hide the action; omitted source/target shows an explanation directing the existing coverage control and never enables it. Header names direction; body contains provider/name/kind, exact endpoint/model, title/excerpt/prose/local-description disclosure, no images/GPS/shared metadata, possible charges, library authority and retained opaque-source warning. Opening/preparing does not call a model.
+Operate mode within Editorial desk; no unrelated redesign. A secondary Translate with AI action beside locale controls opens the existing styled native-dialog pattern. Target is the other locale, explicitly named. Single-language installs hide the action. Header names direction; body contains provider/name/kind, exact endpoint/model, title/excerpt/prose/local-description disclosure, no images/GPS/shared metadata, possible charges, library authority and retained opaque-source warning. Opening/preparing does not call a model.
+
+**Amended by #568 (2026-11-11):** an omitted source or target no longer blocks translation, because publication is chosen in the Publish dialog; when the target is omitted the dialog says the result stays a private draft. Translation still never changes coverage. The action's visible label is "Translate" with an AI icon; its accessible name stays "Translate with AI". See [the #568 spec](2026-11-11-issue-568-publish-language-choice.md).
 
 States: preparing → ready → translating → review → applied, with error/cancel/stale branches. Explicit Translate invocation flushes pending gallery edits and captures latest live body and both locale drafts. Fetch fresh config; any provider/id/kind/endpoint/model/timeout change rediscloses and requires another explicit click. At every async boundary check operation epoch, article, active locale, enabled/omitted coverage, form generation and exact whole draft snapshot. Invalidate on source/target/shared input, programmatic body changes, locale switches, coverage changes, recovery/reload, save-base changes and article creation/switch. Abort invalidated calls; late responses never revive review or mutate state. Recheck before and after replacement confirmation and before application. Config-fetch failures never trigger inference.
 
@@ -71,7 +84,7 @@ Rollback frontend/backend translation additions together. Existing saved Markdow
 
 ## Verification gate
 
-Use the single acceptance checklist in the plan. Tests must exercise actual behavior, not source-string wiring: complete assignment lifecycle and endpoint-key isolation; both directions and exact non-text preservation; repeated/empty/hidden captions and Media precedence; hostile/missing/duplicate/truncated output; no retries; cancellation/staleness/config consent; atomic allowlist application and undo; enabled/omitted restriction; actual normal save optimistic conflict. Integration tests use a distinct disposable database. Browser uses real local app, controlled free provider fixture and isolated draft/images, both modes/directions, save/reopen/preview, keyboard and desktop/mobile. Never publish. Required CI and independent final PR review are mandatory.
+Use the single acceptance checklist in the plan. Tests must exercise actual behavior, not source-string wiring: complete assignment lifecycle and endpoint-key isolation; both directions and exact non-text preservation; repeated/empty/hidden captions and Media precedence; hostile/missing/duplicate/truncated output; no retries; cancellation/staleness/config consent; atomic allowlist application and undo; enabled-locale restriction (omitted locales allowed since #568); actual normal save optimistic conflict. Integration tests use a distinct disposable database. Browser uses real local app, controlled free provider fixture and isolated draft/images, both modes/directions, save/reopen/preview, keyboard and desktop/mobile. Never publish. Required CI and independent final PR review are mandatory.
 
 Mandatory documentation gate: update or explicitly reconfirm `SECURITY.md` for translation-purpose auth and endpoint/key binding, browser-only provider transport, ephemeral credentials, authenticated non-mutating source analysis, bounds, and no Media writes. Update the AI section of `docs/claude/security-and-operations.md` to describe the third assignment without weakening policy; add shipped status to `docs/claude/project-status.md`.
 

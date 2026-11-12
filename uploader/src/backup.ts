@@ -12,6 +12,7 @@ import { POST_SNAPSHOT_SQL, type DbClient, type DbPool } from './db.js';
 import { diskSpace, formatBytes, UPLOAD_HEADROOM_BYTES, type DiskSpace } from './disk.js';
 import { isEncryptedSecret, type EncryptedSecret } from './secrets.js';
 import { storedProcessOptions } from './pipeline.js';
+import { exposureValue, type MediaExposure } from './exif.js';
 import type { GpxFiles } from './gpx-files.js';
 import {
   createRouteArchive, ROUTE_ARCHIVE_RE, routeRecoverySummary, stageRouteRestore,
@@ -56,6 +57,17 @@ import { configuredOriginRoles, validateCanonicalRoles, type OriginRoles } from 
  * v6 added encrypted `app_secrets` (never the encryption master key);
  * v5 added `posts.featured`; v4 added categories/tags/scheduling;
  * v3 added `media` + `media_folders`; v2 added `pages`.
+ * #570's five `media` exposure columns (`focal_length`, `focal_length_35mm`,
+ * `f_number`, `iso`, `exposure_time`) ride in v15 as OPTIONAL row keys: an
+ * absent key restores as NULL, a present one is validated by `readDump`.
+ * @ai-warning Deliberately NO bump for them, a deviation from the v7/v9
+ * precedent above ("older code rejects the new version rather than silently
+ * dropping the new field"). Those fields carried author intent a silent drop
+ * would lose; these five are derived metadata, fully re-derivable from the
+ * retained originals by `backfill-exif`. Restoring a new dump with older code
+ * is not a supported recovery path (recovery is roll-forward) and merely loses
+ * re-derivable values. Do not "fix" this by bumping without a spec change:
+ * docs/superpowers/specs/2026-11-11-issue-570-media-details-design.md, *Backup format*.
  * @ai-warning Bumping this ALSO requires widening the allow-list guard below.
  */
 export const DUMP_VERSION = 15;
@@ -1151,6 +1163,16 @@ export async function validateIdentityAssets(dump: Dump): Promise<void> {
   }
 }
 
+/**
+ * The `media` exposure columns (#570) and the `MediaExposure` field whose
+ * bounds (`exposureValue`, exif.ts) each obeys — shared by `readDump`'s
+ * validation and the restore INSERT's binds so the two cannot disagree.
+ */
+const MEDIA_EXPOSURE_COLUMNS = [
+  ['focal_length', 'focalLength'], ['focal_length_35mm', 'focalLength35mm'], ['f_number', 'fNumber'],
+  ['iso', 'iso'], ['exposure_time', 'exposureTime'],
+] as const satisfies readonly (readonly [string, keyof MediaExposure])[];
+
 /** Parse a dump file and reject versions this code cannot restore. Shared by
  * `restoreDatabase` and the CLI's pre-restore summary, so an unrestorable file
  * is refused before anything (a pre-restore dump, a transaction) happens.
@@ -1203,6 +1225,16 @@ export function readDump(filePath: string): Dump {
         }
       } catch {
         throw new BackupError('Invalid media encoding profile in backup.');
+      }
+      // Absent (a dump written before #570) or null restores as NULL. A present
+      // value must be a number inside the parser's bounds: a dump is a file the
+      // operator hands us, and `double precision` would store NaN or a nonsense
+      // value as it is.
+      for (const [column, field] of MEDIA_EXPOSURE_COLUMNS) {
+        const value = row[column];
+        if (value !== undefined && value !== null && exposureValue(field, value) === null) {
+          throw new BackupError('Invalid media camera metadata in backup.');
+        }
       }
     }
   }
@@ -1481,12 +1513,18 @@ async function restoreDatabaseContents(pool: DbPool, filePath: string, options: 
       await client.query(
         `INSERT INTO media (key, folder, title, alt_de, alt_en, caption_de, caption_en, tags,
                             width, height, orig_bytes, variant_bytes, status, error,
-                            taken_at, camera, lens, lat, lng, uploaded_at, uploaded_by, format, encoding)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8::text[],$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23::jsonb)`,
+                            taken_at, camera, lens, lat, lng, uploaded_at, uploaded_by, format, encoding,
+                            focal_length, focal_length_35mm, f_number, iso, exposure_time)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8::text[],$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23::jsonb,
+                 $24,$25,$26,$27,$28)`,
         [m.key, m.folder, m.title, m.alt_de, m.alt_en, m.caption_de, m.caption_en, asTextArray(m.tags),
          m.width, m.height, m.orig_bytes, m.variant_bytes, m.status, m.error ?? null,
          m.taken_at ?? null, m.camera ?? null, m.lens ?? null, m.lat ?? null, m.lng ?? null,
-         m.uploaded_at ?? new Date(), m.uploaded_by ?? null, m.format ?? null, asJsonb(m.encoding)],
+         m.uploaded_at ?? new Date(), m.uploaded_by ?? null, m.format ?? null, asJsonb(m.encoding),
+         // #570: readDump validated these; binding exposureValue()'s result (not the
+         // raw value) also rounds the integer columns — `iso: 100.4` restores as 100,
+         // where the raw number would fail the integer cast — and maps absent to NULL.
+         ...MEDIA_EXPOSURE_COLUMNS.map(([column, field]) => exposureValue(field, m[column]))],
       );
     }
     // Undefined means this snapshot never captured secrets; [] intentionally

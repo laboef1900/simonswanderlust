@@ -1,7 +1,7 @@
 // Shared admin presentation helpers, loaded by every admin page before its own
-// script. One date format, one count format, one inline-error pattern and one
-// way to keep keyboard focus after an action — see DESIGN.md, "Dates and
-// counts" and "Errors".
+// script. One date format, one count format, one inline-error pattern, one
+// way to keep keyboard focus after an action and the shared icons — see
+// DESIGN.md, "Dates and counts" and "Errors".
 (function (root) {
   'use strict';
 
@@ -113,6 +113,24 @@
       }
     };
   }
+  /**
+   * The first usable candidate whose box lies fully inside `container`'s
+   * visible rect (and the viewport), or null. A focus hand-off that must not
+   * scroll the list picks its target with this, then focuses it with
+   * `preventScroll: true`.
+   */
+  function firstInView(candidates, container) {
+    if (!container) return null;
+    const view = container.getBoundingClientRect();
+    const top = Math.max(view.top, 0);
+    const bottom = Math.min(view.bottom, root.innerHeight || view.bottom);
+    for (const candidate of candidates) {
+      if (!candidate || candidate.disabled || candidate.isConnected === false) continue;
+      const box = candidate.getBoundingClientRect();
+      if (box.height > 0 && box.top >= top && box.bottom <= bottom) return candidate;
+    }
+    return null;
+  }
 
   // ---- one message carried across a navigation -----------------------------
   // An editor that has just deleted its own story, journey or page returns to
@@ -129,11 +147,41 @@
     } catch { return ''; }
   }
 
+  // ---- icons ---------------------------------------------------------------
+  // Drawn for this project and built from constant path data with
+  // createElementNS, never from a markup string. A stroke glyph in the colour
+  // of the text it leads, hidden from assistive technology: the control that
+  // carries one names itself in words. `.admin-icon` sizes it (admin.css).
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  const ICON = {
+    viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '2',
+    'stroke-linecap': 'round', 'stroke-linejoin': 'round',
+    'aria-hidden': 'true', focusable: 'false', class: 'admin-icon',
+  };
+  // A four-point star with a small one at its shoulder.
+  const AI = [
+    'M10 5Q11.5 11.5 18 13Q11.5 14.5 10 21Q8.5 14.5 2 13Q8.5 11.5 10 5Z',
+    'M19 2l1 2 2 1-2 1-1 2-1-2-2-1 2-1z',
+  ];
+  function icon(paths) {
+    const svg = document.createElementNS(SVG_NS, 'svg');
+    for (const name of Object.keys(ICON)) svg.setAttribute(name, ICON[name]);
+    for (const d of paths) {
+      const path = document.createElementNS(SVG_NS, 'path');
+      path.setAttribute('d', d);
+      svg.appendChild(path);
+    }
+    return svg;
+  }
+  /** The mark of an AI action; a fresh element on every call. */
+  function ai() { return icon(AI); }
+
   root.AdminFormat = { date, dateTime, time, count, region };
   root.AdminField = { invalid, valid };
-  root.AdminFocus = { hold };
+  root.AdminFocus = { hold, firstInView };
   root.AdminFlash = { set: setFlash, take: takeFlash };
+  root.AdminIcons = { ai };
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { AdminFormat: root.AdminFormat, AdminField: root.AdminField, AdminFocus: root.AdminFocus, AdminFlash: root.AdminFlash };
+    module.exports = { AdminFormat: root.AdminFormat, AdminField: root.AdminField, AdminFocus: root.AdminFocus, AdminFlash: root.AdminFlash, AdminIcons: root.AdminIcons };
   }
 })(typeof window === 'undefined' ? globalThis : window);

@@ -181,7 +181,7 @@ const BOOTSTRAP_COLUMNS: Record<string, Record<string, string>> = {
   journey_locales: { journey_id: 'uuid', locale: 'text', slug: 'text', title: 'text', intro: 'text', hero_image: 'jsonb', omitted: 'boolean', published_at: 'timestamp with time zone' },
   journey_members: { journey_id: 'uuid', translation_key: 'text', position: 'integer' },
   page_revisions: { id: 'uuid', key: 'text', snapshot: 'jsonb', saved_at: 'timestamp with time zone' },
-  media: { key: 'text', folder: 'text', title: 'text', alt_de: 'text', alt_en: 'text', caption_de: 'text', caption_en: 'text', tags: 'text[]', width: 'integer', height: 'integer', orig_bytes: 'bigint', variant_bytes: 'bigint', status: 'text', error: 'text', taken_at: 'timestamp with time zone', camera: 'text', lens: 'text', lat: 'double precision', lng: 'double precision', format: 'text', encoding: 'jsonb', uploaded_at: 'timestamp with time zone', uploaded_by: 'uuid' },
+  media: { key: 'text', folder: 'text', title: 'text', alt_de: 'text', alt_en: 'text', caption_de: 'text', caption_en: 'text', tags: 'text[]', width: 'integer', height: 'integer', orig_bytes: 'bigint', variant_bytes: 'bigint', status: 'text', error: 'text', taken_at: 'timestamp with time zone', camera: 'text', lens: 'text', lat: 'double precision', lng: 'double precision', focal_length: 'double precision', focal_length_35mm: 'integer', f_number: 'double precision', iso: 'integer', exposure_time: 'double precision', format: 'text', encoding: 'jsonb', uploaded_at: 'timestamp with time zone', uploaded_by: 'uuid' },
   media_folders: { path: 'text', created_at: 'timestamp with time zone' },
   import_jobs: { id: 'uuid', status: 'text', started_by: 'text', started_at: 'timestamp with time zone', updated_at: 'timestamp with time zone', finished_at: 'timestamp with time zone', progress: 'jsonb', summary: 'jsonb', error: 'text' },
   app_secrets: { key: 'text', ciphertext: 'text', iv: 'text', tag: 'text', updated_at: 'timestamp with time zone' },
@@ -192,11 +192,11 @@ const BOOTSTRAP_COLUMNS: Record<string, Record<string, string>> = {
   onboarding_state: { singleton: 'boolean', schema_version: 'smallint', state: 'text', reason: 'text', evaluated_at: 'timestamp with time zone', dismissed_at: 'timestamp with time zone', retired_at: 'timestamp with time zone' },
   upload_receipts: { user_id: 'uuid', upload_id: 'uuid', media_key: 'text', sha256: 'text', identity: 'jsonb', frozen: 'jsonb', state: 'text', incarnation: 'uuid', claim: 'uuid', generation: 'integer', reason: 'text', original_retained: 'boolean', result: 'jsonb' },
 };
-const ADDITIVE_COLUMNS: Record<string, readonly string[]> = { posts: ['published_snapshot','published_at','categories','tags','scheduled_at','title_image','featured','comments_enabled','omitted','last_save_id','last_save_by','stop_route'], pages: ['slug','status','published_at','last_save_id','last_save_by'], media: ['format','encoding'], comments: ['is_author'] };
+const ADDITIVE_COLUMNS: Record<string, readonly string[]> = { posts: ['published_snapshot','published_at','categories','tags','scheduled_at','title_image','featured','comments_enabled','omitted','last_save_id','last_save_by','stop_route'], pages: ['slug','status','published_at','last_save_id','last_save_by'], media: ['format','encoding','focal_length','focal_length_35mm','f_number','iso','exposure_time'], comments: ['is_author'] };
 const NULLABLE_COLUMNS: Record<string, readonly string[]> = {
   posts: ['title_image','stops','stop_route','route','key_facts','published_snapshot','published_at','scheduled_at','last_save_id','last_save_by'],
   pages: ['published_at','last_save_id','last_save_by'], upload_receipts: ['reason','result'],
-  post_routes: ['geometry'], media: ['error','taken_at','camera','lens','lat','lng','format','encoding','uploaded_by'],
+  post_routes: ['geometry'], media: ['error','taken_at','camera','lens','lat','lng','focal_length','focal_length_35mm','f_number','iso','exposure_time','format','encoding','uploaded_by'],
   import_jobs: ['finished_at','summary','error'], site_identity: ['saved_at','canonical_origin'],
   comments: ['email','sender_hash'], site_language: ['locked_at'], onboarding_state: ['dismissed_at','retired_at'],
   journeys: ['published_snapshot', 'published_at'], journey_locales: ['hero_image', 'published_at'],

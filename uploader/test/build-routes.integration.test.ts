@@ -11,6 +11,7 @@ import { buildFailureMessage, type BuildTrigger } from '../src/build-state.js';
 import { ensureSchema } from '../src/db.js';
 import { memoryPostStore, pgPostStore, type PostLocale, type PostStore } from '../src/posts.js';
 import { memoryPageStore, pgPageStore, type PageStore, type StoredPagePair } from '../src/pages.js';
+import { emptyMediaExif } from '../src/exif.js';
 import { memoryMediaStore } from '../src/media-store.js';
 import { memoryUserStore } from '../src/users.js';
 import { memorySessionStore } from '../src/sessions.js';
@@ -72,7 +73,7 @@ async function fixture(options: { posts?: PostStore; pages?: PageStore; builder?
   }
   const cookies = await login(true);
   await media.upsert({ key: 'hero', status: 'ready', width: 640, height: 480, origBytes: 1,
-    exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null }, uploadedBy: null });
+    exif: emptyMediaExif(), uploadedBy: null });
   const locale = (locale: 'de' | 'en'): PostLocale => ({ locale, slug: `${locale}-build-report`, title: 'A story',
     excerpt: 'A story excerpt', country: 'Test', bodyMarkdown: 'A story body.', images: {},
     heroImage: { src: `${origin}/hero`, width: 640, height: 480, alt: 'Landscape' } });

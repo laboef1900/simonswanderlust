@@ -2,6 +2,9 @@
 
 Status: Implemented; owner approved the product choice and technical implementation, then requested a PR and local deployment. Production deployment is not authorized.
 
+> 2026-11-11 (#569): the title image is now chosen from the media library only; the "and upload
+> pipeline" clause below is superseded. See `2026-11-11-issue-569-editor-cleanup-design.md`.
+
 ## Request and scope
 
 Restore the ability to choose a special wide title photograph independently of a post's overview photograph. Extend the existing editorial design, not the page layout or image encoding pipeline.

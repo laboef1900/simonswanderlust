@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import * as geometry from '../public/gpx-geometry.js';
 import { browserScript, galleryCodecBindings } from './gallery-browser-module.js';
 import * as publicTrack from '../public/gpx-public-track.js';
-import { editorDocument, EditorElement, EditorEvent } from './editor-dom-harness.js';
+import { editorDocument, EditorElement, EditorEvent, publishThroughDialog } from './editor-dom-harness.js';
 import { ui } from '../../site/src/i18n/ui.js';
 import { memoryPostStore, type PostPair } from '../src/posts.js';
 import { publication } from './publication-client-fixture.js';
@@ -321,7 +321,6 @@ function fullEditor(candidate: typeof preview, fetchOverride?: SetupOptions['fet
     confirm: () => false,
     EasyMDE,
     Auth: { ensureAuthed: async () => options.initialize ? { isAdmin: true, userId: owner } : null, renderHeader() {}, setPageTitle() {} },
-    AdminConfirm: { ask: async ({ title }: { title: string }) => options.confirm ? options.confirm(title) : true, liveUrls: () => ({ de: '', en: '' }), urlsPlain: () => '' },
     MediaPicker: { open() {} },
     AltSuggest: { wire() {} },
     WaypointCopy: copy('editor.waypoint.'),
@@ -336,13 +335,18 @@ function fullEditor(candidate: typeof preview, fetchOverride?: SetupOptions['fet
   };
   context.window = context;
   vm.createContext(context);
-  for (const file of ['admin-ui.js', 'build-reporting.js', 'publication-state.js', 'publication-refresh.js', 'language.js', 'draft-guard.js', 'write-recovery.js', 'journeys-ui.js', 'waypoint-lookup.js', 'editor-stop-route.js', 'posts-filter.js', 'editor-title-image.js',
+  for (const file of ['admin-ui.js', 'build-reporting.js', 'publication-state.js', 'publication-refresh.js', 'language.js', 'admin-confirm.js', 'draft-guard.js', 'write-recovery.js', 'journeys-ui.js', 'waypoint-lookup.js', 'editor-stop-route.js', 'posts-filter.js', 'editor-title-image.js',
     'gallery-fence.js', 'gallery-metadata-warnings.js', 'media-api.js', 'gallery-library.js', 'editor-galleries.js', 'editor-linter.js',
     'llm.js', 'editor-excerpt.js', 'country-centers.js', 'country-coordinates.js', 'tabs.js',
     'editor-review.js', 'editor-translation.js', 'editor-alt-audit.js', 'editor-inspector.js', 'editor-rich-bridge.js', 'manuscript-bar.js', 'editor-gpx.js']) {
     vm.runInContext(browserScript(file), context, { filename: file });
   }
   vm.runInContext(`SiteLanguage.accept({primary:'de',locales:['de','en'],lockedAt:null,updatedAt:'2026-10-27T00:00:00.000Z'})`, context);
+  // admin-confirm.js supplies the real URL builder the Publish dialog shows;
+  // its prompts are answered by the fixture instead of a native dialog.
+  Object.assign(context.AdminConfirm as object, {
+    ask: async ({ title }: { title: string }) => options.confirm ? options.confirm(title) : true,
+  });
   // Supply the real shared geometry module through the controller's dependency
   // seam: Node's VM cannot resolve the browser-only /admin module URL.
   const controller = context.GpxEditor as { wire(host: Record<string, unknown>): unknown };
@@ -1291,7 +1295,7 @@ describe('explicitly adopting the stored version reconciles the real editor and 
     expect(h.element('gpxDetach').disabled).toBe(false);
     expect(h.element('gpxReimport').hidden).toBe(!after.originalAvailable);
     expect(h.element('gpxDownload').hidden).toBe(!after.originalAvailable);
-    h.element('publishBtn').click();
+    publishThroughDialog(h.element);
     await settle();
     expect(publicationWrites(h)).toHaveLength(1);
     expect(JSON.parse(String(publicationWrites(h)[0]!.options.body))).toEqual({
@@ -1303,12 +1307,14 @@ describe('explicitly adopting the stored version reconciles the real editor and 
 
   it.each(['network', '500', 'json', 'version'] as const)('blocks pending/failed route reconciliation (%s) and recovers only after a successful explicit reload', async (failure) => {
     const pending = Promise.withResolvers<Reply>();
+    const conflict = Promise.withResolvers<void>();
     let reads = 0;
     let saves = 0;
     let stored = reloadPostFixture();
     const h = fullEditor(preview, async (url, options) => {
       if (url === '/posts/pair-1' && options.method === 'PUT') {
         saves++;
+        await conflict.promise; // still in flight while Publish is confirmed behind it
         return response({ code: 'conflict' }, 409);
       }
       if (url === '/posts/pair-1') return response(stored);
@@ -1322,7 +1328,10 @@ describe('explicitly adopting the stored version reconciles the real editor and 
     stored = reloadPostFixture('2026-10-28T10:01:00.000Z'); // another tab saved: the probe finds a changed version
     const save = h.editor.doSaveDraft();
     const queuedSave = h.editor.doSaveDraft(); // queued behind the conflict; refused by the unresolved comparison
-    h.element('publishBtn').click(); // same queue, same refusal
+    publishThroughDialog(h.element); // confirmed while that save is in flight: same queue, same refusal
+    await settle();
+    expect(h.element('publishDialog').open).toBe(false);
+    conflict.resolve();
     await settle();
     expect(await save).toBe(false);
     expect(await queuedSave).toBe(false);
@@ -1336,6 +1345,7 @@ describe('explicitly adopting the stored version reconciles the real editor and 
     for (const id of ['gpxReimport', 'gpxAttach', 'gpxDetach']) expect(h.element(id).disabled).toBe(true);
     expect(await h.editor.doSaveDraft()).toBe(false);
     h.element('publishBtn').click();
+    expect(h.element('publishDialog').open).toBe(false); // the reload barrier: no dialog to confirm
     h.element('unpublishBtn').click();
     h.element('gpxDetach').fire('click');
     expect(() => h.api.publishVersion()).toThrow();
@@ -1355,6 +1365,7 @@ describe('explicitly adopting the stored version reconciles the real editor and 
     expect(await h.editor.doSaveDraft()).toBe(false);
     h.element('gpxDetach').fire('click');
     h.element('publishBtn').click();
+    expect(h.element('publishDialog').open).toBe(false);
     await settle();
     expect(routeWrites(h)).toEqual([]);
     expect(publicationWrites(h)).toEqual([]);
@@ -1439,6 +1450,7 @@ describe('explicitly adopting the stored version reconciles the real editor and 
     expect(h.editor.buildPayload()).toEqual(before);
     expect(await h.editor.doSaveDraft()).toBe(false);
     h.element('publishBtn').click();
+    expect(h.element('publishDialog').open).toBe(false);
     h.element('gpxDetach').click();
     await settle();
     expect(draftWrites(h)).toHaveLength(1);
@@ -1476,6 +1488,9 @@ describe('explicitly adopting the stored version reconciles the real editor and 
     expect(h.editor.buildPayload()).toEqual(before);
     expect(await h.editor.doSaveDraft()).toBe(false);
     h.element('publishBtn').click();
+    // An unconfirmed stored version refuses Publish at the click: there is no dialog to confirm.
+    expect(h.element('publishDialog').open).toBe(false);
+    expect(h.element('actionError').textContent).toBe(ui.en['editor.chrome.publishUnresolved']);
     await settle();
     expect(draftWrites(h)).toHaveLength(1); // the conflicting attempt; never resent
     expect(routeReads(h)).toHaveLength(1);
@@ -1625,6 +1640,7 @@ describe('route refresh response ownership', () => {
     expect(await h.editor.doSaveDraft()).toBe(false);
     h.element('gpxDetach').fire('click');
     h.element('publishBtn').click();
+    expect(h.element('publishDialog').open).toBe(false);
     await settle();
     expect(routeWrites(h)).toEqual([]);
     expect(publicationWrites(h)).toEqual([]);
@@ -1739,7 +1755,7 @@ describe('route caption advisory', () => {
     expect(advisory(h).textContent).toBe(ui.en['gpx.captionUnpublished']);
 
     route = { ...attachedRoute, published: true };
-    h.element('publishBtn').click();
+    publishThroughDialog(h.element);
     await settle();
     expect(publicationWrites(h)).toHaveLength(1);
     expect(advisory(h).hidden).toBe(true);
@@ -1770,7 +1786,7 @@ describe('route caption advisory', () => {
     await h.editor.loadPost('pair-1');
     expect(advisory(h).hidden).toBe(false);
     routeFails = true;
-    h.element('publishBtn').click();
+    publishThroughDialog(h.element);
     await settle();
     expect(publicationWrites(h)).toHaveLength(1);
     // The pre-publish answer is now stale and the new one unknown: neither is shown.
