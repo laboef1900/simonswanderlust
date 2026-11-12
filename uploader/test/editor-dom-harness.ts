@@ -268,7 +268,12 @@ export function editorDocument(markup: string) {
       documentElement: { lang: root.querySelector('html')?.getAttribute('lang') || 'en' },
       // A browser moves focus away from an element that leaves the document;
       // a removed or replaced node must not keep reading as focused.
-      get activeElement() { return state.activeElement && root.contains(state.activeElement) ? state.activeElement : null; },
+      get activeElement() {
+        // Walk up, not down: the editor reads focus often and its tree is large.
+        let node = state.activeElement;
+        while (node && node !== root) node = node.parentElement;
+        return node === root ? state.activeElement : null;
+      },
       get body() { return root.querySelector('body'); },
       getElementById: (id: string) => root.querySelector('#' + id),
       querySelector: (selector: string) => root.querySelector(selector),
