@@ -108,6 +108,8 @@ interface EditorOptions {
   upload?: (options: { ownerId: string; fields: Record<string, string>; file: File; recovery: { observeOwner(userId: string): void } }) => Promise<{ src: string; key: string; width: number; height: number; status: string }>;
   /** #513 `/posts/:tk/stop-route` answers; default: every profile off, no stored route. */
   stopRouteFetch?: Fetch;
+  /** Runs after the page's classic scripts and before its module, e.g. to observe a controller factory. */
+  beforeModule?: (ctx: vm.Context) => void;
 }
 interface ConfirmPrompt { title: string; body: string; confirmLabel?: string }
 /** What editor.html passes to MediaPicker.open for a gallery, as far as these tests read it. */
@@ -583,6 +585,7 @@ async function loadEditor(options: EditorOptions = {}) {
   if (options.review) (ctx.LLM as { reviewStory: Review }).reviewStory = options.review;
   if (options.translate && ctx.LLM && typeof ctx.LLM === 'object') Reflect.set(ctx.LLM, 'translateArticle', options.translate);
   if (options.draft && ctx.LLM && typeof ctx.LLM === 'object') Reflect.set(ctx.LLM, 'draftArticle', options.draft);
+  options.beforeModule?.(ctx);
   await vm.runInContext(script, ctx);
   const api = vm.runInContext('({ populateForm, buildPayload, loadPost, doSaveDraft, renderAltAudit })', ctx) as EditorApi;
   return {
@@ -7417,6 +7420,33 @@ describe('Draft with AI in the real editor (#579)', () => {
     expect(h.el('draftSaveState').textContent).toBe(copy['editor.chrome.saveUnsaved']);
     expect(latestStash(h.local, 'new')!.payload.de.bodyMarkdown).toBe(drafted.bodyMarkdown);
     expect(h.requests.slice(sent).some(({ url, options }) => options.method === 'POST' || options.method === 'PUT' || /publish|rebuild|preview/.test(url))).toBe(false);
+  });
+
+  it('Apply invalidates story review, the excerpt suggestion and translation, whose own input handlers stay quiet during the commit', async () => {
+    const invalidations: Record<string, number> = { EditorReview: 0, EditorExcerpt: 0, EditorTranslation: 0 };
+    const h = await editor({
+      draft: async () => drafted, fetch: draftNetwork(),
+      beforeModule: (ctx) => {
+        for (const name of Object.keys(invalidations)) {
+          const factory = ctx[name] as { create(options: unknown): { invalidate(): void } };
+          const create = factory.create;
+          factory.create = (options) => {
+            const controller = create(options);
+            const invalidate = controller.invalidate;
+            controller.invalidate = () => { invalidations[name]! += 1; invalidate(); };
+            return controller;
+          };
+        }
+      },
+    });
+    h.api.populateForm(emptyStory());
+    await openDraft(h);
+    typeEvents(h, 'Arrived in Lisbon');
+    await generate(h);
+    const before = { ...invalidations };
+    h.el('draftApply').click();
+    expect(h.api.buildPayload().de.title).toBe(drafted.title);
+    for (const name of Object.keys(invalidations)) expect(invalidations[name]! - before[name]!, name).toBeGreaterThan(0);
   });
 
   it('leaves the slug alone for a story published before or a permalink chosen by hand', async () => {

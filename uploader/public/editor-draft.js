@@ -170,6 +170,8 @@ window.EditorDraft = (function () {
     function say(message, state, settings = false) {
       dialog.dataset.state = state;
       status.textContent = message;
+      // Focus usually lands in the fixed footer; keep the sentence that explains why in view.
+      if (message && dialog.open) status.scrollIntoView({ block: 'nearest' });
       $('draftSettingsRow').hidden = !settings;
       const admin = !!(options.isAdmin && options.isAdmin());
       $('draftSettings').hidden = !admin;
@@ -479,7 +481,8 @@ window.EditorDraft = (function () {
       const locale = closeDialog();
       refresh();
       const trigger = locale && triggers[locale];
-      const target = trigger && !trigger.hidden && !trigger.disabled ? trigger : locale ? $(locale + 'Title') : null;
+      // The row, not the button, carries `hidden` when the language is no longer empty.
+      const target = trigger && !trigger.closest('[hidden]') && !trigger.disabled ? trigger : locale ? $(locale + 'Title') : null;
       target?.focus({ preventScroll: true });
     }
 
@@ -508,6 +511,8 @@ window.EditorDraft = (function () {
         const message = parsed.problem === 'empty' ? copy.draftEventsRequired
           : parsed.problem === 'tooMany' ? text('draftEventsTooMany', { max: max.events, count: parsed.events.length })
             : text('draftEventTooLong', { line: parsed.problem.tooLong, count: parsed.events[parsed.problem.tooLong - 1].length, max: max.eventLength });
+        // The inline error explains this refusal; an earlier provider message must not linger beside it.
+        say('', 'ready');
         window.AdminField.invalid(events, message);
         showControls();
         return;

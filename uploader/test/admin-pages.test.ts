@@ -595,6 +595,7 @@ describe('settings.html AI provider registry', () => {
       ['reviewProviderId', 'aiModel', 'reviewModelStatus', 'aiModelOther'],
       ['captionProviderId', 'lmModel', 'captionModelStatus', 'lmModelOther'],
       ['translationProviderId', 'translationModel', 'translationModelStatus', 'translationModelOtherInput'],
+      ['draftingProviderId', 'draftingModel', 'draftingModelStatus', 'draftingModelOtherInput'],
     ] as const) {
       expect(markup).toMatch(new RegExp(`<select id="${provider}"`));
       expect(markup).toMatch(new RegExp(`<select id="${model}"[^>]*aria-describedby="${status}"`));

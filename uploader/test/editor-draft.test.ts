@@ -137,7 +137,17 @@ describe('buildContext', () => {
 });
 
 describe('Draft with AI controller against the real dialog markup', () => {
-  function controller(details: () => Details, overrides: { heroCaption?: () => Promise<string>; config?: Record<string, unknown>; blocked?: () => boolean } = {}) {
+  interface PickRequest { preselect: { src: string }[]; onPick(items: unknown[]): void }
+  interface ControllerOverrides {
+    heroCaption?: () => Promise<string>;
+    config?: Record<string, unknown>;
+    blocked?: () => boolean;
+    /** Replaces LLM.readAiConfig, so a test can hold the very response object the controller reads. */
+    readAiConfig?: (path: string, signal: AbortSignal) => Promise<{ status: number; config: unknown }>;
+    /** Replaces the provider call; the default answers with a fixed draft. */
+    draftArticle?: (request: DraftRequest) => Promise<unknown>;
+  }
+  function controller(details: () => Details, overrides: ControllerOverrides = {}) {
     const dom = editorDocument(markup);
     const el = (id: string): EditorElement => {
       const node = dom.document.getElementById(id);
@@ -149,18 +159,21 @@ describe('Draft with AI controller against the real dialog markup', () => {
     const requests: DraftRequest[] = [];
     Reflect.set(context.LLM as object, 'draftArticle', async (request: DraftRequest) => {
       requests.push(request);
-      return { title: 'Titel', excerpt: 'Kurz.', bodyMarkdown: 'Text.' };
+      return overrides.draftArticle ? overrides.draftArticle(request) : { title: 'Titel', excerpt: 'Kurz.', bodyMarkdown: 'Text.' };
     });
-    const snapshot = { identity: null, formVersion: 1, base: null, generation: 1, locale: 'de', locales: ['de', 'en'], blocked: false,
+    if (overrides.readAiConfig) Reflect.set(context.LLM as object, 'readAiConfig', overrides.readAiConfig);
+    const snapshot: Record<string, unknown> = { identity: null, formVersion: 1, base: null, generation: 1, locale: 'de', locales: ['de', 'en'], blocked: false,
       title: '', excerpt: '', body: '', slug: '', neverPublished: true, slugAuto: true };
     const read = vi.fn(details);
+    const picks: PickRequest[] = [];
+    const on401 = vi.fn();
     const api = draft.create({
       copy: editorCopy, snapshot: () => ({ ...snapshot, blocked: overrides.blocked ? overrides.blocked() : false }), details: read,
-      heroCaption: overrides.heroCaption ?? (async () => ''), pickPhotos() {},
-      commit: () => ({ chooseSlug: false }), didCommit: () => true, notice() {}, on401() {}, isAdmin: () => false,
+      heroCaption: overrides.heroCaption ?? (async () => ''), pickPhotos: (request: PickRequest) => { picks.push(request); },
+      commit: () => ({ chooseSlug: false }), didCommit: () => true, notice() {}, on401, isAdmin: () => false,
     });
     api.refresh();
-    return { el, api, read, requests, snapshot, document: dom.document };
+    return { el, api, read, requests, snapshot, picks, on401, document: dom.document };
   }
   const rows = (el: (id: string) => EditorElement) => el('draftContextItems').children;
 
@@ -289,5 +302,146 @@ describe('Draft with AI controller against the real dialog markup', () => {
     expect(h.el('draftResult').hidden).toBe(true);
     expect(h.el('draftEvents').value).toBe('Arrived in Lisbon');
     expect(rows(h.el)[0]!.querySelector('input')!.checked).toBe(false);
+  });
+
+  it('clears an earlier provider failure from the status when the next Generate is refused for its input', async () => {
+    const h = controller(() => ({ date: null, country: '', region: '', route: null }), {
+      draftArticle: async () => { throw new Error('Story draft HTTP 500'); },
+    });
+    h.el('deDraftAction').click();
+    await flush();
+    h.el('draftEvents').value = 'Arrived in Lisbon';
+    h.el('draftGenerate').click();
+    await flush();
+    expect(h.el('draftStatus').textContent).toBe(editorCopy.draftProviderFailed);
+    h.el('draftEvents').value = '   \n';
+    h.el('draftGenerate').click();
+    await flush();
+    expect(h.el('draftStatus').textContent).toBe('');
+    expect(h.el('draftEvents').getAttribute('aria-invalid')).toBe('true');
+    expect(h.requests).toHaveLength(1);
+  });
+
+  it('returns focus to the title when Close follows the language gaining text, because the trigger row is hidden', async () => {
+    const h = controller(() => ({ date: null, country: '', region: '', route: null }));
+    h.el('deDraftAction').click();
+    await flush();
+    h.snapshot.title = 'Typed meanwhile';
+    h.api.changed();
+    expect(h.el('deDraftStart').hidden).toBe(true);
+    h.el('draftClose').click();
+    expect(h.document.activeElement).toBe(h.el('deTitle'));
+  });
+
+  const keyedConfig = () => ({ ...draftConfig, providerKind: 'custom', baseUrl: 'https://drafts.example/v1', apiKey: 'fixture-drafting-key' });
+  const noDetails = (): Details => ({ date: null, country: '', region: '', route: null });
+
+  it('drops the key from every configuration response: at opening, at Generate, and when a response arrives after Close', async () => {
+    const responses: Record<string, unknown>[] = [];
+    const late = Promise.withResolvers<void>();
+    const h = controller(noDetails, {
+      readAiConfig: async () => {
+        const config = keyedConfig();
+        responses.push(config);
+        if (responses.length === 3) await late.promise;
+        return { status: 200, config };
+      },
+    });
+    h.el('deDraftAction').click();
+    await flush();
+    expect(responses.map((config) => config.apiKey)).toEqual([null]);
+    h.el('draftEvents').value = 'Arrived in Lisbon';
+    h.el('draftGenerate').click();
+    await flush();
+    // The one request carried the key; the response object it came from no longer does.
+    expect(h.requests.map((request) => request.apiKey)).toEqual(['fixture-drafting-key']);
+    expect(responses.map((config) => config.apiKey)).toEqual([null, null]);
+    h.el('draftClose').click();
+    h.el('deDraftAction').click();
+    h.el('draftClose').click();
+    late.resolve();
+    await flush();
+    expect(responses).toHaveLength(3);
+    expect(responses[2]!.apiKey).toBeNull();
+    expect(h.requests).toHaveLength(1);
+  });
+
+  it('sends nobody to the provider and redirects to login when the Generate-time configuration read answers 401', async () => {
+    let reads = 0;
+    const h = controller(noDetails, {
+      readAiConfig: async () => (++reads === 1 ? { status: 200, config: keyedConfig() } : { status: 401, config: null }),
+    });
+    h.el('deDraftAction').click();
+    await flush();
+    h.el('draftEvents').value = 'Arrived in Lisbon';
+    h.el('draftGenerate').click();
+    await flush();
+    expect(reads).toBe(2);
+    expect(h.on401).toHaveBeenCalledTimes(1);
+    expect(h.requests).toEqual([]);
+    expect(h.el('storyDraftDialog').open).toBe(false);
+  });
+
+  const mediaRow = (src: string, caption: { de: string; en: string }) => ({
+    src, key: src.split('/').pop(), width: 1600, height: 1067, title: 'Tram 28', caption, alt: { de: 'Alt', en: 'Alt' },
+    exif: { lat: 38.71153, lng: -9.13008, takenAt: '2024-10-03T10:00:00Z' }, tags: ['lisbon'],
+  });
+
+  it('clears the picked photos with the events after Apply and when another story is loaded, but not on a first save', async () => {
+    const h = controller(noDetails);
+    const pickTram = async () => {
+      h.el('draftPickPhotos').click();
+      h.picks.at(-1)!.onPick([mediaRow('https://img.example/library/tram', { de: 'Die Tram 28', en: 'Tram 28' })]);
+      await flush();
+    };
+    const reopenAndPick = async () => {
+      h.el('draftClose').click();
+      h.el('deDraftAction').click();
+      await flush();
+      h.el('draftPickPhotos').click();
+      return h.picks.at(-1)!.preselect.map((photo) => photo.src);
+    };
+    h.el('deDraftAction').click();
+    await flush();
+    await pickTram();
+    // A first save of this new story (no key → its key) keeps the selection.
+    h.snapshot.identity = 'tk1';
+    h.api.changed();
+    expect(await reopenAndPick()).toEqual(['https://img.example/library/tram']);
+    // Another story loaded: the selection goes with the events.
+    h.snapshot.identity = 'tk2';
+    h.api.changed();
+    expect(await reopenAndPick()).toEqual([]);
+    await pickTram();
+    h.el('draftEvents').value = 'Arrived in Lisbon';
+    h.el('draftGenerate').click();
+    await flush();
+    h.el('draftApply').click();
+    expect(h.el('draftEvents').value).toBe('');
+    h.el('deDraftAction').click();
+    await flush();
+    h.el('draftPickPhotos').click();
+    expect(h.picks.at(-1)!.preselect).toEqual([]);
+  });
+
+  it('keeps the copied caption when the picker returns an unresolved placeholder for a persisted photo', async () => {
+    const h = controller(noDetails);
+    h.el('deDraftAction').click();
+    await flush();
+    const src = 'https://img.example/library/tram';
+    h.el('draftPickPhotos').click();
+    h.picks.at(-1)!.onPick([mediaRow(src, { de: 'Die Tram 28', en: 'Tram 28' })]);
+    await flush();
+    h.el('draftPickPhotos').click();
+    // Unresolved preselected photos come back as bare { src, width, height } placeholders.
+    h.picks.at(-1)!.onPick([{ src, width: 1600, height: 1067 }]);
+    await flush();
+    expect(h.el('draftPhotoItems').children.map((row) => row.textContent)).toEqual(['Caption of Tram 28: Die Tram 28']);
+    h.el('draftEvents').value = 'Arrived in Lisbon';
+    h.el('draftGenerate').click();
+    await flush();
+    expect(h.requests.map((request) => request.context)).toEqual([{ photoCaptions: ['Die Tram 28'] }]);
+    // Only the caption left the browser: no coordinates, URL, key or tags.
+    expect(JSON.stringify(h.requests[0]!.context)).not.toMatch(/38\.7|-9\.1|img\.example|library|lisbon/);
   });
 });

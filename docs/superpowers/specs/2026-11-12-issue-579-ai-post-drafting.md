@@ -319,8 +319,9 @@ opening** (DESIGN.md: confirmations need fresh consent for each opening):
 | Route | `routeSummary(collectStops())` | ≥ 2 complete stops; shown as `Lisbon → Sintra, about 28 km in a straight line between stops` |
 | Photo captions | Media caption (active locale) of each photo picked in the dialog | the author picked photos; each photo with a non-blank caption is its own checkbox, **checked** when picked (picking is the opt-in), and can be unchecked |
 
-An item whose value exceeds its cap is listed without a checkbox, with the reason, never
-truncated. A picked photo without a caption in the active locale is listed as "No caption in
+An item whose text value exceeds its cap is listed without a checkbox, with the reason, never
+truncated; a route whose straight-line sum exceeds 100 000 km is not offered at all (it is not a
+coarse route worth sending, and a character-limit reason would not fit it). A picked photo without a caption in the active locale is listed as "No caption in
 Media (DE); nothing is sent". Picking more than 20 photos is refused with a message and keeps
 the previous selection (the picker itself has no cap, so this check runs on confirm). The
 picker opens with `confirmLabel` **Use these captions** and an `emptyHint` about captions; its
@@ -684,7 +685,7 @@ route row and the assignment paragraph), `docs/claude/project-reference.md` (use
 enumeration), `uploader/README.md` (AI configuration), `DESIGN.md`/`PRODUCT.md` (editor drafting
 bullet; `uploader/README.md` also notes that drafting, like translation, sends `max_tokens:
 32768` and `response_format: json_object` with no fallback, so a provider that rejects either
-fails the one request with the provider message), registry spec amendment note, #67
+fails the one request with the generic provider-failure message), registry spec amendment note, #67
 supersession note, and a
 `docs/claude/project-status.md` entry with the downgrade note.
 
@@ -785,3 +786,36 @@ wording nits (stale "H1" in the trust table, follow-default disclosure in misuse
 row in the verification plan) were applied without changing the design. The full round-3/4
 review text is kept with the PR's acceptance evidence. This approval covers the design only;
 the owner's approval before merge still applies.
+
+## PR review record (PR #580)
+
+Independent `/review` of the implementation ran three read-only reviewers in parallel:
+`PrReview580` (`reviewer`, `anthropic/claude-sonnet-5-5`, REQUEST CHANGES), `SecReview580`
+(`security-reviewer`, `anthropic/claude-sonnet-5-5`, COMMENT) and `DeepReview580` (fresh
+read-only reviewer, `anthropic/claude-opus-5-5` high, REQUEST CHANGES). Real-browser runs on the
+isolated stack added two findings. Every substantiated finding was fixed with a regression test
+that was shown to fail without the fix (mutation check):
+
+- **Focus dropped to the page** when the hero caption re-rendered a focused detail checkbox
+  (Deep W1): detail ids follow the item key and re-rendering restores focus; the DOM harness now
+  drops focus from detached nodes like a browser (no other suite was affected).
+- **Stale hero lookup after `changed()`** could add a second, older hero row (Sec F1): the lookup
+  captures its token and the insert is idempotent.
+- **Invisible characters** (bidi marks, zero-width/invisible operators, BOM, tag characters)
+  passed output validation and could hide text from the preview (Sec F2): now rejected in every
+  field, checked before whitespace folding, and every field needs a visible character.
+- **Untested promises** (PR F1): key scrubbing of every `/ai-config` response (incl. one arriving
+  after Close), the Generate-time 401, clearing picked photos after Apply and on another story,
+  the unresolved-placeholder fallback, and the three `didCommit` invalidations now have tests;
+  the admin-pages pairing contract lists Story drafting.
+- **Phone spacing and dead CSS** (PR F2/F3), **Close focus with a hidden trigger row** (PR F4),
+  **placeholder-filling in provider names**, **late "ready" on an unavailable dialog**, an
+  over-cap route (Deep I1–I3, PR F6), a lingering provider message beside an inline input error
+  and an error sentence below the fold (browser D9-A/B: the status now scrolls into view).
+- **Docs**: README provider-failure wording (PR F5), SECURITY.md date/front-matter wording
+  (Sec F4), corpus additions for `ftp://`, footnotes and non-ASCII e-mail shapes (Sec F3).
+
+Not adopted, with reasons: moving `aria-busy` off the dialog (Deep I4) — parity with the
+translation dialog and the spec; no assistive-technology evidence either way. The follow-default
+key disclosure noted by the security reviewer is documented (trust table, `SECURITY.md`,
+Settings privacy note) for the owner to accept at merge.

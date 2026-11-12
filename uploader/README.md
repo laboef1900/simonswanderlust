@@ -61,7 +61,8 @@ first-person story of about 800–1500 words, up to 4000 characters, with **Rese
 to default**). The language, the untrusted-data guard, the no-invention rule and the JSON
 format are always appended by code. Like translation, drafting sends `max_tokens: 32768` and
 `response_format: json_object` with no fallback and no retry, so a provider that rejects either
-fails that one request with the provider error message. With the provider left on
+fails that one request; the editor then shows its generic provider-failure message (the
+provider's own error text is never displayed). With the provider left on
 **Follow default**, every signed-in author's browser receives the default provider's API key for
 drafting requests. See the
 [#579 design](../docs/superpowers/specs/2026-11-12-issue-579-ai-post-drafting.md).
