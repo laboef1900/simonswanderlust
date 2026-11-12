@@ -154,9 +154,80 @@ export interface MediaExif {
   lens: string | null;
   lat: number | null;
   lng: number | null;
+  /** Millimetres, as recorded (FocalLength). */
+  focalLength: number | null;
+  /** Integer millimetres (FocalLengthIn35mmFilm); the tag's 0 means unknown and is stored as null. */
+  focalLength35mm: number | null;
+  /** FNumber, e.g. 2.8. */
+  fNumber: number | null;
+  /** Integer (ISOSpeedRatings). */
+  iso: number | null;
+  /** Seconds (ExposureTime), e.g. 0.004. */
+  exposureTime: number | null;
 }
 
-const EMPTY_EXIF: MediaExif = { takenAt: null, camera: null, lens: null, lat: null, lng: null };
+/**
+ * The exposure settings of a photo (#570): non-location camera metadata the
+ * library shows to authenticated users. Numbers, never formatted strings.
+ */
+export type MediaExposure = Pick<MediaExif, 'focalLength' | 'focalLength35mm' | 'fNumber' | 'iso' | 'exposureTime'>;
+
+/**
+ * What each stored exposure number must satisfy; anything else becomes null.
+ *
+ * @ai-warning A COMPATIBILITY CONTRACT, not tuning: widen only, or ship a data
+ * migration. `readDump` (backup.ts) rejects a dump whose value fails these, so
+ * narrowing a range later would make existing rows fail backup read-back and
+ * existing dumps unrestorable. There is deliberately no DB CHECK (CHECKs are
+ * write-once, see db.ts) — the stores and the restore apply this at every
+ * write instead. See *Value storage and bounds* in
+ * docs/superpowers/specs/2026-11-11-issue-570-media-details-design.md.
+ */
+const EXPOSURE_RULES: { readonly [F in keyof MediaExposure]: { integer: boolean; accepts: (n: number) => boolean } } = {
+  focalLength: { integer: false, accepts: (n) => n >= 0.5 && n <= 5000 },
+  focalLength35mm: { integer: true, accepts: (n) => n >= 1 && n <= 10_000 },
+  fNumber: { integer: false, accepts: (n) => n >= 0.5 && n <= 512 },
+  iso: { integer: true, accepts: (n) => n >= 1 && n <= 10_000_000 },
+  exposureTime: { integer: false, accepts: (n) => n > 0 && n <= 86_400 },
+};
+
+/** A `MediaExposure` with every field null. */
+export function emptyExposure(): MediaExposure {
+  return { focalLength: null, focalLength35mm: null, fNumber: null, iso: null, exposureTime: null };
+}
+
+/** A `MediaExif` with every field null: no EXIF, or a row nothing has parsed yet. */
+export function emptyMediaExif(): MediaExif {
+  return { takenAt: null, camera: null, lens: null, lat: null, lng: null, ...emptyExposure() };
+}
+
+/**
+ * null unless `v` is a finite number (typeof 'number') inside the field's
+ * bounds; integer fields are rounded first.
+ *
+ * @ai-note exif-reader delivers rationals PRE-DIVIDED, so a malformed one
+ * arrives as NaN (`0/0`), Infinity (`n/0`) or a huge unsigned value (a negative
+ * written into an unsigned slot reads as 4294967291); `double precision` would
+ * store the first two as they are. Arrays are never unwrapped here — only
+ * `parseExif` knows the reader's count-1 quirk.
+ */
+export function exposureValue(field: keyof MediaExposure, v: unknown): number | null {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return null;
+  const rule = EXPOSURE_RULES[field];
+  const n = rule.integer ? Math.round(v) : v;
+  return rule.accepts(n) ? n : null;
+}
+
+/** Applies `exposureValue` to all five fields. */
+export function normalizeExposure(e: Partial<Record<keyof MediaExposure, unknown>>): MediaExposure {
+  return {
+    focalLength: exposureValue('focalLength', e.focalLength),
+    focalLength35mm: exposureValue('focalLength35mm', e.focalLength35mm),
+    fNumber: exposureValue('fNumber', e.fNumber),
+    iso: exposureValue('iso', e.iso),
+    exposureTime: exposureValue('exposureTime', e.exposureTime),
+  };
+}
 
 /**
  * Convert an EXIF GPS degrees/minutes/seconds triple to a signed decimal.
@@ -191,10 +262,14 @@ export function gpsToDecimal(dms: unknown, ref: unknown): number | null {
  */
 export function parseExif(raw: Buffer | undefined): MediaExif {
   const tags = readExif(raw);
-  if (!tags) return { ...EMPTY_EXIF };
+  if (!tags) return emptyMediaExif();
   const takenAt = tags.Photo?.DateTimeOriginal;
   const lat = gpsToDecimal(tags.GPSInfo?.GPSLatitude, tags.GPSInfo?.GPSLatitudeRef);
   const lng = gpsToDecimal(tags.GPSInfo?.GPSLongitude, tags.GPSInfo?.GPSLongitudeRef);
+  // exif-reader returns a scalar for count 1 and an array otherwise (`[]` for
+  // count 0), and ISOSpeedRatings is the one tag here whose count is "any": an
+  // array contributes its first element. This is the only place that unwraps.
+  const iso: unknown = tags.Photo?.ISOSpeedRatings;
   return {
     takenAt: takenAt instanceof Date && !Number.isNaN(takenAt.getTime()) ? takenAt : null,
     // Make and Model are separate tags; the library shows one "camera" string.
@@ -205,5 +280,10 @@ export function parseExif(raw: Buffer | undefined): MediaExif {
     // Latitude is bounded tighter than longitude.
     lat: lat !== null && Math.abs(lat) <= 90 ? lat : null,
     lng,
+    focalLength: exposureValue('focalLength', tags.Photo?.FocalLength),
+    focalLength35mm: exposureValue('focalLength35mm', tags.Photo?.FocalLengthIn35mmFilm),
+    fNumber: exposureValue('fNumber', tags.Photo?.FNumber),
+    iso: exposureValue('iso', Array.isArray(iso) ? iso[0] : iso),
+    exposureTime: exposureValue('exposureTime', tags.Photo?.ExposureTime),
   };
 }

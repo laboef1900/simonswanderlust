@@ -15,6 +15,7 @@
 import { readdir, stat } from 'node:fs/promises';
 import { join, relative, resolve, sep } from 'node:path';
 import sharp from 'sharp';
+import { emptyMediaExif } from './exif.js';
 import { ORIGINAL_FILE_RE, VARIANT_FILE_RE } from './media-files.js';
 import { FORMATS, JPEG_FORMAT, formatsFor, variantWidths, type ImageOutputFormat } from './variants.js';
 import { MAX_PAGE_SIZE, type MediaStore } from './media-store.js';
@@ -242,7 +243,8 @@ export function createMediaSync(opts: MediaSyncOptions) {
             status: verdict.status,
             width: verdict.width, height: verdict.height, origBytes: entry.origBytes,
             ...(verdict.format ? { format: verdict.format, encoding: { convertJpeg: false } } : {}),
-            alt, exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null },
+            // Reconcile does not parse originals; `backfill-exif` fills the exposure columns (#570).
+            alt, exif: emptyMediaExif(),
             uploadedBy: null,
           });
           report.inserted++;

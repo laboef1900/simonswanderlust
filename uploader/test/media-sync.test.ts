@@ -7,11 +7,13 @@ import { createMediaSync, createReconciler, harvestAlt, isCompleteSet, walkStora
 import { FORMATS, variantWidths } from '../src/variants.js';
 import { createEncodeQueue } from '../src/encode-queue.js';
 import { createWorkLock } from '../src/work-lock.js';
+import { emptyMediaExif } from '../src/exif.js';
+import { backfillExif } from '../src/exif-backfill.js';
 import { memoryMediaStore, type MediaStore } from '../src/media-store.js';
 import type { PostUsageRow } from '../src/posts.js';
 
 const BASE = 'https://img.example.com';
-const noExif = { takenAt: null, camera: null, lens: null, lat: null, lng: null };
+const noExif = emptyMediaExif();
 
 let dir: string;
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'mediasync-')); });
@@ -189,6 +191,25 @@ describe('createMediaSync', () => {
     const report = await sync(store).run();
     expect(report).toMatchObject({ scanned: 1, inserted: 1, demoted: 0 });
     expect(await store.get('trips/a/hero')).toMatchObject({ status: 'ready', width: 800, height: 600 });
+  });
+
+  // #570: reconcile only records that the files exist — it does not parse the
+  // original. `backfill-exif` does, and fills the exposure settings alone.
+  it('inserts a reconciled row without any EXIF, which backfill-exif then completes', async () => {
+    const store = memoryMediaStore({ baseUrl: BASE });
+    await writeSet('trips/a/hero', 800);
+    await writeFile(join(dir, 'trips/a/hero-orig.jpg'), await sharp({ create: { width: 800, height: 600, channels: 3, background: '#321' } })
+      .withExif({
+        IFD0: { Make: 'Leica Camera AG', Model: 'LEICA Q2' },
+        IFD2: { FNumber: '28/10', ISOSpeedRatings: '400' },
+        IFD3: { GPSLatitudeRef: 'N', GPSLatitude: '63/1 4/1 3312/100', GPSLongitudeRef: 'E', GPSLongitude: '10/1 23/1 1944/100' },
+      })
+      .jpeg().toBuffer());
+    expect(await sync(store).run()).toMatchObject({ scanned: 1, inserted: 1 });
+    expect(await store.get('trips/a/hero')).toMatchObject({ status: 'ready', exif: emptyMediaExif() });
+    expect(await backfillExif(store, dir, () => {})).toMatchObject({ scanned: 1, updated: 1 });
+    // Camera and GPS are in the original too, and stay out of the row.
+    expect((await store.get('trips/a/hero'))?.exif).toEqual({ ...emptyMediaExif(), fNumber: 2.8, iso: 400 });
   });
 
   it('marks an originals-only key as processing, not ready — with the original\'s real dimensions', async () => {

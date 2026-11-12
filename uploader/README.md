@@ -20,8 +20,10 @@ and editable in Markdown; Visual paste is plain text. Galleries retain their dir
 order, captions and URLs and use the existing Media picker and metadata authority.
 If Visual initialization fails, the Markdown editor remains available.
 
-**Translate with AI** uses the latest unsaved active language to prepare the other enabled,
-non-omitted language of the same story. Configure its independent provider/model/timeout
+**Translate** (accessible name “Translate with AI”) uses the latest unsaved active language
+to prepare the other enabled language of the same story, even when that language is not
+selected for publication; it then stays a private draft. Which languages go live is chosen
+in the Publish dialog. Configure its independent provider/model/timeout
 under Settings → AI models → Article translation. **Advanced settings → Translation
 instructions** sets house style (tone, form of address, glossary, place names, units), up to
 4000 characters. It must contain visible text. Hidden control characters, which pasted text sometimes carries, are refused. **Reset instructions to default** restores the
@@ -978,6 +980,25 @@ the cause, use **Rebuild site now** or this CLI command explicitly.
 A failed rebuild can follow a successful CMS mutation. Follow the saved/published/deleted
 acknowledgement; do not repeat that mutation to repair generation. The previous release
 remains served until another build promotes a replacement.
+
+## CLI exposure backfill (#570)
+
+Photos uploaded before #570 have no stored focal length, aperture, ISO or shutter speed. Fill
+them from the retained originals once after upgrading, with the upgraded app running (its boot
+adds the columns):
+
+```bash
+docker compose exec app node --import tsx src/cli.ts backfill-exif
+```
+
+It reads each photo's private `-orig` file and writes only those five columns; titles, alt text,
+status, camera, lens, capture time and GPS are never touched. It is idempotent: a second run
+reports `updated: 0`. Photos without a retained original keep empty values. Exit codes: `0`
+done (missing originals are normal for older imports), `2` some keys were unreadable, had more
+than one original or an unsafe key (see the log), `1` the schema is not migrated yet. Logs name
+keys and reasons only, never metadata values or paths. Photos that reconcile adds later — a
+rescan after a WordPress import or a restored image archive — also start without these values;
+run `backfill-exif` again after such a rescan.
 
 ## CLI password reset (recovery)
 

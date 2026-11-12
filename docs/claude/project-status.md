@@ -1051,3 +1051,27 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
   attached but unpublished, or detached). `GET/PUT/DELETE /posts/:tk/route` add a read-only
   `published` flag; the editor re-reads it after Publish/Unpublish. Payload, storage, snapshot,
   MDX export and public rendering are unchanged (option 3 out of scope).
+- **Implemented, PR pending (#570, 2026-11-11):** Media photo details store and show focal
+  length (and 35 mm equivalent), aperture, ISO and shutter speed; a fullscreen viewer (native
+  dialog, ←/→, Escape, `F` on a tile); a **Versions** list read from the variant files on disk
+  (`GET /media/items/*?versions=1`); the storage key is no longer shown. Originals stay private:
+  size only, no link. High-risk design approved by an independent AI reviewer under a scoped,
+  recorded exception ([spec](../superpowers/specs/2026-11-11-issue-570-media-details-design.md)).
+  **Release facts:** five nullable `media` columns (`focal_length`, `focal_length_35mm`,
+  `f_number`, `iso`, `exposure_time`) are added automatically on boot; run
+  `docker compose exec app node --import tsx src/cli.ts backfill-exif` once after upgrading to
+  fill existing photos from their originals (and again after a rescan that inserted rows, e.g.
+  after a WordPress import); dumps stay v15 with the new keys optional (older
+  dumps restore them as NULL); recovery is roll-forward only. `allowedExif()` and GPS
+  redaction are unchanged.
+- **Implemented, PR pending (#568, AI-reviewed design under a scoped owner exception):** the
+  story editor chooses published languages in a **Publish** dialog instead of the secondary tab's
+  "Publish this story in …" checkbox. Primary and already-published languages are locked on;
+  an unpublished secondary can be deselected (kept as a private draft, `omitted = true`). The
+  confirmed selection is frozen and the save intent captured while the dialog is still open,
+  then saved through the normal draft save and published; Cancel changes nothing. Gaps are checked
+  for exactly the selected languages (the button gates only the primary, published languages and
+  Expedition details). Translation now also works into an unselected language. The translate
+  action reads **Translate** with a shared AI icon (`AdminIcons.ai()`), accessible name
+  "Translate with AI". No route, schema or `posts.omitted` semantics change. Spec:
+  `docs/superpowers/specs/2026-11-11-issue-568-publish-language-choice.md`.

@@ -1237,8 +1237,12 @@ criterion (2.5.5 is AAA), so the accessibility commitment in `PRODUCT.md` is una
   Journeys rows and inside every locale tab. Four states, each with a non-colour cue and an
   accessible name: available (solid), missing — nothing written yet (dashed, amber),
   omitted — written or not, but not requested for publication (dashed, struck through,
-  muted) and unknown (dotted). The choice itself is one checkbox with one polarity in both
-  editors: **Publish this story in English** / **Publish this journey in English**.
+  muted) and unknown (dotted). The choice itself has one polarity in both editors: the story
+  editor makes it in the **Publish** dialog (#568) — one checkbox per enabled language when two are enabled (a single-language install shows its one row without a checkbox), the
+  primary and any already-published language checked and locked with their reason, each row with
+  title, resulting URL in mono and readiness in words; selected languages with gaps block Publish
+  with an announced reason and a **Go to** link that closes the dialog. The journey editor keeps
+  its **Publish this journey in English** checkbox.
   The **Pages** catalogue replaces About in the admin sidebar, using flat compact
   rows like Posts — kind, a Draft/Published status pill (or "Not created yet"), language
   chips with the enabled-locale titles and right-aligned **Edit**/**Create** actions — not
@@ -1389,7 +1393,10 @@ criterion (2.5.5 is AAA), so the accessibility commitment in `PRODUCT.md` is una
 - Gallery blocks remain part of the canonical Markdown draft. Visual gallery editing uses
   the existing Media picker and preserves directives, ordering, captions and source URLs;
   Markdown mode exposes the underlying fence.
-- **Translate with AI** stays beside the locale tabs. Its native dialog
+- **Translate** (accessible name **Translate with AI**) stays beside the locale tabs, its label
+  led by the shared 1rem stroke AI icon (`AdminIcons.ai()`, `currentColor`, hidden from assistive
+  technology) and kept on one line at every width. It also works for a language that is not
+  selected for publication; the dialog then says the result stays a private draft. Its native dialog
   names the direction and provider/endpoint/model before an explicit inference action, then
   shows readonly title, excerpt, complete Markdown and article-local image text for review.
   Existing target content requires a separate unchecked replacement confirmation. Apply and
@@ -1497,8 +1504,21 @@ criterion (2.5.5 is AAA), so the accessibility commitment in `PRODUCT.md` is una
   back. With no detail selected the grid takes the inspector's
   space; selection guidance and keyboard shortcuts live under Folders. The detail panel
   (20rem) has a quiet **Photo details / Back to photos** header, then the photo itself,
-  camera · date · pixel size and the key in mono, then fields; lens and file sizes
-  stay under **File**. The laptop inspector pins within the workspace and scrolls independently.
+  camera · date · pixel size in mono (the storage key is not shown, #570), then **View
+  fullscreen** beside **Suggest with AI** in one compact row, then fields. **File** lists Lens
+  and Exposure (`28 mm · f/2.8 · 1/250 s · ISO 200`) only when recorded — no dash — then the
+  original and variant sizes. **Versions** follows: one mono, underlined link per stored
+  variant file (`AVIF · 1920 × 1280 · 412 kB`), opening a new tab; the original is size-only
+  and never linked. The fullscreen viewer is a native `<dialog>` on a solid `#0f141a` stage with
+  the photo at `object-fit: contain`; its caption sits **under** the photo on an opaque navy
+  plate (white title, DE/EN alt texts with mono codes, "Photo n of N on this page") with
+  outlined white Previous / Next / Close (white focus ring; the accent ring fails on navy).
+  Previous/Next stay focusable at the ends (`aria-disabled`); ←/→ step, Escape closes and focus
+  returns to the opener. At 320px the plate stacks under the photo with the three controls on
+  one row; on short wide screens it stands beside the photo. A photo without a ready variant
+  shows its status in a dashed frame, never a broken image. Only a fade, and only without a
+  reduced-motion preference. **F** on a focused tile opens it fullscreen; the hint sits with
+  the other shortcuts. The laptop inspector pins within the workspace and scrolls independently.
   Enter opens the focused photo without changing bulk selection; **Photo details** also moves
   focus into the panel. On phones an unmodified photo tap reveals the panel from its top.
   Back to photos asks before discarding unsaved metadata and restores the photo's grid focus.

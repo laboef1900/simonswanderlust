@@ -15,6 +15,7 @@ import { memoryPostStore, pgPostStore, type PostLocale } from '../src/posts.js';
 import { memoryPageStore, pgPageStore } from '../src/pages.js';
 import { memoryUserStore } from '../src/users.js';
 import { memorySessionStore } from '../src/sessions.js';
+import { emptyMediaExif } from '../src/exif.js';
 import { memoryMediaStore, pgMediaStore } from '../src/media-store.js';
 import { memorySecretsStore } from '../src/secrets.js';
 import { defaultSettings, validate } from '../src/settings.js';
@@ -71,7 +72,7 @@ async function fixture(initial: LanguageConfig = modes[0]!, pool?: DbPool, onboa
   const put = (payload: object) => injectAuthoring(app, { method: 'PUT', url: '/language', cookies, payload });
   async function story(suffix = 'one') {
     await media.upsert({ key: 'hero', width: 100, height: 100, origBytes: 100, status: 'ready',
-      exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null }, uploadedBy: null });
+      exif: emptyMediaExif(), uploadedBy: null });
     const locale = (locale: 'de' | 'en'): PostLocale => ({ locale, slug: `${locale}-${suffix}`, title: `${locale} story`,
       country: 'Test', excerpt: 'An excerpt', bodyMarkdown: 'A complete story.', images: {},
       heroImage: { src: 'https://images.test/hero', width: 100, height: 100, alt: 'Landscape' } });
@@ -236,7 +237,7 @@ describe('inactive About preparation', () => {
     const primary = secondary === 'de' ? 'en' : 'de';
     const f = await fixture({ primary, locales: [primary] });
     await f.media.upsert({ key: 'prepared-photo', width: 100, height: 80, origBytes: 100, status: 'processing',
-      exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null }, uploadedBy: null });
+      exif: emptyMediaExif(), uploadedBy: null });
     const prepared = await injectAuthoring(f.app, { method: 'PUT', url: '/pages/about', cookies: f.cookies,
       payload: { prepareLocale: secondary, updatedAt: null, [secondary]: { title: 'Prepared', bodyMarkdown: '![Photo](https://images.test/prepared-photo)', images: {} } } });
     expect(prepared.statusCode).toBe(200);

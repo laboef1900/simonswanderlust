@@ -6,8 +6,8 @@ import { join } from 'node:path';
 import { list as listTar } from 'tar';
 import {
   dumpDatabase, readDump, listBackups, listImageArchives, pruneBackups, readState, writeState, isBackupDue,
-  createDbBackup, archiveImages, sweepTempFiles, ArchiveSpaceError,
-  BACKUP_FILE_RE, IMAGES_ARCHIVE_RE, resolveBackupDir, type Connectable,
+  createDbBackup, archiveImages, sweepTempFiles, ArchiveSpaceError, BackupError,
+  BACKUP_FILE_RE, IMAGES_ARCHIVE_RE, DUMP_VERSION, resolveBackupDir, type Connectable,
 } from '../src/backup.js';
 import { identityDumpRow } from './site-identity-fixture.js';
 import { DEFAULT_NAVIGATION } from '../../site/src/lib/navigation.js';
@@ -611,4 +611,80 @@ describe('createDbBackup.runNow', () => {
       }
     },
   );
+});
+
+// #570: the five exposure columns ride in the existing format as optional row
+// keys. A dump is a file the operator hands us, so a present value is checked
+// against the same bounds the parser applies — before any write.
+describe('readDump media camera metadata', () => {
+  const stamp = '2026-11-11T12:00:00.000Z';
+  const row = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    key: 'library/2025/a', folder: '', title: '', alt_de: '', alt_en: '', caption_de: '', caption_en: '', tags: [],
+    width: 800, height: 600, orig_bytes: 10, variant_bytes: 20, status: 'ready', error: null,
+    taken_at: null, camera: null, lens: null, lat: null, lng: null, uploaded_at: stamp, uploaded_by: null,
+    format: null, encoding: null, ...over,
+  });
+  /** A current-format dump holding these media rows; `text` may rewrite the JSON for values it cannot express. */
+  async function dumpOf(media: Record<string, unknown>[], text: (json: string) => string = (json) => json): Promise<string> {
+    const file = join(dir, 'db-20261111-120000.json.gz');
+    await writeFile(file, gzipSync(text(JSON.stringify({
+      version: DUMP_VERSION, createdAt: stamp,
+      tables: {
+        users: [], posts: [], post_routes: [], site_identity: [identityDumpRow()], site_identity_assets: [],
+        site_language: [{ id: true, primary_locale: 'de', enabled_locales: ['de', 'en'], locked_at: null, updated_at: stamp }],
+        pages: [], site_nav: [{ id: 1, config: DEFAULT_NAVIGATION, updated_at: stamp }],
+        journeys: [], journey_locales: [], journey_members: [], media,
+      },
+    }))));
+    return file;
+  }
+  const rejected = async (media: Record<string, unknown>[], text?: (json: string) => string): Promise<void> => {
+    const file = await dumpOf(media, text);
+    expect(() => readDump(file)).toThrow(BackupError);
+    expect(() => readDump(file)).toThrow('Invalid media camera metadata in backup.');
+  };
+
+  it('accepts rows without the keys (a dump written before #570) and rows carrying null', async () => {
+    const media = [
+      row(),
+      row({ key: 'library/2025/b', focal_length: null, focal_length_35mm: null, f_number: null, iso: null, exposure_time: null }),
+      row({ key: 'library/2025/c', iso: 200 }), // some present, some absent
+    ];
+    expect(readDump(await dumpOf(media)).tables.media).toEqual(media);
+  });
+
+  it('accepts every in-range value, both bounds included, and leaves the rows as written', async () => {
+    const media = [
+      row({ focal_length: 28, focal_length_35mm: 35, f_number: 2.8, iso: 400, exposure_time: 0.004 }),
+      row({ key: 'low', focal_length: 0.5, focal_length_35mm: 1, f_number: 0.5, iso: 1, exposure_time: Number.MIN_VALUE }),
+      row({ key: 'high', focal_length: 5000, focal_length_35mm: 10_000, f_number: 512, iso: 10_000_000, exposure_time: 86_400 }),
+      // A fractional integer is in range once rounded; the restore binds the rounded value.
+      row({ key: 'fractional', focal_length_35mm: 34.6, iso: 100.4 }),
+    ];
+    expect(readDump(await dumpOf(media)).tables.media).toEqual(media);
+  });
+
+  it.each([
+    ['focal_length', [0.4999, 5000.0001, -28, 0]],
+    ['focal_length_35mm', [0, 0.4, 10_001, -35]],
+    ['f_number', [0.4999, 512.0001, -2.8, 0]],
+    ['iso', [0, 0.4, 10_000_001, -100]],
+    ['exposure_time', [0, -0.004, 86_400.0001]],
+  ] as const)('rejects an out-of-range or non-numeric %s', async (column, outOfRange) => {
+    for (const value of [...outOfRange, '28', '', true, false, [28], [], { value: 28 }]) {
+      await rejected([row({ [column]: value })]);
+    }
+    // JSON has no NaN or Infinity literal, but an overflowing number parses to Infinity.
+    await rejected([row({ [column]: 'OVERFLOW' })], (json) => json.replace('"OVERFLOW"', '1e999'));
+  });
+
+  it('checks every row, and a format predating the columns too', async () => {
+    await rejected([row(), row({ key: 'library/2025/b', iso: 'four hundred' })]);
+    const legacy = join(dir, 'db-20260101-000000.json.gz');
+    const media = [row({ format: undefined, encoding: undefined, iso: -1 })];
+    await writeFile(legacy, gzipSync(JSON.stringify({ version: 6, createdAt: stamp, tables: { users: [], posts: [], media } })));
+    expect(() => readDump(legacy)).toThrow('Invalid media camera metadata in backup.');
+    await writeFile(legacy, gzipSync(JSON.stringify({ version: 6, createdAt: stamp, tables: { users: [], posts: [], media: [row()] } })));
+    expect(readDump(legacy).tables.media).toHaveLength(1);
+  });
 });

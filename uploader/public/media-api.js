@@ -125,6 +125,90 @@ window.MediaApi = (function () {
     return 'failed: ' + (item.error || 'unknown');
   }
 
+  // ---- camera settings and stored versions (Photo details) ----------------
+
+  /** What an exposure field holds when the camera recorded it: a positive, finite number. */
+  function measured(value) {
+    return typeof value === 'number' && isFinite(value) && value > 0 ? value : null;
+  }
+
+  /** Up to `decimals` decimals with trailing zeros dropped: 2.8, 8, 0.95. */
+  function trimmed(value, decimals) {
+    return String(Number(value.toFixed(decimals)));
+  }
+
+  /**
+   * A shutter time in seconds, without its unit. Below one second cameras
+   * record a reciprocal, so 0.004 reads "1/250" — but only when that reciprocal
+   * really is the stored value: N ≥ 2 and within 1 % of it (the #371 reciprocal
+   * rule). 0.8 s is not "1/1" and 0.3 s is not "1/3".
+   */
+  function shutter(seconds) {
+    if (seconds >= 1) return trimmed(seconds, 1);
+    var n = Math.round(1 / seconds);
+    return n >= 2 && Math.abs(1 / n - seconds) <= 0.01 * seconds ? '1/' + n : trimmed(seconds, 2);
+  }
+
+  /**
+   * Focal length, aperture, shutter time and ISO as one line — "24 mm · f/2.8 ·
+   * 1/250 s · ISO 200" — without the parts the camera did not record; '' when
+   * it recorded none of them. `equivalentLabel` ("equiv.") comes from the
+   * page's copy, so this module stays dictionary-free; mm, f/, s and ISO are
+   * notation, not copy.
+   */
+  function formatExposure(exif, equivalentLabel) {
+    if (!exif) return '';
+    var parts = [];
+    var focal = measured(exif.focalLength);
+    var focal35 = measured(exif.focalLength35mm);
+    var equivalent = focal35 === null ? ''
+      : Math.round(focal35) + ' mm' + (equivalentLabel ? ' ' + equivalentLabel : '');
+    if (focal !== null) {
+      // A 35 mm equivalent is whole millimetres: the same number twice says nothing.
+      parts.push(trimmed(focal, focal >= 10 ? 0 : 1) + ' mm'
+        + (equivalent && Math.round(focal35) !== Math.round(focal) ? ' (' + equivalent + ')' : ''));
+    } else if (equivalent) {
+      parts.push(equivalent);
+    }
+    var fNumber = measured(exif.fNumber);
+    if (fNumber !== null) parts.push('f/' + trimmed(fNumber, 2));
+    var seconds = measured(exif.exposureTime);
+    if (seconds !== null) parts.push(shutter(seconds) + ' s');
+    var iso = measured(exif.iso);
+    if (iso !== null) parts.push('ISO ' + Math.round(iso));
+    return parts.join(' · ');
+  }
+
+  // Format names are data, not copy: the same in every language.
+  var VERSION_FORMATS = { avif: 'AVIF', webp: 'WebP', jpeg: 'JPEG' };
+
+  /**
+   * The `versions` member of `GET /media/items/*?versions=1` in the one shape
+   * the panel renders, or null when a payload carries none (PATCH responses, a
+   * 409's `current`, poll reads). A member that is not what the route promises
+   * reads as unavailable — never as a shorter or stranger list.
+   */
+  function versionsOf(value) {
+    if (value === undefined || value === null) return null;
+    if (value.availability === 'processing') return { availability: 'processing' };
+    var count = function (n) { return typeof n === 'number' && isFinite(n) && n >= 0; };
+    var listed = value.availability === 'available' && Array.isArray(value.items) && value.items.every(function (v) {
+      return !!v && Object.prototype.hasOwnProperty.call(VERSION_FORMATS, v.format)
+        && count(v.width) && v.width > 0 && (v.height === null || count(v.height))
+        && count(v.bytes) && typeof v.src === 'string';
+    });
+    if (!listed) return { availability: 'unavailable' };
+    return { availability: 'available', items: value.items.map(function (v) {
+      return { format: v.format, width: v.width, height: v.height, bytes: v.bytes, src: v.src };
+    }) };
+  }
+
+  /** One stored version as a line: "AVIF · 1920 × 1280 · 412 kB". The height is a dash when its header could not be read. */
+  function versionLabel(version) {
+    return VERSION_FORMATS[version.format] + ' · ' + version.width + ' × '
+      + (version.height === null ? '—' : version.height) + ' · ' + formatBytes(version.bytes);
+  }
+
   /**
    * State label for one upload-queue row. A duplicate names the folder the
    * photo already lives in: the server keeps a curated folder on re-upload
@@ -621,6 +705,9 @@ window.MediaApi = (function () {
     folderTree: folderTree,
     parentOf: parentOf,
     statusLabel: statusLabel,
+    formatExposure: formatExposure,
+    versionsOf: versionsOf,
+    versionLabel: versionLabel,
     queueState: queueState,
     listQuery: listQuery,
     debounce: debounce,

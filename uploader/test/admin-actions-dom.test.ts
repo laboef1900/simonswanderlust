@@ -306,7 +306,7 @@ function loadPage(file: string, extraGlobals: Record<string, unknown>, scripts: 
       locale, Object.fromEntries(Object.entries(strings).filter(([key]) => key.startsWith('admin.build.'))
         .map(([key, value]) => [key.slice('admin.build.'.length), value])),
     ])),
-    AdminConfirm: { ask: async () => true, liveUrls: () => ({ de: '', en: '' }), urlsPlain: () => '' },
+    AdminConfirm: { ask: async () => true, liveUrls: () => ({ de: '', en: '' }) },
     ...extraGlobals,
   };
   // Focus tracking follows `focus()`; the comments cases also assign it directly.

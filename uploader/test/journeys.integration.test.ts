@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ensureSchema, type DbPool } from '../src/db.js';
 import { memoryLanguageStore, pgLanguageStore, type LanguageConfig, type LanguageStore } from '../src/language.js';
 import { memoryPostStore, pgPostStore, type PostPair, type PostStore } from '../src/posts.js';
+import { emptyMediaExif } from '../src/exif.js';
 import { memoryMediaStore, type MediaStore } from '../src/media-store.js';
 import { memoryJourneyStore, pgJourneyStore, validateJourneyDraft, type JourneyDraft, type JourneyStore, type StoredJourney } from '../src/journeys.js';
 import { parseJourneySnapshot } from '../../site/src/lib/journey-snapshot.js';
@@ -32,7 +33,7 @@ for (const backend of ['memory', 'pg'] as const) {
     let language: LanguageStore; let posts: PostStore; let media: MediaStore; let journeys: JourneyStore;
     beforeEach(async () => {
       media = memoryMediaStore({ baseUrl: imageBase });
-      await media.upsert({ key: 'photo', width: 800, height: 600, origBytes: 1, status: 'ready', exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null }, uploadedBy: null });
+      await media.upsert({ key: 'photo', width: 800, height: 600, origBytes: 1, status: 'ready', exif: emptyMediaExif(), uploadedBy: null });
       if (backend === 'pg') {
         owner = new pg.Pool({ connectionString: process.env.TEST_DATABASE_URL });
         schema = `journey_${randomUUID().replaceAll('-', '')}`;

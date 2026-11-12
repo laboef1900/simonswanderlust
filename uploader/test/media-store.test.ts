@@ -4,9 +4,10 @@ import {
   normalizeTags, pageSizeOf, redactForNonAdmin, sortColumn, thumbWidth,
   MAX_PAGE_SIZE, type MediaStore,
 } from '../src/media-store.js';
+import { emptyExposure, emptyMediaExif } from '../src/exif.js';
 
 const BASE = 'https://img.simonswanderlust.com';
-const noExif = { takenAt: null, camera: null, lens: null, lat: null, lng: null };
+const noExif = emptyMediaExif();
 
 function store(): MediaStore {
   return memoryMediaStore({ baseUrl: BASE });
@@ -113,18 +114,21 @@ describe('libraryKey', () => {
 });
 
 describe('redactForNonAdmin', () => {
-  it('drops GPS and uploadedBy but keeps camera metadata', () => {
+  it('drops GPS and uploadedBy but keeps camera metadata and the exposure settings', () => {
+    const exposure = { focalLength: 28, focalLength35mm: 28, fNumber: 1.7, iso: 200, exposureTime: 0.004 };
     const item = {
-      key: 'k', src: 's', thumbSrc: null, folder: '', title: '',
+      key: 'k', src: 's', thumbSrc: null, fullSrc: 'https://img.example/k-1.webp', folder: '', title: '',
       alt: { de: '', en: '' }, caption: { de: '', en: '' }, tags: [],
       width: 1, height: 1, origBytes: 0, variantBytes: 0,
       status: 'ready' as const, error: null,
-      exif: { takenAt: null, camera: 'Leica Q2', lens: 'Summilux', lat: 63.4, lng: 10.4 },
+      exif: { takenAt: null, camera: 'Leica Q2', lens: 'Summilux', lat: 63.4, lng: 10.4, ...exposure },
       uploadedAt: new Date(), uploadedBy: 'u1',
     };
     const out = redactForNonAdmin(item);
-    expect(out.exif).toMatchObject({ lat: null, lng: null, camera: 'Leica Q2', lens: 'Summilux' });
+    // #570: the exposure settings carry no location, so authors keep them.
+    expect(out.exif).toEqual({ takenAt: null, camera: 'Leica Q2', lens: 'Summilux', lat: null, lng: null, ...exposure });
     expect(out.uploadedBy).toBeNull();
+    expect(out.fullSrc).toBe(item.fullSrc);
     expect(item.exif.lat).toBe(63.4); // input untouched
   });
 });
@@ -156,6 +160,124 @@ describe('memoryMediaStore', () => {
     expect(modern).not.toHaveProperty('format');
     expect(modern).not.toHaveProperty('encoding');
     expect(modern.thumbSrc).toBe(`${BASE}/library/2026/modern-640.webp`);
+  });
+
+  // #570: what the fullscreen viewer shows. variantWidths() always appends the
+  // intrinsic width, so `-${width}` is the largest variant that exists.
+  it('derives fullSrc as the intrinsic-width variant, per status and format', async () => {
+    const s = store();
+    for (const status of ['processing', 'failed', 'missing'] as const) {
+      expect((await add(s, `not-ready-${status}`, { status, width: 3000 })).fullSrc).toBeNull();
+    }
+    expect((await add(s, 'library/2026/wide', { width: 3000, height: 2000 })).fullSrc)
+      .toBe(`${BASE}/library/2026/wide-3000.webp`);
+    expect((await add(s, 'library/2026/jpeg', { width: 3000, format: 'jpeg', encoding: { convertJpeg: false } })).fullSrc)
+      .toBe(`${BASE}/library/2026/jpeg-3000.jpeg`);
+    // Narrower than the smallest standard width: one file is both thumbnail and full size.
+    const small = await add(s, 'small', { width: 500 });
+    expect(small.fullSrc).toBe(`${BASE}/small-500.webp`);
+    expect(small.thumbSrc).toBe(small.fullSrc);
+    // Unknown width (an unreadable probe): no URL, like thumbSrc — never `-0.webp`.
+    expect(await add(s, 'unknown', { width: 0, height: 0 })).toMatchObject({ fullSrc: null, thumbSrc: null });
+    // It appears with the status change, on get and in listings alike.
+    await s.setStatus('not-ready-processing', 'ready');
+    expect((await s.get('not-ready-processing'))?.fullSrc).toBe(`${BASE}/not-ready-processing-3000.webp`);
+    const listed = (await s.list({ q: 'not-ready' })).items.map((i) => [i.key, i.fullSrc]);
+    expect(listed.sort()).toEqual([
+      ['not-ready-failed', null], ['not-ready-missing', null],
+      ['not-ready-processing', `${BASE}/not-ready-processing-3000.webp`],
+    ]);
+  });
+
+  describe('exposure settings (#570)', () => {
+    const exposure = { focalLength: 4.3, focalLength35mm: 24, fNumber: 1.8, iso: 125, exposureTime: 1 / 500 };
+
+    it('round-trips the five numbers through upsert, get and list', async () => {
+      const s = store();
+      const saved = await add(s, 'k', { exif: { ...emptyMediaExif(), camera: 'Pixel', ...exposure } });
+      expect(saved.exif).toEqual({ ...emptyMediaExif(), camera: 'Pixel', ...exposure });
+      expect((await s.get('k'))?.exif).toEqual(saved.exif);
+      expect((await s.list({})).items[0]?.exif).toEqual(saved.exif);
+      expect((await add(s, 'bare')).exif).toEqual(emptyMediaExif());
+    });
+
+    // pg's ON CONFLICT takes EXCLUDED.* for these, like taken_at: the incoming
+    // row wins, including when it carries nothing.
+    it('a re-upsert takes the incoming exposure values, matching the pg ON CONFLICT rule', async () => {
+      const s = store();
+      await add(s, 'k', { exif: { ...emptyMediaExif(), ...exposure } });
+      expect((await add(s, 'k', { exif: { ...emptyMediaExif(), iso: 800 } })).exif).toEqual({ ...emptyMediaExif(), iso: 800 });
+      expect((await add(s, 'k')).exif).toEqual(emptyMediaExif());
+    });
+
+    // The store is the write point: a caller handing over a malformed number
+    // must not be able to store it (Postgres `double precision` accepts NaN).
+    it('normalizes NaN, infinite, out-of-range and fractional-integer values on upsert', async () => {
+      const s = store();
+      const saved = await add(s, 'k', {
+        exif: {
+          ...emptyMediaExif(), lens: 'kept',
+          focalLength: Number.NaN, focalLength35mm: 10_001, fNumber: Number.POSITIVE_INFINITY, iso: 0, exposureTime: -1,
+        },
+      });
+      expect(saved.exif).toEqual({ ...emptyMediaExif(), lens: 'kept' });
+      const rounded = await add(s, 'rounded', { exif: { ...emptyMediaExif(), focalLength35mm: 23.6, iso: 100.4 } });
+      expect(rounded.exif).toMatchObject({ focalLength35mm: 24, iso: 100 });
+      // A caller that omits the fields altogether (a JS caller, an old fixture) stores nulls.
+      const partial = await add(s, 'partial', { exif: { takenAt: null, camera: null, lens: null, lat: null, lng: null } });
+      expect(partial.exif).toEqual(emptyMediaExif());
+    });
+
+    it('setExposure writes only the five fields and reports whether a stored value changed', async () => {
+      const s = store();
+      await add(s, 'k', {
+        folder: 'Island', title: 'Sunrise', alt: { de: 'DE', en: 'EN' }, caption: { de: 'CD', en: 'CE' }, tags: ['dawn'],
+        uploadedBy: 'u1',
+        exif: { ...emptyMediaExif(), takenAt: new Date('2026-07-04T18:23:11Z'), camera: 'LEICA Q2', lens: 'Summilux', lat: 63.4, lng: 10.4 },
+      });
+      await s.setStatus('k', 'failed', 'encode_failed');
+      await s.setVariantBytes('k', 4242);
+      const before = await s.get('k');
+
+      expect(await s.setExposure('k', exposure)).toBe(true);
+      const after = await s.get('k');
+      expect(after?.exif).toEqual({ ...before?.exif, ...exposure });
+      // Nothing else moved: not the status, the text, the camera or the GPS.
+      expect({ ...after, exif: { ...after?.exif, ...emptyExposure() } }).toEqual(before);
+
+      // An identical second write is a no-op — what makes the backfill idempotent.
+      expect(await s.setExposure('k', { ...exposure })).toBe(false);
+      // One changed field is a change; so is clearing a value.
+      expect(await s.setExposure('k', { ...exposure, iso: 200 })).toBe(true);
+      expect(await s.setExposure('k', { ...exposure, iso: null })).toBe(true);
+      expect(await s.setExposure('k', { ...exposure, iso: null })).toBe(false);
+      expect((await s.get('k'))?.exif).toEqual({ ...before?.exif, ...exposure, iso: null });
+      // All-null onto all-null changes nothing either.
+      await add(s, 'bare');
+      expect(await s.setExposure('bare', emptyExposure())).toBe(false);
+    });
+
+    it('setExposure normalizes what it is given, and compares after normalizing', async () => {
+      const s = store();
+      await add(s, 'k');
+      expect(await s.setExposure('k', {
+        focalLength: Number.NaN, focalLength35mm: 23.6, fNumber: 513, iso: 100.4, exposureTime: Number.POSITIVE_INFINITY,
+      })).toBe(true);
+      expect((await s.get('k'))?.exif).toEqual({ ...emptyMediaExif(), focalLength35mm: 24, iso: 100 });
+      // Different raw input, same stored values: unchanged.
+      expect(await s.setExposure('k', { focalLength: 0, focalLength35mm: 24.2, fNumber: null, iso: 99.6, exposureTime: 0 })).toBe(false);
+      // Nothing storable arrives for a row that has nothing: unchanged, never NaN in the row.
+      await add(s, 'bare');
+      expect(await s.setExposure('bare', { ...emptyExposure(), fNumber: Number.NaN })).toBe(false);
+      expect((await s.get('bare'))?.exif).toEqual(emptyMediaExif());
+    });
+
+    it('setExposure resolves false for an unknown key and creates nothing', async () => {
+      const s = store();
+      expect(await s.setExposure('ghost', exposure)).toBe(false);
+      expect(await s.get('ghost')).toBeNull();
+      expect(await s.allKeys()).toEqual([]);
+    });
   });
 
   it('does not leak mutable encoding objects through upsert or get', async () => {
