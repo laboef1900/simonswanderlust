@@ -5975,8 +5975,12 @@ describe('stop routing in the editor (#513)', () => {
     return h;
   }
   type Harness = Awaited<ReturnType<typeof loadEditor>>;
-  async function settleFor(h: Harness, done: () => boolean) {
-    for (let i = 0; i < 40 && !done(); i++) await settle();
+  // The route fingerprint is a real crypto.subtle digest on the thread pool, so
+  // wait on the clock, not on a number of event-loop turns: a fast harness runs
+  // out of turns before a loaded machine finishes hashing.
+  async function settleFor(_h: Harness, done: () => boolean) {
+    const deadline = Date.now() + 2000;
+    while (!done() && Date.now() < deadline) await settle();
   }
   const rows = (h: Harness) => h.el('stopsList').querySelectorAll('.stop-row');
   const status = (h: Harness) => h.el('stopRouteStatus').textContent;

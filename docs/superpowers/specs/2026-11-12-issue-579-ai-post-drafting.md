@@ -835,7 +835,11 @@ the larger editor, and the draft controller looks ids up on every refresh. Two t
 changes fixed it, with the same semantics (both checked differentially against the old lookups
 across all 20 harness suites). Focus connectedness walks up the parent chain instead of scanning
 the tree, and a plain id takes an early-exit walk. The controller also keeps its entry rows like
-its triggers. `editor-gpx.test.ts` now runs in about 2 s (`dev`: about 19 s).
+its triggers. `editor-gpx.test.ts` now runs in about 2 s (`dev`: about 19 s). The faster harness
+exposed one latent wait on CI (`dc2d521`). The stop-routing tests allowed 40 event-loop turns for
+a real `crypto.subtle` digest, and slow DOM lookups had been padding those turns with wall time.
+That wait is now bounded by the clock (2 s). With hashing slowed by 25 ms, the old wait fails 7
+tests and the new one passes all 941 harness tests.
 
 The security and deep reviewers' optional notes were adopted: the default-ignorable rule above,
 `x@-y.z`/`a@_b.c` pinned as hostile corpus entries, and a refused "Generate again" keeps a result
