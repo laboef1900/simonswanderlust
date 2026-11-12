@@ -381,7 +381,9 @@ describe('parseDraft', () => {
       '\u202a', '\u202b', '\u202c', '\u202d', '\u202e', '\u2066', '\u2067', '\u2068', '\u2069',
       // Hidden from the plain-text preview: marks, zero-width/invisible operators, BOM, tag characters.
       '\u061c', '\u200b', '\u200e', '\u200f', '\u2060', '\u2061', '\u2062', '\u2063', '\u2064', '\ufeff',
-      '\u{e0000}', '\u{e0041}', '\u{e007f}']) {
+      '\u{e0000}', '\u{e0041}', '\u{e007f}',
+      // Any other default-ignorable code point: combining grapheme joiner, fillers, Mongolian FVS, VS17+.
+      '\u034f', '\u3164', '\uffa0', '\u180b', '\u{e0100}']) {
       for (const field of ['title', 'excerpt', 'bodyMarkdown'] as const) {
         rejects(draftJson({ ...DRAFT, [field]: 'Lisbon ' + bad + ' tram' }));
       }
@@ -391,6 +393,8 @@ describe('parseDraft', () => {
     // A well-formed astral pair is text, and ZWJ sequences keep working.
     expect(parseDraft(draftJson({ ...DRAFT, title: 'Lisbon 🚋' })).title).toBe('Lisbon 🚋');
     expect(parseDraft(draftJson({ ...DRAFT, excerpt: 'Family trip 👨\u200d👩\u200d👧' })).excerpt).toBe('Family trip 👨\u200d👩\u200d👧');
+    // Soft hyphens and emoji presentation selectors are ordinary text.
+    expect(parseDraft(draftJson({ ...DRAFT, title: 'Wan\u00adderung mit \u2764\ufe0f' })).title).toBe('Wan\u00adderung mit \u2764\ufe0f');
   });
 
   it('refuses a field that has no visible character, so an invisible title is never applied', () => {

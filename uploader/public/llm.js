@@ -540,9 +540,11 @@ window.LLM = (function () {
     /```|~~~/,
   ];
   // Characters that hide or reorder text in the plain-text preview the author
-  // reviews: bidi controls and marks, zero-width and invisible operators, BOM and
-  // Unicode tag characters. ZWNJ/ZWJ stay allowed (emoji sequences, some scripts).
-  const DRAFT_INVISIBLE = /[\u061c\u200b\u200e\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff\u{e0000}-\u{e007f}]/u;
+  // reviews: every default-ignorable code point (bidi controls and marks,
+  // zero-width and invisible operators, BOM, fillers, tag characters and
+  // variation selectors beyond VS16), except soft hyphen, ZWNJ, ZWJ and VS15/VS16,
+  // which ordinary words and emoji sequences need.
+  const DRAFT_INVISIBLE = /(?![\u00ad\u200c\u200d\ufe0e\ufe0f])\p{Default_Ignorable_Code_Point}/u;
   // The #567 visibility rule: at least one character a reader can see.
   const DRAFT_VISIBLE = /[^\s\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}\u2800]/u;
   // Front matter the renderer would swallow: the first line alone, BOM and trailing blanks allowed.

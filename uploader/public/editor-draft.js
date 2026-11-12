@@ -512,7 +512,9 @@ window.EditorDraft = (function () {
           : parsed.problem === 'tooMany' ? text('draftEventsTooMany', { max: max.events, count: parsed.events.length })
             : text('draftEventTooLong', { line: parsed.problem.tooLong, count: parsed.events[parsed.problem.tooLong - 1].length, max: max.eventLength });
         // The inline error explains this refusal; an earlier provider message must not linger beside it.
-        say('', 'ready');
+        // A result still under review keeps its status; otherwise nothing else needs saying.
+        if (shown) say(copy.draftReview, 'review');
+        else say('', 'ready');
         window.AdminField.invalid(events, message);
         showControls();
         return;

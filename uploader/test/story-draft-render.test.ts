@@ -84,7 +84,7 @@ const HOSTILE = [
   '[castle][]\n\n[castle]: /castle', 'Note[^1].\n\n[^1]: A footnote',
   'http://evil.example', 'https://evil.example', 'HTTPS://EVIL.EXAMPLE', 'www.evil.example', 'WWW.Evil.Example',
   'mailto:me@evil.example', 'xmpp:me@evil.example', 'contact@evil.example', 'a@b.cd', 'a@.b.cd', 'contact@.evil.example',
-  'first.last@evil.example', 'x_y@evil.example',
+  'first.last@evil.example', 'x_y@evil.example', 'x@-y.z', 'a@_b.c',
   'https&#58;//evil.example', '&#x3C;img src=x onerror=alert(1)&#x3E;', 'contact&#64;evil.example', 'www&period;evil.example',
   '&lt;script&gt;', 'https\\://evil.example', '\\<script>', 'contact\\@evil.example', '\\[x\\](https\\://evil.example)',
   '```js\nalert(1)\n```', '```gallery\nhttps://img.example/a.jpg\n```', '```math\nx^2\n```', '~~~\ncode\n~~~',

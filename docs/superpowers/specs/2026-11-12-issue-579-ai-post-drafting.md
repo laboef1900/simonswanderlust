@@ -206,10 +206,11 @@ Output validation (`parseDraft`, exported for tests; any failure throws
    JavaScript's `\s` also matches U+FEFF); whitespace runs collapse to one space and trim; then
    at least one visible character (the #567 visibility rule), no `\p{Cc}`, no lone surrogates,
    and none of the body's forbidden substrings below; title ≤ 200, excerpt ≤ 300.
-   *Invisible characters* are those the plain-text preview would hide or reorder: bidi controls
-   and marks (U+061C, U+200E, U+200F, U+202A–U+202E, U+2066–U+2069), zero-width and invisible
-   operators (U+200B, U+2060–U+2064), U+FEFF and Unicode tag characters (U+E0000–U+E007F).
-   ZWNJ/ZWJ (U+200C/U+200D) stay allowed for emoji sequences and scripts that need them.
+   *Invisible characters* are those the plain-text preview would hide or reorder: every
+   `Default_Ignorable_Code_Point` (bidi controls and marks, zero-width and invisible operators,
+   U+FEFF, fillers, Unicode tag characters, variation selectors beyond VS16) except soft hyphen
+   (U+00AD), ZWNJ/ZWJ (U+200C/U+200D) and VS15/VS16 (U+FE0E/U+FE0F), which ordinary words and
+   emoji sequences need.
 4. `bodyMarkdown`: CRLF/CR normalized to LF, trailing whitespace at the end of the whole string
    trimmed (leading text and per-line whitespace unchanged); non-empty; ≤ 100 000;
    at least one visible character; no C0/C1 controls other than tab and newline, no lone
@@ -802,8 +803,10 @@ that was shown to fail without the fix (mutation check):
 - **Stale hero lookup after `changed()`** could add a second, older hero row (Sec F1): the lookup
   captures its token and the insert is idempotent.
 - **Invisible characters** (bidi marks, zero-width/invisible operators, BOM, tag characters)
-  passed output validation and could hide text from the preview (Sec F2): now rejected in every
-  field, checked before whitespace folding, and every field needs a visible character.
+  passed output validation and could hide text from the preview (Sec F2): now every
+  default-ignorable code point except soft hyphen, ZWNJ/ZWJ and VS15/VS16 is rejected in every
+  field (widened from an enumerated list after the fix re-review), checked before whitespace
+  folding, and every field needs a visible character.
 - **Untested promises** (PR F1): key scrubbing of every `/ai-config` response (incl. one arriving
   after Close), the Generate-time 401, clearing picked photos after Apply and on another story,
   the unresolved-placeholder fallback, and the three `didCommit` invalidations now have tests;
@@ -814,6 +817,10 @@ that was shown to fail without the fix (mutation check):
   and an error sentence below the fold (browser D9-A/B: the status now scrolls into view).
 - **Docs**: README provider-failure wording (PR F5), SECURITY.md date/front-matter wording
   (Sec F4), corpus additions for `ftp://`, footnotes and non-ASCII e-mail shapes (Sec F3).
+
+Fix re-review: `SecReview580` **APPROVE** and `DeepReview580` **APPROVE**. Their optional notes
+were adopted: the default-ignorable rule above, `x@-y.z`/`a@_b.c` pinned as hostile corpus
+entries, and a refused "Generate again" keeps a result under review with its status.
 
 Not adopted, with reasons: moving `aria-busy` off the dialog (Deep I4) — parity with the
 translation dialog and the spec; no assistive-technology evidence either way. The follow-default

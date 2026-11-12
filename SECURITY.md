@@ -1163,9 +1163,10 @@ language, the untrusted-data guard, a no-invention rule and the JSON contract. O
 click makes at most one bounded, abortable request (no format fallback, no retry, 2 MiB
 response cap, `max_tokens` 32768, completion must stop). The output must be a JSON object with
 exactly `title`, `excerpt` and `bodyMarkdown` strings (own-key set equality, so `__proto__` or
-`constructor` reject), within caps, each with a visible character and free of controls, bidi
-controls and marks, zero-width and invisible operators, BOM and Unicode tag characters (text
-the plain-text preview would hide). None of them may contain HTML, character references,
+`constructor` reject), within caps, each with a visible character and free of controls and of
+default-ignorable characters such as bidi controls and marks, zero-width and invisible
+operators, BOM, fillers and Unicode tag characters (text the plain-text preview would hide;
+only soft hyphen, ZWNJ/ZWJ and VS15/VS16 are allowed). None of them may contain HTML, character references,
 backslash escapes, images, links, reference definitions, GFM autolink literals (including
 e-mail shapes) or code fences, and the body may not start with front matter; a
 renderer-backed differential test (fixed corpus plus a seeded randomized one) checks that no

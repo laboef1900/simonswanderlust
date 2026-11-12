@@ -322,6 +322,21 @@ describe('Draft with AI controller against the real dialog markup', () => {
     expect(h.requests).toHaveLength(1);
   });
 
+  it('keeps a result under review, with its status, when Generate again is refused for its input', async () => {
+    const h = controller(() => ({ date: null, country: '', region: '', route: null }));
+    h.el('deDraftAction').click();
+    await flush();
+    h.el('draftEvents').value = 'Arrived in Lisbon';
+    h.el('draftGenerate').click();
+    await flush();
+    h.el('draftEvents').value = '';
+    h.el('draftAgain').click();
+    await flush();
+    expect([h.el('storyDraftDialog').dataset.state, h.el('draftStatus').textContent]).toEqual(['review', editorCopy.draftReview]);
+    expect([h.el('draftResult').hidden, h.el('draftApply').hidden, h.el('draftEvents').getAttribute('aria-invalid')]).toEqual([false, false, 'true']);
+    expect(h.requests).toHaveLength(1);
+  });
+
   it('returns focus to the title when Close follows the language gaining text, because the trigger row is hidden', async () => {
     const h = controller(() => ({ date: null, country: '', region: '', route: null }));
     h.el('deDraftAction').click();
