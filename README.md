@@ -299,6 +299,23 @@ limitations, then check correspondence and delivery in the final rebuilt release
 
 ### Cutting a release
 
+**v0.22.0 — publish-time language choice, media exposure details, posts bulk bar** (linux/amd64 and linux/arm64,
+`ghcr.io/laboef1900/wanderlust-studio:0.22.0`). Changes since v0.21.3 (PRs #571, #572, #573, #574, #575):
+
+- **Publish languages** (#574): choose which languages to publish in the Publish dialog, plus a Translate action (#567/#568).
+- **Media details** (#573): photo exposure settings (focal length, aperture, ISO, shutter) parsed from EXIF, a
+  `backfill-exif` CLI for older rows, version listing and a viewer (#570).
+- **Posts list** (#575): floating bulk-action bar, filter menus and hover checkboxes (#566).
+- **Editor** (#572): one-line stop controls with icon Find coordinates (#569).
+
+Upgrade notes for v0.21.3 → v0.22.0 (the [release recovery checklist](ARCHITECTURE.md#release-recovery-checklist)):
+
+- **Image and deployment:** apply this release's image tag (`0.22.0`).
+- **Schema:** additive only — five nullable `media` exposure columns added by `ensureSchema` on boot
+  (`ADD COLUMN IF NOT EXISTS`, no row rewrite). Optionally run `backfill-exif` to fill older photos.
+- **Compose and `.env`:** no changes.
+- **Rollback to v0.21.3:** supported by reverting the image tag; the extra nullable columns are ignored.
+
 **v0.21.3 — Admin Studio UI/UX overhaul and repository rename** (linux/amd64 and linux/arm64,
 `ghcr.io/laboef1900/wanderlust-studio:0.21.3`). Changes since v0.21.2 (PRs #562, #563):
 
