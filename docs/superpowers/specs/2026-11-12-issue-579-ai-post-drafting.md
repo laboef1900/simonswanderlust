@@ -822,15 +822,24 @@ measured in Chromium and the documentation fixes checked by reading:
 Fix re-review: `SecReview580` **APPROVE** and `DeepReview580` **APPROVE**; `PrReview580`
 REQUEST CHANGES on two scroll defects it measured in Chromium — routine opening/ready messages
 scrolled the body down (destination and events label out of view), and the generated draft was
-focused off-screen. Fixed: only outcome messages reveal the status (config-changed also reveals
-the destination), and the result title is focused without `preventScroll`; a controller test
-pins both. Its two follow-up notes (an ineffective destination scroll, a half-pinned reveal test)
-were adopted, and `PrReview580` then returned **APPROVE** on the final code, including a
-test-harness-only change that checks focus connectedness by walking up the parent chain instead
-of scanning the tree (same semantics, checked differentially; it removes load-induced timeouts in
-the heavy editor DOM suites). Their optional notes
-were adopted: the default-ignorable rule above, `x@-y.z`/`a@_b.c` pinned as hostile corpus
-entries, and a refused "Generate again" keeps a result under review with its status.
+focused off-screen. Fixed: only outcome messages (results, failures, a configuration change)
+reveal the status, and the result title is focused without `preventScroll`; controller tests pin
+both. Its two follow-up notes (an ineffective destination scroll, a half-pinned reveal test) were
+adopted, and `PrReview580` then returned **APPROVE** on the final code.
+
+CI timing: the uploader job failed twice on slow runners (`9c5c743`, `7be0e7e`; the same code
+passed elsewhere) with two editor-gpx route-reconciliation tests past the 5 s limit. Interleaved
+local runs showed the branch made the editor DOM suites 15–25 % slower than `dev`. A CPU profile
+traced it to the harness: `getElementById` ran the full selector matcher over every element of
+the larger editor, and the draft controller looks ids up on every refresh. Two test-harness-only
+changes fixed it, with the same semantics (both checked differentially against the old lookups
+across all 20 harness suites). Focus connectedness walks up the parent chain instead of scanning
+the tree, and a plain id takes an early-exit walk. The controller also keeps its entry rows like
+its triggers. `editor-gpx.test.ts` now runs in about 2 s (`dev`: about 19 s).
+
+The security and deep reviewers' optional notes were adopted: the default-ignorable rule above,
+`x@-y.z`/`a@_b.c` pinned as hostile corpus entries, and a refused "Generate again" keeps a result
+under review with its status.
 
 Not adopted, with reasons: moving `aria-busy` off the dialog (Deep I4) — parity with the
 translation dialog and the spec; no assistive-technology evidence either way. The follow-default

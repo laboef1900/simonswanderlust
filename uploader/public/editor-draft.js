@@ -117,6 +117,7 @@ window.EditorDraft = (function () {
     const pickButton = $('draftPickPhotos');
     const result = $('draftResult');
     const triggers = Object.fromEntries(LOCALES.map((locale) => [locale, $(locale + 'DraftAction')]));
+    const starts = Object.fromEntries(LOCALES.map((locale) => [locale, $(locale + 'DraftStart')]));
     let epoch = 0;          // request generation: any release() orphans a pending request
     let opening = null;     // { token, locale, prepared, candidates, picked }
     let openings = 0;       // async candidates carry the opening token they were asked for
@@ -630,7 +631,7 @@ window.EditorDraft = (function () {
       const snapshot = options.snapshot();
       forgetIdentity(snapshot);
       for (const locale of LOCALES) {
-        $(locale + 'DraftStart').hidden = !(snapshot.locale === locale && snapshot.locales.includes(locale) && isEmpty(snapshot));
+        starts[locale].hidden = !(snapshot.locale === locale && snapshot.locales.includes(locale) && isEmpty(snapshot));
         triggers[locale].disabled = snapshot.blocked;
       }
     }

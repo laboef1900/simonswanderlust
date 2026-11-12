@@ -183,6 +183,16 @@ export class EditorElement {
     return found;
   }
   querySelector(selector: string) { return this.querySelectorAll(selector)[0] ?? null; }
+  /** querySelector('#' + id) for a plain id, without matching every selector part on every element. */
+  findById(id: string): EditorElement | null {
+    for (const child of this.childNodes) {
+      if (child.tagName === '#TEXT') continue;
+      if (child.id === id) return child;
+      const found = child.findById(id);
+      if (found) return found;
+    }
+    return null;
+  }
   getClientRects() { return this.closest('[hidden]') ? [] : [{}]; }
   get offsetParent(): EditorElement | null { return this.closest('[hidden]') ? null : this.parentElement; }
   focus() { if (!this.disabled && !this.closest('[hidden]') && !this.closest('dialog:not([open])')) this.state.activeElement = this; }
@@ -275,7 +285,8 @@ export function editorDocument(markup: string) {
         return node === root ? state.activeElement : null;
       },
       get body() { return root.querySelector('body'); },
-      getElementById: (id: string) => root.querySelector('#' + id),
+      // The editor looks ids up constantly; a plain id takes the early-exit walk.
+      getElementById: (id: string) => (/^[\w-]+$/.test(id) ? root.findById(id) : root.querySelector('#' + id)),
       querySelector: (selector: string) => root.querySelector(selector),
       querySelectorAll: (selector: string) => root.querySelectorAll(selector),
       addEventListener: root.addEventListener.bind(root),
