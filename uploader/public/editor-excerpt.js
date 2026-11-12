@@ -21,7 +21,6 @@ window.EditorExcerpt = (function () {
   const KEYED_PROVIDERS = ['openrouter', 'deepseek', 'anthropic', 'openai'];
   const LOCALES = ['de', 'en'];
   const DRAFT_FIELDS = ['locale', 'identity', 'title', 'markdown', 'excerpt'];
-  const CONFIG_TIMEOUT_MS = 15000;
 
   function element(tag, className, text) {
     const node = document.createElement(tag);
@@ -45,29 +44,6 @@ window.EditorExcerpt = (function () {
     return !!config && typeof config === 'object' && PROVIDERS.includes(config.aiProvider) &&
       typeof config.aiBaseUrl === 'string' && !!config.aiBaseUrl.trim() &&
       typeof config.aiModel === 'string' && !!config.aiModel.trim() && typeof config.reviewPrompt === 'string';
-  }
-
-  // GET /ai-config with its own deadline over the headers AND the body read;
-  // `signal` cancels it together with the request it belongs to.
-  async function readConfig(signal) {
-    const ctrl = new AbortController();
-    const follow = () => ctrl.abort();
-    const timer = setTimeout(follow, CONFIG_TIMEOUT_MS);
-    const { promise: aborted, reject } = Promise.withResolvers();
-    const rejectAbort = () => reject(new Error('AI settings request aborted'));
-    ctrl.signal.addEventListener('abort', rejectAbort, { once: true });
-    signal.addEventListener('abort', follow, { once: true });
-    if (signal.aborted) follow();
-    try {
-      return await Promise.race([(async () => {
-        const response = await fetch('/ai-config', { cache: 'no-store', signal: ctrl.signal });
-        return { status: response.status, config: response.ok ? await response.json() : null };
-      })(), aborted]);
-    } finally {
-      clearTimeout(timer);
-      ctrl.signal.removeEventListener('abort', rejectAbort);
-      signal.removeEventListener('abort', follow);
-    }
   }
 
   /**
@@ -194,7 +170,7 @@ window.EditorExcerpt = (function () {
       let apiKey = null;
       let configured = false;
       try {
-        const loaded = await readConfig(request.controller.signal);
+        const loaded = await window.LLM.readAiConfig('/ai-config', request.controller.signal);
         config = loaded.config;
         if (stale(request)) return;
         if (loaded.status === 401) {

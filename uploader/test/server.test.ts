@@ -23,6 +23,7 @@ import { createImportRunner, memoryImportJobStore, type ImportRunner } from '../
 import { defaultSettings, validate } from '../src/settings.js';
 import type { Settings, SettingsStore } from '../src/settings.js';
 import { DEFAULT_TRANSLATION_PROMPT, TRANSLATION_PROMPT_MAX_LENGTH } from '../src/translation-prompt.js';
+import { DEFAULT_DRAFTING_PROMPT, DRAFTING_PROMPT_MAX_LENGTH } from '../src/drafting-prompt.js';
 import { memoryUserStore, hashPassword, type User, type UserStore } from '../src/users.js';
 import { randomUUID } from 'node:crypto';
 import { memorySessionStore, type SessionStore } from '../src/sessions.js';
@@ -1637,7 +1638,7 @@ describe('settings endpoints', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({
       ...SETTINGS, aiProviders: SETTINGS.aiProviders.map((p) => ({ ...p, hasApiKey: false })),
-      translationPromptDefault: DEFAULT_TRANSLATION_PROMPT,
+      translationPromptDefault: DEFAULT_TRANSLATION_PROMPT, draftingPromptDefault: DEFAULT_DRAFTING_PROMPT,
     });
   });
 
@@ -1818,7 +1819,7 @@ describe('AI provider routes', () => {
     });
     expect(created.statusCode).toBe(201);
     expect(created.body).not.toContain('fixture-first');
-    expect(Object.keys(created.json()).sort()).toEqual([...Object.keys(SETTINGS), 'translationPromptDefault'].sort());
+    expect(Object.keys(created.json()).sort()).toEqual([...Object.keys(SETTINGS), 'translationPromptDefault', 'draftingPromptDefault'].sort());
     const view = created.json().aiProviders[1];
     expect(view).toEqual({
       id: expect.stringMatching(/^p-[0-9a-f]{8}$/), name: 'OpenRouter', kind: 'openrouter',
@@ -2031,7 +2032,7 @@ describe('AI credential boundaries', () => {
     expect(saved.statusCode).toBe(200);
     expect(saved.headers['cache-control']).toBe('no-store');
     expect(saved.json()).toMatchObject({ aiDefaultProviderId: 'remote', reviewProviderId: null, captionProviderId: 'lm-studio' });
-    expect(Object.keys(saved.json()).sort()).toEqual([...Object.keys(SETTINGS), 'translationPromptDefault'].sort());
+    expect(Object.keys(saved.json()).sort()).toEqual([...Object.keys(SETTINGS), 'translationPromptDefault', 'draftingPromptDefault'].sort());
     expect(settings.get()).not.toHaveProperty('lmBaseUrl');
     expect(settings.get()).not.toHaveProperty('aiProvider');
     expect((await b.app.inject({ method: 'POST', url: '/settings', cookies: (await authed(b, { isAdmin: false, username: 'author' })).cookie, payload: { captionProviderId: 'remote' } })).statusCode).toBe(403);
@@ -2575,6 +2576,224 @@ describe('article translation assignment API', () => {
       expect((await config).json()).toMatchObject({ providerId: 'lm-studio', providerKind: 'lm-studio', apiKey: null });
       expect(get).not.toHaveBeenCalled();
     } finally { release.resolve(); get.mockRestore(); await b.app.close(); }
+  });
+});
+
+describe('story drafting assignment API (#579)', () => {
+  const DRAFT_PROMPT_ERROR = 'Drafting instructions are required and must be visible plain text of at most 4000 characters.';
+  const DRAFT_MARKER = 'PRIVATE-DRAFT-MARKER';
+  const CONFIG_KEYS = ['providerId', 'providerName', 'providerKind', 'baseUrl', 'model', 'timeoutMs', 'prompt', 'apiKey'];
+
+  it('saves only the drafting fields for admins, serves a read-only default, and refuses invalid values without coercion', async () => {
+    const settings = fakeStore(registry([remote('review'), remote('translation'), remote('drafting')], {
+      reviewProviderId: 'review', translationProviderId: 'translation',
+    }));
+    const b = build({ settings });
+    const admin = await authed(b);
+    const author = await authed(b, { username: 'author', isAdmin: false });
+    const save = (payload: Record<string, unknown>) => b.app.inject({ method: 'POST', url: '/settings', cookies: admin.cookie, payload });
+    const payload = {
+      draftingProviderId: 'drafting', draftingModel: 'draft-model', draftingTimeoutMs: 130000,
+      draftingPrompt: '  Write in the first person.\n\tKeep it short.  ',
+    };
+    try {
+      const page = await b.app.inject({ url: '/settings', cookies: admin.cookie });
+      expect(page.headers['cache-control']).toBe('no-store');
+      expect(page.json()).toMatchObject({
+        draftingProviderId: null, draftingModel: 'qwen2.5-7b-instruct', draftingTimeoutMs: 120000,
+        draftingPrompt: DEFAULT_DRAFTING_PROMPT, draftingPromptDefault: DEFAULT_DRAFTING_PROMPT,
+      });
+      for (const cookies of [undefined, author.cookie]) {
+        const refused = await b.app.inject({ method: 'POST', url: '/settings', cookies, payload });
+        expect(refused.statusCode).toBe(cookies ? 403 : 401);
+        expect(refused.headers['cache-control']).toBe('no-store');
+      }
+      const before = settings.get();
+      const saved = await save(payload);
+      expect(saved.statusCode).toBe(200);
+      expect(saved.headers['cache-control']).toBe('no-store');
+      expect(saved.json()).toMatchObject({ ...payload, draftingPromptDefault: DEFAULT_DRAFTING_PROMPT });
+      expect(settings.get()).toEqual({ ...before, ...payload });
+      const cases: [Record<string, unknown>, string][] = [
+        [{ draftingProviderId: 'gone' }, 'Story drafting provider must be one of the configured providers.'],
+        [{ draftingProviderId: '' }, 'Story drafting provider must be a provider id, or empty to follow the default.'],
+        [{ draftingModel: 7 }, 'Drafting model must be a string of at most 100 characters.'],
+        [{ draftingModel: 'x'.repeat(101) }, 'Drafting model must be a string of at most 100 characters.'],
+        ...['120000', 4999, 300001, 5000.1].map((draftingTimeoutMs): [Record<string, unknown>, string] =>
+          [{ draftingTimeoutMs }, 'Drafting timeout must be a whole number of milliseconds between 5000 and 300000.']),
+        ...[7654321987, null, '', ' \n ', '\u200b', DRAFT_MARKER + '\u0000', DRAFT_MARKER + 'x'.repeat(DRAFTING_PROMPT_MAX_LENGTH)]
+          .map((draftingPrompt): [Record<string, unknown>, string] => [{ draftingPrompt }, DRAFT_PROMPT_ERROR]),
+        // A valid field in the same request is not saved either.
+        [{ draftingModel: 'must-not-save', draftingPrompt: [DRAFT_MARKER] }, DRAFT_PROMPT_ERROR],
+      ];
+      for (const [invalid, error] of cases) {
+        const res = await save(invalid);
+        expect(res.statusCode, JSON.stringify(invalid).slice(0, 80)).toBe(400);
+        expect(res.headers['cache-control']).toBe('no-store');
+        expect(res.json()).toEqual({ error });
+        expect(res.body).not.toContain(DRAFT_MARKER);
+        expect(res.body).not.toContain('7654321987');
+        expect(settings.get()).toEqual({ ...before, ...payload });
+      }
+      // The served default is read-only: submitting it changes nothing on its own.
+      const ignored = await save({ draftingPromptDefault: 'Replaced default.' });
+      expect(ignored.json()).toMatchObject({ draftingPrompt: payload.draftingPrompt, draftingPromptDefault: DEFAULT_DRAFTING_PROMPT });
+      expect(settings.get()).toEqual({ ...before, ...payload });
+      const longest = 'x'.repeat(DRAFTING_PROMPT_MAX_LENGTH);
+      expect((await save({ draftingPrompt: longest })).json().draftingPrompt).toBe(longest);
+      // Reset is an ordinary save of the served default; null follows the default provider again.
+      const reset = await save({ draftingPrompt: page.json().draftingPromptDefault, draftingProviderId: null });
+      expect(reset.json()).toMatchObject({ draftingPrompt: DEFAULT_DRAFTING_PROMPT, draftingProviderId: null, draftingModel: 'draft-model' });
+      expect(settings.get()).toMatchObject({ reviewProviderId: 'review', translationProviderId: 'translation' });
+    } finally { await b.app.close(); }
+  });
+
+  it('returns exactly the drafting provider with only its own key to any signed-in author, separate from every other purpose', async () => {
+    const secrets = memorySecretsStore();
+    for (const id of ['review', 'vision', 'translation', 'drafting']) await secrets.set('ai_provider_key:' + id, 'fixture-' + id);
+    const drafter = remote('drafting', 'custom', 'https://drafter.example/v1');
+    const settings = fakeStore(registry([remote('review'), remote('vision'), remote('translation'), drafter], {
+      aiDefaultProviderId: 'review', captionProviderId: 'vision', translationProviderId: 'translation',
+      translationModel: 'translation-model', translationPrompt: 'Translation house style.',
+      draftingProviderId: 'drafting', draftingModel: 'drafting-model', draftingTimeoutMs: 200000,
+      draftingPrompt: DRAFT_MARKER + ': first person, short.',
+    }));
+    const b = build({ settings, secrets });
+    const { cookie } = await authed(b, { isAdmin: false });
+    const get = vi.spyOn(secrets, 'get');
+    const has = vi.spyOn(secrets, 'has');
+    const config = (query: string) => b.app.inject({ url: '/ai-config' + query, cookies: cookie });
+    try {
+      const expected = {
+        providerId: 'drafting', providerName: drafter.name, providerKind: 'custom', baseUrl: 'https://drafter.example/v1',
+        model: 'drafting-model', timeoutMs: 200000, prompt: DRAFT_MARKER + ': first person, short.', apiKey: 'fixture-drafting',
+      };
+      const drafting = await config('?purpose=drafting');
+      expect(drafting.statusCode).toBe(200);
+      expect(drafting.headers['cache-control']).toBe('no-store');
+      expect(drafting.json()).toEqual(expected);
+      expect(Object.keys(drafting.json())).toEqual(CONFIG_KEYS);
+      expect(get.mock.calls).toEqual([['ai_provider_key:drafting']]);
+      expect(has).not.toHaveBeenCalled();
+      get.mockClear();
+      // Distinct prompts and keys per purpose; no other variant carries the drafting instructions or key.
+      const translation = await config('?purpose=translation');
+      expect(translation.json()).toEqual({
+        providerId: 'translation', providerName: 'Remote translation', providerKind: 'openrouter',
+        baseUrl: 'https://openrouter.ai/api/v1', model: 'translation-model', timeoutMs: 120000,
+        prompt: 'Translation house style.', apiKey: 'fixture-translation',
+      });
+      const review = await config('');
+      const caption = await config('?purpose=caption');
+      for (const other of [translation, review, caption]) {
+        expect(other.statusCode).toBe(200);
+        expect(other.body).not.toContain(DRAFT_MARKER);
+        expect(other.body).not.toContain('fixture-drafting');
+        expect(other.json()).not.toHaveProperty('draftingPrompt');
+      }
+      expect(get.mock.calls).toEqual([['ai_provider_key:translation'], ['ai_provider_key:review'], ['ai_provider_key:vision']]);
+      get.mockClear();
+      // A new default leaves the explicit drafting assignment alone.
+      settings.update({ aiDefaultProviderId: 'vision' });
+      expect((await config('?purpose=drafting')).json()).toEqual(expected);
+      // Follow-default resolves to the default provider and its key, keeping the drafting model and prompt.
+      settings.update({ draftingProviderId: null });
+      expect((await config('?purpose=drafting')).json()).toEqual({
+        ...expected, providerId: 'vision', providerName: 'Remote vision', providerKind: 'openrouter',
+        baseUrl: 'https://openrouter.ai/api/v1', apiKey: 'fixture-vision',
+      });
+      expect(get.mock.calls).toEqual([['ai_provider_key:drafting'], ['ai_provider_key:vision']]);
+      settings.update({ draftingProviderId: 'drafting' });
+      await secrets.delete('ai_provider_key:drafting');
+      expect((await config('?purpose=drafting')).json()).toEqual({ ...expected, apiKey: null });
+      for (const query of ['?purpose=drafting&purpose=translation', '?purpose=draft', '?purpose=Drafting']) {
+        expect((await config(query)).statusCode).toBe(400);
+      }
+      const anonymous = await b.app.inject({ url: '/ai-config?purpose=drafting' });
+      expect(anonymous.statusCode).toBe(401);
+      expect(anonymous.headers['cache-control']).toBe('no-store');
+      expect(anonymous.body).not.toContain('fixture-');
+    } finally { get.mockRestore(); has.mockRestore(); await b.app.close(); }
+  });
+
+  it('answers a local drafting assignment without touching the secrets store and sanitizes remote store failures', async () => {
+    const secrets = memorySecretsStore();
+    const get = vi.spyOn(secrets, 'get').mockRejectedValue(new Error('PRIVATE SECRET FAILURE'));
+    const has = vi.spyOn(secrets, 'has').mockRejectedValue(new Error('PRIVATE SECRET FAILURE'));
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const settings = fakeStore(registry([remote('remote')], { aiDefaultProviderId: 'remote', draftingProviderId: 'lm-studio' }));
+    const b = build({ secrets, settings });
+    const { cookie } = await authed(b, { isAdmin: false });
+    try {
+      const local = await b.app.inject({ url: '/ai-config?purpose=drafting', cookies: cookie });
+      expect(local.json()).toEqual({
+        providerId: 'lm-studio', providerName: 'Local LM Studio', providerKind: 'lm-studio',
+        baseUrl: 'http://localhost:1234/v1', model: 'qwen2.5-7b-instruct', timeoutMs: 120000,
+        prompt: DEFAULT_DRAFTING_PROMPT, apiKey: null,
+      });
+      expect(get).not.toHaveBeenCalled();
+      expect(has).not.toHaveBeenCalled();
+      settings.update({ draftingProviderId: null });
+      const failed = await b.app.inject({ url: '/ai-config?purpose=drafting', cookies: cookie });
+      expect(failed.statusCode).toBe(503);
+      expect(failed.headers['cache-control']).toBe('no-store');
+      expect(failed.body).not.toContain('PRIVATE');
+      expect(get.mock.calls).toEqual([['ai_provider_key:remote']]);
+      expect(log).not.toHaveBeenCalled();
+    } finally { get.mockRestore(); has.mockRestore(); log.mockRestore(); await b.app.close(); }
+  });
+
+  it('binds the remote drafting prompt, model and key to the settings snapshot committed by a queued save', async () => {
+    const secrets = memorySecretsStore();
+    await secrets.set('ai_provider_key:drafting', 'fixture-drafting');
+    const originalHas = secrets.has;
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    secrets.has = async key => { entered.resolve(); await release.promise; return originalHas(key); };
+    const b = build({ secrets, settings: fakeStore(registry([remote('drafting')], { draftingProviderId: 'drafting' })) });
+    const { cookie } = await authed(b);
+    try {
+      const saving = b.app.inject({ method: 'POST', url: '/settings', cookies: cookie,
+        payload: { draftingPrompt: 'Queued drafting style.', draftingModel: 'queued-model' } }).then(r => r);
+      await entered.promise;
+      let resolved = false;
+      const config = b.app.inject({ url: '/ai-config?purpose=drafting', cookies: cookie }).then(r => { resolved = true; return r; });
+      await nextTurn();
+      expect(resolved).toBe(false);
+      release.resolve();
+      expect((await saving).statusCode).toBe(200);
+      expect((await config).json()).toEqual({
+        providerId: 'drafting', providerName: 'Remote drafting', providerKind: 'openrouter',
+        baseUrl: 'https://openrouter.ai/api/v1', model: 'queued-model', timeoutMs: 120000,
+        prompt: 'Queued drafting style.', apiKey: 'fixture-drafting',
+      });
+    } finally { release.resolve(); await b.app.close(); }
+  });
+
+  it('refuses to delete the explicit drafting provider, names drafting in useCases, and never blocks on follow-default', async () => {
+    const secrets = memorySecretsStore();
+    for (const id of ['drafting', 'shared', 'spare']) await secrets.set('ai_provider_key:' + id, 'fixture-' + id);
+    const settings = fakeStore(registry([remote('drafting'), remote('shared'), remote('spare')], {
+      draftingProviderId: 'drafting', translationProviderId: 'shared',
+    }));
+    const b = build({ settings, secrets });
+    const { cookie } = await authed(b);
+    const remove = (id: string) => b.app.inject({ method: 'DELETE', url: '/ai-providers/' + id, cookies: cookie });
+    try {
+      const refused = await remove('drafting');
+      expect(refused.statusCode).toBe(409);
+      expect(refused.json()).toMatchObject({ code: 'provider_in_use', useCases: ['drafting'] });
+      expect(await secrets.get('ai_provider_key:drafting')).toBe('fixture-drafting');
+      settings.update({ draftingProviderId: 'shared' });
+      expect((await remove('shared')).json()).toMatchObject({ code: 'provider_in_use', useCases: ['translation', 'drafting'] });
+      // Drafting follows the default (lm-studio): an unassigned provider is deletable.
+      settings.update({ draftingProviderId: null });
+      expect((await remove('spare')).statusCode).toBe(200);
+      expect((await remove('drafting')).statusCode).toBe(200);
+      expect(await secrets.get('ai_provider_key:drafting')).toBeNull();
+      expect(await secrets.get('ai_provider_key:shared')).toBe('fixture-shared');
+      expect(settings.get()).toMatchObject({ draftingProviderId: null, translationProviderId: 'shared' });
+    } finally { await b.app.close(); }
   });
 });
 

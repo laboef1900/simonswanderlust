@@ -81,15 +81,16 @@ Full security model: `SECURITY.md`. These patterns MUST be preserved when changi
 
 ### 4. AI/LLM Security
 
-- AI captions, editorial review, excerpts and article translation are browser-direct.
+- AI captions, editorial review, excerpts, article translation and story drafting are browser-direct.
   The server never contacts a model: do not proxy providers through the server or
   `safeFetch`, which would add an SSRF surface.
 - Model output is untrusted; it MUST NOT reach commands, queries, or authorization decisions.
 - AI destinations live in the **provider registry** (`settings.json` `aiProviders`, one
-  assignment per use case: Story review & excerpts, Photo descriptions, Article translation).
+  assignment per use case: Story review & excerpts, Photo descriptions, Article translation,
+  Story drafting).
   Each remote provider owns one encrypted key (`app_secrets` `ai_provider_key:<id>`); slot
   names come only from validated registry ids (`slotFor`). `GET /ai-config` and its
-  `?purpose=caption` / `?purpose=translation` variants return a key only together with its
+  `?purpose=caption` / `?purpose=translation` / `?purpose=drafting` variants return a key only together with its
   owning provider's base URL, to authenticated authors in request-local browser memory.
   Local providers never hold or read a key. Never persist keys in browser storage, logs,
   or draft backups. Config and credential responses are `no-store`.
@@ -100,6 +101,14 @@ Full security model: `SECURITY.md`. These patterns MUST be preserved when changi
   house guidance, visible plain text of at most 4000 characters, validated without coercion at every
   reader. Code always appends the direction, the untrusted-input guard and the JSON contract,
   so the prompt never changes what the parser accepts. A prompt change requires renewed consent.
+  Story drafting (#579) follows the same pattern with `draftingPrompt` (same rule) and only runs
+  for an empty story language. Its context is opt-in per item and allow-listed in the transport
+  (no coordinates, image URLs or Media rows); its output must be exactly `{title, excerpt,
+  bodyMarkdown}` and free of HTML, entities, escapes, images, links, autolink literals, fences and
+  front matter (defense in depth, checked against the real renderer); it is applied only by an
+  explicit, re-checked Apply, never retries, saves or publishes, and fills a slug only for a
+  never-published story with an automatic slug. A follow-default assignment discloses the default
+  provider's key to authors on request.
 - Provider/key management (`/ai-providers*`, incl. the admin-only `/credential` read for
   Settings Test) and settings writes remain admin-only. Settings responses expose only key
   presence; `ENCRYPTION_KEY` is separately escrowed. Missing master key allows local

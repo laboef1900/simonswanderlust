@@ -39,6 +39,7 @@ describe('ui dictionaries', () => {
     'map.landcoverAttribution', 'map.landcoverLicense',
     'editor.chrome.identityLogo', // “Logo” is the same word in German and English.
     'editor.chrome.markdownMode', // Markdown is the format's name in both languages.
+    'editor.chrome.draftContextRegion', // “Region: {value}” is the same word in German and English.
   ];
 
   it('flags untranslated values (identical in DE and EN) outside the allow-list', () => {

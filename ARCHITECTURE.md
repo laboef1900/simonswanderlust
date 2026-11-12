@@ -814,13 +814,24 @@ No new persistence model, autosave, publication, Media write or upload is introd
 See the [issue design](docs/superpowers/specs/2026-11-07-issue-550-ai-article-translation.md)
 and the [prompt design](docs/superpowers/specs/2026-11-11-issue-567-translation-prompt.md).
 
+Story drafting (#579) needs no server route or schema: `public/editor-draft.js` owns the
+empty-language entry point, the dialog, per-opening context consent, the request epoch/snapshot
+guards and the explicit Apply; `LLM.draftArticle` validates the request (limits and the context
+allow-list) before one bounded browser-direct call and strictly validates the
+`{title, excerpt, bodyMarkdown}` output. Its system message is the admin-editable
+`draftingPrompt` (default in `src/drafting-prompt.ts`, the shared #567 visible-plain-text rule)
+followed by a code-owned suffix. Apply reuses the generalized source-transaction commit (with the
+image map untouched) and fills a slug only for a never-published story whose slug is still
+automatic. See the [#579 design](docs/superpowers/specs/2026-11-12-issue-579-ai-post-drafting.md).
+
 ### AI provider registry (2026-10-19)
 
 `settings.json` holds `aiProviders` (1–20 entries of `{ id, name, kind, baseUrl }`, `kind` one
 of `lm-studio` / `openrouter` / `deepseek` / `anthropic` / `openai` / `custom`), `aiDefaultProviderId`, and one
 assignment per use case — `reviewProviderId` (Story review & excerpts),
 `captionProviderId` (Photo descriptions: alt text and media details), and
-`translationProviderId` (Article translation) — where `null` follows the default.
+`translationProviderId` (Article translation) and `draftingProviderId` (Story drafting, #579) —
+where `null` follows the default.
 Validation guarantees every reference resolves; a hand-edited dangling id is
 repaired on load and logged by field name. Postgres `app_secrets` holds one AES-256-GCM key
 per remote provider under `ai_provider_key:<id>`; local providers never hold one.
@@ -832,10 +843,12 @@ per remote provider under `ai_provider_key:<id>`; local providers never hold one
 | `GET /ai-providers/:id/credential` | admin | key for Settings' model lookup and **Test** (browser calls only `<baseUrl>/models`) |
 | `GET /ai-config[?purpose=caption]` | author | resolved review/caption provider + its key; existing consumer shape unchanged |
 | `GET /ai-config?purpose=translation` | author | only translation provider identity/endpoint, model, timeout, translation prompt and request-local key |
+| `GET /ai-config?purpose=drafting` | author | only drafting provider identity/endpoint, model, timeout, drafting prompt and request-local key (#579) |
 
 Default `GET /ai-config` returns the review provider's `kind` as `aiProvider`, its base URL as
 `aiBaseUrl`, and its own key. Local caption and translation configs never query or decrypt
-secrets and do not wait on the settings queue, so broken remote credentials cannot break them.
+secrets and do not wait on the settings queue, so broken remote credentials cannot break them
+(local drafting configs likewise).
 Remote reads serialize with settings writes and fail closed on secret errors. Every config and
 settings surface is `Cache-Control: no-store`. The first boot of this release migrates a
 pre-registry `settings.json` (deterministic ids, `settings.json.pre-ai-registry` kept) and

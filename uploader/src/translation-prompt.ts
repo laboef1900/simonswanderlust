@@ -21,8 +21,17 @@ const LONE_SURROGATE = /\p{Cs}/u;
 // blank Braille pattern.
 const VISIBLE = /[^\s\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}\u2800]/u;
 
+/**
+ * Visible plain text of at most `max` UTF-16 units; never coerced. The one
+ * owner-instruction rule shared by translation (#567) and story drafting (#579);
+ * mirrored by `instructionProblem` in `uploader/public/llm.js`.
+ */
+export function isInstructionText(v: unknown, max: number): v is string {
+  return typeof v === 'string' && v.length <= max &&
+    !CONTROL.test(v) && !LONE_SURROGATE.test(v) && VISIBLE.test(v);
+}
+
 /** Visible plain text within the cap; never coerced. Mirrored by `LLM.isTranslationPrompt`. */
 export function isTranslationPrompt(v: unknown): v is string {
-  return typeof v === 'string' && v.length <= TRANSLATION_PROMPT_MAX_LENGTH &&
-    !CONTROL.test(v) && !LONE_SURROGATE.test(v) && VISIBLE.test(v);
+  return isInstructionText(v, TRANSLATION_PROMPT_MAX_LENGTH);
 }

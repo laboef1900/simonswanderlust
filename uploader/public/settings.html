@@ -82,7 +82,7 @@
           <p id="providersOut" class="page-status" role="status"></p>
         </section>
 
-        <section class="card" id="useCaseSection" aria-labelledby="reviewUseCaseLabel captionUseCaseLabel translationUseCaseLabel">
+        <section class="card" id="useCaseSection" aria-labelledby="reviewUseCaseLabel captionUseCaseLabel translationUseCaseLabel draftingUseCaseLabel">
           <div class="settings-savebar">
             <button id="saveAi" type="button" data-settings-copy="settingsAiSave"></button>
             <p class="muted" data-settings-copy="settingsAiTiming"></p>
@@ -205,6 +205,42 @@
                 <div class="settings-field-meta">
                   <p id="translationPromptCount" class="muted"></p>
                   <button id="translationPromptReset" type="button" class="btn-secondary btn-sm" data-settings-copy="settingsTranslationPromptReset" disabled></button>
+                </div>
+              </details>
+            </section>
+            <section class="settings-feature" aria-labelledby="draftingUseCaseLabel">
+              <h2 class="card-heading" id="draftingUseCaseLabel" data-settings-copy="settingsDrafting"></h2>
+              <p class="muted" data-settings-copy="settingsDraftingPrivacy"></p>
+              <div class="use-case-row">
+                <div class="use-case-field">
+                  <label for="draftingProviderId" id="draftingProviderLabel" data-settings-copy="settingsDraftingProvider"></label>
+                  <select id="draftingProviderId" aria-labelledby="draftingUseCaseLabel draftingProviderLabel"></select>
+                </div>
+                <div class="use-case-field">
+                  <label for="draftingModel" id="draftingModelLabel" data-settings-copy="settingsDraftingModel"></label>
+                  <div class="model-picker">
+                    <select id="draftingModel" aria-labelledby="draftingUseCaseLabel draftingModelLabel" aria-describedby="draftingModelStatus"></select>
+                    <button id="draftingModelsReload" type="button" class="btn-secondary model-reload" aria-labelledby="draftingReloadLabel"><span id="draftingReloadLabel" class="visually-hidden" data-settings-copy="settingsDraftingReload"></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg></button>
+                  </div>
+                  <div id="draftingModelOther" class="model-other" hidden>
+                    <label for="draftingModelOtherInput" id="draftingModelOtherLabel" data-settings-copy="settingsDraftingModelId"></label>
+                    <input id="draftingModelOtherInput" type="text" maxlength="100" autocomplete="off" spellcheck="false" aria-labelledby="draftingUseCaseLabel draftingModelOtherLabel" />
+                  </div>
+                </div>
+                <p id="draftingModelStatus" class="use-case-models" role="status"></p>
+                <p class="use-case-resolved"><span id="draftingResolved"></span> <span id="draftingDestination" class="use-case-url"></span></p>
+                <p id="draftingProviderWarn" class="notice-warn" role="status" hidden></p>
+              </div>
+              <details class="help-details settings-advanced" id="draftingAdvanced">
+                <summary data-settings-copy="settingsAdvanced"></summary>
+                <label for="draftingTimeoutSeconds" data-settings-copy="settingsDraftingTimeout"></label>
+                <input id="draftingTimeoutSeconds" type="number" min="5" max="300" step="0.001" />
+                <label for="draftingPrompt" id="draftingPromptLabel" data-settings-copy="settingsDraftingPrompt"></label>
+                <textarea id="draftingPrompt" rows="8" required aria-describedby="draftingPromptHelp draftingPromptCount"></textarea>
+                <p id="draftingPromptHelp" class="muted" data-settings-copy="settingsDraftingPromptHelp"></p>
+                <div class="settings-field-meta">
+                  <p id="draftingPromptCount" class="muted"></p>
+                  <button id="draftingPromptReset" type="button" class="btn-secondary btn-sm" data-settings-copy="settingsDraftingPromptReset" disabled></button>
                 </div>
               </details>
             </section>
@@ -718,6 +754,12 @@
           resolved: 'translationResolved', destination: 'translationDestination', warn: 'translationProviderWarn',
           saved: '', current: '', other: false,
         },
+        drafting: {
+          label: copy.settingsDrafting, field: 'draftingProviderId', model: 'draftingModel', otherField: 'draftingModelOther',
+          otherInput: 'draftingModelOtherInput', status: 'draftingModelStatus', reload: 'draftingModelsReload',
+          resolved: 'draftingResolved', destination: 'draftingDestination', warn: 'draftingProviderWarn',
+          saved: '', current: '', other: false,
+        },
       };
       const MAX_PROVIDERS = 20;
       const RELOAD_HINT = 'Reload settings before retrying.';
@@ -728,7 +770,9 @@
       let form = null;                // { id, busy? }; a new object per opening, id null = Add
       let formPresetKind = 'openrouter';
       let reviewTestController = null;
-      let translationPromptDefault = null; // the server's default instructions from the last settings response, for Reset
+      // The server's default instructions from the last settings response, for Reset.
+      let translationPromptDefault = null;
+      let draftingPromptDefault = null;
       const modelCache = new Map();   // provider id -> { baseUrl, models } listed from this browser
       const modelLookups = new Map(); // provider id -> { baseUrl, promise } while a listing runs
       const modelFailures = new Map(); // provider id -> { baseUrl, reason } of the last failed listing
@@ -1371,38 +1415,57 @@
         });
       }
 
-      // ---- Translation instructions ----------------------------------------------
-      /** Translation-instructions copy with {count}, {max} and {over} filled in from the field. */
-      function translationPromptText(key) {
-        const max = LLM.TRANSLATION_PROMPT_MAX_LENGTH;
-        const count = $('translationPrompt').value.length;
+      // ---- Owner instructions (translation #567, drafting #579) ------------------
+      // One row per instructions field: the same counter, Reset and inline
+      // validation; `copyPrefix` names its copy keys (…Count, …Over, …TooLong…).
+      // The rule is llm.js's, read when it is used.
+      const INSTRUCTIONS = {
+        translation: {
+          field: 'translationPrompt', count: 'translationPromptCount', reset: 'translationPromptReset',
+          advanced: 'translationAdvanced', copyPrefix: 'settingsTranslationPrompt',
+          max: () => LLM.TRANSLATION_PROMPT_MAX_LENGTH, problem: (value) => LLM.translationPromptProblem(value),
+          defaultValue: () => translationPromptDefault,
+        },
+        drafting: {
+          field: 'draftingPrompt', count: 'draftingPromptCount', reset: 'draftingPromptReset',
+          advanced: 'draftingAdvanced', copyPrefix: 'settingsDraftingPrompt',
+          max: () => LLM.DRAFTING_PROMPT_MAX_LENGTH, problem: (value) => LLM.draftingPromptProblem(value),
+          defaultValue: () => draftingPromptDefault,
+        },
+      };
+      /** Instructions copy with {count}, {max} and {over} filled in from the field. */
+      function instructionsText(row, suffix) {
+        const count = $(row.field).value.length;
+        const max = row.max();
         const values = { count, max, over: count - max };
-        return copy[key].replace(/\{(count|max|over)\}/g, (_, name) => String(values[name]));
+        return copy[row.copyPrefix + suffix].replace(/\{(count|max|over)\}/g, (_, name) => String(values[name]));
       }
-      function showTranslationPromptCount() {
-        $('translationPromptCount').textContent = translationPromptText(
-          $('translationPrompt').value.length > LLM.TRANSLATION_PROMPT_MAX_LENGTH ? 'settingsTranslationPromptOver' : 'settingsTranslationPromptCount');
+      function showInstructionsCount(row) {
+        $(row.count).textContent = instructionsText(row, $(row.field).value.length > row.max() ? 'Over' : 'Count');
       }
-      $('translationPrompt').addEventListener('input', () => {
-        AdminField.valid($('translationPrompt'));
-        showTranslationPromptCount();
-      });
-      $('translationPromptReset').addEventListener('click', () => {
-        if (translationPromptDefault === null) return;
-        $('translationPrompt').value = translationPromptDefault;
-        // A real input event: the AI scope's draft watcher marks it unsaved, and the
-        // field's own listener above clears any error and recounts.
-        $('translationPrompt').dispatchEvent(new Event('input', { bubbles: true }));
-        $('translationPrompt').focus();
-        $('aiOut').textContent = copy.settingsTranslationPromptRestored;
-      });
+      for (const row of Object.values(INSTRUCTIONS)) {
+        $(row.field).addEventListener('input', () => {
+          AdminField.valid($(row.field));
+          showInstructionsCount(row);
+        });
+        $(row.reset).addEventListener('click', () => {
+          const value = row.defaultValue();
+          if (value === null) return;
+          $(row.field).value = value;
+          // A real input event: the AI scope's draft watcher marks it unsaved, and the
+          // field's own listener above clears any error and recounts.
+          $(row.field).dispatchEvent(new Event('input', { bubbles: true }));
+          $(row.field).focus();
+          $('aiOut').textContent = copy[row.copyPrefix + 'Restored'];
+        });
+      }
 
       /** Registry state from a settings response; `fillFields` also replaces the AI form's values. */
       function applyAi(s, fillFields) {
         saved = {
           aiProviders: s.aiProviders, aiDefaultProviderId: s.aiDefaultProviderId,
           reviewProviderId: s.reviewProviderId, captionProviderId: s.captionProviderId,
-          translationProviderId: s.translationProviderId,
+          translationProviderId: s.translationProviderId, draftingProviderId: s.draftingProviderId,
         };
         if (fillFields) {
           setModel(USE_CASES.review, s.aiModel);
@@ -1416,18 +1479,27 @@
           setModel(USE_CASES.translation, s.translationModel);
           $('translationTimeoutSeconds').value = s.translationTimeoutMs / 1000;
           $('translationPrompt').value = s.translationPrompt;
-          AdminField.valid($('translationPrompt'));
-          showTranslationPromptCount();
+          setModel(USE_CASES.drafting, s.draftingModel);
+          $('draftingTimeoutSeconds').value = s.draftingTimeoutMs / 1000;
+          $('draftingPrompt').value = s.draftingPrompt;
+          for (const row of Object.values(INSTRUCTIONS)) {
+            AdminField.valid($(row.field));
+            showInstructionsCount(row);
+          }
           aiDraft.clean();
         }
         renderProviders();
-        renderUseCaseSelects(fillFields ? { review: s.reviewProviderId, caption: s.captionProviderId, translation: s.translationProviderId } : null);
+        renderUseCaseSelects(fillFields ? {
+          review: s.reviewProviderId, caption: s.captionProviderId,
+          translation: s.translationProviderId, drafting: s.draftingProviderId,
+        } : null);
         syncForm();
         if ($('providersOut').textContent === copy.settingsRegistryUnavailable) $('providersOut').textContent = '';
         $('saveAi').disabled = false;
         $('testReview').disabled = false;
         translationPromptDefault = LLM.isTranslationPrompt(s.translationPromptDefault) ? s.translationPromptDefault : null;
-        $('translationPromptReset').disabled = translationPromptDefault === null;
+        draftingPromptDefault = LLM.isDraftingPrompt(s.draftingPromptDefault) ? s.draftingPromptDefault : null;
+        for (const row of Object.values(INSTRUCTIONS)) $(row.reset).disabled = row.defaultValue() === null;
       }
 
       async function reloadSettings() {
@@ -1452,14 +1524,14 @@
 
       $('saveAi').addEventListener('click', async () => {
         if (!saved || $('aiFields').disabled) return;
-        const promptProblem = LLM.translationPromptProblem($('translationPrompt').value);
-        if (promptProblem) {
+        for (const row of Object.values(INSTRUCTIONS)) {
+          const promptProblem = row.problem($(row.field).value);
+          if (!promptProblem) continue;
           // Caught before anything is sent; the text stays for the owner to fix.
-          $('translationAdvanced').open = true;
+          $(row.advanced).open = true;
           $('aiOut').textContent = '';
-          AdminField.invalid($('translationPrompt'), translationPromptText(
-            promptProblem === 'tooLong' ? 'settingsTranslationPromptTooLong'
-              : promptProblem === 'hidden' ? 'settingsTranslationPromptHidden' : 'settingsTranslationPromptRequired'));
+          AdminField.invalid($(row.field), instructionsText(row,
+            promptProblem === 'tooLong' ? 'TooLong' : promptProblem === 'hidden' ? 'Hidden' : 'Required'));
           return;
         }
         clearReviewTest();
@@ -1478,6 +1550,10 @@
           translationModel: USE_CASES.translation.current,
           translationTimeoutMs: Math.round(Number($('translationTimeoutSeconds').value) * 1000),
           translationPrompt: $('translationPrompt').value,
+          draftingProviderId: $('draftingProviderId').value || null,
+          draftingModel: USE_CASES.drafting.current,
+          draftingTimeoutMs: Math.round(Number($('draftingTimeoutSeconds').value) * 1000),
+          draftingPrompt: $('draftingPrompt').value,
         };
         const restore = AdminFocus.hold($('saveAi'));
         $('saveAi').disabled = true;
