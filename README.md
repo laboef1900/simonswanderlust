@@ -299,6 +299,23 @@ limitations, then check correspondence and delivery in the final rebuilt release
 
 ### Cutting a release
 
+**v0.23.0 — AI story drafts from trip events** (linux/amd64 and linux/arm64,
+`ghcr.io/laboef1900/wanderlust-studio:0.23.0`). Changes since v0.22.0 (PR #580):
+
+- **Draft with AI** (#579): an empty story language can be drafted from a list of trip events. The author
+  ticks which story details to share, reviews a plain-text preview and applies it as an unsaved edit.
+  Spec: `docs/superpowers/specs/2026-11-12-issue-579-ai-post-drafting.md`.
+- **Settings:** a new Story drafting assignment (provider, model, timeout, editable instructions with Reset).
+
+Upgrade notes for v0.22.0 → v0.23.0 (the [release recovery checklist](ARCHITECTURE.md#release-recovery-checklist)):
+
+- **Image and deployment:** apply this release's image tag (`0.23.0`).
+- **Schema:** no changes. Drafting settings live in the existing settings storage and need no migration.
+- **Compose and `.env`:** no changes.
+- **Rollback to v0.22.0:** supported by reverting the image tag; unused drafting settings are ignored.
+- **Privacy:** when Story drafting follows the default provider, signed-in authors receive that provider's key
+  for the one request (see `SECURITY.md`).
+
 **v0.22.0 — publish-time language choice, media exposure details, posts bulk bar** (linux/amd64 and linux/arm64,
 `ghcr.io/laboef1900/wanderlust-studio:0.22.0`). Changes since v0.21.3 (PRs #571, #572, #573, #574, #575):
 
