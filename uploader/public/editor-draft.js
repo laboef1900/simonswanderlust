@@ -549,8 +549,8 @@ window.EditorDraft = (function () {
           apiKey = null;
           release();
           disclose(loaded.prepared);
-          // The changed destination is what to check; its explanation follows if both fit.
-          $('draftDestination').scrollIntoView({ block: 'nearest' });
+          // Revealed although its state is 'ready': the sentence says what changed and to
+          // check the destination line at the top of the dialog before generating again.
           say(copy.draftConfigChanged, 'ready', false, true);
           focusGenerate();
           return;

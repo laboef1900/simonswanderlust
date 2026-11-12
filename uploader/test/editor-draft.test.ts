@@ -324,9 +324,10 @@ describe('Draft with AI controller against the real dialog markup', () => {
 
   it('opens without scrolling the body, reveals failures, and brings the generated draft into view', async () => {
     let fail = true;
+    const provider = Promise.withResolvers<void>();
     const h = controller(() => ({ date: null, country: '', region: '', route: null }), {
       draftArticle: async () => {
-        if (fail) throw new Error('Story draft HTTP 500');
+        if (fail) { await provider.promise; throw new Error('Story draft HTTP 500'); }
         return { title: 'Titel', excerpt: 'Kurz.', bodyMarkdown: 'Text.' };
       },
     });
@@ -341,13 +342,41 @@ describe('Draft with AI controller against the real dialog markup', () => {
     h.el('draftEvents').value = 'Arrived in Lisbon';
     h.el('draftGenerate').click();
     await flush();
+    expect(h.el('draftStatus').textContent).toBe(editorCopy.draftGenerating);
+    // Only the failure itself counts: the progress sentence was revealed already.
+    reveal.mockClear();
+    provider.resolve();
+    await flush();
     expect(h.el('draftStatus').textContent).toBe(editorCopy.draftProviderFailed);
-    expect(reveal).toHaveBeenCalled();
+    expect(reveal).toHaveBeenCalledTimes(1);
     fail = false;
     h.el('draftGenerate').click();
     await flush();
     // Focus may scroll: the draft itself is what the author must review, not only Apply in the footer.
     expect(focus).toHaveBeenCalledWith();
+  });
+
+  it('reveals the config-changed explanation, although its state is ready', async () => {
+    let reads = 0;
+    const h = controller(() => ({ date: null, country: '', region: '', route: null }), {
+      readAiConfig: async () => ({ status: 200, config: { ...draftConfig, model: ++reads === 1 ? 'draft-model' : 'other-model' } }),
+    });
+    const reveal = vi.fn();
+    Reflect.set(h.el('draftStatus'), 'scrollIntoView', reveal);
+    h.el('deDraftAction').click();
+    await flush();
+    expect(reveal).not.toHaveBeenCalled();
+    h.el('draftEvents').value = 'Arrived in Lisbon';
+    h.el('draftGenerate').click();
+    await flush();
+    expect(h.el('draftStatus').textContent).toBe(editorCopy.draftConfigChanged);
+    // Once for "Writing the draft…", once for the explanation of the change.
+    expect(reveal).toHaveBeenCalledTimes(2);
+    expect(h.requests).toEqual([]);
+    h.el('draftGenerate').click();
+    await flush();
+    expect(h.requests).toHaveLength(1);
+    expect(h.el('draftStatus').textContent).toBe(editorCopy.draftReview);
   });
 
   it('keeps a result under review, with its status, when Generate again is refused for its input', async () => {
