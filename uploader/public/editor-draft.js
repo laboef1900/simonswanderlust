@@ -167,11 +167,13 @@ window.EditorDraft = (function () {
       return node;
     }
 
-    function say(message, state, settings = false) {
+    // `reveal`: focus usually lands in the fixed footer, so an outcome sentence is
+    // scrolled into view. Routine opening/ready messages never move the body: the
+    // destination and the events field must stay at the top when the dialog opens.
+    function say(message, state, settings = false, reveal = state !== 'opening' && state !== 'ready') {
       dialog.dataset.state = state;
       status.textContent = message;
-      // Focus usually lands in the fixed footer; keep the sentence that explains why in view.
-      if (message && dialog.open) status.scrollIntoView({ block: 'nearest' });
+      if (message && reveal && dialog.open) status.scrollIntoView({ block: 'nearest' });
       $('draftSettingsRow').hidden = !settings;
       const admin = !!(options.isAdmin && options.isAdmin());
       $('draftSettings').hidden = !admin;
@@ -547,7 +549,9 @@ window.EditorDraft = (function () {
           apiKey = null;
           release();
           disclose(loaded.prepared);
-          say(copy.draftConfigChanged, 'ready');
+          // The changed destination is what to check; its explanation follows if both fit.
+          $('draftDestination').scrollIntoView({ block: 'nearest' });
+          say(copy.draftConfigChanged, 'ready', false, true);
           focusGenerate();
           return;
         }
@@ -569,7 +573,8 @@ window.EditorDraft = (function () {
         result.hidden = false;
         say(copy.draftReview, 'review');
         showControls();
-        $('draftResultTitle').focus({ preventScroll: true });
+        // Without preventScroll: the generated draft must come into view, not only Apply in the footer.
+        $('draftResultTitle').focus();
       } catch (error) {
         if (!current(request)) return;
         release();

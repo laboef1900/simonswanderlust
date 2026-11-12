@@ -794,8 +794,9 @@ Independent `/review` of the implementation ran three read-only reviewers in par
 `PrReview580` (`reviewer`, `anthropic/claude-sonnet-5-5`, REQUEST CHANGES), `SecReview580`
 (`security-reviewer`, `anthropic/claude-sonnet-5-5`, COMMENT) and `DeepReview580` (fresh
 read-only reviewer, `anthropic/claude-opus-5-5` high, REQUEST CHANGES). Real-browser runs on the
-isolated stack added two findings. Every substantiated finding was fixed with a regression test
-that was shown to fail without the fix (mutation check):
+isolated stack added two findings. Every substantiated finding was fixed; where it is testable,
+with a regression test shown to fail without the fix (mutation check). The CSS fixes were
+measured in Chromium and the documentation fixes checked by reading:
 
 - **Focus dropped to the page** when the hero caption re-rendered a focused detail checkbox
   (Deep W1): detail ids follow the item key and re-rendering restores focus; the DOM harness now
@@ -818,7 +819,12 @@ that was shown to fail without the fix (mutation check):
 - **Docs**: README provider-failure wording (PR F5), SECURITY.md date/front-matter wording
   (Sec F4), corpus additions for `ftp://`, footnotes and non-ASCII e-mail shapes (Sec F3).
 
-Fix re-review: `SecReview580` **APPROVE** and `DeepReview580` **APPROVE**. Their optional notes
+Fix re-review: `SecReview580` **APPROVE** and `DeepReview580` **APPROVE**; `PrReview580`
+REQUEST CHANGES on two scroll defects it measured in Chromium — routine opening/ready messages
+scrolled the body down (destination and events label out of view), and the generated draft was
+focused off-screen. Fixed: only outcome messages reveal the status (config-changed also reveals
+the destination), and the result title is focused without `preventScroll`; a controller test
+pins both. Their optional notes
 were adopted: the default-ignorable rule above, `x@-y.z`/`a@_b.c` pinned as hostile corpus
 entries, and a refused "Generate again" keeps a result under review with its status.
 

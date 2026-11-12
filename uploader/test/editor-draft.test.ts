@@ -322,6 +322,34 @@ describe('Draft with AI controller against the real dialog markup', () => {
     expect(h.requests).toHaveLength(1);
   });
 
+  it('opens without scrolling the body, reveals failures, and brings the generated draft into view', async () => {
+    let fail = true;
+    const h = controller(() => ({ date: null, country: '', region: '', route: null }), {
+      draftArticle: async () => {
+        if (fail) throw new Error('Story draft HTTP 500');
+        return { title: 'Titel', excerpt: 'Kurz.', bodyMarkdown: 'Text.' };
+      },
+    });
+    const reveal = vi.fn();
+    Reflect.set(h.el('draftStatus'), 'scrollIntoView', reveal);
+    const focus = vi.spyOn(h.el('draftResultTitle'), 'focus');
+    h.el('deDraftAction').click();
+    await flush();
+    // Loading and ready are routine: the destination and the events field stay at the top.
+    expect(h.el('draftStatus').textContent).toBe(editorCopy.draftReady);
+    expect(reveal).not.toHaveBeenCalled();
+    h.el('draftEvents').value = 'Arrived in Lisbon';
+    h.el('draftGenerate').click();
+    await flush();
+    expect(h.el('draftStatus').textContent).toBe(editorCopy.draftProviderFailed);
+    expect(reveal).toHaveBeenCalled();
+    fail = false;
+    h.el('draftGenerate').click();
+    await flush();
+    // Focus may scroll: the draft itself is what the author must review, not only Apply in the footer.
+    expect(focus).toHaveBeenCalledWith();
+  });
+
   it('keeps a result under review, with its status, when Generate again is refused for its input', async () => {
     const h = controller(() => ({ date: null, country: '', region: '', route: null }));
     h.el('deDraftAction').click();
