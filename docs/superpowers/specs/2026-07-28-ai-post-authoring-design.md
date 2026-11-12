@@ -8,6 +8,9 @@ image; see §The `authoring` service), `uploader/src/settings.ts`, `uploader/src
 (`PRODUCT.md`, `CLAUDE.md`, `SECURITY.md`, `ARCHITECTURE.md`) and a new `authoring/` tree.
 **No change to `site/`.**
 **Refs:** #67 — this is the design only; the issue stays open for implementation.
+**Superseded in part:** *Slice 1 — Draft from rough notes* is superseded by the browser-direct
+[#579 story drafting design](2026-11-12-issue-579-ai-post-drafting.md), which does not build on
+this sidecar design.
 **Builds on:** `2026-06-24-postgres-cms-phase-b-design.md` (the in-admin editor and the `PostPair`
 contract), `2026-07-03-single-app-container-design.md` (the `app`/`db` topology and the DHI runtime),
 `2026-07-26-media-library-and-galleries-design.md` (`GET /media` at session level with redaction),

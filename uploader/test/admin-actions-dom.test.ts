@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import vm from 'node:vm';
 import { createSettingsStore, defaultSettings } from '../src/settings.js';
 import { DEFAULT_TRANSLATION_PROMPT } from '../src/translation-prompt.js';
+import { DEFAULT_DRAFTING_PROMPT } from '../src/drafting-prompt.js';
 import { buildServer } from '../src/server.js';
 import { memoryUserStore } from '../src/users.js';
 import { memorySessionStore } from '../src/sessions.js';
@@ -2337,6 +2338,11 @@ interface SettingsResponse {
   translationTimeoutMs: number;
   translationPrompt: string;
   translationPromptDefault: string;
+  draftingProviderId: string | null;
+  draftingModel: string;
+  draftingTimeoutMs: number;
+  draftingPrompt: string;
+  draftingPromptDefault: string;
   aiModel: string;
   reviewPrompt: string;
   reviewTimeoutMs: number;
@@ -2367,6 +2373,8 @@ function settingsResponse(overrides: Partial<SettingsResponse> = {}): SettingsRe
     aiProviders: [LOCAL], aiDefaultProviderId: 'lm-studio', reviewProviderId: null, captionProviderId: null,
     translationProviderId: null, translationModel: 'translation-model', translationTimeoutMs: 120000,
     translationPrompt: 'Translation prompt', translationPromptDefault: DEFAULT_TRANSLATION_PROMPT,
+    draftingProviderId: null, draftingModel: 'drafting-model', draftingTimeoutMs: 120000,
+    draftingPrompt: 'Drafting prompt', draftingPromptDefault: DEFAULT_DRAFTING_PROMPT,
     aiModel: 'review-model', reviewPrompt: 'Review prompt', reviewTimeoutMs: 60000,
     lmModel: 'vision-model', captionPrompt: 'Caption prompt', captionTimeoutMs: 60000, captionMaxTokens: 8000, captionMaxEdge: 768,
     backupSchedule: 'off', backupRetention: 14, convertJpeg: true, webpQuality: 75, avifQuality: 55,
@@ -2376,22 +2384,26 @@ function settingsResponse(overrides: Partial<SettingsResponse> = {}): SettingsRe
   };
 }
 
-// Settings checks translation instructions with the browser's own rule, so the
-// harness takes it from the real llm.js rather than restating it (its top-level
-// body only assigns window.LLM).
+// Settings checks translation and drafting instructions with the browser's own
+// rule, so the harness takes it from the real llm.js rather than restating it
+// (its top-level body only assigns window.LLM).
 const browserLlm: { LLM?: {
   TRANSLATION_PROMPT_MAX_LENGTH: number; isTranslationPrompt(value: unknown): boolean; translationPromptProblem(value: unknown): string | null;
+  DRAFTING_PROMPT_MAX_LENGTH: number; isDraftingPrompt(value: unknown): boolean; draftingPromptProblem(value: unknown): string | null;
 } } = {};
 vm.runInNewContext(readFileSync('public/llm.js', 'utf8'), { window: browserLlm });
-const TRANSLATION_PROMPT_RULE = {
+const PROMPT_RULES = {
   TRANSLATION_PROMPT_MAX_LENGTH: browserLlm.LLM!.TRANSLATION_PROMPT_MAX_LENGTH,
   isTranslationPrompt: browserLlm.LLM!.isTranslationPrompt,
   translationPromptProblem: browserLlm.LLM!.translationPromptProblem,
+  DRAFTING_PROMPT_MAX_LENGTH: browserLlm.LLM!.DRAFTING_PROMPT_MAX_LENGTH,
+  isDraftingPrompt: browserLlm.LLM!.isDraftingPrompt,
+  draftingPromptProblem: browserLlm.LLM!.draftingPromptProblem,
 };
 
 function loadSettingsPage(extra: Record<string, unknown> = {}) {
   return loadPage('public/settings.html', {
-    LLM: { mixedContentWarning: () => '', listModels: async () => [], ...TRANSLATION_PROMPT_RULE },
+    LLM: { mixedContentWarning: () => '', listModels: async () => [], ...PROMPT_RULES },
     AbortController, AbortSignal, Event, setTimeout, clearTimeout,
     ...extra,
   }, ['public/tabs.js', 'public/settings-drafts.js']);
@@ -2438,6 +2450,7 @@ function pageText(el: (id: string) => Element): string {
     'reviewResolved', 'reviewDestination', 'captionResolved', 'captionDestination', 'aiOut', 'reviewTestOut', 'out',
     'reviewModelStatus', 'captionModelStatus',
     'translationResolved', 'translationDestination', 'translationModelStatus', 'translationProviderWarn',
+    'draftingResolved', 'draftingDestination', 'draftingModelStatus', 'draftingProviderWarn',
   ].map((id) => el(id).textContent).concat(descendants(el('providerList')).map((n) => n.textContent)).join('\n');
 }
 
@@ -2485,7 +2498,7 @@ async function apiPage(initial: SettingsResponse, opts: {
   const page = loadSettingsPage({
     fetch: fetcher,
     localStorage: { setItem: storageWrite }, sessionStorage: { setItem: storageWrite },
-    LLM: { mixedContentWarning: opts.mixedContentWarning ?? (() => ''), listModels, ...TRANSLATION_PROMPT_RULE },
+    LLM: { mixedContentWarning: opts.mixedContentWarning ?? (() => ''), listModels, ...PROMPT_RULES },
     AdminConfirm: {
       ask: async (question: Question) => { questions.push(question); return opts.confirm ? opts.confirm(question) : true; },
     },
@@ -3323,7 +3336,7 @@ describe('settings.html providers', () => {
   });
 
   it('Set default does not ask when every use case is explicitly assigned', async () => {
-    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER], reviewProviderId: 'lm-studio', captionProviderId: 'lm-studio', translationProviderId: 'lm-studio' }));
+    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER], reviewProviderId: 'lm-studio', captionProviderId: 'lm-studio', translationProviderId: 'lm-studio', draftingProviderId: 'lm-studio' }));
     await rowButton(providerRow(page.el, 'OpenRouter'), 'Set default').click();
     expect(page.questions).toEqual([]);
     expect(page.requests[0]).toEqual({ url: '/settings', method: 'POST', body: { aiDefaultProviderId: 'openrouter' } });
@@ -3571,7 +3584,7 @@ describe('settings.html model lists', () => {
   });
 
   it('a stored key that cannot be loaded, or a missing required key, fails without asking the provider', async () => {
-    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER, DEEPSEEK], reviewProviderId: 'openrouter', captionProviderId: 'deepseek', translationProviderId: 'openrouter' }), {
+    const page = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER, DEEPSEEK], reviewProviderId: 'openrouter', captionProviderId: 'deepseek', translationProviderId: 'openrouter', draftingProviderId: 'openrouter' }), {
       route: (request) => (request.url.endsWith('/credential') ? Response.json({ error: 'Secrets unavailable.' }, { status: 503 }) : undefined),
     });
     const { el } = page;
@@ -3616,6 +3629,7 @@ describe('settings.html use case assignments', () => {
       captionTimeoutMs: 60000, captionMaxEdge: 768, captionMaxTokens: 8000,
       translationProviderId: 'deepseek', translationModel: 'translation-2', translationTimeoutMs: 130123,
       translationPrompt: 'Translation prompt',
+      draftingProviderId: null, draftingModel: 'drafting-model', draftingTimeoutMs: 120000, draftingPrompt: 'Drafting prompt',
     });
     expect(el('translationModel').value).toBe('translation-2');
     expect(el('translationModelOther').hidden).toBe(true);
@@ -3745,6 +3759,7 @@ describe('settings.html use case assignments', () => {
       captionMaxTokens: 4096,
       translationProviderId: null, translationModel: 'translation-model', translationTimeoutMs: 120000,
       translationPrompt: 'Translation prompt',
+      draftingProviderId: null, draftingModel: 'drafting-model', draftingTimeoutMs: 120000, draftingPrompt: 'Drafting prompt',
     });
     // The saved values come back as the new "saved" models; Other closes.
     expect(el('aiModel').value).toBe('review-2');
@@ -3792,7 +3807,7 @@ describe('settings.html use case assignments', () => {
 });
 
 describe('settings.html translation instructions', () => {
-  const MAX = TRANSLATION_PROMPT_RULE.TRANSLATION_PROMPT_MAX_LENGTH;
+  const MAX = PROMPT_RULES.TRANSLATION_PROMPT_MAX_LENGTH;
   const DESCRIBED_BY = 'translationPromptHelp translationPromptCount';
   const counted = (length: number) => length + ' of ' + MAX + ' characters';
 
@@ -3944,6 +3959,155 @@ describe('settings.html translation instructions', () => {
     expect(page.error()!.hidden).toBe(true);
     expect(field.getAttribute('aria-describedby')).toBe(DESCRIBED_BY);
     expect(page.requests).toEqual([]);
+  });
+});
+
+describe('settings.html story drafting (#579)', () => {
+  const MAX = PROMPT_RULES.DRAFTING_PROMPT_MAX_LENGTH;
+  const DESCRIBED_BY = 'draftingPromptHelp draftingPromptCount';
+  const counted = (length: number) => length + ' of ' + MAX + ' characters';
+
+  /** The textarea hung under its real disclosure, so AdminField's error line lands beside it. */
+  async function draftingPage(overrides: Partial<SettingsResponse> = {}) {
+    const page = await apiPage(settingsResponse(overrides));
+    const advanced = page.el('draftingAdvanced');
+    const field = page.el('draftingPrompt');
+    advanced.appendChild(field);
+    const error = () => advanced.children[advanced.children.indexOf(field) + 1];
+    return { ...page, field, advanced, error, doc: documentOf(page) };
+  }
+  const type = (field: Element, value: string) => {
+    field.value = value;
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+
+  it('fills the fourth task section from the settings response', async () => {
+    const saved = 'Write in the first person.\n\tKeep it short.';
+    const { el } = await draftingPage({
+      aiProviders: [LOCAL, ROUTER], draftingProviderId: 'openrouter', draftingModel: 'draft-model',
+      draftingTimeoutMs: 95500, draftingPrompt: saved,
+    });
+    expect(el('draftingProviderId').value).toBe('openrouter');
+    expect(el('draftingProviderId').children[0]!.textContent).toBe('Default — Local LM Studio');
+    expect(el('draftingResolved').textContent).toBe('→ OpenRouter / draft-model');
+    expect(el('draftingDestination').textContent).toBe(ROUTER.baseUrl);
+    expect(Number(el('draftingTimeoutSeconds').value)).toBe(95.5);
+    expect(el('draftingPrompt').value).toBe(saved);
+    expect(el('draftingPrompt').getAttribute('aria-describedby')).toBe(DESCRIBED_BY);
+    expect(el('draftingPromptCount').textContent).toBe(counted(saved.length));
+    expect(el('draftingPromptReset').disabled).toBe(false);
+    expect(el('settingsDraftBar').hidden).toBe(true);
+  });
+
+  it('saves an independent drafting assignment with the shared Save AI settings, leaving translation alone', async () => {
+    const page = await draftingPage({ aiProviders: [LOCAL, DEEPSEEK] });
+    const { el, field } = page;
+    el('draftingProviderId').value = 'deepseek';
+    await el('draftingProviderId').fire('change');
+    expect(el('draftingProviderWarn').hidden).toBe(false);
+    expect(el('draftingProviderWarn').textContent).toContain('“DeepSeek” has no stored API key');
+    expect(el('translationProviderWarn').hidden).toBe(true);
+    await chooseModel(el, 'draftingModel', 'Other model ID…');
+    el('draftingModelOtherInput').value = ' drafter-2 ';
+    await el('draftingModelOtherInput').fire('input');
+    el('draftingTimeoutSeconds').value = '130.123';
+    type(field, '  Short, plain paragraphs.\n');
+    expect(el('settingsDraftStatus').textContent).toContain(EDITOR_COPY.settingsAiSection);
+    await el('saveAi').click();
+    expect(calls(page.requests)).toEqual(['POST /settings']);
+    expect(page.requests[0]!.body).toMatchObject({
+      translationProviderId: null, translationModel: 'translation-model', translationTimeoutMs: 120000,
+      translationPrompt: 'Translation prompt',
+      draftingProviderId: 'deepseek', draftingModel: 'drafter-2', draftingTimeoutMs: 130123,
+      draftingPrompt: '  Short, plain paragraphs.\n',
+    });
+    expect(page.requests[0]!.body).not.toHaveProperty('draftingPromptDefault');
+    expect(el('draftingResolved').textContent).toBe('→ DeepSeek / drafter-2');
+    expect(el('draftingModelOther').hidden).toBe(true);
+    expect(el('aiOut').textContent).toBe(EDITOR_COPY.writingSaved);
+    expect(el('settingsDraftBar').hidden).toBe(true);
+  });
+
+  it('Reset restores the served default in the field only: unsaved, focused, announced, nothing sent', async () => {
+    const page = await draftingPage({ draftingPrompt: 'Custom drafting style' });
+    const { el, field } = page;
+    await el('draftingPromptReset').click();
+    expect(field.value).toBe(DEFAULT_DRAFTING_PROMPT);
+    expect(el('draftingPromptCount').textContent).toBe(counted(DEFAULT_DRAFTING_PROMPT.length));
+    expect(el('settingsDraftStatus').textContent).toContain(EDITOR_COPY.settingsAiSection);
+    expect(page.doc.activeElement).toBe(field);
+    expect(el('aiOut').textContent).toBe(EDITOR_COPY.settingsDraftingPromptRestored);
+    expect(el('translationPrompt').value).toBe('Translation prompt');
+    expect(page.requests).toEqual([]);
+    await el('saveAi').click();
+    expect(page.requests[0]!.body).toMatchObject({ draftingPrompt: DEFAULT_DRAFTING_PROMPT, translationPrompt: 'Translation prompt' });
+  });
+
+  it('keeps Reset unavailable when the response carries no usable drafting default', async () => {
+    const page = await draftingPage({ draftingPrompt: 'Custom drafting style', draftingPromptDefault: '\u200b' });
+    expect(page.el('draftingPromptReset').disabled).toBe(true);
+    expect(page.el('translationPromptReset').disabled).toBe(false);
+    await page.el('draftingPromptReset').click();
+    expect(page.field.value).toBe('Custom drafting style');
+  });
+
+  it.each([
+    ['blank', '', EDITOR_COPY.settingsDraftingPromptRequired],
+    ['invisible-only', '\u200b\u2060', EDITOR_COPY.settingsDraftingPromptRequired],
+    ['hidden-control', 'Line one\u000bLine two', EDITOR_COPY.settingsDraftingPromptHidden],
+    ['over-limit', 'x'.repeat(MAX + 1),
+      EDITOR_COPY.settingsDraftingPromptTooLong!.replace('{max}', String(MAX)).replace('{over}', '1')],
+  ])('refuses %s drafting instructions under the field without a request, and typing clears the error', async (_name, value, message) => {
+    const page = await draftingPage();
+    const { el, field, advanced } = page;
+    type(field, value);
+    expect(advanced.open).toBe(false);
+    await el('saveAi').click();
+    expect(page.requests).toEqual([]);
+    expect(advanced.open).toBe(true);
+    expect(el('translationAdvanced').open).toBe(false);
+    const error = page.error()!;
+    expect(error.id).toBe('draftingPromptError');
+    expect(error.textContent).toBe(message);
+    expect(error.textContent).not.toMatch(/[{}]/);
+    expect(field.getAttribute('aria-invalid')).toBe('true');
+    expect(field.getAttribute('aria-describedby')).toBe(DESCRIBED_BY + ' draftingPromptError');
+    expect(page.doc.activeElement).toBe(field);
+    expect(field.value).toBe(value);
+
+    type(field, 'Write warmly.');
+    expect(field.getAttribute('aria-invalid')).toBeNull();
+    expect(error.hidden).toBe(true);
+    await el('saveAi').click();
+    expect(calls(page.requests)).toEqual(['POST /settings']);
+    expect(page.requests[0]!.body).toMatchObject({ draftingPrompt: 'Write warmly.' });
+  });
+
+  it('names Story drafting when refusing deletion, from the saved assignment or the server’s useCases', async () => {
+    const saved = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER], draftingProviderId: 'openrouter' }), { hash: '#images' });
+    await rowButton(providerRow(saved.el, ROUTER.name), 'Delete').click();
+    expect(saved.requests).toEqual([]);
+    expect(saved.el('providersOut').textContent).toBe(
+      '“OpenRouter” is assigned to ' + EDITOR_COPY.settingsDrafting + '. Assign another provider there first, then delete it.');
+
+    const stale = await apiPage(settingsResponse({ aiProviders: [LOCAL, ROUTER] }), {
+      route: (request) => (request.method === 'DELETE' ? Response.json({
+        code: 'provider_in_use', error: 'This provider is assigned to a use case.', useCases: ['translation', 'drafting'],
+      }, { status: 409 }) : undefined),
+    });
+    await rowButton(providerRow(stale.el, 'OpenRouter'), 'Delete').click();
+    expect(stale.el('providersOut').textContent).toBe('“OpenRouter” is assigned to ' + EDITOR_COPY.settingsTranslation + ' and ' +
+      EDITOR_COPY.settingsDrafting + '. Assign another provider there first, then delete it.');
+  });
+
+  it('lists Story drafting among the follow-default use cases a new default would move', async () => {
+    const page = await apiPage(settingsResponse({
+      aiProviders: [LOCAL, ROUTER], reviewProviderId: 'lm-studio', captionProviderId: 'lm-studio', translationProviderId: 'lm-studio',
+    }));
+    await rowButton(providerRow(page.el, ROUTER.name), 'Set default').click();
+    expect(page.questions).toHaveLength(1);
+    expect(page.questions[0]!.body).toContain(EDITOR_COPY.settingsDrafting + ' follows the default provider');
+    expect(page.el('draftingProviderId').children[0]!.textContent).toBe('Default — OpenRouter');
   });
 });
 
@@ -4328,6 +4492,39 @@ describe('settings.html against the real settings and provider routes', () => {
     await el('saveAi').click();
     expect(settings.get().translationPrompt).toBe(DEFAULT_TRANSLATION_PROMPT);
     expect((await app.inject({ url: '/ai-config?purpose=translation', cookies })).json().prompt).toBe(DEFAULT_TRANSLATION_PROMPT);
+  });
+
+  it('saves the drafting assignment and instructions through the real routes and serves them to purpose=drafting', async () => {
+    const { el, app, cookies, settings, refill, fetcher, createProvider } = await realPage();
+    expect(el('draftingPrompt').value).toBe(DEFAULT_DRAFTING_PROMPT);
+    const created = await createProvider('fixture-drafting-key');
+    await refill();
+    el('draftingProviderId').value = created.id;
+    await el('draftingProviderId').fire('change');
+    await chooseModel(el, 'draftingModel', 'Other model ID…');
+    el('draftingModelOtherInput').value = 'drafting-model';
+    await el('draftingModelOtherInput').fire('input');
+    el('draftingTimeoutSeconds').value = '150';
+    const custom = '  First person, short paragraphs.\n';
+    el('draftingPrompt').value = custom;
+    await el('draftingPrompt').fire('input');
+    await el('saveAi').click();
+    expect(el('aiOut').textContent).toBe(EDITOR_COPY.writingSaved);
+    expect(settings.get()).toMatchObject({
+      draftingProviderId: created.id, draftingModel: 'drafting-model', draftingTimeoutMs: 150000, draftingPrompt: custom,
+    });
+    expect((await app.inject({ url: '/ai-config?purpose=drafting', cookies })).json()).toEqual({
+      providerId: created.id, providerName: 'Router', providerKind: 'openrouter', baseUrl: 'https://openrouter.ai/api/v1',
+      model: 'drafting-model', timeoutMs: 150000, prompt: custom, apiKey: 'fixture-drafting-key',
+    });
+    expect(pageText(el)).not.toContain('fixture-drafting-key');
+
+    const before = fetcher.mock.calls.length;
+    await el('draftingPromptReset').click();
+    expect(el('draftingPrompt').value).toBe(DEFAULT_DRAFTING_PROMPT);
+    expect(fetcher.mock.calls).toHaveLength(before);
+    await el('saveAi').click();
+    expect(settings.get().draftingPrompt).toBe(DEFAULT_DRAFTING_PROMPT);
   });
 
   it('saves the photo output budget, refuses an invalid one without saving, and reloads the saved value', async () => {

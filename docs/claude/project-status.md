@@ -4,6 +4,21 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Implemented (PR #580 for #579, 2026-11-12):** **Draft with AI** fills an empty story
+  language from the author's list of trip events. Browser-direct through a fourth AI
+  assignment (`draftingProviderId`/`Model`/`TimeoutMs`/`Prompt`, `/ai-config?purpose=drafting`,
+  editable instructions with Reset under Settings → AI models → Story drafting); opt-in,
+  per-opening context (date, country, region, hero and picked-photo Media captions, a
+  whole-km straight-line route; never coordinates); strict `{title, excerpt, bodyMarkdown}`
+  output with forbidden-substring checks backed by a renderer differential test; plain-text
+  preview and an explicit, re-checked Apply that never saves or publishes and fills the slug
+  only for a never-published story with an automatic slug. No route, schema or server egress.
+  Design, four-round AI design review (approved in round 4 by `anthropic/claude-opus-5-5`,
+  high; Astra was unavailable with `usage_limit_reached`) and the scoped design-gate exception:
+  `docs/superpowers/specs/2026-11-12-issue-579-ai-post-drafting.md`. **Downgrade note for the
+  release author:** an older app drops the four `drafting*` keys from `settings.json` on its
+  next settings write; copy `settings.json` first to keep custom drafting instructions.
+
 - **Implemented (PR for #566, 2026-11-11):** Posts bulk actions float in a bar fixed at the
   foot of the workspace (centred over it, never the sidebar; `--menu-shadow`; `--surface` at a
   measured 95% floor, no blur — 13.58:1 ink, 5.53:1 accent, 3.03:1 outline over a black

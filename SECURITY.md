@@ -1051,12 +1051,13 @@ Design and misuse cases: `docs/superpowers/specs/2026-09-05-safe-fetch-redirects
 
 AI inference is **browser-direct**, not a server remote-fetch path. Alt-text suggestions
 (local LM Studio or an admin-selected remote vision provider), editorial review, excerpts,
-and article translation never call `safeFetch` or a server inference proxy.
+article translation and story drafting never call `safeFetch` or a server inference proxy.
 `src/editorial-review.ts` contains only the review contract, schema, prompt and parser.
 
-Review, excerpt, caption, translation and model-discovery clients scope optional Bearer keys
-to individual requests; local LM Studio receives none. Excerpts reuse the review
-provider/model/timeout; article translation has an independent assignment. The only other
+Review, excerpt, caption, translation, drafting and model-discovery clients scope optional
+Bearer keys to individual requests; local LM Studio receives none. Excerpts reuse the review
+provider/model/timeout; article translation and story drafting each have an independent
+assignment. The only other
 secret read is the admin-only `GET /ai-providers/:id/credential` behind Settings model lookup
 and Test. Since the provider registry (2026-10-19), each provider has its own encrypted key,
 so independently assigned tasks send different keys, each only to its own provider's URL
@@ -1145,6 +1146,38 @@ uses existing dirty/recovery/save-conflict handling and offers guarded whole-fie
 There is no autosave, publishing, global Media mutation, duplicate upload or alternate
 persistence path. See the issue-specific design and scoped approval exception in
 `docs/superpowers/specs/2026-11-07-issue-550-ai-article-translation.md`.
+
+Story drafting (#579) is offered only while the active language of a story has no title,
+excerpt or body. Its user message is exactly `{ locale, events, context }`: up to 50 author
+events of at most 500 UTF-16 units each, plus only the context items the author ticked in that
+dialog opening, each shown with the value sent (the date in display format, sent as ISO) — the
+date, the language's country text,
+the region label, the Media caption of the hero photo, Media captions of photos picked in the
+dialog (at most 20) and a coarse route (first and last stop name and a whole-kilometre
+straight-line distance). The browser transport rejects any other key or type before fetch, so
+coordinates (EXIF or stops), image URLs, Media rows, keys and tags cannot leave the browser.
+The system message is the admin-editable **drafting instructions** (`draftingPrompt`, same
+visible-plain-text rule and 4000-unit cap as `translationPrompt`, readable by authors through
+`/ai-config?purpose=drafting`, never logged) followed by a fixed code-owned suffix: target
+language, the untrusted-data guard, a no-invention rule and the JSON contract. One explicit
+click makes at most one bounded, abortable request (no format fallback, no retry, 2 MiB
+response cap, `max_tokens` 32768, completion must stop). The output must be a JSON object with
+exactly `title`, `excerpt` and `bodyMarkdown` strings (own-key set equality, so `__proto__` or
+`constructor` reject), within caps, each with a visible character and free of controls and of
+default-ignorable characters such as bidi controls and marks, zero-width and invisible
+operators, BOM, fillers and Unicode tag characters (text the plain-text preview would hide;
+only soft hyphen, ZWNJ/ZWJ and VS15/VS16 are allowed). None of them may contain HTML, character references,
+backslash escapes, images, links, reference definitions, GFM autolink literals (including
+e-mail shapes) or code fences, and the body may not start with front matter; a
+renderer-backed differential test (fixed corpus plus a seeded randomized one) checks that no
+accepted body renders a link, image or classed code block. These checks are defense in depth;
+the rendering boundary stays the Visual editor's allow-list and `safeLink`, `rehype-sanitize`,
+the preview CSP and the publish gates. The result is shown as plain text and applied only on
+an explicit **Apply**, synchronously and only if the language is still empty and the
+editor snapshot is unchanged; Apply writes title, excerpt and body, and fills the slug only for
+a never-published story whose slug is still automatic. It never saves, publishes, rebuilds or
+writes Media. The event list lives only in the dialog for the page's lifetime. See
+`docs/superpowers/specs/2026-11-12-issue-579-ai-post-drafting.md`.
 
 Media-library photo details (title, DE/EN alt and caption, tags) use the caption
 provider, config and request-local key; there is no additional secret or route. Only a
@@ -1597,8 +1630,11 @@ preview even though the live site would load it.
   the default nor assigned; deleting it removes its key first.
 - **Author disclosure is deliberate:** admin-only routes (`POST/PUT/DELETE /ai-providers*`,
   `POST /settings`) manage providers and keys, while authenticated `GET /ai-config`,
-  `?purpose=caption` and `?purpose=translation` return plaintext in browser memory only for
-  the selected task's remote provider—never another assignment's key. Admin-only
+  `?purpose=caption`, `?purpose=translation` and `?purpose=drafting` return plaintext in browser
+  memory only for the selected task's remote provider—never another assignment's key. A
+  follow-default assignment (`null`) discloses the **default** provider's key for that task, even
+  when every other use case is explicitly assigned elsewhere; assign a dedicated provider to
+  keep the default key out of authors' browsers. Admin-only
   `GET /ai-providers/:id/credential` returns one remote
   provider's key to the admin's browser for Settings' model dropdowns and **Test**; opening the AI
   models tab looks up models automatically for each assigned provider (owner decision 2026-10-19),
@@ -1609,11 +1645,12 @@ preview even though the live site would load it.
   TLS at the proxy remains required.
   Every author can copy a returned key; session revocation cannot retract it. Revoke at
   the provider after suspected exposure and use provider-side access/spend limits.
-- **No server AI egress:** the server never fetches provider URLs. The caption and translation
-  purposes resolve independent assignments. Local providers perform no secret lookup or wait,
+- **No server AI egress:** the server never fetches provider URLs. The caption, translation and
+  drafting purposes resolve independent assignments. Local providers perform no secret lookup or wait,
   so remote crypto failures do not disable local tasks. Remote captions send a resized JPEG
   and prompt. Translation sends text slots plus the owner's translation instructions and the
-  fixed contract, from the browser with the assigned provider's
+  fixed contract; drafting sends the event list, the ticked context and the owner's drafting
+  instructions plus its fixed contract; both from the browser with the assigned provider's
   key. Remote config fails closed on secret errors. Presets and custom HTTP(S) destinations
   are admin authority. Custom HTTP can expose key/content on the network; prefer HTTPS and
   never add a proxy to work around CORS/mixed-content failures.

@@ -403,3 +403,13 @@ are defined in the issue-specific design, not retroactively waived by this regis
 > admin-editable translation instructions. They come from the same settings snapshot that
 > resolves the provider, and the key comes from that provider's own `app_secrets` slot.
 > See [the #567 design](2026-11-11-issue-567-translation-prompt.md).
+
+## 13. Story drafting assignment (#579, 2026-11-12)
+
+A fourth assignment adds `draftingProviderId` (null follows default), `draftingModel`,
+`draftingTimeoutMs` and `draftingPrompt`, with the same validation, load recovery, deletion
+constraint (`useCases` reports `drafting`) and AI Settings save scope as translation.
+Authenticated `GET /ai-config?purpose=drafting` returns exactly `{ providerId, providerName,
+providerKind, baseUrl, model, timeoutMs, prompt, apiKey }` for the drafting-resolved provider,
+sharing translation's key-binding helper; local providers never access secrets. See
+[the #579 design](2026-11-12-issue-579-ai-post-drafting.md).
