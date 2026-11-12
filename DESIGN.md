@@ -1301,12 +1301,17 @@ criterion (2.5.5 is AAA), so the accessibility commitment in `PRODUCT.md` is una
   **Software license and source** remains a 44px-high, underlined secondary link above the
   account control, not an outlined command button.
 - The shell is exactly the viewport and the workspace is its only scroll container:
-  masthead, sidebar and the canvas gutter around the workspace never scroll away. The
-  workspace carries a minimal shadow that surrounds it on every side — an ambient blur plus a
-  slight downward key shadow, no border — and a thin scrollbar
-  drawn in `--line-strong`. Sticky children (the editor command bar and inspector,
-  the Settings index) stick inside it, and anything sized to the visible area uses
-  `--cms-workspace-h`, not the viewport. No script reads or sets window scroll.
+  masthead, sidebar and the canvas gutter around the workspace never scroll away.
+  At the owner's direction (2026-11-13), `.cms-app-shell` uses a neutral-gray
+  rule-of-thirds diagonal gradient (darkest `#d0d4da` at bottom-left, anchored
+  through the `(1/3, 1/3)` crossing point `#dbdfe4`, to brightest `#fbfbfd` at
+  top-right, with `--shell-muted: #4b525c` for AA contrast on the darker sidebar).
+  The workspace is frosted at `rgb(255 255 255 / 0.68)` with `backdrop-filter:
+  blur(16px) saturate(112%)`, a crisp `1px` `rgb(255 255 255 / 0.62)` edge, and
+  a minimal shadow — and a thin scrollbar drawn in `--line-strong`. Sticky
+  children (the editor command bar and inspector, the Settings index) stick inside
+  it, and anything sized to the visible area uses `--cms-workspace-h`, not the
+  viewport. No script reads or sets window scroll.
 - Below 900px, navigation becomes a dismissible drawer. It traps keyboard focus,
   makes both masthead and workspace inert, closes with Escape, and restores focus to
   the menu button. Reduced-motion preferences are respected.

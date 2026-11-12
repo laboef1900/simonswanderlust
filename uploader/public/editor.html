@@ -18,7 +18,7 @@
     <main>
       <div class="editor-commandbar" id="editorCommandbar">
         <div class="editor-commandbar__nav">
-          <a id="backToPosts" href="/admin/posts.html" class="action-link commandbar__back">Back to Posts</a>
+          <a id="backToPosts" href="/admin/posts.html" class="btn-secondary commandbar__back" aria-label="Back to Posts" title="Back to Posts">Back</a>
           <div class="lang-switch-bar" role="tablist" aria-label="Post language">
             <button type="button" class="tab-btn active" role="tab" id="tabbtn-de" aria-selected="true" aria-controls="tab-de" data-tab="de">
               Deutsch <span class="lang-code" aria-hidden="true">DE</span>
@@ -33,9 +33,6 @@
         <div class="editor-commandbar__actions">
           <button id="saveDraft" type="button" class="commandbar__save">Save draft</button>
           <button id="publishBtn" type="button" class="btn-primary-publish" hidden>Publish</button>
-          <!-- Preview is a daily writing action, so it sits in the bar, not the menu.
-               Its accessible name keeps the full "not the live site" warning. -->
-          <button id="previewBtn" type="button" class="btn-secondary" aria-describedby="previewHelp"></button>
           <!-- Review story and secondary lifecycle actions live in More actions;
                below 74rem publish readiness lives here too. -->
           <details class="editor-actions-menu" id="editorActionsMenu">
@@ -46,6 +43,7 @@
                 <p id="mobileLocaleChip" class="locale-chip"></p>
                 <p id="previewHelp" class="muted"></p>
               </div>
+              <button id="previewBtn" type="button" class="btn-secondary" aria-describedby="previewHelp"></button>
               <button id="reviewStory" type="button" class="btn-secondary" aria-haspopup="dialog" aria-controls="storyReviewDialog">Review story</button>
               <button id="unpublishBtn" type="button" class="btn-secondary" hidden>Unpublish</button>
             </div>
@@ -75,6 +73,105 @@
           </details>
           <p id="actionStatus" class="muted" role="status"></p>
           <p id="actionError" class="err" role="alert" hidden></p>
+        </div>
+        <div class="editor-commandbar__tools">
+          <!-- The bar pins in the command bar, so formatting and photos
+               stay at hand anywhere in a long story; inserts go in at the
+               cursor. A roving toolbar: one Tab stop, arrow keys inside. -->
+          <div class="manuscript-tools" data-locale="de">
+            <div class="manuscript-bar" id="deManuscriptBar" role="toolbar" aria-label="Story tools (DE)">
+              <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="deFormatToggle" aria-expanded="false" aria-controls="deFormatPanel" hidden></button>
+              <div class="manuscript-format" id="deFormatPanel">
+              <div class="manuscript-bar__group">
+                <button type="button" class="manuscript-bar__btn" data-format="bold" aria-label="Bold"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h9a4 4 0 0 1 0 8H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h7a4 4 0 0 1 0 8"/></svg></button>
+                <button type="button" class="manuscript-bar__btn" data-format="italic" aria-label="Italic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 4h-9"/><path d="M14 20H5"/><path d="M15 4 9 20"/></svg></button>
+                <button type="button" class="manuscript-bar__btn" data-format="heading" aria-label="Heading"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12"/><path d="M6 20V4"/><path d="M18 20V4"/></svg></button>
+              </div>
+              <div class="manuscript-bar__group">
+                <button type="button" class="manuscript-bar__btn" data-format="quote" aria-label="Quote"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 6H3"/><path d="M21 12H8"/><path d="M21 18H8"/><path d="M3 12v6"/></svg></button>
+                <button type="button" class="manuscript-bar__btn" data-format="bullets" aria-label="Bulleted list"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/></svg></button>
+                <button type="button" class="manuscript-bar__btn" data-format="numbers" aria-label="Numbered list"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 6h11"/><path d="M10 12h11"/><path d="M10 18h11"/><path d="M4 6h1v4"/><path d="M4 10h2"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/></svg></button>
+                <button type="button" class="manuscript-bar__btn" data-format="link" aria-label="Link"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>
+                <button type="button" class="manuscript-bar__btn" data-format="code"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 6-6 6 6 6"/><path d="m16 6 6 6-6 6"/><path d="m14 3-4 18"/></svg></button>
+              </div>
+                <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="deGalleryView"></button>
+              </div>
+              <div class="manuscript-bar__group">
+                <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="dePhotoToggle" aria-expanded="false" aria-controls="dePhotoPanel"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.09-3.09a2 2 0 0 0-2.82 0L6 21"/></svg>Photo</button>
+                <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="deGallery"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>Gallery</button>
+              </div>
+              <div class="manuscript-bar__group manuscript-bar__group--view">
+                <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="deVisualMode" data-editor-mode="visual" aria-controls="deRichBody" aria-pressed="false"></button>
+                <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="deMarkdownMode" data-editor-mode="markdown" aria-controls="deMarkdownBody" aria-pressed="true"></button>
+              </div>
+            </div>
+            <p id="deBodyImgStatus" class="muted manuscript-tools__status" role="status"></p>
+            <div class="manuscript-photo" id="dePhotoPanel" role="group" aria-label="Insert a photo (DE)" hidden>
+              <div class="manuscript-photo__fields">
+                <div>
+                  <label for="deBodyImgFile">Photo file</label>
+                  <input id="deBodyImgFile" type="file" accept="image/*" class="hero-file-input" />
+                </div>
+                <div>
+                  <label for="deBodyImgAlt">Alt text (DE)</label>
+                  <input id="deBodyImgAlt" type="text" placeholder="Describe the photo in German" />
+                </div>
+              </div>
+              <div class="manuscript-photo__actions">
+                <button type="button" id="deBodyImgUpload">Upload and insert</button>
+                <button type="button" id="deBodyImgSuggest" class="btn-secondary">Suggest alt text</button>
+                <button type="button" id="deBodyImgLibrary" class="btn-secondary">Choose from library</button>
+                <p class="muted">Goes in at the cursor.</p>
+              </div>
+            </div>
+          </div>
+          <div class="manuscript-tools" data-locale="en" hidden>
+            <div class="manuscript-bar" id="enManuscriptBar" role="toolbar" aria-label="Story tools (EN)">
+              <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="enFormatToggle" aria-expanded="false" aria-controls="enFormatPanel" hidden></button>
+              <div class="manuscript-format" id="enFormatPanel">
+              <div class="manuscript-bar__group">
+                <button type="button" class="manuscript-bar__btn" data-format="bold" aria-label="Bold"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h9a4 4 0 0 1 0 8H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h7a4 4 0 0 1 0 8"/></svg></button>
+                <button type="button" class="manuscript-bar__btn" data-format="italic" aria-label="Italic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 4h-9"/><path d="M14 20H5"/><path d="M15 4 9 20"/></svg></button>
+                <button type="button" class="manuscript-bar__btn" data-format="heading" aria-label="Heading"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12"/><path d="M6 20V4"/><path d="M18 20V4"/></svg></button>
+              </div>
+              <div class="manuscript-bar__group">
+                <button type="button" class="manuscript-bar__btn" data-format="quote" aria-label="Quote"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 6H3"/><path d="M21 12H8"/><path d="M21 18H8"/><path d="M3 12v6"/></svg></button>
+                <button type="button" class="manuscript-bar__btn" data-format="bullets" aria-label="Bulleted list"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/></svg></button>
+                <button type="button" class="manuscript-bar__btn" data-format="numbers" aria-label="Numbered list"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 6h11"/><path d="M10 12h11"/><path d="M10 18h11"/><path d="M4 6h1v4"/><path d="M4 10h2"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/></svg></button>
+                <button type="button" class="manuscript-bar__btn" data-format="link" aria-label="Link"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>
+                <button type="button" class="manuscript-bar__btn" data-format="code"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 6-6 6 6 6"/><path d="m16 6 6 6-6 6"/><path d="m14 3-4 18"/></svg></button>
+              </div>
+                <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="enGalleryView"></button>
+              </div>
+              <div class="manuscript-bar__group">
+                <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="enPhotoToggle" aria-expanded="false" aria-controls="enPhotoPanel"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.09-3.09a2 2 0 0 0-2.82 0L6 21"/></svg>Photo</button>
+                <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="enGallery"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>Gallery</button>
+              </div>
+              <div class="manuscript-bar__group manuscript-bar__group--view">
+                <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="enVisualMode" data-editor-mode="visual" aria-controls="enRichBody" aria-pressed="false"></button>
+                <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="enMarkdownMode" data-editor-mode="markdown" aria-controls="enMarkdownBody" aria-pressed="true"></button>
+              </div>
+            </div>
+            <p id="enBodyImgStatus" class="muted manuscript-tools__status" role="status"></p>
+            <div class="manuscript-photo" id="enPhotoPanel" role="group" aria-label="Insert a photo (EN)" hidden>
+              <div class="manuscript-photo__fields">
+                <div>
+                  <label for="enBodyImgFile">Photo file</label>
+                  <input id="enBodyImgFile" type="file" accept="image/*" class="hero-file-input" />
+                </div>
+                <div>
+                  <label for="enBodyImgAlt">Alt text (EN)</label>
+                  <input id="enBodyImgAlt" type="text" placeholder="Describe the photo in English" />
+                </div>
+              </div>
+              <div class="manuscript-photo__actions">
+                <button type="button" id="enBodyImgUpload">Upload and insert</button>
+                <button type="button" id="enBodyImgSuggest" class="btn-secondary">Suggest alt text</button>
+                <button type="button" id="enBodyImgLibrary" class="btn-secondary">Choose from library</button>
+                <p class="muted">Goes in at the cursor.</p>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -117,56 +214,6 @@
 
             <div class="editor-card editor-writing-surface__body">
               <h2 class="editor-card-title">Story (DE)</h2>
-              <!-- The bar pins under the command bar, so formatting and photos
-                   stay at hand anywhere in a long story; inserts go in at the
-                   cursor. A roving toolbar: one Tab stop, arrow keys inside. -->
-              <div class="manuscript-tools" data-locale="de">
-                <div class="manuscript-bar" id="deManuscriptBar" role="toolbar" aria-label="Story tools (DE)">
-                  <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="deFormatToggle" aria-expanded="false" aria-controls="deFormatPanel" hidden></button>
-                  <div class="manuscript-format" id="deFormatPanel">
-                  <div class="manuscript-bar__group">
-                    <button type="button" class="manuscript-bar__btn" data-format="bold" aria-label="Bold"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h9a4 4 0 0 1 0 8H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h7a4 4 0 0 1 0 8"/></svg></button>
-                    <button type="button" class="manuscript-bar__btn" data-format="italic" aria-label="Italic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 4h-9"/><path d="M14 20H5"/><path d="M15 4 9 20"/></svg></button>
-                    <button type="button" class="manuscript-bar__btn" data-format="heading" aria-label="Heading"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12"/><path d="M6 20V4"/><path d="M18 20V4"/></svg></button>
-                  </div>
-                  <div class="manuscript-bar__group">
-                    <button type="button" class="manuscript-bar__btn" data-format="quote" aria-label="Quote"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 6H3"/><path d="M21 12H8"/><path d="M21 18H8"/><path d="M3 12v6"/></svg></button>
-                    <button type="button" class="manuscript-bar__btn" data-format="bullets" aria-label="Bulleted list"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/></svg></button>
-                    <button type="button" class="manuscript-bar__btn" data-format="numbers" aria-label="Numbered list"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 6h11"/><path d="M10 12h11"/><path d="M10 18h11"/><path d="M4 6h1v4"/><path d="M4 10h2"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/></svg></button>
-                    <button type="button" class="manuscript-bar__btn" data-format="link" aria-label="Link"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>
-                    <button type="button" class="manuscript-bar__btn" data-format="code"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 6-6 6 6 6"/><path d="m16 6 6 6-6 6"/><path d="m14 3-4 18"/></svg></button>
-                  </div>
-                    <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="deGalleryView"></button>
-                  </div>
-                  <div class="manuscript-bar__group">
-                    <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="dePhotoToggle" aria-expanded="false" aria-controls="dePhotoPanel"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.09-3.09a2 2 0 0 0-2.82 0L6 21"/></svg>Photo</button>
-                    <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="deGallery"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>Gallery</button>
-                  </div>
-                  <div class="manuscript-bar__group manuscript-bar__group--view">
-                    <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="deVisualMode" data-editor-mode="visual" aria-controls="deRichBody" aria-pressed="false"></button>
-                    <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="deMarkdownMode" data-editor-mode="markdown" aria-controls="deMarkdownBody" aria-pressed="true"></button>
-                  </div>
-                </div>
-                <p id="deBodyImgStatus" class="muted manuscript-tools__status" role="status"></p>
-                <div class="manuscript-photo" id="dePhotoPanel" role="group" aria-label="Insert a photo (DE)" hidden>
-                  <div class="manuscript-photo__fields">
-                    <div>
-                      <label for="deBodyImgFile">Photo file</label>
-                      <input id="deBodyImgFile" type="file" accept="image/*" class="hero-file-input" />
-                    </div>
-                    <div>
-                      <label for="deBodyImgAlt">Alt text (DE)</label>
-                      <input id="deBodyImgAlt" type="text" placeholder="Describe the photo in German" />
-                    </div>
-                  </div>
-                  <div class="manuscript-photo__actions">
-                    <button type="button" id="deBodyImgUpload">Upload and insert</button>
-                    <button type="button" id="deBodyImgSuggest" class="btn-secondary">Suggest alt text</button>
-                    <button type="button" id="deBodyImgLibrary" class="btn-secondary">Choose from library</button>
-                    <p class="muted">Goes in at the cursor.</p>
-                  </div>
-                </div>
-              </div>
               <p id="deRichError" class="notice-warn" role="alert" hidden></p>
               <div id="deRichBody" class="rich-text-editor" hidden></div>
               <div id="deMarkdownBody" class="markdown-editor">
@@ -190,53 +237,6 @@
 
             <div class="editor-card editor-writing-surface__body">
               <h2 class="editor-card-title">Story (EN)</h2>
-              <div class="manuscript-tools" data-locale="en">
-                <div class="manuscript-bar" id="enManuscriptBar" role="toolbar" aria-label="Story tools (EN)">
-                  <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="enFormatToggle" aria-expanded="false" aria-controls="enFormatPanel" hidden></button>
-                  <div class="manuscript-format" id="enFormatPanel">
-                  <div class="manuscript-bar__group">
-                    <button type="button" class="manuscript-bar__btn" data-format="bold" aria-label="Bold"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h9a4 4 0 0 1 0 8H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h7a4 4 0 0 1 0 8"/></svg></button>
-                    <button type="button" class="manuscript-bar__btn" data-format="italic" aria-label="Italic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 4h-9"/><path d="M14 20H5"/><path d="M15 4 9 20"/></svg></button>
-                    <button type="button" class="manuscript-bar__btn" data-format="heading" aria-label="Heading"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12"/><path d="M6 20V4"/><path d="M18 20V4"/></svg></button>
-                  </div>
-                  <div class="manuscript-bar__group">
-                    <button type="button" class="manuscript-bar__btn" data-format="quote" aria-label="Quote"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 6H3"/><path d="M21 12H8"/><path d="M21 18H8"/><path d="M3 12v6"/></svg></button>
-                    <button type="button" class="manuscript-bar__btn" data-format="bullets" aria-label="Bulleted list"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/></svg></button>
-                    <button type="button" class="manuscript-bar__btn" data-format="numbers" aria-label="Numbered list"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 6h11"/><path d="M10 12h11"/><path d="M10 18h11"/><path d="M4 6h1v4"/><path d="M4 10h2"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/></svg></button>
-                    <button type="button" class="manuscript-bar__btn" data-format="link" aria-label="Link"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>
-                    <button type="button" class="manuscript-bar__btn" data-format="code"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 6-6 6 6 6"/><path d="m16 6 6 6-6 6"/><path d="m14 3-4 18"/></svg></button>
-                  </div>
-                    <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="enGalleryView"></button>
-                  </div>
-                  <div class="manuscript-bar__group">
-                    <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="enPhotoToggle" aria-expanded="false" aria-controls="enPhotoPanel"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.09-3.09a2 2 0 0 0-2.82 0L6 21"/></svg>Photo</button>
-                    <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="enGallery"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>Gallery</button>
-                  </div>
-                  <div class="manuscript-bar__group manuscript-bar__group--view">
-                    <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="enVisualMode" data-editor-mode="visual" aria-controls="enRichBody" aria-pressed="false"></button>
-                    <button type="button" class="manuscript-bar__btn manuscript-bar__btn--text" id="enMarkdownMode" data-editor-mode="markdown" aria-controls="enMarkdownBody" aria-pressed="true"></button>
-                  </div>
-                </div>
-                <p id="enBodyImgStatus" class="muted manuscript-tools__status" role="status"></p>
-                <div class="manuscript-photo" id="enPhotoPanel" role="group" aria-label="Insert a photo (EN)" hidden>
-                  <div class="manuscript-photo__fields">
-                    <div>
-                      <label for="enBodyImgFile">Photo file</label>
-                      <input id="enBodyImgFile" type="file" accept="image/*" class="hero-file-input" />
-                    </div>
-                    <div>
-                      <label for="enBodyImgAlt">Alt text (EN)</label>
-                      <input id="enBodyImgAlt" type="text" placeholder="Describe the photo in English" />
-                    </div>
-                  </div>
-                  <div class="manuscript-photo__actions">
-                    <button type="button" id="enBodyImgUpload">Upload and insert</button>
-                    <button type="button" id="enBodyImgSuggest" class="btn-secondary">Suggest alt text</button>
-                    <button type="button" id="enBodyImgLibrary" class="btn-secondary">Choose from library</button>
-                    <p class="muted">Goes in at the cursor.</p>
-                  </div>
-                </div>
-              </div>
               <p id="enRichError" class="notice-warn" role="alert" hidden></p>
               <div id="enRichBody" class="rich-text-editor" hidden></div>
               <div id="enMarkdownBody" class="markdown-editor">
@@ -1274,6 +1274,9 @@
       function syncInspectorLocale(tab) {
         document.querySelectorAll('[data-inspector-locale]').forEach((panel) => {
           panel.hidden = panel.dataset.inspectorLocale !== tab;
+        });
+        document.querySelectorAll('#editorCommandbar .manuscript-tools[data-locale]').forEach((tools) => {
+          tools.hidden = tools.dataset.locale !== tab;
         });
       }
       function activateLocale(tab) {

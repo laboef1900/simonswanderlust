@@ -4,6 +4,8 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Implemented (2026-11-13):** **Admin shell gradient & frosted workspace** (`uploader/public/admin.css`, mockup in `ui-mockups/shell-gradient.html`). `.cms-app-shell` uses a neutral-gray rule-of-thirds diagonal gradient (`#d0d4da` bottom-left → `#dbdfe4` at `(1/3, 1/3)` → `#fbfbfd` top-right, with `--shell-muted: #4b525c` for AA contrast in the sidebar/masthead), and `.cms-workspace` uses `68%` translucent frosted white (`backdrop-filter: blur(16px) saturate(112%)`), extended to the Story editor's `.editor-workspace`, `.editor-commandbar`, and `.editor-inspector` backdrop.
+
 - **Implemented (PR #580 for #579, 2026-11-12):** **Draft with AI** fills an empty story
   language from the author's list of trip events. Browser-direct through a fourth AI
   assignment (`draftingProviderId`/`Model`/`TimeoutMs`/`Prompt`, `/ai-config?purpose=drafting`,
