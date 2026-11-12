@@ -1,0 +1,1015 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Wanderlust Studio · App-Shell Gradient &amp; Frosted Workspace Mockups</title>
+  <style>
+    :root {
+      /* Core Studio tokens (from uploader/public/admin.css) */
+      --canvas: #f5f6f7;
+      --surface: #fff;
+      --navy: #263b51;
+      --navy-hover: #1b2b3c;
+      --ink: #202630;
+      --muted: #626974;
+      --line: #e7e9ec;
+      --line-strong: #d6dbe1;
+      --line-control: #858c95;
+      --studio-accent: #416486;
+      --studio-accent-hover: #2f5273;
+      --studio-accent-soft: #eaf0f6;
+      --red: #d23b30;
+      --red-hover: #ac2a21;
+      --warn-ink: #7a4a0c;
+      --warn-bg: #fef7e6;
+      --warn-line: #e3b25a;
+      --status-ok-bg: #eef5f0;
+      --status-ok-ink: #32654e;
+      --status-idle-bg: #f0f2f4;
+      --status-idle-ink: #545e69;
+      --sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+      --radius-sm: 0.25rem;
+      --control-radius: 0.375rem;
+      --radius-lg: 0.5rem;
+      --radius-xl: 0.75rem;
+
+      /* Preset B (Alpine Slate - balanced default) */
+      --shell-pool: rgb(166 188 212 / 0.62);
+      --shell-pool-mid: rgb(178 198 218 / 0.26);
+      --shell-mid: #e1e9f1;
+      --shell-light: #f3f6f9;
+      --shell-brightest: #fbfbfd;
+      --shell-muted: #3a4552;
+      --shell-divider: rgb(38 59 81 / 0.14);
+      --ws-alpha: 0.68;
+      --ws-blur: 16px;
+    }
+
+    body[data-preset='mist'] {
+      --shell-pool: rgb(196 201 208 / 0.56);
+      --shell-pool-mid: rgb(206 211 217 / 0.24);
+      --shell-darkest: #d0d4da;
+      --shell-third: #dbdfe4;
+      --shell-mid: #eceef1;
+      --shell-light: #f6f7f9;
+      --shell-brightest: #fbfbfd;
+      --shell-muted: #4b525c;
+      --shell-divider: rgb(32 38 48 / 0.12);
+    }
+
+    body[data-preset='fjord'] {
+      --shell-pool: rgb(148 174 202 / 0.68);
+      --shell-pool-mid: rgb(164 187 211 / 0.30);
+      --shell-darkest: #a8bcd1;
+      --shell-third: #bad0e3;
+      --shell-mid: #dbe5ef;
+      --shell-light: #f0f4f8;
+      --shell-brightest: #fbfbfd;
+      --shell-muted: #343f4b;
+      --shell-divider: rgb(38 59 81 / 0.17);
+    }
+
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+
+    body {
+      margin: 0;
+      font-family: var(--sans);
+      font-size: 0.875rem;
+      line-height: 1.5;
+      color: var(--ink);
+      background: var(--canvas);
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ---- App Shell with Rule-of-Thirds Diagonal Gradient ---- */
+    .cms-app-shell {
+      --cms-masthead-h: 3rem;
+      --cms-shell-gutter: 1rem;
+      --cms-sidebar-w: 13rem;
+      --cms-workspace-h: calc(100dvh - var(--cms-masthead-h) - var(--cms-shell-gutter));
+      position: relative;
+      display: grid;
+      grid-template-columns: var(--cms-sidebar-w) minmax(0, 1fr);
+      grid-template-rows: auto minmax(0, 1fr);
+      height: 100dvh;
+      overflow: hidden;
+      padding: 0 var(--cms-shell-gutter) var(--cms-shell-gutter) 0;
+      color: var(--ink);
+      /* Layered asymmetric radial pool in bottom-left 1/3 + diagonal linear gradient
+         whose 33.333% stop aligns with the (1/3 left, 1/3 bottom) crossing point. */
+      background-color: var(--shell-brightest);
+      background-image:
+        radial-gradient(64% 58% at 17% 83%, var(--shell-pool) 0%, var(--shell-pool-mid) 46%, transparent 82%),
+        linear-gradient(
+          to top right,
+          var(--shell-darkest) 0%,
+          var(--shell-third) 33.333%,
+          var(--shell-mid) 62%,
+          var(--shell-light) 84%,
+          var(--shell-brightest) 100%
+        );
+    }
+
+    /* ---- Masthead (top bar) ---- */
+    .cms-masthead {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: center;
+      gap: 1.5rem;
+      min-height: var(--cms-masthead-h);
+      padding: 0 0.5rem 0 1.25rem;
+    }
+    .cms-brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      min-height: 2rem;
+      color: var(--ink);
+      text-decoration: none;
+    }
+    .cms-brand-mark {
+      display: grid;
+      place-items: center;
+      flex-shrink: 0;
+      width: 1.625rem;
+      height: 1.625rem;
+      border-radius: var(--radius-sm);
+      background: var(--navy);
+      color: #fff;
+      font-size: 0.9375rem;
+      font-weight: 650;
+    }
+    .cms-brand-title { font-size: 0.875rem; font-weight: 650; }
+    .cms-masthead-right { margin-left: auto; display: flex; align-items: center; gap: 1rem; }
+    .cms-brand-sub { color: var(--shell-muted); font-size: 0.75rem; }
+    .cms-btn-ghost {
+      display: inline-flex;
+      align-items: center;
+      min-height: 1.875rem;
+      padding: 0.25rem 0.75rem;
+      border: 1px solid var(--line-control);
+      border-radius: var(--control-radius);
+      background: rgb(255 255 255 / 0.65);
+      color: var(--ink);
+      font-size: 0.8125rem;
+      font-weight: 500;
+      text-decoration: none;
+    }
+    .cms-btn-ghost:hover { border-color: var(--studio-accent); background: rgb(255 255 255 / 0.9); }
+
+    /* ---- Sidebar (left nav) ---- */
+    .cms-sidebar {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      min-height: 0;
+      color: var(--ink);
+    }
+    .cms-nav-group {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+      min-height: 0;
+      padding: 0.75rem 0.65rem 1rem;
+      overflow-y: auto;
+    }
+    .cms-nav-heading {
+      margin: 1.4rem 0.6rem 0.45rem;
+      color: var(--shell-muted);
+      font: 600 0.7rem/1.5 var(--sans);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    .cms-nav-heading:first-child { margin-top: 0; }
+    .cms-nav-item {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+      min-height: 2.25rem;
+      padding: 0.375rem 0.7rem;
+      border-radius: var(--control-radius);
+      color: var(--shell-muted);
+      font-size: 0.875rem;
+      font-weight: 450;
+      text-decoration: none;
+      transition: background-color 120ms ease, color 120ms ease;
+    }
+    .cms-nav-item svg { width: 1.1rem; height: 1.1rem; flex-shrink: 0; }
+    .cms-nav-item:hover { background: rgb(255 255 255 / 0.45); color: var(--ink); }
+    .cms-nav-item[aria-current='page'] {
+      background: rgb(255 255 255 / 0.78);
+      color: var(--studio-accent-hover);
+      font-weight: 600;
+      box-shadow: 0 1px 2px rgb(20 42 66 / 7%);
+    }
+    .cms-sidebar-footer {
+      flex-shrink: 0;
+      margin: 0 1rem;
+      padding: 0.85rem 0 0;
+      border-top: 1px solid var(--shell-divider);
+    }
+    .cms-legal-link {
+      display: flex;
+      align-items: center;
+      min-height: 1.875rem;
+      padding: 0.25rem 0;
+      margin-bottom: 0.375rem;
+      color: var(--shell-muted);
+      font-size: 0.75rem;
+      line-height: 1.45;
+      text-decoration: underline;
+    }
+    .cms-avatar-btn {
+      display: grid;
+      place-items: center;
+      width: 2.75rem;
+      height: 2.75rem;
+      margin: 0 0 -0.25rem -0.25rem;
+      border: 0;
+      border-radius: 50%;
+      background: transparent;
+      padding: 0;
+      cursor: pointer;
+    }
+    .cms-avatar {
+      display: grid;
+      place-items: center;
+      width: 2.25rem;
+      height: 2.25rem;
+      border-radius: 50%;
+      background: var(--studio-accent);
+      color: #fff;
+      font-size: 0.875rem;
+      font-weight: 600;
+      box-shadow: 0 1px 3px rgb(20 42 66 / 18%);
+    }
+
+    /* ---- Frosted Translucent Main Workspace ---- */
+    .cms-workspace {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      min-height: 0;
+      overflow-y: auto;
+      border-radius: var(--radius-xl);
+      background: rgb(255 255 255 / var(--ws-alpha));
+      backdrop-filter: blur(var(--ws-blur)) saturate(112%);
+      -webkit-backdrop-filter: blur(var(--ws-blur)) saturate(112%);
+      border: 1px solid rgb(255 255 255 / 0.62);
+      box-shadow:
+        inset 0 1px 0 rgb(255 255 255 / 0.75),
+        0 1px 3px rgb(20 42 66 / 7%),
+        0 8px 24px -4px rgb(20 42 66 / 10%);
+      scrollbar-width: thin;
+      scrollbar-color: var(--line-strong) transparent;
+    }
+
+    /* ---- Shared Workspace Controls & Typography ---- */
+    .btn-new, .btn-primary, .btn-primary-publish, .btn-secondary, .commandbar__save {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.4rem;
+      min-height: 2.25rem;
+      padding: 0.375rem 0.875rem;
+      border-radius: var(--control-radius);
+      font: 550 0.875rem/1.2 var(--sans);
+      text-decoration: none;
+      cursor: pointer;
+    }
+    .btn-new { border: 0; background: var(--studio-accent); color: #fff; }
+    .btn-new:hover { background: var(--studio-accent-hover); }
+    .btn-primary-publish { border: 0; background: var(--red); color: #fff; }
+    .btn-primary-publish:hover { background: var(--red-hover); }
+    .btn-secondary, .commandbar__save {
+      border: 1px solid var(--line-control);
+      background: rgb(255 255 255 / 0.78);
+      color: var(--ink);
+    }
+    .btn-secondary:hover, .commandbar__save:hover { background: #fff; border-color: var(--studio-accent); }
+    .btn-sm { min-height: 1.875rem; padding: 0.25rem 0.65rem; font-size: 0.8125rem; }
+
+    .badge-ok {
+      display: inline-flex;
+      align-items: center;
+      padding: 0.15rem 0.5rem;
+      border-radius: var(--radius-sm);
+      background: var(--status-ok-bg);
+      color: var(--status-ok-ink);
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    .badge-idle {
+      display: inline-flex;
+      align-items: center;
+      padding: 0.15rem 0.5rem;
+      border-radius: var(--radius-sm);
+      background: var(--status-idle-bg);
+      color: var(--status-idle-ink);
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    .mono { font-family: var(--mono); }
+    .muted { color: var(--muted); }
+
+    /* ---- View 1: Desk ---- */
+    .cms-topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1.5rem;
+      padding: 1.125rem 2rem 0.75rem;
+    }
+    .cms-page-title { margin: 0; font-size: 1.375rem; font-weight: 650; letter-spacing: -0.02em; }
+    .cms-page-lede { margin: 0.2rem 0 0; color: var(--muted); font-size: 0.875rem; }
+    .cms-content { flex: 1; width: 100%; max-width: 62rem; padding: 0.75rem 2rem 4rem; }
+
+    .desk-section + .desk-section {
+      margin-top: 1.5rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid rgb(38 59 81 / 0.10);
+    }
+    .desk-heading { margin: 0 0 0.75rem; font-size: 1.0625rem; font-weight: 650; letter-spacing: -0.01em; }
+    .desk-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: 0.75rem 1rem;
+      border: 1px solid rgb(38 59 81 / 0.12);
+      border-radius: var(--radius-lg);
+      background: rgb(255 255 255 / 0.52);
+    }
+    .desk-row__title { font-weight: 600; color: var(--ink); }
+    .desk-row__meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-top: 0.2rem; font-size: 0.8125rem; color: var(--muted); }
+
+    .desk-stats {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.75rem;
+      margin-bottom: 0.875rem;
+    }
+    .desk-stat {
+      padding: 0.75rem 0.875rem;
+      border-radius: var(--radius-lg);
+      border: 1px solid rgb(38 59 81 / 0.10);
+      background: rgb(255 255 255 / 0.48);
+    }
+    .desk-stat__val { font-size: 1.25rem; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; }
+    .desk-stat__lbl { font-size: 0.75rem; color: var(--muted); margin-top: 0.125rem; }
+
+    .desk-kv { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
+    .desk-kv li {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: 0.5rem 0;
+      border-bottom: 1px solid rgb(38 59 81 / 0.08);
+      font-size: 0.875rem;
+    }
+    .desk-kv li:last-child { border-bottom: 0; }
+    .notice-warn {
+      margin: 0.75rem 0 0;
+      padding: 0.65rem 0.875rem;
+      border-left: 3px solid var(--warn-line);
+      border-radius: var(--radius-sm);
+      background: rgb(254 247 230 / 0.88);
+      color: var(--warn-ink);
+      font-size: 0.8125rem;
+    }
+    .notice-warn a { color: inherit; font-weight: 600; }
+
+    /* ---- View 2: Story Editor ---- */
+    .editor-commandbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 0.45rem 0.75rem;
+      padding: 0.625rem 1.25rem;
+      border-bottom: 1px solid rgb(38 59 81 / 0.11);
+      background: rgb(255 255 255 / 0.86);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+    }
+    .editor-commandbar__nav,
+    .editor-commandbar__actions,
+    .editor-commandbar__status {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+    .editor-commandbar__status {
+      grid-column: 1 / -1;
+      font-size: 0.8125rem;
+      gap: 0.875rem;
+    }
+    .editor-commandbar :is(.btn-secondary, .commandbar__save, .btn-primary-publish) {
+      min-height: 2rem;
+      padding: 0.25rem 0.75rem;
+      font-size: 0.8125rem;
+    }
+    .commandbar__back {
+      color: var(--studio-accent-hover);
+      text-decoration: none;
+      font-weight: 550;
+      font-size: 0.8125rem;
+      padding: 0.25rem 0.4rem;
+    }
+    .lang-switch-bar {
+      display: inline-flex;
+      padding: 0.15rem;
+      border-radius: var(--control-radius);
+      background: rgb(38 59 81 / 0.08);
+      gap: 0.15rem;
+    }
+    .tab-btn {
+      border: 0;
+      border-radius: calc(var(--control-radius) - 1px);
+      padding: 0.25rem 0.6rem;
+      font: 550 0.8125rem/1.2 var(--sans);
+      color: var(--muted);
+      background: transparent;
+      cursor: pointer;
+    }
+    .tab-btn.active { background: #fff; color: var(--ink); box-shadow: 0 1px 2px rgb(20 42 66 / 10%); }
+    .lang-code { font-family: var(--mono); font-size: 0.6875rem; opacity: 0.78; margin-left: 0.2rem; }
+
+    .editor-workspace {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 21rem;
+      flex: 1;
+      min-height: 0;
+      background: transparent;
+    }
+    .editor-writing-surface {
+      max-width: 50rem;
+      width: 100%;
+      margin: 0 auto;
+      padding: 1.75rem 2.25rem 4.5rem;
+    }
+    .editor-title-input {
+      width: 100%;
+      border: 0;
+      background: transparent;
+      font: 700 1.875rem/1.2 var(--sans);
+      letter-spacing: -0.025em;
+      color: var(--ink);
+      margin: 0 0 1rem;
+      padding: 0;
+      outline: none;
+    }
+    .manuscript-tools {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      padding: 0.4rem 0.6rem;
+      margin-bottom: 1.25rem;
+      border: 1px solid rgb(38 59 81 / 0.12);
+      border-radius: var(--control-radius);
+      background: rgb(255 255 255 / 0.62);
+    }
+    .tool-group { display: flex; align-items: center; gap: 0.25rem; flex-wrap: wrap; }
+    .tool-btn {
+      border: 0;
+      background: transparent;
+      color: var(--ink);
+      font: 600 0.8125rem/1 var(--sans);
+      padding: 0.35rem 0.5rem;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+    }
+    .tool-btn:hover { background: rgb(65 100 134 / 0.12); }
+    .prose-body p {
+      margin: 0 0 1rem;
+      font-size: 1rem;
+      line-height: 1.68;
+      color: var(--ink);
+    }
+    .gallery-widget {
+      margin: 1.25rem 0;
+      padding: 0.875rem;
+      border: 1px solid rgb(38 59 81 / 0.12);
+      border-radius: var(--radius-lg);
+      background: rgb(255 255 255 / 0.55);
+    }
+    .gallery-widget__head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 0.8125rem;
+      font-weight: 600;
+      margin-bottom: 0.65rem;
+    }
+    .gallery-tiles {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.6rem;
+    }
+    .gallery-tile {
+      border-radius: var(--radius-sm);
+      overflow: hidden;
+      border: 1px solid rgb(38 59 81 / 0.12);
+      background: rgb(255 255 255 / 0.72);
+    }
+    .gallery-tile__img {
+      aspect-ratio: 4 / 3;
+      background: linear-gradient(135deg, #4b6580 0%, #7d96ad 55%, #b9c8d6 100%);
+      display: grid;
+      place-items: center;
+      color: #fff;
+      font: 600 0.7rem/1 var(--mono);
+      letter-spacing: 0.08em;
+    }
+    .gallery-tile__cap {
+      padding: 0.4rem 0.5rem;
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+
+    .editor-inspector {
+      border-left: 1px solid rgb(38 59 81 / 0.12);
+      background: rgb(245 246 247 / 0.36);
+      padding: 0 1rem 2rem;
+      overflow-y: auto;
+    }
+    .editor-inspector__header {
+      position: sticky;
+      top: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.625rem 0;
+      border-bottom: 1px solid rgb(38 59 81 / 0.10);
+      background: rgb(245 246 247 / 0.72);
+      backdrop-filter: blur(8px);
+    }
+    .editor-inspector__header h2 { margin: 0; font-size: 0.9375rem; font-weight: 700; }
+    .insp-section {
+      padding: 0.875rem 0;
+      border-bottom: 1px solid rgb(38 59 81 / 0.10);
+    }
+    .insp-label {
+      margin: 0 0 0.4rem;
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: var(--ink);
+    }
+    .insp-field {
+      width: 100%;
+      padding: 0.45rem 0.6rem;
+      border: 1px solid var(--line-control);
+      border-radius: var(--control-radius);
+      background: rgb(255 255 255 / 0.86);
+      font: 400 0.8125rem/1.4 var(--sans);
+      color: var(--ink);
+    }
+    .insp-row { display: grid; grid-template-columns: 4.5rem minmax(0, 1fr); gap: 0.6rem; align-items: center; }
+    .insp-thumb {
+      width: 4.5rem;
+      height: 3.125rem;
+      border-radius: var(--radius-sm);
+      background: linear-gradient(135deg, #263b51, #5a7794);
+    }
+
+    /* ---- Rule-of-Thirds Geometry Overlay ---- */
+    .thirds-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 500;
+      pointer-events: none;
+    }
+    .thirds-overlay svg { width: 100%; height: 100%; display: block; }
+
+    /* ---- Floating Study Controls ---- */
+    .study-dock {
+      position: fixed;
+      left: 50%;
+      bottom: 1.5rem;
+      transform: translateX(-50%);
+      z-index: 600;
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+      width: max-content;
+      max-width: calc(100vw - 2rem);
+      padding: 0.35rem 0.65rem;
+      border-radius: 999px;
+      background: rgb(20 42 66 / 0.92);
+      color: #fff;
+      box-shadow: 0 10px 28px rgb(20 42 66 / 28%);
+      font-size: 0.75rem;
+      white-space: nowrap;
+      backdrop-filter: blur(8px);
+    }
+    .study-dock__group {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.2rem;
+      padding-right: 0.55rem;
+      border-right: 1px solid rgb(255 255 255 / 0.18);
+    }
+    .study-dock__group:last-child { padding-right: 0; border-right: 0; }
+    .study-dock__label {
+      color: rgb(255 255 255 / 0.72);
+      font-weight: 600;
+      margin-right: 0.15rem;
+    }
+    .study-pill {
+      border: 0;
+      background: transparent;
+      color: rgb(255 255 255 / 0.85);
+      padding: 0.26rem 0.54rem;
+      border-radius: 999px;
+      font: 550 0.75rem/1.1 var(--sans);
+      cursor: pointer;
+    }
+    .study-pill:hover { background: rgb(255 255 255 / 0.14); color: #fff; }
+    .study-pill.is-active { background: #fff; color: var(--navy); font-weight: 650; }
+    .study-restore {
+      position: fixed;
+      right: 1.5rem;
+      bottom: 1.5rem;
+      z-index: 600;
+      border: 0;
+      border-radius: 999px;
+      padding: 0.4rem 0.85rem;
+      background: rgb(20 42 66 / 0.92);
+      color: #fff;
+      font: 600 0.75rem/1.1 var(--sans);
+      box-shadow: 0 8px 20px rgb(20 42 66 / 24%);
+      cursor: pointer;
+    }
+    .study-restore:hover { background: var(--navy); }
+    .study-pill[aria-pressed='true'].is-guide { background: #ff5a4e; color: #fff; }
+  </style>
+</head>
+<body data-preset="mist">
+  <div class="cms-app-shell">
+    <header class="cms-masthead">
+      <a class="cms-brand" href="#desk">
+        <span class="cms-brand-mark" aria-hidden="true">W</span>
+        <span class="cms-brand-title">Wanderlust Studio</span>
+      </a>
+      <div class="cms-masthead-right">
+        <span class="cms-brand-sub">Simon's travel journal</span>
+        <a href="#live" class="cms-btn-ghost">View site</a>
+      </div>
+    </header>
+
+    <aside class="cms-sidebar" aria-label="Admin navigation">
+      <nav class="cms-nav-group">
+        <p class="cms-nav-heading">Journal</p>
+        <a href="#desk" class="cms-nav-item" data-nav="desk" aria-current="page">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>
+          <span>Desk</span>
+        </a>
+        <a href="#editor" class="cms-nav-item" data-nav="editor">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+          <span>Posts</span>
+        </a>
+        <a href="#journeys" class="cms-nav-item">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>
+          <span>Journeys</span>
+        </a>
+        <a href="#media" class="cms-nav-item">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+          <span>Media</span>
+        </a>
+        <a href="#pages" class="cms-nav-item">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+          <span>Pages</span>
+        </a>
+        <a href="#comments" class="cms-nav-item">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          <span>Comments</span>
+        </a>
+
+        <p class="cms-nav-heading">Site</p>
+        <a href="#import" class="cms-nav-item">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          <span>Import</span>
+        </a>
+        <a href="#settings" class="cms-nav-item">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.6.85 1 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          <span>Settings</span>
+        </a>
+        <a href="#users" class="cms-nav-item">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          <span>Users</span>
+        </a>
+      </nav>
+
+      <div class="cms-sidebar-footer">
+        <a href="#legal" class="cms-legal-link">Software license and source</a>
+        <button type="button" class="cms-avatar-btn" aria-label="Account menu for Simon">
+          <span class="cms-avatar" aria-hidden="true">S</span>
+        </button>
+      </div>
+    </aside>
+
+    <div class="cms-workspace" id="workspace">
+      <!-- DESK VIEW -->
+      <div id="viewDesk">
+        <div class="cms-topbar">
+          <div>
+            <h1 class="cms-page-title">Desk</h1>
+            <p class="cms-page-lede">Your editorial starting point for stories, media and publication.</p>
+          </div>
+          <div>
+            <button type="button" class="btn-new" data-switch-view="editor">New post</button>
+          </div>
+        </div>
+        <div class="cms-content">
+          <section class="desk-section">
+            <h2 class="desk-heading">Next up</h2>
+            <div class="desk-row">
+              <div>
+              </div>
+              <button type="button" class="btn-secondary btn-sm" data-switch-view="editor">Continue writing</button>
+            </div>
+          </section>
+
+          <section class="desk-section">
+            <h2 class="desk-heading">Publication</h2>
+            <div class="desk-stats">
+              <div class="desk-stat">
+                <div class="desk-stat__val">20</div>
+                <div class="desk-stat__lbl">Published stories</div>
+              </div>
+              <div class="desk-stat">
+                <div class="desk-stat__val">4</div>
+                <div class="desk-stat__lbl">Journeys</div>
+              </div>
+              <div class="desk-stat">
+                <div class="desk-stat__val">312</div>
+                <div class="desk-stat__lbl">Ready photos</div>
+              </div>
+            </div>
+            <div class="desk-row">
+              <div>
+                <div class="desk-row__title">Static build is current <span class="badge-ok">Live</span></div>
+                <div class="desk-row__meta">Last promoted 11 Nov 2026, 09:12 · All referenced photos ready</div>
+              </div>
+              <button type="button" class="btn-secondary btn-sm">Rebuild site</button>
+            </div>
+          </section>
+
+          <section class="desk-section">
+            <h2 class="desk-heading">Site</h2>
+            <ul class="desk-kv">
+              <li><span>Language mode</span><span class="mono">DE + EN (DE primary)</span></li>
+              <li><span>Pending comments</span><span>2 awaiting moderation</span></li>
+              <li><span>Database backup schedule</span><span>Off</span></li>
+            </ul>
+            <p class="notice-warn">Automatic database backups are off. <a href="#settings">Configure backups in Site &amp; backups</a>.</p>
+          </section>
+        </div>
+      </div>
+
+      <!-- STORY EDITOR VIEW -->
+      <div id="viewEditor" hidden>
+        <div class="editor-commandbar">
+          <div class="editor-commandbar__nav">
+            <a href="#desk" class="commandbar__back" data-switch-view="desk">← Back to Posts</a>
+            <div class="lang-switch-bar" role="tablist">
+              <button type="button" class="tab-btn active">Deutsch <span class="lang-code">DE</span></button>
+              <button type="button" class="tab-btn">English <span class="lang-code">EN</span></button>
+            </div>
+            <button type="button" class="btn-secondary">Translate</button>
+          </div>
+          <div class="editor-commandbar__actions">
+            <button type="button" class="commandbar__save">Save draft</button>
+            <button type="button" class="btn-primary-publish">Publish</button>
+            <button type="button" class="btn-secondary">Save &amp; preview</button>
+            <button type="button" class="btn-secondary">More actions ▾</button>
+          </div>
+          <div class="editor-commandbar__status">
+            <span style="font-weight:600">Saved to server · 18:24</span>
+            <span class="badge-ok">Live</span>
+            <span class="muted">Publish checklist · All ready</span>
+          </div>
+        </div>
+
+        <div class="editor-workspace">
+          <div class="editor-writing-surface">
+            <input type="text" class="editor-title-input" value="4 Tage in Bukarest — Kontraste an der Donau" aria-label="Article title" />
+            <div class="manuscript-tools">
+              <div class="tool-group">
+                <button type="button" class="tool-btn">B</button>
+                <button type="button" class="tool-btn">I</button>
+                <button type="button" class="tool-btn">H2</button>
+                <button type="button" class="tool-btn">Quote</button>
+                <button type="button" class="tool-btn">Link</button>
+                <button type="button" class="tool-btn">Photo</button>
+                <button type="button" class="tool-btn">Gallery</button>
+              </div>
+              <div class="lang-switch-bar">
+                <button type="button" class="tab-btn active">Visual</button>
+                <button type="button" class="tab-btn">Markdown</button>
+              </div>
+            </div>
+            <div class="prose-body">
+              <p>Am späten Nachmittag legt sich weiches Oktoberlicht über die breiten Boulevards rund um den Piața Unirii. Zwischen klassizistischen Fassaden, verblichenen Neonschildern und wuchtigen Betonbauten erzählt jede Straßenecke eine andere Schicht der Stadtgeschichte.</p>
+              <p>Früh am Morgen lohnt der Weg in die Seitenstraßen von Lipscani, noch bevor die Cafés ihre Tische herausstellen. Mit der Leica Q2 in der Hand bleibt genau jene halbe Stunde, in der Straßenbahnen das erste Licht schneiden und der Nebel über den Höfen abzieht.</p>
+              <div class="gallery-widget">
+                <div class="gallery-widget__head">
+                  <span>Gallery · Justified breakout (3 photos)</span>
+                  <span class="muted">Edit gallery</span>
+                </div>
+                <div class="gallery-tiles">
+                  <div class="gallery-tile">
+                    <div class="gallery-tile__img">Q2 · 28 MM</div>
+                    <div class="gallery-tile__cap">Morgenlicht über Lipscani</div>
+                  </div>
+                  <div class="gallery-tile">
+                    <div class="gallery-tile__img">AE-1 · PORTRA</div>
+                    <div class="gallery-tile__cap">Straßenbahn am Boulevard</div>
+                  </div>
+                  <div class="gallery-tile">
+                    <div class="gallery-tile__img">Q2 · 28 MM</div>
+                    <div class="gallery-tile__cap">Innenhof bei Stavropoleos</div>
+                  </div>
+                </div>
+              </div>
+              <p>Weiter südlich öffnet sich die Stadt zur Dâmbovița hin. Hier zeigt sich der Kontrast am deutlichsten: neben restaurierten Backsteinfassaden stehen noch die Spuren vergangener Jahrzehnte, unaufgeregt und präzise wie ein Feldtagebuch.</p>
+            </div>
+          </div>
+
+          <aside class="editor-inspector">
+            <div class="editor-inspector__header">
+              <h2>Story details</h2>
+              <button type="button" class="btn-secondary btn-sm">Collapse</button>
+            </div>
+            <div class="insp-section">
+              <p class="insp-label">Hero image</p>
+              <div class="insp-row">
+                <div class="insp-thumb"></div>
+                <div>
+                  <div style="font-size:0.8125rem;font-weight:600">L1004821.jpg</div>
+                  <div class="muted" style="font-size:0.75rem">3000 × 2000 · Ready</div>
+                </div>
+              </div>
+            </div>
+            <div class="insp-section">
+              <p class="insp-label">Excerpt (DE)</p>
+              <textarea class="insp-field" rows="3">Vier Tage zwischen klassizistischen Innenhöfen, Straßenbahnen im Morgenlicht und den Kontrasten einer unterschätzten Hauptstadt.</textarea>
+            </div>
+            <div class="insp-section">
+              <p class="insp-label">Country &amp; Permalink</p>
+              <div class="mono muted" style="font-size:0.72rem;margin-bottom:0.25rem">simonswanderlust.com/reisen/</div>
+              <input class="insp-field mono" type="text" value="reisebericht-4-tage-bukarest" />
+            </div>
+            <div class="insp-section">
+              <p class="insp-label">Expedition details</p>
+              <div class="muted" style="font-size:0.8125rem">4 Oct 2026 · <span class="mono">RO</span> · Europe · 3 stops</div>
+            </div>
+            <div class="insp-section" style="border-bottom:0">
+              <p class="insp-label">GPX route</p>
+              <div class="muted" style="font-size:0.8125rem">14.2 km attached · Public track ready</div>
+            </div>
+          </aside>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RULE OF THIRDS GEOMETRY OVERLAY -->
+  <div class="thirds-overlay" id="thirdsOverlay" hidden>
+    <svg viewBox="0 0 1200 800" preserveAspectRatio="none" aria-hidden="true">
+      <!-- Left 1/3 vertical band -->
+      <rect x="0" y="0" width="400" height="800" fill="rgb(20 42 66 / 0.05)" />
+      <!-- Bottom 1/3 horizontal band -->
+      <rect x="0" y="533.33" width="1200" height="266.67" fill="rgb(20 42 66 / 0.05)" />
+      <!-- 1/3 grid lines -->
+      <line x1="400" y1="0" x2="400" y2="800" stroke="#d23b30" stroke-width="1.5" stroke-dasharray="6 5" />
+      <line x1="0" y1="533.33" x2="1200" y2="533.33" stroke="#d23b30" stroke-width="1.5" stroke-dasharray="6 5" />
+      <!-- Diagonal from bottom-left through (1/3, 1/3) to top-right -->
+      <line x1="0" y1="800" x2="1200" y2="0" stroke="#263b51" stroke-width="2" stroke-dasharray="4 4" />
+      <!-- Crossing point (1/3 from left, 1/3 from bottom) -->
+      <circle cx="400" cy="533.33" r="8" fill="#d23b30" stroke="#fff" stroke-width="2.5" />
+      <!-- Labels -->
+      <rect x="414" y="502" width="236" height="24" rx="4" fill="#142a42" />
+      <text x="424" y="518" fill="#fff" font-family="IBM Plex Mono, monospace" font-size="12" font-weight="600">Crossing (33.3% L, 33.3% B)</text>
+      <rect x="64" y="756" width="196" height="24" rx="4" fill="#142a42" />
+      <text x="74" y="772" fill="#fff" font-family="IBM Plex Mono, monospace" font-size="12" font-weight="600">Darkest anchor (0%, 100%)</text>
+      <rect x="964" y="54" width="208" height="24" rx="4" fill="#142a42" />
+      <text x="974" y="70" fill="#fff" font-family="IBM Plex Mono, monospace" font-size="12" font-weight="600">Brightest (100%, 0%)</text>
+    </svg>
+  </div>
+
+  <!-- FLOATING STUDY DOCK -->
+  <div class="study-dock" role="region" aria-label="Mockup controls">
+    <div class="study-dock__group">
+      <span class="study-dock__label">Surface</span>
+      <button type="button" class="study-pill is-active" data-view="desk">Desk</button>
+      <button type="button" class="study-pill" data-view="editor">Story editor</button>
+    </div>
+    <div class="study-dock__group">
+      <span class="study-dock__label">Gradient</span>
+      <button type="button" class="study-pill is-active" data-preset="mist">A · Mist</button>
+      <button type="button" class="study-pill" data-preset="alpine">B · Alpine</button>
+      <button type="button" class="study-pill" data-preset="fjord">C · Fjord</button>
+    </div>
+    <div class="study-dock__group">
+      <span class="study-dock__label">Frost</span>
+      <button type="button" class="study-pill" data-alpha="0.62">62%</button>
+      <button type="button" class="study-pill is-active" data-alpha="0.68">68%</button>
+      <button type="button" class="study-pill" data-alpha="0.74">74%</button>
+    </div>
+    <div class="study-dock__group">
+      <button type="button" class="study-pill is-guide" id="guideBtn" aria-pressed="false">1/3 Guide</button>
+      <button type="button" class="study-pill" id="hideDockBtn" title="Hide mockup bar (press M to restore)">Hide</button>
+    </div>
+  </div>
+  <button type="button" class="study-restore" id="showDockBtn" hidden>Controls</button>
+
+  <script>
+    (function () {
+      const viewDesk = document.getElementById('viewDesk');
+      const viewEditor = document.getElementById('viewEditor');
+      const guideBtn = document.getElementById('guideBtn');
+      const thirdsOverlay = document.getElementById('thirdsOverlay');
+      const hideDockBtn = document.getElementById('hideDockBtn');
+      const studyDock = document.querySelector('.study-dock');
+
+      function setView(name) {
+        const isEditor = name === 'editor';
+        viewDesk.hidden = isEditor;
+        viewEditor.hidden = !isEditor;
+        document.querySelectorAll('[data-view]').forEach((btn) => {
+          btn.classList.toggle('is-active', btn.dataset.view === name);
+        });
+        document.querySelectorAll('[data-nav]').forEach((link) => {
+          if (link.dataset.nav === name) link.setAttribute('aria-current', 'page');
+          else link.removeAttribute('aria-current');
+        });
+      }
+
+      document.querySelectorAll('[data-view]').forEach((btn) => {
+        btn.addEventListener('click', () => setView(btn.dataset.view));
+      });
+      document.querySelectorAll('[data-switch-view]').forEach((el) => {
+        el.addEventListener('click', (e) => {
+          e.preventDefault();
+          setView(el.dataset.switchView);
+        });
+      });
+      document.querySelectorAll('[data-nav]').forEach((link) => {
+        link.addEventListener('click', (e) => {
+          e.preventDefault();
+          setView(link.dataset.nav);
+        });
+      });
+
+      document.querySelectorAll('[data-preset]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          document.body.dataset.preset = btn.dataset.preset;
+          document.querySelectorAll('[data-preset]').forEach((b) => {
+            b.classList.toggle('is-active', b === btn);
+          });
+        });
+      });
+
+      document.querySelectorAll('[data-alpha]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          document.documentElement.style.setProperty('--ws-alpha', btn.dataset.alpha);
+          document.querySelectorAll('[data-alpha]').forEach((b) => {
+            b.classList.toggle('is-active', b === btn);
+          });
+        });
+      });
+
+      guideBtn.addEventListener('click', () => {
+        const on = thirdsOverlay.hidden;
+        thirdsOverlay.hidden = !on;
+        guideBtn.setAttribute('aria-pressed', String(on));
+      });
+      const showDockBtn = document.getElementById('showDockBtn');
+      function setDockHidden(hidden) {
+        studyDock.hidden = hidden;
+        showDockBtn.hidden = !hidden;
+      }
+      hideDockBtn.addEventListener('click', () => setDockHidden(true));
+      showDockBtn.addEventListener('click', () => setDockHidden(false));
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'm' || e.key === 'M') {
+          if (document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') {
+            setDockHidden(!studyDock.hidden);
+          }
+        }
+      });
+    })();
+  </script>
+</body>
+</html>
