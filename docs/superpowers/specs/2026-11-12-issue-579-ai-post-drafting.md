@@ -824,7 +824,11 @@ REQUEST CHANGES on two scroll defects it measured in Chromium — routine openin
 scrolled the body down (destination and events label out of view), and the generated draft was
 focused off-screen. Fixed: only outcome messages reveal the status (config-changed also reveals
 the destination), and the result title is focused without `preventScroll`; a controller test
-pins both. Their optional notes
+pins both. Its two follow-up notes (an ineffective destination scroll, a half-pinned reveal test)
+were adopted, and `PrReview580` then returned **APPROVE** on the final code, including a
+test-harness-only change that checks focus connectedness by walking up the parent chain instead
+of scanning the tree (same semantics, checked differentially; it removes load-induced timeouts in
+the heavy editor DOM suites). Their optional notes
 were adopted: the default-ignorable rule above, `x@-y.z`/`a@_b.c` pinned as hostile corpus
 entries, and a refused "Generate again" keeps a result under review with its status.
 
