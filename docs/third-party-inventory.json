@@ -14,13 +14,13 @@
   "lockfiles": {
     "site": {
       "path": "site/package-lock.json",
-      "sha256": "2781e3126ad521b636eb43bed88e315891a1408eccf19fc4a5176d07b220c556",
+      "sha256": "05eff01344c4bb1614ef432fa62a4a1003d9fd2b45a91a27b05a3f7f70c47458",
       "lockfileVersion": 3,
       "entries": 489
     },
     "uploader": {
       "path": "uploader/package-lock.json",
-      "sha256": "7768e0dc42ca309ecda81519736fe33cf699721d9dad6947ca64e230cbf13be9",
+      "sha256": "10495d9a8924ef6fa9fef0e1b151bda0f0f50fe739870f2e0a4442739d3e7360",
       "lockfileVersion": 3,
       "entries": 348
     }
