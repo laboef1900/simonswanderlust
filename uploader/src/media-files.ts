@@ -37,9 +37,9 @@ export interface UsageRef {
   working: boolean;
 }
 
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
+const KEY_CHAR_RE = /[a-z0-9/_-]/;
+const VARIANT_SUFFIX_RE = /^-(\d+)\.(?:avif|webp|jpeg)/;
+const SAFE_CANDIDATE_URL_RE = /^[a-z]+:\/\/[^/]+\/([a-z0-9/_-]+)$/;
 
 /**
  * True when `text` references `src` as a whole URL: the occurrence may carry a
@@ -48,8 +48,17 @@ function escapeRegExp(s: string): string {
  * not match inside `…/hero2` or `…/hero-2`.
  */
 function textReferences(src: string, text: string): boolean {
-  const re = new RegExp(`${escapeRegExp(src)}(?:-\\d+\\.(?:avif|webp|jpeg))?(?![a-z0-9/_-])`);
-  return re.test(text);
+  if (!src || !text) return false;
+  let pos = 0;
+  while ((pos = text.indexOf(src, pos)) !== -1) {
+    let end = pos + src.length;
+    const rest = text.slice(end);
+    const variant = VARIANT_SUFFIX_RE.exec(rest);
+    if (variant) end += variant[0].length;
+    if (end >= text.length || !KEY_CHAR_RE.test(text[end]!)) return true;
+    pos += 1;
+  }
+  return false;
 }
 
 interface UsageLocale {
@@ -68,21 +77,18 @@ function localeUses(src: string, l: UsageLocale): boolean {
   return textReferences(src, l.bodyMarkdown);
 }
 
-/**
- * Which posts/pages reference the image `src` (hero, images map, or body
- * markdown). Posts arrive as flat per-locale rows (PostStore.usageRows) so a
- * stranded single-locale row — invisible to PostStore.get() — still guards
- * its images against deletion, and a published post's snapshot rows guard
- * what the live site still renders after a draft swapped the photo out (#115).
- */
-export function imageUsage(src: string, posts: PostUsageRow[], pages: PagePair[], journeys: StoredJourney[] = []): UsageRef[] {
-  const refs: UsageRef[] = [];
+function groupPostRows(posts: PostUsageRow[]): Map<string, PostUsageRow[]> {
   const byKey = new Map<string, PostUsageRow[]>();
   for (const r of posts) {
     const rows = byKey.get(r.translationKey) ?? [];
     rows.push(r);
     byKey.set(r.translationKey, rows);
   }
+  return byKey;
+}
+
+function postUsageFromGroups(src: string, byKey: Map<string, PostUsageRow[]>): UsageRef[] {
+  const refs: UsageRef[] = [];
   for (const [key, rows] of byKey) {
     const using = rows.filter((r) => localeUses(src, r));
     if (using.length > 0) {
@@ -93,6 +99,18 @@ export function imageUsage(src: string, posts: PostUsageRow[], pages: PagePair[]
       });
     }
   }
+  return refs;
+}
+
+/**
+ * Which posts/pages reference the image `src` (hero, images map, or body
+ * markdown). Posts arrive as flat per-locale rows (PostStore.usageRows) so a
+ * stranded single-locale row — invisible to PostStore.get() — still guards
+ * its images against deletion, and a published post's snapshot rows guard
+ * what the live site still renders after a draft swapped the photo out (#115).
+ */
+export function imageUsage(src: string, posts: PostUsageRow[], pages: PagePair[], journeys: StoredJourney[] = []): UsageRef[] {
+  const refs = postUsageFromGroups(src, groupPostRows(posts));
   for (const pg of pages) {
     if (localeUses(src, pg.de) || localeUses(src, pg.en)) {
       refs.push({ kind: 'page', key: pg.key, title: pg.de.title || pg.en.title || pg.key, published: true, working: true });
@@ -107,6 +125,121 @@ export function imageUsage(src: string, posts: PostUsageRow[], pages: PagePair[]
     });
   }
   return refs;
+}
+
+/**
+ * Single-pass batch lookup for `GET /media`: indexes candidate keys across
+ * posts, pages and journeys once instead of scanning the full corpus per item.
+ */
+export function imageUsageBatch(
+  srcs: readonly string[],
+  posts: PostUsageRow[],
+  pages: PagePair[],
+  journeys: StoredJourney[] = [],
+): Map<string, UsageRef[]> {
+  const result = new Map<string, UsageRef[]>();
+  if (srcs.length === 0) return result;
+  const byPostKey = groupPostRows(posts);
+  const wanted = new Set<string>();
+  const fallback: string[] = [];
+  for (const src of srcs) {
+    const m = SAFE_CANDIDATE_URL_RE.exec(src);
+    if (m) wanted.add(m[1]!);
+    else fallback.push(src);
+  }
+  const candidatePosts = new Map<string, Set<string>>();
+  const candidatePages = new Map<string, Set<PagePair>>();
+  const journeyRefs = new Map<string, UsageRef[]>();
+  const scanRe = /\/([a-z0-9/_-]+?)(?:-\d+\.(?:avif|webp|jpeg))?(?![a-z0-9/_-])/g;
+  const collect = (text: string, onHit: (key: string) => void) => {
+    if (!text) return;
+    scanRe.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = scanRe.exec(text)) !== null) {
+      const key = m[1]!;
+      if (wanted.has(key)) onHit(key);
+    }
+  };
+  const collectLocale = (l: UsageLocale, onHit: (key: string) => void) => {
+    if (l.heroImage?.src) collect(l.heroImage.src, onHit);
+    if (l.titleImage?.src) collect(l.titleImage.src, onHit);
+    if (l.images) for (const k of Object.keys(l.images)) collect(k, onHit);
+    collect(l.bodyMarkdown, onHit);
+  };
+  if (wanted.size > 0) {
+    for (const r of posts) {
+      collectLocale(r, (key) => {
+        let set = candidatePosts.get(key);
+        if (!set) { set = new Set(); candidatePosts.set(key, set); }
+        set.add(r.translationKey);
+      });
+    }
+    for (const pg of pages) {
+      const hit = (key: string) => {
+        let set = candidatePages.get(key);
+        if (!set) { set = new Set(); candidatePages.set(key, set); }
+        set.add(pg);
+      };
+      collectLocale(pg.de, hit);
+      collectLocale(pg.en, hit);
+    }
+  }
+  for (const journey of journeys) {
+    const ref: UsageRef = {
+      kind: 'journey', key: journey.id, title: journey.de.title || journey.en.title || journey.id,
+      working: false, published: false,
+    };
+    const seen = new Map<string, { working: boolean; published: boolean }>();
+    for (const locale of [journey.de, journey.en]) {
+      const s = locale.heroImage?.src;
+      if (s) seen.set(s, { ...(seen.get(s) ?? { working: false, published: false }), working: true });
+    }
+    const pub = journey.status === 'published';
+    for (const locale of Object.values(journey.publishedSnapshot?.locales ?? {})) {
+      const s = locale.heroImage.src;
+      seen.set(s, { ...(seen.get(s) ?? { working: false, published: false }), published: pub });
+    }
+    for (const [s, flags] of seen) {
+      const list = journeyRefs.get(s) ?? [];
+      list.push({ ...ref, ...flags });
+      journeyRefs.set(s, list);
+    }
+  }
+  for (const src of srcs) {
+    const m = SAFE_CANDIDATE_URL_RE.exec(src);
+    if (!m) {
+      result.set(src, imageUsage(src, posts, pages, journeys));
+      continue;
+    }
+    const key = m[1]!;
+    const refs: UsageRef[] = [];
+    const postKeys = candidatePosts.get(key);
+    if (postKeys) {
+      for (const tk of postKeys) {
+        const rows = byPostKey.get(tk)!;
+        const using = rows.filter((r) => localeUses(src, r));
+        if (using.length > 0) {
+          refs.push({
+            kind: 'post', key: tk, title: rows.map((r) => r.title).find((t) => t) || tk,
+            published: using.some((r) => r.source === 'published'),
+            working: using.some((r) => r.source === 'working'),
+          });
+        }
+      }
+    }
+    const pageMatches = candidatePages.get(key);
+    if (pageMatches) {
+      for (const pg of pageMatches) {
+        if (localeUses(src, pg.de) || localeUses(src, pg.en)) {
+          refs.push({ kind: 'page', key: pg.key, title: pg.de.title || pg.en.title || pg.key, published: true, working: true });
+        }
+      }
+    }
+    const jRefs = journeyRefs.get(src);
+    if (jRefs) refs.push(...jRefs);
+    result.set(src, refs);
+  }
+  return result;
 }
 
 /**
@@ -211,7 +344,7 @@ export async function listVariantFiles(storageDir: string, key: string): Promise
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') return [];
     throw e;
   }
-  const files: VariantFile[] = [];
+  const candidates: { format: ImageFormat; width: number; file: string }[] = [];
   for (const d of entries) {
     if (!d.isFile()) continue;
     const match = VARIANT_FILE_RE.exec(d.name);
@@ -222,17 +355,20 @@ export async function listVariantFiles(storageDir: string, key: string): Promise
     // so a name that does not round-trip (`hero-0640.webp`, a width past the safe
     // integers) is not a variant the site can address and is left out.
     if (!format || String(width) !== match[1]) continue;
-    const file = join(dir, d.name);
+    candidates.push({ format, width, file: join(dir, d.name) });
+  }
+  const probed = await Promise.all(candidates.map(async ({ format, width, file }): Promise<VariantFile | null> => {
     let stat;
     try {
       stat = await lstat(file);
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === 'ENOENT') continue; // deleted since the listing
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null; // deleted since the listing
       throw e;
     }
-    if (!stat.isFile()) continue;
-    files.push({ format, width, height: await headerHeight(file), bytes: stat.size });
-  }
+    if (!stat.isFile()) return null;
+    return { format, width, height: await headerHeight(file), bytes: stat.size };
+  }));
+  const files = probed.filter((f): f is VariantFile => f !== null);
   return files.sort((a, b) =>
     a.width - b.width || VARIANT_FORMAT_ORDER.indexOf(a.format) - VARIANT_FORMAT_ORDER.indexOf(b.format));
 }

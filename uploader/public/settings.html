@@ -314,13 +314,13 @@
             <div class="quality-compare-panes">
               <figure class="quality-pane">
                 <div class="quality-pane-box" id="previewOriginalBox" role="region" tabindex="0" aria-label="Original photo">
-                  <img id="previewOriginal" alt="Original test photo" />
+                  <img id="previewOriginal" alt="Original test photo" hidden />
                 </div>
                 <figcaption id="previewOriginalCaption"></figcaption>
               </figure>
               <figure class="quality-pane">
                 <div class="quality-pane-box" id="previewEncodedBox" role="region" tabindex="0" aria-label="Encoded preview">
-                  <img id="previewEncoded" alt="" />
+                  <img id="previewEncoded" alt="" hidden />
                 </div>
                 <figcaption id="previewEncodedCaption"></figcaption>
               </figure>
@@ -1858,6 +1858,10 @@
       function clearPreview() {
         for (const url of previewUrls) URL.revokeObjectURL(url);
         previewUrls = [];
+        $('previewOriginal').hidden = true;
+        $('previewEncoded').hidden = true;
+        $('previewOriginal').removeAttribute('src');
+        $('previewEncoded').removeAttribute('src');
         $('previewResult').hidden = true;
       }
 
@@ -1925,7 +1929,9 @@
           previewUrls = [URL.createObjectURL(file), URL.createObjectURL(encoded)];
           previewWidth = size('X-Preview-Width');
           $('previewOriginal').src = previewUrls[0];
+          $('previewOriginal').hidden = false;
           $('previewEncoded').src = previewUrls[1];
+          $('previewEncoded').hidden = false;
           $('previewEncoded').alt = 'Test photo encoded as ' + f.label + ' at quality ' + quality;
           const kind = (String(file.type).replace(/^image\//, '') || 'image').toUpperCase();
           const saving = savingsText(file.size, encoded.size);

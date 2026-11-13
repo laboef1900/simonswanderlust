@@ -4,7 +4,7 @@ import { readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
-import { deleteMedia, imageUsage, listVariantFiles, VARIANT_FILE_RE } from '../src/media-files.js';
+import { deleteMedia, imageUsage, imageUsageBatch, listVariantFiles, VARIANT_FILE_RE } from '../src/media-files.js';
 import type { PostUsageRow } from '../src/posts.js';
 import type { PagePair } from '../src/pages.js';
 
@@ -271,5 +271,41 @@ describe('listVariantFiles', () => {
   it('throws every other storage error for the caller to report as unavailable', async () => {
     await put('trips'); // the key's directory is a file
     await expect(listVariantFiles(dir, 'trips/x/hero')).rejects.toMatchObject({ code: 'ENOTDIR' });
+  });
+});
+
+describe('imageUsageBatch', () => {
+  it('matches imageUsage across posts, pages, variant suffixes, and boundary-adjacent keys', () => {
+    const base = 'https://img.example';
+    const posts: PostUsageRow[] = [
+      {
+        translationKey: 'tk-1', locale: 'de', source: 'working', title: 'One',
+        heroImage: { src: `${base}/trips/a/hero`, width: 800, height: 600, alt: '' },
+        bodyMarkdown: `Inline ![x](${base}/trips/a/inline-640.webp) and sibling ${base}/trips/a/hero-2`,
+        images: {},
+      },
+      {
+        translationKey: 'tk-1', locale: 'de', source: 'published', title: 'One',
+        heroImage: { src: `${base}/trips/a/hero`, width: 800, height: 600, alt: '' },
+        bodyMarkdown: 'No inline anymore',
+        images: {},
+      },
+    ];
+    const pages = [{
+      key: 'about',
+      de: { locale: 'de' as const, title: 'Über mich', bodyMarkdown: `![About](${base}/about/me)`, images: {} },
+      en: { locale: 'en' as const, title: 'About', bodyMarkdown: '', images: {} },
+    }];
+    const srcs = [
+      `${base}/trips/a/hero`,
+      `${base}/trips/a/hero-2`,
+      `${base}/trips/a/inline`,
+      `${base}/trips/a/her`,
+      `${base}/about/me`,
+    ];
+    const batch = imageUsageBatch(srcs, posts, pages);
+    for (const src of srcs) {
+      expect(batch.get(src), src).toEqual(imageUsage(src, posts, pages));
+    }
   });
 });

@@ -5112,9 +5112,9 @@ describe('publication refresh in list, Desk and Settings consumers', () => {
     expect(doc.activeElement).toBe(page.el('deskUnpub').querySelectorAll('.action-link')[0]);
     history.resolve(Response.json({ record: 'missing' })); await refresh;
     expect(doc.activeElement).toBe(page.el('deskUnpub').querySelectorAll('.action-link')[0]);
-    page.el('publicationRefresh').focus();
+    page.el('deskRebuild').focus();
     await (vm.runInContext('publicationRefresh.refresh()', page.ctx) as Promise<void>);
-    expect(doc.activeElement).toBe(page.el('publicationRefresh'));
+    expect(doc.activeElement).toBe(page.el('deskRebuild'));
     vm.runInContext('publicationRefresh.stop()', page.ctx);
   });
 
@@ -5133,7 +5133,7 @@ describe('publication refresh in list, Desk and Settings consumers', () => {
     expect(doc.activeElement).toBe(page.el('deskAttention').querySelectorAll('.action-link')[0]);
     rows = [];
     await (vm.runInContext('publicationRefresh.refresh()', page.ctx) as Promise<void>);
-    expect(doc.activeElement).toBe(page.el('publicationRefresh'));
+    expect(doc.activeElement).toBe(page.el('deskRebuild'));
     page.el('deskNewPost').focus();
     await (vm.runInContext('publicationRefresh.refresh()', page.ctx) as Promise<void>);
     expect(doc.activeElement).toBe(page.el('deskNewPost'));

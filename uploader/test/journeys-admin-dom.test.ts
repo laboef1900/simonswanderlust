@@ -179,7 +179,7 @@ describe('journey authoring DOM', () => {
   it('acknowledges failed publication with its new token, slug lock and accessible recovery', async () => {
     const h = await editor();
     h.fail(200, { build: failedBuild, saved: { ...h.row, status: 'published', updatedAt: '2026-10-29T00:02:00.000Z', de: { ...h.row.de, publishedAt: stamp } } });
-    h.el('journeyPublish').click(); await settle();
+    h.el('journeyPublish').click(); h.el('publishDialogConfirm').click(); await settle();
     const status = h.el('journeyStatus');
     expect(status.textContent).toContain(ui.en['admin.build.failure.build_failed']);
     expect(status.textContent).not.toContain('PRIVATE');
@@ -188,7 +188,7 @@ describe('journey authoring DOM', () => {
     expect(h.el('journeyError').hidden).toBe(true);
     expect(h.el('journey-de-slug').readOnly).toBe(true); expect(h.el('journeyUnpublish').hidden).toBe(false);
     h.hide(); expect(h.storage.size).toBe(0);
-    h.el('journeyPublish').click(); await settle(); const calls = h.requests.filter(request => request.url.endsWith('/publish'));
+    h.el('journeyPublish').click(); h.el('publishDialogConfirm').click(); await settle(); const calls = h.requests.filter(request => request.url.endsWith('/publish'));
     expect(JSON.parse(String(calls[1]!.init.body)).baseUpdatedAt).toBe('2026-10-29T00:02:00.000Z');
   });
   it('keeps an unacknowledged save dirty without replacing its optimistic base', async () => {
@@ -315,30 +315,18 @@ describe('journey authoring DOM', () => {
     expect(label('journey-en-slug')).toBe(ui.en['editor.chrome.journeySlug'].replace('{code}', 'EN'));
     expect(label('journey-de-intro')).toBe(ui.en['editor.chrome.journeyIntro'].replace('{code}', 'DE'));
   });
-  it('asks “Publish this journey in English” and sends the stored omitted flag inverted, through save, reload and a local draft', async () => {
+  it('chooses published languages in the Publish modal and sends the stored omitted flag inverted', async () => {
     const h = await editor();
-    const box = h.el('journey-en-included');
-    expect(box.closest('label')!.textContent).toContain(ui.en['editor.chrome.journeyInclude'].replace('{language}', ui.en['editor.chrome.languageEnglish']));
-    expect(box.checked).toBe(true);
-    expect(h.el('journey-de-included').checked).toBe(true); expect(h.el('journey-de-included').disabled).toBe(true);
-    box.checked = false; box.dispatchEvent(new EditorEvent('change', { bubbles: true }));
-    await h.submit();
+    h.el('journeyPublish').click();
+    const boxes = h.el('publishDialog').querySelectorAll('input[type="checkbox"]');
+    expect(boxes).toHaveLength(2);
+    expect(boxes[0]!.checked).toBe(true); expect(boxes[0]!.disabled).toBe(true);
+    expect(boxes[1]!.checked).toBe(true); expect(boxes[1]!.disabled).toBe(false);
+    boxes[1]!.checked = false; boxes[1]!.dispatchEvent(new EditorEvent('change', { bubbles: true }));
+    h.el('publishDialogConfirm').click(); await settle();
     const payload = JSON.parse(String(h.requests.find(request => request.init.method === 'PUT')!.init.body));
     expect(payload.en.omitted).toBe(true); expect(payload.de.omitted).toBe(false);
-    h.hide(); expect(h.storage.size).toBe(0);
-    // Stored as omitted, the translation loads with its box unchecked; a local draft restores the same way.
-    const storage = new Map<string, string>();
-    const stored = await editor({ storage, fetch: async (url, init) => url === '/journey-admin/' + id && !init.method
-      ? { status: 200, ok: true, json: async () => ({ ...h.row, en: { ...h.row.en, omitted: true } }) }
-      : { status: 200, ok: true, json: async () => url === '/posts' ? [] : { primary: 'de', locales: ['de', 'en'], updatedAt: stamp, lockedAt: null } } });
-    expect(stored.el('journey-en-included').checked).toBe(false);
-    stored.el('journey-en-included').checked = true; stored.el('journey-en-included').dispatchEvent(new EditorEvent('change', { bubbles: true })); stored.hide();
-    expect(storage.size).toBe(1);
-    expect(JSON.parse([...storage.values()][0]!).payload.en.omitted).toBe(false);
-    const restored = await editor({ storage, fetch: async (url, init) => url === '/journey-admin/' + id && !init.method
-      ? { status: 200, ok: true, json: async () => ({ ...h.row, en: { ...h.row.en, omitted: true } }) }
-      : { status: 200, ok: true, json: async () => url === '/posts' ? [] : { primary: 'de', locales: ['de', 'en'], updatedAt: stamp, lockedAt: null } } });
-    expect(restored.el('journey-en-included').checked).toBe(true);
+    expect(h.requests.some(request => request.url.endsWith('/publish'))).toBe(true);
   });
   it('refuses to create an untitled journey: no request, the German title field marked and focused', async () => {
     const h = await editor({ fresh: true });
@@ -362,6 +350,8 @@ describe('journey authoring DOM', () => {
   });
   it('carries each locale’s state in its tab chip: not requested, no title yet, available', async () => {
     const h = await editor({ fresh: true });
+    expect(h.el('journeyStatus').textContent).toBe('');
+    expect(h.el('journeyPublish').hidden).toBe(false);
     const english = ui.en['editor.chrome.languageEnglish'];
     const noTitle = ui.en['editor.chrome.languageTitleEmpty'].replace('{language}', english);
     const notRequested = ui.en['editor.chrome.languageOmittedLabel'].replace('{language}', english);
@@ -370,9 +360,12 @@ describe('journey authoring DOM', () => {
     expect(h.el('journey-tab-de').textContent).toContain(ui.en['editor.chrome.languageTitleEmpty'].replace('{language}', ui.en['editor.chrome.languageGerman']));
     h.edit('journey-en-title', 'Coast to coast');
     expect(tab.textContent).not.toContain(noTitle); expect(tab.getAttribute('title')).toBeFalsy();
-    h.el('journey-en-included').checked = false; h.el('journey-en-included').dispatchEvent(new EditorEvent('change', { bubbles: true }));
-    expect(tab.textContent).toContain(notRequested); expect(tab.getAttribute('title')).toBe(notRequested);
-    // A stored journey reports its chips on load too.
+    // A stored journey reports its omitted and available chips on load too.
+    const omitted = await editor({ fetch: async (url, init) => url === '/journey-admin/' + id && !init.method
+      ? { status: 200, ok: true, json: async () => ({ ...h.row, en: { ...h.row.en, omitted: true } }) }
+      : { status: 200, ok: true, json: async () => url === '/posts' ? [] : { primary: 'de', locales: ['de', 'en'], updatedAt: stamp, lockedAt: null } } });
+    expect(omitted.el('journey-tab-en').textContent).toContain(notRequested);
+    expect(omitted.el('journey-tab-en').getAttribute('title')).toBe(notRequested);
     const loaded = await editor({ single: false });
     expect(loaded.el('journey-tab-en').textContent).not.toContain(english + ':');
   });

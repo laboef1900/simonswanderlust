@@ -216,6 +216,7 @@ export interface PostStore {
   getPublishState(translationKey: string): Promise<PublishState | null>;
   getPublishedTrack(translationKey: string): Promise<PublishedTrackProjection>;
   getPublishedLocales(translationKey: string): Promise<Locale[]>;
+  getPublishedLocalesBatch?(translationKeys: readonly string[]): Promise<Map<string, Locale[]>>;
   /**
    * Create or overwrite the working copy. When `baseUpdatedAt` is given (the
    * `updatedAt` the editor loaded), the save is rejected with PostError code
@@ -811,6 +812,17 @@ export function memoryPostStore(opts: MemoryPostStoreOptions = {}): PostStore {
         return mode.locales.filter((locale) => p.rowStatus[locale] === 'published' && !!p.publishedSnapshot[locale]);
       });
     },
+    async getPublishedLocalesBatch(keys) {
+      return language.runExclusive(async (mode) => {
+        const out = new Map<string, Locale[]>();
+        for (const tk of new Set(keys)) {
+          const p = byKey.get(tk);
+          out.set(tk, !p || p.rowStatus[mode.primary] !== 'published' || !p.publishedSnapshot[mode.primary]
+            ? [] : mode.locales.filter((locale) => p.rowStatus[locale] === 'published' && !!p.publishedSnapshot[locale]));
+        }
+        return out;
+      });
+    },
     async getStopRoute(tk) {
       const p = byKey.get(tk);
       if (!p) throw new PostError('post not found', 'not_found');
@@ -1359,6 +1371,30 @@ export function pgPostStore(pool: DbPool, options: PgPostStoreOptions = {}): Pos
         );
         const locales = rows.map((row) => row.locale);
         return locales.includes(language.primary) ? language.locales.filter((locale) => locales.includes(locale)) : [];
+      });
+    },
+    async getPublishedLocalesBatch(keys) {
+      const unique = [...new Set(keys)];
+      const out = new Map<string, Locale[]>();
+      if (unique.length === 0) return out;
+      return consistentRead(async (client, language) => {
+        const { rows } = await client.query<{ translation_key: string; locale: Locale }>(
+          `SELECT translation_key, locale FROM posts
+            WHERE translation_key=ANY($1::text[]) AND locale=ANY($2::text[])
+              AND status='published' AND published_snapshot IS NOT NULL`,
+          [unique, language.locales],
+        );
+        const found = new Map<string, Set<Locale>>();
+        for (const row of rows) {
+          let set = found.get(row.translation_key);
+          if (!set) { set = new Set(); found.set(row.translation_key, set); }
+          set.add(row.locale);
+        }
+        for (const tk of unique) {
+          const set = found.get(tk);
+          out.set(tk, set && set.has(language.primary) ? language.locales.filter((l) => set.has(l)) : []);
+        }
+        return out;
       });
     },
     async getStopRoute(tk) {

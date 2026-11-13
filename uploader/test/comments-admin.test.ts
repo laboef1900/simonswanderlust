@@ -15,7 +15,7 @@ import { memoryMediaStore } from '../src/media-store.js';
 import type { EncodeQueue } from '../src/encode-queue.js';
 import type { DbBackup } from '../src/backup.js';
 import { memorySecretsStore } from '../src/secrets.js';
-import { memoryCommentAdminStore, pgCommentAdminStore, type AdminComment, type CommentAdminStore } from '../src/comments-admin.js';
+import { memoryCommentAdminStore, pgCommentAdminStore, withPublicLocaleMetadata, type AdminComment, type CommentAdminStore } from '../src/comments-admin.js';
 import { createPool, ensureSchema, type DbPool } from '../src/db.js';
 import { pgCommentStore } from '../src/comments.js';
 import { publishTokens } from './publish-tokens.js';
@@ -399,6 +399,20 @@ for (const kind of ['memory', 'postgres'] as const) {
     }
   });
 }
+describe('withPublicLocaleMetadata batching', () => {
+  it('prefers getPublishedLocalesBatch when provided instead of N+1 queries', async () => {
+    const rows = [
+      { id: '1', translationKey: 'tk1', locale: 'de' as const, name: 'A', email: null, body: 'hi', status: 'pending' as const, isAuthor: false, createdAt: new Date() },
+      { id: '2', translationKey: 'tk2', locale: 'en' as const, name: 'B', email: null, body: 'hi', status: 'pending' as const, isAuthor: false, createdAt: new Date() },
+    ];
+    const single = vi.fn(async () => []);
+    const batch = vi.fn(async () => new Map([['tk1', ['de' as const]], ['tk2', ['de' as const]]]));
+    const out = await withPublicLocaleMetadata(rows, { getPublishedLocales: single, getPublishedLocalesBatch: batch });
+    expect(batch).toHaveBeenCalledTimes(1);
+    expect(single).not.toHaveBeenCalled();
+    expect(out.map((r) => r.publicLocale)).toEqual([true, false]);
+  });
+});
 describe('site identity administration', () => {
   it('checks both actual image roles on save, then exposes normalized canonical and clearing immediately', async () => {
     const identityStore = memorySiteIdentityStore();
