@@ -36,6 +36,22 @@ const scriptStart = html.lastIndexOf('<script type="module">');
 const script = html.slice(html.indexOf("'use strict'", scriptStart), html.lastIndexOf('</script>'));
 const markup = html.slice(0, scriptStart);
 
+// Cache compiled code only; every case still gets a new document, VM context,
+// storage and network fixtures. Hundreds of cases need not reread/recompile it.
+const editorScript = new vm.Script(script, { filename: 'public/editor.html' });
+const compiledBrowserScripts = new Map<string, vm.Script>();
+function runBrowserScript(file: string, context: vm.Context) {
+  let compiled = compiledBrowserScripts.get(file);
+  if (!compiled) {
+    compiled = new vm.Script(browserScript(file), {
+      filename: resolve('public/' + file),
+      importModuleDynamically: vm.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER,
+    });
+    compiledBrowserScripts.set(file, compiled);
+  }
+  return compiled.runInContext(context);
+}
+
 type Element = EditorElement;
 
 interface ReviewStory {
@@ -542,26 +558,18 @@ async function loadEditor(options: EditorOptions = {}) {
   ctx.window = ctx;
   ctx.languageFixture = { primary: 'de', locales: ['de', 'en'], ...options.language, lockedAt: null, updatedAt: '2026-10-27T00:00:00.000Z' };
   vm.createContext(ctx);
-  vm.runInContext(readFileSync('public/admin-ui.js', 'utf8'), ctx, { filename: 'admin-ui.js' });
-  vm.runInContext(readFileSync('public/build-reporting.js', 'utf8'), ctx);
-  vm.runInContext(readFileSync('public/publication-state.js', 'utf8'), ctx);
-  vm.runInContext(readFileSync('public/publication-refresh.js', 'utf8'), ctx);
-  vm.runInContext(readFileSync('public/auth.js', 'utf8'), ctx, { filename: 'auth.js' });
-  vm.runInContext(readFileSync('public/language.js', 'utf8'), ctx, { filename: 'language.js' });
+  for (const file of ['admin-ui.js', 'build-reporting.js', 'publication-state.js', 'publication-refresh.js', 'auth.js', 'language.js']) runBrowserScript(file, ctx);
   vm.runInContext('SiteLanguage.accept(languageFixture)', ctx);
   // The real URL builder: the Publish dialog shows exactly what it returns.
   // Prompts stay scripted, so no test waits on a native dialog.
-  vm.runInContext(readFileSync('public/admin-confirm.js', 'utf8'), ctx, { filename: 'admin-confirm.js' });
+  runBrowserScript('admin-confirm.js', ctx);
   Object.assign(ctx.AdminConfirm as object, {
     ask: async (prompt: ConfirmPrompt) => {
       prompts.push(prompt);
       return typeof options.confirm === 'function' ? options.confirm(prompt) : options.confirm === true;
     },
   });
-  vm.runInContext(readFileSync('public/draft-guard.js', 'utf8'), ctx, { filename: 'draft-guard.js' });
-  vm.runInContext(readFileSync('public/write-recovery.js', 'utf8'), ctx, { filename: 'write-recovery.js' });
-  vm.runInContext(readFileSync('public/editor-rich-bridge.js', 'utf8'), ctx, { filename: 'editor-rich-bridge.js' });
-  vm.runInContext(readFileSync('public/manuscript-bar.js', 'utf8'), ctx, { filename: 'manuscript-bar.js' });
+  for (const file of ['draft-guard.js', 'write-recovery.js', 'editor-rich-bridge.js', 'manuscript-bar.js']) runBrowserScript(file, ctx);
   const safety = ctx.DraftGuard as {
     createDraftGuard(options: { resource: string; collect: () => unknown; onChange?: (dirty: boolean) => void }): {
       markDirty(): void; redirectToLogin(): void;
@@ -577,16 +585,13 @@ async function loadEditor(options: EditorOptions = {}) {
     return guard;
   };
   for (const file of ['journeys-ui.js', 'waypoint-lookup.js', 'editor-stop-route.js', 'posts-filter.js', 'editor-title-image.js', 'gallery-fence.js', 'gallery-metadata-warnings.js', 'media-api.js', 'gallery-library.js', 'editor-galleries.js', 'editor-linter.js', 'llm.js', 'editor-excerpt.js', 'country-centers.js', 'country-coordinates.js', 'tabs.js', 'editor-review.js', 'editor-translation.js', 'editor-draft.js', 'editor-alt-audit.js', 'editor-inspector.js', 'image-markdown.js']) {
-    vm.runInContext(browserScript(file), ctx, {
-      filename: resolve('public/' + file),
-      importModuleDynamically: vm.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER,
-    });
+    runBrowserScript(file, ctx);
   }
   if (options.review) (ctx.LLM as { reviewStory: Review }).reviewStory = options.review;
   if (options.translate && ctx.LLM && typeof ctx.LLM === 'object') Reflect.set(ctx.LLM, 'translateArticle', options.translate);
   if (options.draft && ctx.LLM && typeof ctx.LLM === 'object') Reflect.set(ctx.LLM, 'draftArticle', options.draft);
   options.beforeModule?.(ctx);
-  await vm.runInContext(script, ctx);
+  await editorScript.runInContext(ctx);
   const api = vm.runInContext('({ populateForm, buildPayload, loadPost, doSaveDraft, renderAltAudit })', ctx) as EditorApi;
   return {
     api, el, editors, richEditors, created: dom.created, document: dom.document, requests, galleryRequests, stopRouteRequests, prompts, local, galleryPickers,

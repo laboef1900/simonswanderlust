@@ -1,0 +1,49 @@
+name: dependency inventory update
+on:
+  pull_request:
+    paths: ['site/package-lock.json', 'uploader/package-lock.json']
+permissions:
+  contents: read
+concurrency:
+  group: dependency-inventory-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  inventory:
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Execute only the protected base's generator. Proposed lockfiles are data;
+      # no npm install, dependency lifecycle script or PR executable runs here.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: proposed
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26
+      - name: Generate reviewable inventory patch
+        run: |
+          cp docs/third-party-inventory.json "$RUNNER_TEMP/inventory-before.json"
+          for tree in site uploader; do
+            test ! -L "proposed/$tree"
+            test ! -L "proposed/$tree/package-lock.json"
+          done
+          cp proposed/site/package-lock.json site/package-lock.json
+          cp proposed/uploader/package-lock.json uploader/package-lock.json
+          node uploader/scripts/generate-third-party-inventory.mjs
+          status=0
+          diff -u --label a/docs/third-party-inventory.json --label b/docs/third-party-inventory.json \
+            "$RUNNER_TEMP/inventory-before.json" docs/third-party-inventory.json > dependency-inventory.patch || status=$?
+          test "$status" -le 1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dependency-inventory-patch
+          path: dependency-inventory.patch
+          retention-days: 7
+          if-no-files-found: error

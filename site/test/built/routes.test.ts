@@ -4,15 +4,11 @@ import { Window } from 'happy-dom';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { LEGACY_REDIRECTS, legacyRedirectForRelease } from '../../../uploader/src/redirects.js';
-// Run after building the SAME two published pairs in all modes. This project
-// deliberately fails, rather than skips, when build evidence is missing.
-// Fixtures: language-europe => de/reise + en/journey, region europe;
-// language-south-america => de/zweite-reise + en/second-journey, region south-america.
-// baseline is the real pre-#285 DE-primary bilingual build of those fixtures.
-// In single-mode fixtures put private-<disabled locale>-285 in the disabled
-// rows' retained titles, bodies and slugs; enabled fixture slugs stay unchanged.
+// The fixture driver builds these independently specified published pairs in
+// every mode. This is a continuous route contract, not a historical byte diff.
+// Disabled rows retain private-<locale>-285 markers; they must never be emitted.
 const root = process.env.BUILT_ROUTE_CONTRACT_ROOT;
-if (!root) throw new Error('BUILT_ROUTE_CONTRACT_ROOT must contain baseline, de-bilingual, en-bilingual, de-only and en-only release directories');
+if (!root) throw new Error('BUILT_ROUTE_CONTRACT_ROOT must contain de-bilingual, en-bilingual, de-only and en-only releases');
 const windows: Window[] = [];
 afterEach(async () => { await Promise.all(windows.splice(0).map((window) => window.happyDOM.close())); });
 function documentOf(text: string, xml = false) {
@@ -28,7 +24,7 @@ async function files(dir: string, prefix = '', htmlXmlOnly = true): Promise<stri
   }
   return result.sort();
 }
-const common = ['404.html', 'sitemap-index.xml', 'sitemap-0.xml'];
+const common = ['404.html', 'sitemap-index.xml', 'sitemap-0.xml', 'legal/de.html', 'legal/en.html'];
 const de = ['index.html', 'uber-mich/index.html', 'karte/index.html', 'reiseziele/index.html', 'reiseziele/europa/index.html', 'reiseziele/suedamerika/index.html', 'reise/index.html', 'zweite-reise/index.html', 'rss.xml'];
 const en = ['index.html', 'about-me/index.html', 'travel-map/index.html', 'destinations/index.html', 'destinations/europe/index.html', 'destinations/south-america/index.html', 'journey/index.html', 'second-journey/index.html', 'rss.xml'];
 const enSecondary = en.map((path) => `en/${path === 'travel-map/index.html' ? 'map/index.html' : path}`);
@@ -42,11 +38,6 @@ const cases = [
 function publicPath(file: string) { return '/' + file.replace(/index\.html$/, ''); }
 
 describe('actual built four-mode route and SEO contract', () => {
-  it('keeps the pre-change DE-primary HTML/XML inventory byte-identical', async () => {
-    const baseline = await files(join(root, 'baseline'));
-    expect(baseline).toEqual([...cases[0]!.expected].sort());
-    expect((await files(join(root, 'de-bilingual'))).join('\n')).toBe(baseline.join('\n'));
-  });
   it.each(cases)('$name has exactly the approved files and no dangling locale links', async ({ name, primary, locales, expected }) => {
     const dir = join(root, name);
     expect(await files(dir)).toEqual([...expected].sort());
@@ -58,16 +49,26 @@ describe('actual built four-mode route and SEO contract', () => {
         expect((await readFile(join(dir, file))).includes(markerBytes), `${name}/${file} leaks retained inactive content`).toBe(false);
       }
     }
-    const urls = new Set(expected.map(publicPath));
+    const urls = new Set((await files(dir, '', false)).map(publicPath));
+    // Packaged software notices are global static assets, not localized blog routes.
+    for (const locale of ['de', 'en']) {
+      const file = `legal/${locale}.html`;
+      const notice = documentOf(await readFile(join(dir, file), 'utf8'));
+      expect(notice.documentElement.lang).toBe(locale);
+      for (const link of notice.querySelectorAll('a[href]')) {
+        const target = new URL(link.getAttribute('href')!, 'https://simonswanderlust.com/' + file);
+        if (target.origin === 'https://simonswanderlust.com') expect(urls.has(target.pathname), target.pathname).toBe(true);
+      }
+    }
     const sitemap = documentOf(await readFile(join(dir, 'sitemap-0.xml'), 'utf8'), true);
     const sitemapPaths = [...sitemap.querySelectorAll('url > loc')].map((node) => new URL(node.textContent!).pathname).sort();
-    const htmlPaths = expected.filter((path) => path.endsWith('.html') && path !== '404.html').map(publicPath).sort();
+    const htmlPaths = expected.filter((path) => path.endsWith('.html') && path !== '404.html' && !path.startsWith('legal/')).map(publicPath).sort();
     expect(sitemapPaths).toEqual(htmlPaths);
     for (const [from, target] of LEGACY_REDIRECTS) {
       const eligible = primary === 'de' && (!from.startsWith('/en/') || locales.includes('en'));
       expect(await legacyRedirectForRelease(from, dir)).toBe(eligible ? target : undefined);
     }
-    for (const file of expected.filter((path) => path.endsWith('.html'))) {
+    for (const file of expected.filter((path) => path.endsWith('.html') && !path.startsWith('legal/'))) {
       const document = documentOf(await readFile(join(dir, file), 'utf8'));
       const locale = file.startsWith('de/') ? 'de' : file.startsWith('en/') ? 'en' : primary;
       expect(document.documentElement.lang).toBe(locale);

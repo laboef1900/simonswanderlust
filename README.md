@@ -501,8 +501,12 @@ tagging; generated notes alone do not qualify.
    updated deliberately, not copied over or silently rewritten.
 
 Never push directly to protected branches, tag an unmerged feature branch or replace a
-published tag. The release workflow builds once for amd64 and arm64, pushes only to
-`ghcr.io/laboef1900/wanderlust-studio` and creates the GitHub Release.
+published tag. Only stable tags at the current `main` tip with green CI for that revision
+are eligible. The workflow builds once per native amd64/arm64 architecture, qualifies those
+exact images (ownership/restore and legal assets), then promotes their digests to version,
+minor and `latest` tags in `ghcr.io/laboef1900/wanderlust-studio` and creates the GitHub Release.
+Staging candidate tags are not deployment tags. See the
+[automation contract and test commands](docs/superpowers/specs/2026-11-13-github-automation-hardening.md).
 It requires repository variable `DHI_USERNAME` and secret
 `DHI_TOKEN` to pull the hardened base images. Verify the workflow before deployment;
 publishing a release does not deploy it or rebuild the live blog.

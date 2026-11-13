@@ -4,8 +4,7 @@ import { Window } from 'happy-dom';
 import { afterEach, describe, expect, it } from 'vitest';
 import { aboutPath, homePath, mapPath } from '../../src/lib/paths';
 import type { SiteLanguage } from '../../src/lib/site-language';
-// Actual Astro artifacts, not render mocks. The exact fixture is recorded in the
-// #287/#289 specification's public-output evidence appendix.
+// Actual Astro artifacts from scripts/verify-built-contracts.ts, not render mocks.
 const root = process.env.BUILT_PAGE_CONTRACT_ROOT;
 if (!root) throw new Error('BUILT_PAGE_CONTRACT_ROOT must contain seed and configured releases for each of the four language modes');
 const modes: { name: string; mode: SiteLanguage }[] = [

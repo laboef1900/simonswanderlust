@@ -162,18 +162,24 @@ Applies to the `uploader/` runtime; `site/` is static output and exempt.
 
 ### 4. CI/CD and Software Supply Chain
 
-- `.github/workflows/ci.yml` runs the Automated Verification Loop (typecheck + tests for both apps
-  + `astro check` + full `astro build`, against a Postgres service container) on every PR and on
-  every push to `dev` or `main`. It is the authoritative merge gate for both protected branches.
-- `.github/workflows/release.yml` builds the app image ONCE per version tag (`v*.*.*`) and pushes
-  it to GHCR with least-privilege `permissions:`. Deploys promote that immutable image by bumping
-  `IMAGE_TAG` in the server's `.env` — never rebuild on the server.
-- **Known gaps against the template, accepted for now.** Record here rather than silently claiming
-  compliance; close them when the project's risk justifies the effort:
-  - `ci.yml` has no `permissions:` block, so it runs with the default token scope.
-  - Third-party actions are pinned by major tag (`@v4`), not immutably by commit SHA.
-  - No SBOM, provenance attestation, or image signing on release.
-  - No `dependabot.yml`; dependency updates are manual (`npm audit` at upgrade time).
-  - No secret scanning or SAST in CI.
+- `.github/workflows/ci.yml` keeps the protected-branch check names and runs types, both
+  test suites with PostgreSQL, a full build, four-mode populated release contracts and
+  a real Chromium login/edit/recovery/publish smoke. Actionlint and release-policy tests
+  run in the uploader gate. Superseded PRs cancel; main-push qualification does not.
+- Workflow tokens default to read-only, checkout credentials are not persisted, jobs have
+  deadlines, and third-party actions are pinned by SHA. Dependabot updates actions/npm weekly.
+  Its inventory workflow executes only the protected base's generator on proposed lockfile
+  data and supplies a reviewable patch; maintainers must apply/review it before the normal
+  inventory-freshness gate passes. It does not commit or auto-merge changes.
+- `security.yml` runs CodeQL and PR dependency review (moderate and above). GitHub secret
+  scanning and push protection are enabled. Weekly/manual coverage reports supply evidence,
+  not arbitrary percentage gates or another costly PR test run.
+- `release.yml` accepts only stable tags at the current protected main tip with successful
+  CI for that exact revision. It builds native amd64/arm64 candidates once, qualifies their
+  ownership/restore behavior and legal assets, and promotes their immutable digests only
+  after both pass and eligibility is rechecked. Deployment mounts still require their own
+  qualification. The image is never rebuilt on the server.
+- **Remaining supply-chain gaps:** no installed-image SBOM, provenance attestation or
+  image signing. The lockfile/license inventory is not a substitute for these artifacts.
 - **Backups** — Postgres backups run scheduled/on-demand to `/data/backup/db` with retention
   pruning (admin Settings page); restore is CLI-only — see `ARCHITECTURE.md`.

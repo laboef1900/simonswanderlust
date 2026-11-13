@@ -3,13 +3,12 @@ import { join } from 'node:path';
 import { Window } from 'happy-dom';
 import { afterEach, describe, expect, it } from 'vitest';
 
-// Real Astro release fixtures, not container renders. Parent qualification prepares:
-// BUILT_JOURNEY_CONTRACT_ROOT/{de-bilingual,en-bilingual,de-only,en-only}/{before,live,dormant}.
-// `before`: actual #309/#289 prerequisite code, same published stories a,c,n in each enabled locale.
-// Keep published generic pages and seeded navigation identical across all three releases;
-// do not substitute the historical pre-#289 fixture or add automatic journey navigation.
+// The fixture driver builds before/live/dormant releases with identical current
+// code and distinct database states. "before" has no published journeys, not a
+// copied expected output. The independent assertions below pin routes/privacy.
+// Published generic pages and navigation remain unchanged across states.
 // `live`: published journey expedition with members a,b,c; b is draft. A second
-// published journey dormant has only b. `dormant`: both journeys have only b.
+// published journey dormant has only draft d. `dormant`: expedition has only b.
 // Every unpublished field/slug uses private-draft-310; journey working fields use
 // private-working-310; disabled locale content uses private-inactive-310.
 // a public track = [[[1,2],[3,4]],[[5,6],[7,8]]]; c = [[[90,20],[91,21]]].

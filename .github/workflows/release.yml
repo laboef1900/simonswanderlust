@@ -1,92 +1,153 @@
 name: release
 
-# Build and publish the app image to GHCR, and cut a GitHub Release,
-# whenever a new, owner-authorized version tag is pushed.
-# Image-name cutover applies to future releases only; never replay old tags here.
+# Stable tags promote only the exact native images that passed qualification.
+# Candidate tags are staging references, never deployment/version tags.
 on:
   push:
     tags:
       - 'v*.*.*'
 
 permissions:
-  contents: write   # create the GitHub Release
-  packages: write   # push images to ghcr.io
+  contents: read
+
+concurrency:
+  group: release-promotion
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/laboef1900/wanderlust-studio
 
 jobs:
-  images:
-    name: build & push app
+  eligibility:
     runs-on: ubuntu-latest
-    outputs:
-      digest: ${{ steps.build.outputs.digest }}
+    timeout-minutes: 17
+    permissions:
+      contents: read
+      actions: read
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # Needed to pull the Docker Hardened Image bases. The Dockerfile's NODE_BUILD /
-      # NODE_RUNTIME defaults are the reviewed digest-pinned references; do not override
-      # them here with floating tags (the native-build stage refuses those). Requires the
-      # repo variable DHI_USERNAME (not sensitive) + secret DHI_TOKEN (a dhi.io access token).
-      - name: Log in to dhi.io (Docker Hardened Images)
-        uses: docker/login-action@v3
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          registry: dhi.io
-          username: ${{ vars.DHI_USERNAME }}
-          password: ${{ secrets.DHI_TOKEN }}
+          node-version: 26
+      - run: node .github/release/eligibility.mjs
+        env:
+          GH_TOKEN: ${{ github.token }}
 
-      - name: Image metadata (tags + labels)
-        id: meta
-        uses: docker/metadata-action@v5
+  candidate:
+    needs: eligibility
+    name: qualify native ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    env:
+      ARCH: ${{ matrix.arch }}
+      SOURCE_SHA: ${{ github.sha }}
+      FIXTURE_PREFIX: swl_305_package_${{ matrix.arch }}_${{ github.run_id }}_${{ github.run_attempt }}
+      CANDIDATE: ghcr.io/laboef1900/wanderlust-studio:candidate-${{ github.sha }}-${{ github.run_id }}-${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          images: ghcr.io/laboef1900/wanderlust-studio
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest
-          # GitHub reports the repository license as `AGPL-3.0`; the approved identifier
-          # is `AGPL-3.0-only` (#291). The Dockerfile sets the same fixed value.
-          labels: |
-            org.opencontainers.image.licenses=AGPL-3.0-only
-
-      - name: Build and push
-        id: build
-        uses: docker/build-push-action@v6
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          context: .
-          build-args: |
-            SOURCE_REPOSITORY=${{ github.repository }}
-            SOURCE_REVISION=${{ github.sha }}
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          node-version: 26
+      - name: Prepare private fixture and authenticate image pulls
+        env:
+          DHI_USERNAME: ${{ vars.DHI_USERNAME }}
+          DHI_TOKEN: ${{ secrets.DHI_TOKEN }}
+        run: |
+          umask 077
+          export PRIVATE_ROOT="$RUNNER_TEMP/release-$GITHUB_RUN_ID-$ARCH"
+          export DOCKER_CONFIG="$RUNNER_TEMP/docker-$GITHUB_RUN_ID-$ARCH"
+          printf 'PRIVATE_ROOT=%s\nDOCKER_CONFIG=%s\n' "$PRIVATE_ROOT" "$DOCKER_CONFIG" >> "$GITHUB_ENV"
+          mkdir -m 700 "$PRIVATE_ROOT" "$DOCKER_CONFIG"
+          test -n "$DHI_USERNAME" && test -n "$DHI_TOKEN"
+          printf '%s' "$DHI_TOKEN" | docker login dhi.io --username "$DHI_USERNAME" --password-stdin
+      - name: Build candidate once on native architecture
+        run: |
+          docker build --platform="linux/$ARCH" \
+            --build-arg "SOURCE_REPOSITORY=$GITHUB_REPOSITORY" \
+            --build-arg "SOURCE_REVISION=$SOURCE_SHA" \
+            --label "org.opencontainers.image.revision=$SOURCE_SHA" \
+            --label "org.opencontainers.image.version=${GITHUB_REF_NAME#v}" \
+            --tag "$CANDIDATE" . > "$PRIVATE_ROOT/build.log" 2>&1
+      - name: Discard image-pull credential
+        if: always()
+        run: docker logout dhi.io
+      - name: Qualify packaged ownership and legal assets
+        run: bash .github/release/qualify.sh
+      - name: Stage qualified image
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          docker push "$CANDIDATE"
+          mkdir -p "$PRIVATE_ROOT/digest"
+          docker image inspect "$CANDIDATE" --format '{{json .RepoDigests}}' \
+            | node .github/release/record-digest.mjs > "$PRIVATE_ROOT/digest/$ARCH.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: qualified-digest-${{ matrix.arch }}
+          path: ${{ env.PRIVATE_ROOT }}/digest/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Stop owned fixture and discard credentials
+        if: always()
+        run: |
+          if docker container inspect "${FIXTURE_PREFIX}_pg" >/dev/null 2>&1; then
+            docker stop --time 10 "${FIXTURE_PREFIX}_pg"
+          fi
+          rm -rf -- "$DOCKER_CONFIG"
 
   release:
-    name: GitHub Release
-    needs: images
+    name: Promote qualified digests and create release
+    needs: [eligibility, candidate]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      packages: write
+      actions: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: qualified-digest-*
+          path: qualified-digests
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Recheck eligibility and promote without rebuilding
+        id: promote
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node .github/release/eligibility.mjs
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          node .github/release/promote.mjs
       - name: Create release with auto-generated notes
-        uses: softprops/action-gh-release@v2
-        with:
-          generate_release_notes: true
-          body: |
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_BODY: |
             ## Image and corresponding source
 
-            Image digest: `${{ needs.images.outputs.digest }}`.
+            Image digest: `${{ steps.promote.outputs.digest }}`.
             Source revision: `${{ github.sha }}`.
             [Download this revision's source](https://github.com/${{ github.repository }}/archive/${{ github.sha }}.tar.gz)
             · [Browse source and build instructions](https://github.com/${{ github.repository }}/tree/${{ github.sha }}).
@@ -104,3 +165,8 @@ jobs:
             Operators modifying this software must provide their actual version's
             Corresponding Source at no charge and update its static source directions;
             these upstream links do not describe uncommitted or private modifications.
+        run: |
+          gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes --notes "$RELEASE_BODY"
+      - name: Discard registry credential
+        if: always()
+        run: docker logout ghcr.io

@@ -4,6 +4,20 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Implemented locally (2026-11-13): GitHub automation and test quality.** Read-only workflow
+  permissions, immutable action pins, PR-only cancellation and bounded jobs; stable-main/green-CI
+  release eligibility, native candidate ownership/restore + legal checks and digest-only promotion.
+  Adds four-mode populated build fixtures, real Chromium authoring/recovery/publication smoke,
+  computed accessible-name checks, weekly coverage, CodeQL, dependency review and grouped
+  Dependabot updates with a protected-base-generated inventory patch. Patches the XML/parser
+  dependency alerts and regenerates the legal inventory. Removes redundant wiring/decorative
+  assertions, reuses compiled editor test scripts without sharing mutable state, and scopes backup
+  column assertions to the active schema. The repository token default is read-only and the two
+  obsolete issue-specific workflow registrations are disabled; history is retained. No push,
+  release or deployment was performed. Native Linux/DHI candidate execution and remote CI remain
+  required before release. Contract, commands and runtime evidence:
+  `docs/superpowers/specs/2026-11-13-github-automation-hardening.md`.
+
 - **Implemented (2026-11-13):** **Software license and source page, capsule account trigger, & thin scrollbars** (`uploader/public/auth.js`, `uploader/public/license.html`, `uploader/public/admin.css`, `uploader/scripts/copy-legal.mjs`). Moved **Software license and source** into `#cmsAccountMenu`'s panel (above **Log out**), linking to `/admin/license.html`; the account trigger is a `44px` capsule showing the avatar, single-line username, role, and chevron; restored `scrollbar-width: thin` on `.cms-workspace` and `.cms-nav-group`; `copy-legal.mjs`'s standalone `/legal/*.html` and `/admin/legal/*.html` indexes also use matching Mist gradient + frosted card styling.
  - **Implemented (2026-11-13):** **Admin Tinted Paper & Capsules (3B)** across all admin pages and dialogs (`uploader/public/admin.css`, mockups in `ui-mockups/story-details-controls.html` and `ui-mockups/editorial-underline-refinements.html`). Inputs, textareas, selects, file inputs, filter triggers (`.admin-select__trigger`), and `.slug-preview` fields use paper wells (`#f6f8fa` / `rgb(255 255 255 / 0.76)` in the Story details rail) with `--radius-lg` top corners and a `1.5px` bottom ledger rule that lifts to `--surface` and `--studio-accent` on focus; custom checkboxes/radios use `--studio-accent` with `forced-colors` fallback; action buttons, command-bar controls, row action links, and `.excerpt-assist__generate` use `999px` capsules while preserving unboxed `.editor-title-input`, segmented tabs, flat list/tab triggers, and menu items.
  - **Implemented (2026-11-13):** **Admin shell gradient & frosted workspace** (`uploader/public/admin.css`, mockup in `ui-mockups/shell-gradient.html`). `.cms-app-shell` uses a neutral-gray rule-of-thirds diagonal gradient (`#d0d4da` bottom-left → `#dbdfe4` at `(1/3, 1/3)` → `#fbfbfd` top-right, with `--shell-muted: #4b525c` for AA contrast in the sidebar/masthead), and `.cms-workspace` uses `68%` translucent frosted white (`backdrop-filter: blur(16px) saturate(112%)`), extended to the Story editor's `.editor-workspace`, `.editor-commandbar`, and `.editor-inspector` backdrop.

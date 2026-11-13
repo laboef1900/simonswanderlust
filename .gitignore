@@ -30,3 +30,8 @@ node_modules/
 /uploader/public/legal/
 /.issue-runtime/
 /source-release.json
+
+# Local automated verification output (never commit browser traces or screenshots).
+**/coverage/
+/uploader/test-results/
+/uploader/playwright-report/

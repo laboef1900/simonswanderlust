@@ -1,0 +1,50 @@
+name: coverage
+on:
+  schedule:
+    - cron: '43 5 * * 1'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  report:
+    name: coverage · ${{ matrix.tree }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        tree: [site, uploader]
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U ci -d ci"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: |
+            site/package-lock.json
+            uploader/package-lock.json
+      - run: npm ci --prefix site && npm ci --prefix uploader
+      - run: npm run build:native --prefix uploader
+      - run: npm run test:coverage -- --coverage.reporter=text-summary --coverage.reporter=json-summary
+        working-directory: ${{ matrix.tree }}
+        env:
+          TEST_DATABASE_URL: postgres://ci:ci@localhost:5432/ci
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-${{ matrix.tree }}
+          path: ${{ matrix.tree }}/coverage/coverage-summary.json
+          if-no-files-found: error
+          retention-days: 30

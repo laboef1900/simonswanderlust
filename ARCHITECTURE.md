@@ -420,8 +420,10 @@ and additionally drop rows whose locale is not enabled. Route generation is one 
 `site/src/pages/[...path].astro`, fed by `publicRoutes` (`site/src/lib/public-routes.ts`) for the
 enabled locales only; the hand-placed `src/pages/en/*` twins are gone. Standalone `npm run dev`,
 `astro check` and CI read the same Postgres truth without a snapshot. `site/test/built/routes.test.ts`
-compares the real four-mode build inventory (the DE-primary bilingual one byte-identical to the
-pre-#285 baseline) and greps single-language builds for a marker planted in the disabled rows.
+compares the real four-mode build inventory against independently specified expected routes
+and checks single-language output for disabled-row markers. `npm run test:built-contracts`
+generates disposable populated PostgreSQL fixtures and real builds for routes, pages/navigation
+and before/live/dormant journeys; it does not manufacture historical baseline evidence.
 
 **Per-surface rules.** Comments are bound to the committed published locale set
 (`SECURITY.md`, *Public comments*); WXR import skips Polylang items of a disabled locale
@@ -1690,11 +1692,13 @@ warns about.
 
 **Release flow** (`.github/workflows/release.yml`): pushing a `vX.Y.Z` tag —
 
-1. logs in to GHCR (`GITHUB_TOKEN`) and to `dhi.io` (repo variable `DHI_USERNAME` + secret
-   `DHI_TOKEN`) to pull the DHI bases,
-2. `buildx` multi-arch (**amd64 + arm64**) with the Dockerfile's digest-pinned DHI bases, pushed to
-   `ghcr.io/laboef1900/wanderlust-studio` tagged `{version}`, `{major}.{minor}`, and `latest`,
-3. creates the GitHub Release with generated notes.
+1. verifies a stable tag at the current protected `main` tip and green main-push CI for that SHA,
+2. authenticates DHI pulls (`DHI_USERNAME` variable + `DHI_TOKEN` secret), builds each architecture
+   once on its native runner, and qualifies that candidate's ownership/restore and legal assets,
+3. stages qualified images in GHCR, then rechecks eligibility and assembles the two immutable
+   digests into `{version}`, `{major}.{minor}` and `latest` tags without rebuilding,
+4. creates the GitHub Release with generated notes and the promoted digest. Candidate tags are
+   not release tags; deployment-mounted filesystem qualification remains a separate gate.
 
 v0.18.1 is the first release under this name (the `v0.18.0` tag's workflow failed before
 publishing anything). For every release, confirm the workflow run
