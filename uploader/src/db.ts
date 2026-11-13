@@ -17,6 +17,12 @@ export const ABOUT_SEED = {
   },
 };
 
+export const APP_POOL_TIMEOUTS = {
+  connectionTimeoutMillis: 10_000,
+  statement_timeout: 120_000,
+  idle_in_transaction_session_timeout: 60_000,
+} as const;
+
 export function createPool(connectionString: string, applicationName?: string): DbPool {
   if (applicationName !== undefined) {
     let url: URL;
@@ -26,7 +32,7 @@ export function createPool(connectionString: string, applicationName?: string): 
     url.searchParams.set('application_name', applicationName);
     connectionString = url.toString();
   }
-  return new Pool({ connectionString });
+  return new Pool({ connectionString, ...APP_POOL_TIMEOUTS });
 }
 
 /**

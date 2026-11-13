@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { mediaImpact } from '../src/media-impact.js';
+import * as renderMd from '../../site/src/lib/render-markdown.js';
 import { memoryPostStore, pgPostStore, type PostPair } from '../src/posts.js';
 import { memoryLanguageStore } from '../src/language.js';
 import { createPool, ensureSchema } from '../src/db.js';
@@ -76,6 +77,24 @@ describe('Media story impact through the real renderer', () => {
     const corpus = await posts.mediaImpactCorpus();
     corpus[0]!.rows[0]!.working.body_markdown = null as unknown as string;
     await expect(mediaImpact(corpus, 'photo', origin)).rejects.toThrow();
+  });
+
+  it('skips Markdown parsing on stories that do not reference the target key', async () => {
+    const posts = memoryPostStore();
+    const unrelated = pair('No matching images here');
+    unrelated.de.images = {};
+    unrelated.en.images = {};
+    await posts.upsertDraft(unrelated);
+    const other = pair(`![Hit](${src})`);
+    await posts.upsertDraft(other);
+    const spy = vi.spyOn(renderMd, 'renderMarkdown');
+    try {
+      const impact = await mediaImpact(await posts.mediaImpactCorpus(), 'photo', origin);
+      expect(impact).toMatchObject({ availability: 'available', drafts: [{ translationKey: other.translationKey }] });
+      expect(spy).toHaveBeenCalledTimes(2); // DE + EN of the matching story only
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 

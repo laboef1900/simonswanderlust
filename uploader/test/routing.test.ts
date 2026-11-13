@@ -146,6 +146,18 @@ describe('host routing', () => {
     expect(onMain.statusCode).toBe(404);
   });
 
+  it('matches imgHost case-insensitively per RFC 9110', async () => {
+    await mkdir(join(dir, 'images'), { recursive: true });
+    await writeFile(join(dir, 'images', 'k-640.webp'), 'img-bytes');
+    await release('r1', { 'index.html': '<h1>blog</h1>', '404.html': 'not here' });
+    const app = build();
+    try {
+      const upper = await app.inject({ method: 'GET', url: '/k-640.webp', headers: { host: 'IMG.SimonsWanderlust.COM' } });
+      expect(upper.statusCode).toBe(200);
+      expect(upper.body).toBe('img-bytes');
+    } finally { await app.close(); }
+  });
+
   it.each(['avif', 'webp', 'jpeg'])('allows cross-origin reads of public %s variants, including ranges and revalidation', async (format) => {
     await mkdir(join(dir, 'images', 'trips'), { recursive: true });
     await writeFile(join(dir, 'images', 'trips', `k-640.${format}`), 'img-bytes');

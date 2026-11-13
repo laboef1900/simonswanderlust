@@ -31,15 +31,21 @@ export interface AdminComment {
 
 /** Admin-only visibility metadata; retain every moderation row, including hidden locales. */
 export async function withPublicLocaleMetadata(
-  rows: AdminComment[], posts: Pick<PostStore, 'getPublishedLocales'>,
+  rows: AdminComment[],
+  posts: Pick<PostStore, 'getPublishedLocales'> & Partial<Pick<PostStore, 'getPublishedLocalesBatch'>>,
 ): Promise<(AdminComment & { publicLocale: boolean })[]> {
-  const locales = new Map<string, Locale[]>();
-  await Promise.all([...new Set(rows.map((row) => row.translationKey))].map(async (key) => {
-    locales.set(key, await posts.getPublishedLocales(key));
-  }));
-  return rows.map((row) => ({ ...row, publicLocale: locales.get(row.translationKey)!.includes(row.locale) }));
+  const uniqueKeys = [...new Set(rows.map((row) => row.translationKey))];
+  let locales: Map<string, Locale[]>;
+  if (posts.getPublishedLocalesBatch) {
+    locales = await posts.getPublishedLocalesBatch(uniqueKeys);
+  } else {
+    locales = new Map<string, Locale[]>();
+    await Promise.all(uniqueKeys.map(async (key) => {
+      locales.set(key, await posts.getPublishedLocales(key));
+    }));
+  }
+  return rows.map((row) => ({ ...row, publicLocale: (locales.get(row.translationKey) ?? []).includes(row.locale) }));
 }
-
 export interface CommentAdminStore {
   list(status: CommentStatus, offset?: number): Promise<{ comments: AdminComment[]; hasMore: boolean }>;
   /** false when the id is unknown. */

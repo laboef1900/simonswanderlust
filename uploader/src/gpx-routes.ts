@@ -6,17 +6,16 @@ import type { AttachRouteInput, GpxService } from './gpx-service.js';
 import type { RouteTokens } from './gpx-store.js';
 import { SOURCE_ID_RE } from './gpx-files.js';
 import { readGpxUpload } from './gpx-upload.js';
+import { isPlainObject, isStrictIsoUtc } from './request-guards.js';
 
 function closedObject(value: unknown, keys: readonly string[]): Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new GpxError('gpx_invalid_request', 400);
-  const object = value as Record<string, unknown>;
-  if (Object.keys(object).length !== keys.length || keys.some((key) => !Object.hasOwn(object, key))) throw new GpxError('gpx_invalid_request', 400);
-  return object;
+  if (!isPlainObject(value)) throw new GpxError('gpx_invalid_request', 400);
+  if (Object.keys(value).length !== keys.length || keys.some((key) => !Object.hasOwn(value, key))) throw new GpxError('gpx_invalid_request', 400);
+  return value;
 }
 function tokens(body: Record<string, unknown>): RouteTokens {
   if (body.baseVersion !== null && (typeof body.baseVersion !== 'string' || !SOURCE_ID_RE.test(body.baseVersion))) throw new GpxError('gpx_invalid_request', 400);
-  if (typeof body.baseUpdatedAt !== 'string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(body.baseUpdatedAt) || !Number.isFinite(Date.parse(body.baseUpdatedAt))) throw new GpxError('gpx_invalid_request', 400);
-  if (new Date(body.baseUpdatedAt).toISOString() !== body.baseUpdatedAt) throw new GpxError('gpx_invalid_request', 400);
+  if (!isStrictIsoUtc(body.baseUpdatedAt)) throw new GpxError('gpx_invalid_request', 400);
   return { baseVersion: body.baseVersion, baseUpdatedAt: body.baseUpdatedAt };
 }
 function selection(value: unknown): TrimSelection {

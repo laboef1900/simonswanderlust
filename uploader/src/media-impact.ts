@@ -32,18 +32,33 @@ function count(row: ClassifiedRow, src: string): LocaleUse {
 const differs = (a: LocaleUse, b: LocaleUse) => a.gallery !== b.gallery
   || a.galleryCaptionFollowsLibrary !== b.galleryCaptionFollowsLibrary || a.heroTitle !== b.heroTitle || a.inline !== b.inline;
 
+/** Conservative substring check so unrelated stories skip full Markdown parsing. */
+function rowMayReferenceKey(row: PostRow, needle: string): boolean {
+  if (typeof row.body_markdown !== 'string') return true;
+  if (row.hero_image?.src?.includes(needle)) return true;
+  if (row.title_image?.src?.includes(needle)) return true;
+  if (row.images && Object.keys(row.images).some((k) => k.includes(needle))) return true;
+  return row.body_markdown.includes(needle);
+}
+
 /** Fresh classification, never cached by release or snapshot digest. Failures propagate to the optional boundary. */
 export async function mediaImpact(corpus: MediaImpactStory[], key: string, imageOrigin: string): Promise<MediaImpact> {
   const result: Extract<MediaImpact, { availability: 'available' }> = { availability: 'available', published: [], drafts: [], newerDrafts: [] };
-  const src = `${imageOrigin.replace(/\/+$/, '')}/${key}`;
+  const origin = imageOrigin.replace(/\/+$/, '');
+  const src = `${origin}/${key}`;
+  const needle = `/${key}`;
   for (const story of corpus) {
     const scopes = { published: { de: empty(), en: empty() }, drafts: { de: empty(), en: empty() }, newerDrafts: { de: empty(), en: empty() } };
     let newer = false;
     for (const row of story.rows) {
-      const published = row.published ? count(await classifyRow(row.published, imageOrigin, renderMarkdown), src) : empty();
+      const published = row.published && rowMayReferenceKey(row.published, needle)
+        ? count(await classifyRow(row.published, origin, renderMarkdown), src)
+        : empty();
       scopes.published[row.locale] = published;
       if (!row.requested) continue;
-      const working = count(await classifyRow(row.working, imageOrigin, renderMarkdown), src);
+      const working = rowMayReferenceKey(row.working, needle)
+        ? count(await classifyRow(row.working, origin, renderMarkdown), src)
+        : empty();
       if (row.status === 'draft') scopes.drafts[row.locale] = working;
       else if (differs(working, published)) { scopes.newerDrafts[row.locale] = working; newer = true; }
     }

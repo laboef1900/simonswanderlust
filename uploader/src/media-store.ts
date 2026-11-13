@@ -98,6 +98,7 @@ export interface MediaQuery {
 
 export interface MediaStore {
   list(q: MediaQuery): Promise<{ items: MediaItem[]; total: number }>;
+  count?(q: MediaQuery): Promise<number>;
   get(key: string, client?: Pick<DbClient, 'query'>): Promise<MediaItem | null>;
   upsert(item: NewMediaItem): Promise<MediaItem>;
   patch(key: string, fields: MediaPatch, client?: Pick<DbClient, 'query'>): Promise<MediaItem>;
@@ -369,6 +370,10 @@ export function memoryMediaStore(opts: MediaStoreOptions): MediaStore {
       const size = pageSizeOf(q.pageSize);
       const page = Math.max(1, Math.floor(Number(q.page) || 1));
       return { items: sorted.slice((page - 1) * size, page * size).map(toItem), total: filtered.length };
+    },
+    async count(q) {
+      if (q.folder !== undefined) assertSafeFolder(q.folder);
+      return applyQuery([...rows.values()], q).length;
     },
     async get(key) {
       const r = rows.get(key);
@@ -696,6 +701,11 @@ export function pgMediaStore(pool: DbPool, opts: MediaStoreOptions): MediaStore 
         [...values, size, (page - 1) * size],
       );
       return { items: rows.map((r) => rowToItem(r, baseUrl)), total: Number(countRes.rows[0]?.n ?? 0) };
+    },
+    async count(q) {
+      const { sql, values } = where(q);
+      const countRes = await pool.query<{ n: string }>(`SELECT count(*) AS n FROM media ${sql}`, values);
+      return Number(countRes.rows[0]?.n ?? 0);
     },
     async get(key, client) {
       const r = await getRow(key, client);

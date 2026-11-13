@@ -63,6 +63,7 @@ export interface PageRemoval {
 export interface PageStore {
   configureImageOrigin(origin: string): void;
   get(key: string): Promise<StoredPagePair>;
+  getAll?(): Promise<StoredPagePair[]>;
   getForSave(key: string, ownerUserId: string): Promise<SaveRead<StoredPagePair>>;
   save(pair: PageUpdate, baseUpdatedAt?: Date, options?: PageSaveOptions): Promise<SavedPagePair>;
   publish(key: string, baseUpdatedAt?: Date, options?: PageSaveOptions): Promise<StoredPagePair>;
@@ -186,6 +187,7 @@ export function memoryPageStore(language: LanguageStore = memoryLanguageStore(),
   const store: PageStore = {
     configureImageOrigin(value) { origin = new URL(value).origin; },
     async get(key) { return structuredClone(pairs.get(key) ?? emptyPair(key)); },
+    async getAll() { return [...pairs.keys()].sort().map((k) => structuredClone(pairs.get(k)!)); },
     async getForSave(key, ownerUserId) {
       const content = structuredClone(pairs.get(key) ?? emptyPair(key));
       const receipt = receipts.get(key);
@@ -306,6 +308,16 @@ export function pgPageStore(pool: DbPool, options: { imageOrigin?: string } = {}
   const store: PageStore = {
     configureImageOrigin(value) { origin = new URL(value).origin; },
     get: (key) => readPage(pool, key),
+    async getAll() {
+      const { rows } = await pool.query<PageRow>('SELECT * FROM pages ORDER BY key, locale');
+      const byKey = new Map<string, PageRow[]>();
+      for (const r of rows) {
+        const list = byKey.get(r.key) ?? [];
+        list.push(r);
+        byKey.set(r.key, list);
+      }
+      return [...byKey.entries()].map(([k, list]) => pagePairFromRows(k, list));
+    },
     async getForSave(key, ownerUserId) {
       const { rows } = await pool.query<PageRow & { last_save_id: string | null; last_save_by: string | null }>(
         'SELECT * FROM pages WHERE key=$1 ORDER BY locale', [key]);
