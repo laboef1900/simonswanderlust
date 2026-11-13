@@ -190,12 +190,12 @@ window.Auth = (function () {
           '<details class="cms-account-menu" id="cmsAccountMenu">' +
             '<summary class="cms-account-menu__trigger">' +
               '<span class="cms-avatar" aria-hidden="true"></span>' +
-            '</summary>' +
-            '<div class="cms-account-menu__panel">' +
-              '<div class="cms-user-info">' +
+              '<span class="cms-user-info">' +
                 '<span class="cms-user-name"></span>' +
                 '<span class="cms-user-role"></span>' +
-              '</div>' +
+              '</span>' +
+            '</summary>' +
+            '<div class="cms-account-menu__panel">' +
               '<a href="/admin/license.html" class="cms-account-link">' +
                 ICON.posts +
                 '<span class="cms-account-link__label"></span>' +

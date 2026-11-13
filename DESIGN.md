@@ -1297,14 +1297,13 @@ criterion (2.5.5 is AAA), so the accessibility commitment in `PRODUCT.md` is una
 - A full-width 3rem masthead (brand on the left; descriptor and View site on the right)
   sits above a 13rem sidebar and a single rounded white workspace. The sidebar holds
   all page navigation (no journal header above it) and, at its foot, the account menu. Its
-  trigger is the avatar alone: a 36px steel-blue (`--studio-accent`) circle with the white
-  initial, inside a 44px hit area aligned to the footer edge; it darkens on hover and gains a
-  canvas-gapped accent ring while open. No name, role or chevron sits in the sidebar, so a long
-  username never wraps there. The panel opens upward with the full name (wrapping, never
-  truncated) and role above a hairline, then **Log out**, closing like every admin menu (Escape,
-  outside click); the trigger's accessible name stays “Account menu for …”. Admin-only pages appear
-  in the sidebar for admins only. Roles and server authorization are unchanged. Publish and
-  destructive actions retain their existing red treatment.
+  trigger is a full-width capsule showing the 32px steel-blue (`--studio-accent`) avatar,
+  single-line ellipsized username, role, and chevron (`44px` hit height). The panel opens
+  upward with **Software license and source** above a hairline and **Log out**, closing like
+  every admin menu (Escape, outside click); the trigger's accessible name stays “Account
+  menu for …”. Admin-only pages appear in the sidebar for admins only. Roles and server
+  authorization are unchanged. Publish and destructive actions retain their existing red
+  treatment.
   **Software license and source** sits inside the account menu (`#cmsAccountMenu`, above
   **Log out**) and opens `/admin/license.html`, styled in the frosted Editorial desk shell.
 - The shell is exactly the viewport and the workspace is its only scroll container:
