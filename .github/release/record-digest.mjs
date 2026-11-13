@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+const { ARCH: arch, SOURCE_SHA: sha, GITHUB_RUN_ID: runId, IMAGE: image } = process.env;
+assert(['amd64', 'arm64'].includes(arch));
+assert(/^[a-f0-9]{40}$/.test(sha));
+assert(/^\d+$/.test(runId));
+assert.equal(image, 'ghcr.io/laboef1900/wanderlust-studio');
+const digests = JSON.parse(readFileSync(0, 'utf8')).filter(value => value.startsWith(image + '@sha256:'));
+assert.equal(digests.length, 1, 'Expected exactly one pushed image digest');
+const digest = digests[0].slice(image.length + 1);
+assert(/^sha256:[a-f0-9]{64}$/.test(digest));
+console.log(JSON.stringify({ arch, sha, runId, digest }));

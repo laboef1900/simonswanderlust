@@ -44,8 +44,8 @@ afterEach(async () => {
   await Promise.all(windows.splice(0).map((w) => w.happyDOM.close()));
 });
 
-describe('HomePage layout & MapTeaser pins', () => {
-  it('uses a larger corner radius on the hero box, places RegionFilter beside the stories heading, and renders linked pin titles without outer rings', async () => {
+describe('HomePage navigation and MapTeaser pins', () => {
+  it('offers region navigation and links map pins with full accessible titles', async () => {
     vi.stubEnv('SITE_LANGUAGE_JSON', JSON.stringify({ primary: 'en', locales: ['en'] }));
     const tripA = makeTrip('bucharest', '4-day travel report: Bucharest', { lat: 44.4268, lng: 26.1025 });
     const tripB = makeTrip('rhodes', 'Rhodes', { lat: 36.4349, lng: 28.2176 });
@@ -59,24 +59,13 @@ describe('HomePage layout & MapTeaser pins', () => {
       }),
     );
 
-    // 1. Hero box has increased corner radius (sm:rounded-xl)
-    const heroHeading = doc.getElementById('hero-entry-title');
-    const heroBox = heroHeading?.closest('div.max-w-2xl');
-    expect(heroBox?.className).toContain('sm:rounded-xl');
-    expect(heroBox?.className).not.toContain('sm:rounded-sm');
-
-    // 2. RegionFilter sits beside the "All travel stories" heading
     const storiesSection = doc.getElementById('stories')!;
-    const headerRow = storiesSection.firstElementChild!;
-    expect(headerRow.className).toContain('flex');
-    expect(headerRow.querySelector('h2')?.textContent).toBe(ui.en['home.allStories']);
-    expect(headerRow.querySelector(`nav[aria-label="${ui.en['regions.navLabel']}"]`)).not.toBeNull();
+    expect(storiesSection.querySelector('h2')?.textContent).toBe(ui.en['home.allStories']);
+    expect(storiesSection.querySelector(`nav[aria-label="${ui.en['regions.navLabel']}"]`)).not.toBeNull();
 
-    // 3. MapTeaser removes outer r="11" rings and renders short-title article links
     const chartSvg = doc.querySelector(`svg[aria-label="${ui.en['home.mapTeaser.chartLabel']}"]`)!;
     expect(chartSvg).not.toBeNull();
     expect(chartSvg.getAttribute('role')).toBe('group');
-    expect(chartSvg.querySelectorAll('circle[r="11"]')).toHaveLength(0);
 
     const pinLinks = [...chartSvg.querySelectorAll('a.chart-pin')];
     expect(pinLinks).toHaveLength(2);

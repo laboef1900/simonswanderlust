@@ -16,10 +16,19 @@ on:
         required: false
         default: false
 
+permissions:
+  contents: read
+
+# Keep post-merge and manual qualification runs; only superseded PRs are cancelled.
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   uploader:
     name: uploader · typecheck + tests
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:18-alpine
@@ -37,8 +46,10 @@ jobs:
       run:
         working-directory: uploader
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 26
           cache: npm
@@ -53,6 +64,12 @@ jobs:
       # in site/node_modules — install them so typecheck + tests can compile.
       - run: npm ci
         working-directory: site
+      - name: Validate workflows and release policy
+        working-directory: .
+        run: |
+          docker run --rm -v "$GITHUB_WORKSPACE:/repo:ro" -w /repo \
+            rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 -color
+          node --test .github/release/*.test.mjs
       - run: npm run typecheck
       # TEST_DATABASE_URL un-skips the pg/pages/backup integration suites
       # (serialized against the shared DB by vitest.config.ts's integration
@@ -61,6 +78,11 @@ jobs:
         env:
           TEST_DATABASE_URL: postgres://ci:ci@localhost:5432/ci
 
+      - run: npx playwright install --with-deps chromium
+      - name: Exercise real browser and publication
+        run: npm run test:e2e
+        env:
+          TEST_DATABASE_URL: postgres://ci:ci@localhost:5432/ci
   # Permanent architecture coverage of current product source. These host-runner
   # tests are NOT DHI/container/deployment-mount qualification.
   native-owner:
@@ -99,10 +121,10 @@ jobs:
       run:
         working-directory: uploader
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 26
           cache: npm
@@ -121,16 +143,13 @@ jobs:
           TEST_DATABASE_URL: postgres://ci:ci@localhost:5432/ci
 
   # Actual Dockerfile/main/offline CLI qualification, distinct from host tests.
-  # Automatic secret-bearing execution stays on the owned #305 branch only.
+  # Manual qualification complements the mandatory exact-candidate release gate.
   # Named-volume evidence NEVER waives the deployment-mounted filesystem gate.
   packaged-owner:
     if: >-
       github.repository == 'laboef1900/wanderlust-studio' &&
       github.event.repository.private == false &&
-      ((github.event_name == 'pull_request' &&
-        github.event.pull_request.head.repo.full_name == github.repository &&
-        github.event.pull_request.head.ref == 'feature/issue-305-write-reconciliation') ||
-       (github.event_name == 'workflow_dispatch' && inputs.qualify_native_package))
+      github.event_name == 'workflow_dispatch' && inputs.qualify_native_package
     name: packaged owner · native ${{ matrix.arch }}
     permissions:
       contents: read
@@ -156,7 +175,7 @@ jobs:
       DOCKER_CONFIG: ${{ github.workspace }}/.local/swl-305-docker-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
       PACKAGE_IMAGE: swl-305-package:${{ github.event.pull_request.head.sha || github.sha }}-${{ matrix.arch }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Test the real reviewed HEAD, never GitHub's synthetic merge commit.
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -172,7 +191,8 @@ jobs:
           test "$RUNNER_ARCH" = "$EXPECTED_RUNNER_ARCH"
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           umask 077
-          mkdir -p -m 700 "$GITHUB_WORKSPACE/.local"
+          mkdir -p "$GITHUB_WORKSPACE/.local"
+          chmod 700 "$GITHUB_WORKSPACE/.local"
           mkdir -m 700 "$PRIVATE_ROOT" "$DOCKER_CONFIG"
           python3 - <<'PY'
           import os, secrets
@@ -225,7 +245,7 @@ jobs:
             --health-cmd 'pg_isready -U package_owner -d postgres' \
             --health-interval 2s --health-timeout 5s --health-retries 30 \
             postgres:18-alpine
-          for attempt in {1..60}; do
+          for _ in {1..60}; do
             if [ "$(docker inspect --format '{{.State.Health.Status}}' "${FIXTURE_PREFIX}_pg")" = healthy ]; then
               exit 0
             fi
@@ -299,7 +319,7 @@ jobs:
           PY
       - name: Upload sanitized evidence only
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: packaged-owner-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -312,6 +332,7 @@ jobs:
   site:
     name: site · tests + astro check
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:18-alpine
@@ -326,8 +347,10 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 26
           cache: npm
@@ -359,3 +382,8 @@ jobs:
         working-directory: site
         env:
           DATABASE_URL: postgres://ci:ci@localhost:5432/ci
+      - name: Build populated contracts in all four language modes
+        run: npm run test:built-contracts
+        working-directory: site
+        env:
+          TEST_DATABASE_URL: postgres://ci:ci@localhost:5432/ci

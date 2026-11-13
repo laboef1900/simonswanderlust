@@ -14,7 +14,9 @@
     "preview": "astro preview",
     "astro": "astro",
     "test": "vitest run",
-    "test:built-routes": "vitest run --config vitest.built.config.ts"
+    "test:coverage": "vitest run --coverage",
+    "test:built-routes": "vitest run --config vitest.built.config.ts",
+    "test:built-contracts": "../uploader/node_modules/.bin/tsx scripts/verify-built-contracts.ts"
   },
   "dependencies": {
     "@astrojs/markdown-satteri": "0.4.5",
@@ -40,6 +42,7 @@
     "unist-util-visit": "^5.1.0"
   },
   "devDependencies": {
+    "@vitest/coverage-v8": "4.1.12",
     "@astrojs/check": "^0.9.9",
     "@fontsource-variable/inter": "^5.2.8",
     "@fontsource/ibm-plex-mono": "^5.2.7",
@@ -48,5 +51,10 @@
     "happy-dom": "^21.0.4",
     "typescript": "^6.0.3",
     "vitest": "^4.1.12"
+  },
+  "overrides": {
+    "@tailwindcss/typography": {
+      "postcss-selector-parser": "6.1.5"
+    }
   }
 }

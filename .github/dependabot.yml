@@ -1,0 +1,22 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      actions:
+        patterns: ['*']
+  - package-ecosystem: npm
+    directories: [/site, /uploader]
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      non-major:
+        patterns: ['*']
+        update-types: [minor, patch]
+    # dependency-inventory.yml supplies a protected-base-generated patch artifact.
+    # Apply/review it, or run node uploader/scripts/generate-third-party-inventory.mjs.
+    # The normal CI freshness gate intentionally remains mandatory.

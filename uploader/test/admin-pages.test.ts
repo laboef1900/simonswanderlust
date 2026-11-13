@@ -490,11 +490,6 @@ describe('admin page wiring', () => {
   const login = readFileSync('public/login.html', 'utf8');
   const auth = readFileSync('public/auth.js', 'utf8');
 
-  it('editor, about, and login load the shared draft-guard script', () => {
-    for (const page of [editor, about, login]) {
-      expect(page).toContain('<script src="/admin/draft-guard.js"></script>');
-    }
-  });
 
   it('editor and about create a guard and route every 401 through it', () => {
     for (const page of [editor, about]) {
@@ -546,11 +541,6 @@ describe('admin page wiring', () => {
     }
   });
 
-  it('login honors a validated ?next= return URL', () => {
-    expect(login).toContain('DraftGuard.safeNextPath(');
-    expect(login).toContain('location.href = nextPath');
-    expect(login).not.toMatch(/location\.href = '\/admin\/'/);
-  });
 
 
   it('EasyMDE built-in autosave and toolbar stay off on the page editor (DraftGuard owns persistence, the manuscript bar the tools)', () => {

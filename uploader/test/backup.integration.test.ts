@@ -647,7 +647,7 @@ maybe('backup round-trip (Postgres)', () => {
       expect(dump.tables.comments).toHaveLength(2);
       for (const c of dump.tables.comments!) expect(c).not.toHaveProperty('email');
       const schemaCols = (await pool.query(
-        `SELECT column_name FROM information_schema.columns WHERE table_name = 'comments' AND column_name <> 'email'`,
+        `SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'comments' AND column_name <> 'email'`,
       )).rows.map((x) => x.column_name as string).sort();
       expect(Object.keys(dump.tables.comments![0]!).sort()).toEqual(schemaCols);
 

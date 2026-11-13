@@ -1,6 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { Window } from 'happy-dom';
+import { computeAccessibleName } from 'dom-accessibility-api';
 
 // The admin targets WCAG 2.2 AA (CLAUDE.md). These are the contracts an
 // assistive-technology user relies on and that a markup edit can silently
@@ -12,30 +14,48 @@ const PAGES = ['editor', 'about', 'settings', 'posts', 'media', 'login', 'users'
 const html = Object.fromEntries(PAGES.map((p) => [p, readFileSync(`public/${p}.html`, 'utf8')])) as Record<typeof PAGES[number], string>;
 const markupOf = (page: string): string => page.slice(0, page.indexOf('<script'));
 
-describe('admin form fields have accessible names', () => {
-  for (const name of PAGES) {
-    it(`${name}.html`, () => {
-      const markup = markupOf(html[name]);
-      const labelled = new Set([...markup.matchAll(/<label[^>]*\bfor="([^"]+)"/g)].map((m) => m[1]));
-      const controls = [...markup.matchAll(/<(input|textarea|select)\b([^>]*)>/g)];
-      const unnamed = controls
-        .filter((m) => !/type="hidden"/.test(m[2]!))
-        .filter((m) => !/\baria-label(ledby)?="/.test(m[2]!))
-        .filter((m) => {
-          const id = /\bid="([^"]+)"/.exec(m[2]!)?.[1];
-          if (id && labelled.has(id)) return false;
-          // Wrapped in a <label> that is still open at the control's position.
-          const before = markup.slice(0, m.index!);
-          return before.lastIndexOf('<label') < before.lastIndexOf('</label>');
-        })
-        .map((m) => m[0]);
-      expect(unnamed).toEqual([]);
-    });
-  }
+const windows: Window[] = [];
+afterEach(async () => { await Promise.all(windows.splice(0).map(window => window.happyDOM.close())); });
+function documentOf(markup: string) {
+  const window = new Window();
+  windows.push(window);
+  return new window.DOMParser().parseFromString(markup, 'text/html');
+}
+function controlNames(markup: string) {
+  return [...documentOf(markup).querySelectorAll('input:not([type="hidden"]), textarea, select')]
+    .map(control => ({ id: control.id, name: computeAccessibleName(control as unknown as Element) }));
+}
+
+describe('accessible form names', () => {
+  // Other admin pages populate translated labels at runtime. Their actual visible
+  // controls are checked in e2e/studio.spec.ts, rather than accepting empty markup.
+  it('names the real sign-in fields', () => {
+    expect(controlNames(markupOf(html.login))).toEqual([
+      { id: 'username', name: 'Username' }, { id: 'password', name: 'Password' },
+    ]);
+  });
+  it.each([
+    '<input id="field">',
+    '<label>Earlier label</label><input id="field">',
+    '<label for="different">Wrong field</label><input id="field">',
+    '<input id="field" aria-label="">',
+    '<input id="field" aria-labelledby="missing">',
+    '<span id="empty"></span><input id="field" aria-labelledby="empty">',
+  ])('rejects missing, empty and dangling names: %s', markup => {
+    expect(controlNames(markup)).toEqual([{ id: 'field', name: '' }]);
+  });
+  it.each([
+    '<label for="field">Photo title</label><input id="field">',
+    '<label>Photo title<input id="field"></label>',
+    '<input id="field" aria-label="Photo title">',
+    '<span id="title">Photo</span><span id="kind">title</span><input id="field" aria-labelledby="title kind">',
+  ])('resolves explicit, wrapped and ARIA names: %s', markup => {
+    expect(controlNames(markup)).toEqual([{ id: 'field', name: 'Photo title' }]);
+  });
 });
 
 describe('admin outcome messages are announced (SC 4.1.3)', () => {
-  const liveRoles = /role="(status|alert)"/;
+  const liveRoles = /^(status|alert)$/;
   const cases: [typeof PAGES[number], string[]][] = [
     ['posts', ['out']], ['media', ['out']], ['import', ['out']], ['login', ['out', 'err']],
     ['users', ['out', 'pwout']],
@@ -50,18 +70,18 @@ describe('admin outcome messages are announced (SC 4.1.3)', () => {
   for (const [page, ids] of cases) {
     it(`${page}.html`, () => {
       for (const id of ids) {
-        const tag = new RegExp(`<(pre|p)\\b[^>]*\\bid="${id}"[^>]*>`).exec(html[page])?.[0];
-        expect(tag, `#${id} exists`).toBeDefined();
-        expect(tag, `#${id} is a live region`).toMatch(liveRoles);
+        const node = documentOf(html[page]).getElementById(id);
+        expect(node, `#${id} exists`).not.toBeNull();
+        expect(node?.getAttribute('role'), `#${id} is a live region`).toMatch(liveRoles);
       }
     });
   }
   it('error lines interrupt, status lines do not (editor and login)', () => {
-    const roleOf = (page: string, id: string) => new RegExp(`<(pre|p)\\b[^>]*\\bid="${id}"[^>]*>`).exec(page)?.[0];
-    expect(roleOf(html.editor, 'actionError')).toMatch(/role="alert"/);
-    expect(roleOf(html.editor, 'actionStatus')).toMatch(/role="status"/);
-    expect(roleOf(html.login, 'err')).toMatch(/role="alert"/);
-    expect(roleOf(html.login, 'out')).toMatch(/role="status"/);
+    const roleOf = (page: string, id: string) => documentOf(page).getElementById(id)?.getAttribute('role');
+    expect(roleOf(html.editor, 'actionError')).toBe('alert');
+    expect(roleOf(html.editor, 'actionStatus')).toBe('status');
+    expect(roleOf(html.login, 'err')).toBe('alert');
+    expect(roleOf(html.login, 'out')).toBe('status');
   });
 });
 
