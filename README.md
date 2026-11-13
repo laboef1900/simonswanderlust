@@ -1,152 +1,75 @@
-# Wanderlust Studio
+<h1 align="center">Wanderlust Studio</h1>
 
-**A self-hosted CMS for travel blogs. Built for the stories, photographs and places worth sharing.**
+<p align="center">
+  <strong>Your journeys, your photographs, your stories—all in one self-hosted studio.</strong>
+</p>
 
-Turn a journey into a photo-rich travel journal: write your story, arrange the gallery,
-plot the route and publish in German and English. Wanderlust Studio brings the editor,
-media library, maps and publishing workflow together—with your content on your own server.
+<p align="center">
+  A bilingual travel blog CMS, responsive image pipeline, and static-site publisher built for expedition writing.
+</p>
 
-Originally built for **Simon's Wanderlust**, it pairs a browser-based writing studio with
-an editorial, photography-first blog. No editing Markdown files in git to publish a post.
-No separate image service or build server to run.
+<p align="center">
+  <a href="https://github.com/laboef1900/wanderlust-studio/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/laboef1900/wanderlust-studio/actions/workflows/ci.yml/badge.svg?branch=dev"></a>
+  <img alt="Astro 7" src="https://img.shields.io/badge/Astro-7-BC52EE?logo=astro&logoColor=white">
+  <img alt="Node 26" src="https://img.shields.io/badge/Node-26-339933?logo=nodedotjs&logoColor=white">
+  <img alt="PostgreSQL 18" src="https://img.shields.io/badge/PostgreSQL-18-4169E1?logo=postgresql&logoColor=white">
+  <img alt="Docker amd64 · arm64" src="https://img.shields.io/badge/Docker-amd64%20%C2%B7%20arm64-2496ED?logo=docker&logoColor=white">
+  <a href="LICENSE"><img alt="License: AGPL v3" src="https://img.shields.io/badge/License-AGPL%20v3-blue.svg"></a>
+</p>
 
-**[Start your travel journal](#quick-start-full-stack-docker)** ·
-[Explore the authoring workflow](docs/authoring-workflow.md) ·
-[Browse releases](https://github.com/laboef1900/wanderlust-studio/releases)
+<p align="center">
+  <a href="#quick-start">Quick start</a> ·
+  <a href="docs/authoring-workflow.md">Authoring workflow</a> ·
+  <a href="docs/install.md">Server install</a> ·
+  <a href="https://github.com/laboef1900/wanderlust-studio/releases">Releases</a>
+</p>
+
+---
 
 ## More journey. Less publishing machinery.
 
-### Give your photography room to breathe
+Wanderlust Studio brings your writing desk, photo library, route maps, and static-site publisher under one roof—on your own server. Turn a camera roll and field notes into a photography-first travel journal without committing Markdown files to git or running a separate image host.
 
-Upload a collection of photos, organize it into folders and build a gallery without
-leaving the editor. Choose justified rows, a wide break-out or a slider; readers can
-open the photographs in a lightbox.
+Originally built for **Simon's Wanderlust**, it pairs a quiet browser-based editorial studio with a fast, magazine-grade public blog. Spend your time on the story and the photographs; hit **Publish** when a piece is ready for readers.
 
-The image pipeline creates responsive **AVIF and WebP** variants automatically, with a
-JPEG option for JPG uploads. Choose your quality settings and compare the result before
-committing to them. Keep the originals privately; publish optimized variants without
-embedded GPS coordinates.
+## Everything a travel story needs, built in
 
-Photo descriptions have a home, too. Manage German and English alt text and captions in
-**Media**, and article galleries pick up the current values on the next site rebuild.
-Describe a photograph once per language—not again in every story that uses it.
+- **Write in visual mode or Markdown.** Draft in a clean rich-text studio or switch straight to Markdown source—with separate opening and title photography, key facts, ordered stops, revision history, and live preview before anything goes live.
+- **Give your photography room to breathe.** Upload in bulk, organize into folders, and inspect camera exposure details (focal length, aperture, ISO, shutter). Every upload generates responsive **AVIF and WebP** variants automatically (with a JPEG option and side-by-side quality preview), while source originals stay private and published images strip GPS coordinates.
+- **Describe a photo once, use it everywhere.** Drop justified gallery rows, full-bleed breakouts, or interactive sliders with a lightbox right inside your manuscript. Maintain German and English alt text and captions once in **Media**, and every story gallery picks them up on the next rebuild.
+- **Put the places on the page.** Connect published stories on a global travel map, import GPX tracks (simplified cleanly for public routes), and generate car, bike, or foot legs between stops with bundled OSRM—all rendered over self-hosted map tiles and fonts with zero third-party map trackers.
+- **Tell it in two languages.** Keep German and English editions paired in one editor—sharing routes and trip details while localizing titles, excerpts, countries, and key facts—or run a German-only or English-only site with your choice of primary root URL.
+- **Optional AI copilot, strictly on your terms.** Draft from trip event notes, translate between German and English while preserving galleries and frontmatter, review stories, suggest excerpts, and bulk-caption photo folders using local models or your own OpenAI, Anthropic, or OpenRouter keys—sent straight from your browser, never required to write or publish.
+- **Journeys, reader comments, and a clean escape from WordPress.** Group related stories into multi-leg **Journeys**, moderate self-hosted reader comments without collecting emails, migrate an existing WordPress blog via WXR import with preserved slugs and re-hosted photos, and export portable MDX plus database and image backups anytime.
 
-### Write the story, not the layout
+## Static speed on the outside. Full control underneath.
 
-A focused Markdown editor keeps the manuscript at the centre. Add an opening photograph,
-a separate title image, key facts and an itinerary, then preview the result before it
-goes live. The public blog gives those ingredients an editorial layout, with generous
-photography, a table of contents, destination pages and expedition-log details.
+Readers get pre-rendered **Astro 7** HTML—fast, crisp, and built with canonical URLs, `hreflang` alternates, JSON-LD, sitemaps, and RSS out of the box. Every public page is served directly by the app with no runtime database queries or third-party analytics in your visitors' browsers.
 
-**Drafts, revision history and explicit publishing** give you room to work. Saving changes
-to an existing article does not publish them. Publish when the story is ready; the app
-builds and serves the new static pages. Gallery descriptions from Media follow their own
-next-rebuild update rule.
+Underneath, **Node 26**, **Fastify 5**, **sharp**, and **PostgreSQL 18** keep drafts, accounts, media metadata, and moderated comments safely separated from published releases. Saving an edit never overwrites the live blog; each **Publish** builds a fresh static release and switches to it atomically.
 
-### Put the places on the page
+## Made for your server
 
-Give readers a way to follow your travels—not just read about them. A travel map connects
-your published stories, while individual articles can show their location and route stops.
-Country-coordinate assistance and optional waypoint search help you place the journey.
+Wanderlust Studio runs as a self-contained Docker Compose stack—one `app` container (CMS, image pipeline, builder, and static server), `db` (PostgreSQL 18), and bundled per-country `osrm` street routing—built for **Linux `amd64` and `arm64`**, plus Docker Desktop for local trials.
 
-Public maps use **self-hosted map tiles and fonts**. They do not need a third-party map
-service in your readers' browsers. Editor waypoint searches are separate and use an
-external geocoding service when requested.
+### Quick start
 
-### Tell it in two languages
+Installing on a production server? Start with the [installation guide](docs/install.md) for measured hardware sizing, secrets, reverse-proxy setup, blog and image domains, and backups.
 
-German and English belong to the same story. Switch between locale tabs to write titles,
-excerpts, country names, key facts and photo descriptions, while shared trip details stay
-together. Readers get language switching and linked translations: German at the root,
-English under `/en/`.
-
-This is a purpose-built **DE/EN workflow**, not a promise of automatic translation or an
-arbitrary-language site builder.
-
-### Keep your voice. Get help where it counts.
-
-Optional AI tools can suggest excerpts, review a story and describe photographs. Choose
-local or remote providers independently for editorial work and photo descriptions.
-Review Story checks the unsaved active language locally first. **Review with AI** explicitly
-sends it to the disclosed provider/model; suggestions never silently rewrite your article or
-gate publishing.
-
-For a large photo collection, generate titles, bilingual alt text, captions and tags in
-bulk. Fill empty fields by default; replacing existing descriptions is an explicit choice.
-Bulk photo-detail generation saves as it runs, while single-photo suggestions wait for
-**Save details**.
-
-**AI is optional.** Writing, uploading and publishing work without a model. When enabled,
-model requests go directly from the author's browser to the selected provider; the server
-never runs inference. Remote providers may charge for use and receive the submitted content.
-
-## A travel blog you control
-
-- **Your stories, your server.** Posts, accounts and comments live in Postgres. Image
-  originals, generated variants, releases and backups stay in your self-hosted storage.
-- **A static reading experience.** Astro builds the public pages ahead of time; the CMS
-  does not assemble each article on every reader request.
-- **Discovery built in.** Canonical URLs, language alternates, social-sharing metadata,
-  structured article data, sitemaps and RSS feeds are part of the public site.
-- **Conversations without a comment platform.** Optional reader comments are self-hosted,
-  held for moderation and support author replies. Readers do not need to supply an email.
-- **A way out, not a lock-in.** Export posts as MDX, back up the database and archive your
-  images. Scheduled and on-demand backups are available in the admin.
-- **A path from WordPress.** Import a WXR export, preserve existing post slugs and re-host
-  its photos. Imported stories arrive as drafts for you to review before publishing.
-
-## From camera roll to published story
-
-1. **Collect.** Upload your photographs to Media, organize folders and add descriptions.
-2. **Compose.** Write the article, choose your images and gallery layout, and add trip facts
-   and map stops. Work on the second language in the same editor.
-3. **Review.** Open Preview, check the photos and wording, and use optional editorial help.
-4. **Publish.** The app rebuilds the blog and switches to the new release. Your photographs,
-   maps and story are ready for readers.
-
-[Walk through your first post](docs/authoring-workflow.md).
-
-## Quick start (full stack, Docker)
-
-**Bring your own server, keep your own journal.** The stack runs as two containers:
-one app for the CMS, image processing and public blog, plus Postgres. The release workflow
-builds for amd64 and arm64.
-
-Site name, author, logo, public domain and languages (DE+EN, DE-only or EN-only) are set
-in the admin's Settings; templates you want to change are edited in source. It is a
-self-hosted project, not a hosted signup service or a no-code theme marketplace. This README describes the current source; tagged images contain the
-features shipped in their release.
-
-### Start with a released image
-
-**Image name:** releases from **v0.18.1** on are published as
-`ghcr.io/laboef1900/wanderlust-studio` (see the
-[releases](https://github.com/laboef1900/wanderlust-studio/releases)). Releases up to
-v0.17.1 remain at `ghcr.io/laboef1900/simonswanderlust-app`; they are not copied or
-aliased to the new package, so a saved `IMAGE_TAG=0.17.1` does not resolve under the new
-name. Existing installations upgrade deliberately, following the
-[release notes](#cutting-a-release) and the upgrade runbook.
-
-**Installing on a server?** Follow the [installation guide](docs/install.md): supported
-platforms, measured requirements, secrets, the reverse proxy, blog and image domains, first
-run, upgrades and backups. The rest of this section is a local trial on your own machine.
-
-You need Docker Engine with Compose (or Docker Desktop for a trial). From a checkout:
+For a local trial on your own machine:
 
 ```bash
 cp uploader/.env.example .env
 ```
 
-Edit your private `.env`: set `POSTGRES_PASSWORD` to the output of `openssl rand -hex 32`,
-`PUBLIC_BASE_URL=http://localhost:3000`, `IMG_HOST=localhost:3000` and `IMAGE_TAG` (a
-version published under `ghcr.io/laboef1900/wanderlust-studio`, or `local` after
-[building the current source](#build-the-current-source)). All four are required; Compose
-stops with `set … in .env` when one is missing. `PUBLIC_BASE_URL`/`IMG_HOST` name the image
-host only; a server's blog domain is set later in **Settings → Site identity**. Street
-routing needs no setting: it downloads the map of each country your stories have stops in
-([docs/install.md](docs/install.md#4g-street-routing-bundled-osrm)).
+Edit `.env` and set all four required variables:
 
-On Linux, the app runs as uid 1000, so prepare the data directory before starting:
+- `POSTGRES_PASSWORD` — generate with `openssl rand -hex 32`
+- `PUBLIC_BASE_URL=http://localhost:3000`
+- `IMG_HOST=localhost:3000`
+- `IMAGE_TAG` — a published release from `ghcr.io/laboef1900/wanderlust-studio` (v0.18.1 or later; earlier v0.17.1 images remain at `simonswanderlust-app`), or `local` after building from source
+
+On Linux, prepare the data directory for uid `1000`, then start the stack:
 
 ```bash
 mkdir -p uploader/data
@@ -155,144 +78,67 @@ docker compose pull      # skip for IMAGE_TAG=local
 docker compose up -d
 ```
 
-Open **http://localhost:3000/login** to create the first admin account; the Desk's first-run
-checklist takes it from there.
+Open **http://localhost:3000/login** to create your first admin account and walk through the first-run checklist. Street routing automatically downloads and prepares only the countries your multi-stop stories use.
 
-### Build the current source
+### Build from source
 
-Compose runs images; it does not build them. To use your own changes:
+To run your own changes with `IMAGE_TAG=local` (requires access to the `dhi.io/node` hardened base images used in `Dockerfile`):
 
 ```bash
 docker build -t ghcr.io/laboef1900/wanderlust-studio:local .
 IMAGE_TAG=local docker compose up -d
 ```
 
-For subsequent Compose commands against this local build, set `IMAGE_TAG=local` in
-your private `.env` too; `local` is a locally built tag, not a published release.
-
-The Dockerfile uses Docker Hardened Images (`dhi.io/node`); building requires access to
-those base images. Pulling a finished release from GHCR does not require a DHI login.
-
-**Redeploying the app does not rebuild an existing blog.** Use Publish or **Rebuild site
-now** to regenerate the static output. See [the publishing guide](docs/authoring-workflow.md).
+> **Note:** Redeploying the container does not rebuild already-published static pages. Trigger **Publish** on a story or **Settings → Rebuild site now** to regenerate the live site.
 
 ### Connect an optional AI provider
 
-Configure providers and per-use-case models under **Settings → AI models**. Local-only
-use needs no encryption master key. Remote credentials require a private `ENCRYPTION_KEY`
-and separate key escrow for recovery. Credentials are encrypted at rest but disclosed
-to signed-in authors for browser-direct requests.
+Configure providers and per-use-case models under **Settings → AI models**. Local-only setups need no encryption master key. Remote API keys require a private `ENCRYPTION_KEY` (with separate key escrow for recovery); keys are encrypted at rest and decrypted only for signed-in authors making browser-direct requests. See [provider setup and credential recovery](uploader/README.md#ai-providers-and-encrypted-credentials-214-registry-2026-10-19).
 
-[Provider setup and credential recovery](uploader/README.md#ai-providers-and-encrypted-credentials-214-registry-2026-10-19).
-
-## Backups
-
-Your journal deserves a copy somewhere else. App-created database dumps, image archives and
-private GPX companion archives normally live under `/data/backup/db`, on the **same disk as
-the running app**. Settings lists local files, not verified offsite delivery.
-
-[Backup and restore procedures](ARCHITECTURE.md#backups--disaster-recovery) ·
-[App upgrade and supported recovery runbook](ARCHITECTURE.md#app-upgrades-and-supported-recovery).
-Before upgrading, capture a coherent old-app dump, matching private route archive, image
-recovery material, operator-managed settings/bootstrap copy and separately escrowed key
-generation under a write freeze. Settings are not included in the dump; there is no native
-settings snapshot. **No eligible backward release pair is currently established; recovery
-is roll-forward only.**
-
-## Under the hood
+### Under the hood & backups
 
 | Part | Responsibility | Stack |
-| :-- | :-- | :-- |
-| [`site/`](site/) | Photography-first public blog, built from published Postgres content | Astro 7, Tailwind 4, MapLibre |
-| [`uploader/`](uploader/) | Wanderlust Studio, media processing, imports, builds and serving | Node 26, Fastify 5, sharp |
-| Postgres | Stories, accounts, media metadata and comments | PostgreSQL 18 |
+| :--- | :--- | :--- |
+| [`site/`](site/) | Photography-first public blog built from published Postgres content | Astro 7, Tailwind 4, MapLibre |
+| [`uploader/`](uploader/) | Wanderlust Studio desk, image pipeline, imports, builds, and serving | Node 26, Fastify 5, sharp |
+| `db` | Stories, pages, journeys, accounts, media metadata, and comments | PostgreSQL 18 |
 
-The app runs Astro builds at runtime and serves the resulting release itself. Content is
-managed through the CMS, not committed as source files; MDX exports are portable backups.
-There is no separate build-server container to operate.
-
-For local site development with Node 26+ and a reachable, initialized Postgres database:
+For local `site/` development against a reachable Postgres instance (`DATABASE_URL` set):
 
 ```bash
-cd site
-npm ci
-npm run dev
+cd site && npm ci && npm run dev
 ```
 
-Set `DATABASE_URL` for the site process. Both `npm run build` and `npx astro check` load
-content from Postgres. Site unit tests run with `npm test` without a database; `uploader/`
-integration tests need a separate `TEST_DATABASE_URL`.
+Site unit tests run via `npm test` without a database (`npx astro check` and `npm run build` read from Postgres); `uploader/` integration tests use `TEST_DATABASE_URL`.
 
-## Software, contributions and content rights
-
-**Wanderlust Studio software is licensed under [GNU AGPL version 3 only](LICENSE)
-(`AGPL-3.0-only`). Copyright 2026 Simon and contributors.** This covers original
-application code, tests, build scripts and technical documentation, without warranty
-to the extent permitted by law. Third-party components retain their own licenses.
-
-Stories and translations, uploaded photos and illustrations, MDX story content
-(including `site/src/content/trips/` stubs), reader submissions and brand/logo
-artwork are **excluded from the software grant and are not open-licensed here**.
-Permission comes from their respective rightsholders, unless separately licensed
-or permitted by law. No ownership of users' or third parties' content is claimed.
-Using the CMS does not itself put authored content under AGPL or change its
-visibility/access controls. Software embedded in generated output retains its
-applicable license; AGPL §2 governs when output constitutes a covered work.
-
-Original software contributions are accepted under **AGPL-3.0-only, inbound =
-outbound**, with **no DCO or CLA**. Submit only material you have authority to
-license and preserve third-party notices. This is not a copyright assignment.
-
-The product stays **Wanderlust Studio**. The software grant does not grant rights
-to brand a separate service as “Simon's Wanderlust” or “Wanderlust Studio”, use
-their logos, or imply endorsement. See [NOTICE](NOTICE) and the
-[owner decision](docs/superpowers/specs/2026-10-27-software-content-brand-rights-design.md).
-The separately approved image rename is implemented on
-`feature/issue-291-image-name`; old artifacts remain untouched.
-
-### Distributing and operating modified software
-
-Provide the exact version's Corresponding Source under AGPL §6 when distributing
-object code, with clear source directions alongside each image/release. Modified
-network versions must prominently offer their Corresponding Source to all remote
-users, at no charge, under §13. A moving upstream branch or package inventory alone
-is not proof of correspondence. Release builds record the existing GitHub repository
-and full commit in `/app/source-release.json`; legal indexes offer that exact
-revision's archive and source tree, and release notes pair the links with the image
-digest. Local builds without that provenance explicitly show an unknown revision.
-Operators modifying code must provide their actual source and update those static
-directions, not claim their changes match upstream. The source archive contains
-tracked repository files; any tracked stories/content remain excluded from the
-software license. It collects no deployed uploads, databases, settings or secrets.
-No runtime configuration, source-download API or content export is introduced.
-
-`node uploader/scripts/generate-third-party-inventory.mjs` regenerates the lockfile
-[inventory](docs/third-party-inventory.json); [evidence](docs/third-party-evidence.json)
-records non-lockfile assets and obligations. After `npm ci`, run
-`node uploader/scripts/copy-legal.mjs site` and
-`node uploader/scripts/copy-legal.mjs uploader` from the repository root to package
-licenses, rights statements, inventory and installed-package notices. Docker does
-both; site `predev`/`prebuild` also refresh site notices. They are delivered through
-existing static serving at `/legal/de.html`, `/legal/en.html` and
-`/admin/legal/en.html`. Review `notice-gaps.json` and actual emitted/native assets:
-collecting notice files is not a complete dependency or corresponding-source audit.
-Exact historical `0.17.1` amd64/arm64 inspection and verified DHI base SBOM/source
-attestations are recorded in [image evidence](docs/third-party-image-evidence.json).
-Those images lack readable glyph/native package notices; this patch does not
-change their bytes or certify old images. Full native component notices, matching
-Rust standard-library notices and source/relink directions are now included as
-supplements. Review the recorded upstream missing-notice and mutable-input
-limitations, then check correspondence and delivery in the final rebuilt release.
+**Backups:** In-app database dumps, image archives, and private GPX archives are written under `/data/backup/db` on the host disk—pair them with offsite backups. See [backup and restore](ARCHITECTURE.md#backups--disaster-recovery) and the [upgrade recovery runbook](ARCHITECTURE.md#app-upgrades-and-supported-recovery) before upgrading (upgrades are roll-forward only; settings live outside database dumps).
 
 ## Documentation
 
-- [Installation guide](docs/install.md) — supported server install, requirements, proxy and domains.
-- [Authoring workflow](docs/authoring-workflow.md) — photos, stories, galleries and publishing.
-- [Architecture](ARCHITECTURE.md) — storage, deployment, builds, backups and recovery.
-- [Security](SECURITY.md) — permissions, photo privacy, credentials and request safeguards.
-- [Map assets](docs/map-assets.md) — self-hosted basemaps and fonts.
-- [Site development](site/README.md) · [CMS operations](uploader/README.md).
-- [Contributor conventions](CLAUDE.md) · [Design specs and plans](docs/superpowers/).
+- [Installation guide](docs/install.md) — supported server setup, requirements, reverse proxy, and domains
+- [Authoring workflow](docs/authoring-workflow.md) — photos, stories, galleries, maps, and publishing
+- [Architecture](ARCHITECTURE.md) — storage, deployment, builds, backups, and recovery
+- [Security](SECURITY.md) — permissions, photo EXIF privacy, credentials, and request safeguards
+- [Map assets](docs/map-assets.md) — self-hosted basemaps and fonts
+- [Site development](site/README.md) · [CMS operations](uploader/README.md)
+- [Contributor conventions](CLAUDE.md) · [Design specs and plans](docs/superpowers/)
+
+## Software, contributions and content rights
+
+Wanderlust Studio software is free software licensed under the [GNU Affero General Public License v3.0 only](LICENSE) (`AGPL-3.0-only`, Copyright 2026 Simon and contributors), covering original application code, tests, build scripts, and technical documentation without warranty. Third-party dependencies retain their own licenses.
+
+**Content and brand are excluded.** Stories, translations, uploaded photographs, illustrations, MDX story content (including `site/src/content/trips/` stubs), reader submissions, and the **Simon's Wanderlust** and **Wanderlust Studio** names and logos are not open-licensed here ([NOTICE](NOTICE) · [owner decision](docs/superpowers/specs/2026-10-27-software-content-brand-rights-design.md)). Using this software does not license your own content under AGPL.
+
+**Contributions** are accepted under `AGPL-3.0-only` (inbound = outbound) with no DCO or CLA.
+
+<details>
+<summary>Distributing or operating modified software (AGPL §6 / §13 &amp; notice packaging)</summary>
+
+- Distributors must provide exact Corresponding Source under AGPL §6 alongside each image or release; operators of modified network versions must prominently offer Corresponding Source to all remote users at no charge under §13.
+- Release builds record the repository and full commit in `/app/source-release.json` and expose `/legal/de.html`, `/legal/en.html`, and `/admin/legal/en.html`. Operators running modified builds must update those static source directions to match their actual source.
+- `node uploader/scripts/generate-third-party-inventory.mjs` regenerates [docs/third-party-inventory.json](docs/third-party-inventory.json) ([evidence](docs/third-party-evidence.json), [image evidence](docs/third-party-image-evidence.json)); after `npm ci`, `node uploader/scripts/copy-legal.mjs site` and `node uploader/scripts/copy-legal.mjs uploader` package license and third-party notices (check `notice-gaps.json` and emitted/native assets).
+
+</details>
 
 <details>
 <summary>Maintainers: releases and upgrade notes</summary>
@@ -665,3 +511,7 @@ See the [image-name cutover record](docs/superpowers/specs/2026-10-27-issue-291-
 for scope, retained history and recovery constraints.
 
 </details>
+
+<p align="center">
+  <strong>Self-hosted at heart. Built for the road.</strong>
+</p>
