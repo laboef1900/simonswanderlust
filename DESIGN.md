@@ -1435,6 +1435,13 @@ criterion (2.5.5 is AAA), so the accessibility commitment in `PRODUCT.md` is una
   **Details** button; the same header toggle closes it, and it traps Tab, closes on
   Escape or the scrim, and restores focus to its opener. The manuscript retains its
   unboxed document surface.
+  At the owner's direction (2026-11-13, mockup 3B **Tinted Paper & Capsules**), Story
+  details inputs, textareas, selects, file inputs, and editable permalinks use translucent
+  paper wells (`rgb(255 255 255 / 0.76)`, `#f6f8fa` inside the hero/title cards) with a
+  `1.5px` bottom ledger rule that lifts to `--surface` and `--studio-accent` on focus, and
+  inspector buttons (secondary actions, `Generate excerpt with AI`, primary actions, row
+  removers, and search toggles) use `999px` capsules (multi-line waypoint lookup results
+  keep `--radius-lg`). Other admin surfaces keep their existing control chrome.
 - Within each locale, Story details leads with the hero thumbnail and excerpt, followed by
   country and permalink. Key facts fold behind a live row count without removing their values
   from the draft. The optional title image and expedition/route sections remain available.
