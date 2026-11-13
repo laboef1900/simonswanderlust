@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mapChart, TARGET_ASPECT, type ChartInput } from './map-chart';
+import { mapChart, shortPinTitle, TARGET_ASPECT, type ChartInput } from './map-chart';
 
 const CORPUS: ChartInput[] = [
   { lng: 26.1025, lat: 44.4268, title: 'Bukarest' },
@@ -135,5 +135,22 @@ describe('mapChart', () => {
     // Mid-South-Pacific: the window holds no ring the 110m layer records, so
     // MapTeaser omits the <path> instead of shipping an empty one.
     expect(mapChart([{ lng: -140, lat: -30, title: 'nowhere' }])!.land).toBe('');
+  });
+  it('passes href through to each ChartPin', () => {
+    const chart = mapChart([{ lng: 26.1, lat: 44.4, title: 'Bukarest', href: '/bukarest/' }])!;
+    expect(chart.pins[0]?.href).toBe('/bukarest/');
+  });
+});
+
+describe('shortPinTitle', () => {
+  it('keeps short titles intact', () => {
+    expect(shortPinTitle('Bukarest')).toBe('Bukarest');
+    expect(shortPinTitle('  Sonne auf Rhodos  ')).toBe('Sonne auf Rhodos');
+  });
+
+  it('truncates long titles cleanly at a word boundary with an ellipsis', () => {
+    expect(shortPinTitle('Reisebericht: 4 Tage Bukarest', 20)).toBe('Reisebericht: 4…');
+    expect(shortPinTitle('Sonne und Abenteuer auf Rhodos', 20)).toBe('Sonne und Abenteuer…');
+    expect(shortPinTitle('Donaudeltaundschwarzesmeer', 12)).toBe('Donaudeltau…');
   });
 });
