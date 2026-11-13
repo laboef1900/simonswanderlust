@@ -627,9 +627,9 @@ function storedComparison(h: { document: { querySelector(selector: string): Elem
   const compare = required(panel, 'details');
   return { compare, status: required(panel, '[role="status"]'), useStored: required(compare, 'button') };
 }
-/** The gallery check's status line for a locale: under its manuscript bar, in the manuscript's status area. */
+/** The gallery check's status line for a locale: under its manuscript bar in the command bar. */
 function galleryCheckStatus(h: { el(id: string): Element }, locale: 'de' | 'en') {
-  return required(h.el('tab-' + locale), '.editor-gallery__analysis');
+  return required(h.el(locale + 'ManuscriptBar').parentElement!, '.editor-gallery__analysis');
 }
 /** Publish in the command bar, up to the open dialog: what the author is shown before anything is sent. */
 function openPublishDialog(h: { el(id: string): Element }): Element {

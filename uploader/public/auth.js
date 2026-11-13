@@ -190,12 +190,16 @@ window.Auth = (function () {
           '<details class="cms-account-menu" id="cmsAccountMenu">' +
             '<summary class="cms-account-menu__trigger">' +
               '<span class="cms-avatar" aria-hidden="true"></span>' +
-            '</summary>' +
-            '<div class="cms-account-menu__panel">' +
-              '<div class="cms-user-info">' +
+              '<span class="cms-user-info">' +
                 '<span class="cms-user-name"></span>' +
                 '<span class="cms-user-role"></span>' +
-              '</div>' +
+              '</span>' +
+            '</summary>' +
+            '<div class="cms-account-menu__panel">' +
+              '<a href="/admin/license.html" class="cms-account-link">' +
+                ICON.posts +
+                '<span class="cms-account-link__label"></span>' +
+              '</a>' +
               '<button type="button" id="cmsLogoutBtn" class="cms-logout-btn">' +
                 '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>' +
                 '<span>Log out</span>' +
@@ -215,12 +219,7 @@ window.Auth = (function () {
     shell.querySelector('.cms-brand-mark').textContent = copy.studioName.charAt(0);
     shell.querySelector('.cms-brand-title').textContent = copy.studioName;
     shell.querySelector('.cms-masthead-right > .cms-brand-sub').textContent = identityDescriptor();
-    const legal = document.createElement('a');
-    legal.href = '/admin/legal/en.html';
-    legal.className = 'cms-legal-link';
-    legal.textContent = copy.softwareNotices;
-    shell.querySelector('.cms-sidebar-footer').prepend(legal);
-
+    shell.querySelector('.cms-account-link__label').textContent = copy.softwareNotices;
     // User-controlled strings are set as text
     // and as an attribute value AFTER the parse so it can never be markup (#131).
     const accountTrigger = shell.querySelector('.cms-account-menu__trigger');
