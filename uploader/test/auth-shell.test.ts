@@ -198,9 +198,11 @@ function shellSandbox(pathname: string, options: SandboxOptions = {}) {
           accountMenu.parent = sidebar;
           const accountTrigger = makeElement('', 'SUMMARY');
           accountTrigger.parent = accountMenu;
+          const accountLink = makeElement('', 'A');
+          accountLink.parent = accountMenu;
           const logout = makeElement('cmsLogoutBtn', 'BUTTON');
           logout.parent = accountMenu;
-          sidebar.setFocusables([close, accountTrigger, logout]);
+          sidebar.setFocusables([close, accountTrigger, accountLink, logout]);
           shell.setSelectors({
             '.cms-masthead': masthead,
             '.cms-brand-mark': makeElement(),
@@ -208,6 +210,7 @@ function shellSandbox(pathname: string, options: SandboxOptions = {}) {
             '.cms-masthead-right > .cms-brand-sub': makeElement(),
             '#cmsAccountMenu': accountMenu,
             '.cms-account-menu__trigger': accountTrigger,
+            '.cms-account-link__label': makeElement(),
             '.cms-sidebar-footer': makeElement(),
             '#cmsSidebar': sidebar,
             '#cmsMenuBtn': menu,
@@ -438,13 +441,20 @@ describe('Auth navigation shell', () => {
     expect(shell.part('.cms-content').children).toEqual([shell.main]);
   });
 
-  it('sets the username as text and names the account menu after it', () => {
+  it('sets the username as text, names the account menu after it, and places Software license and source inside the account menu', () => {
     const shell = shellSandbox('/admin/');
     expect(shell.part('.cms-user-name').textContent).toBe('simon');
     expect(shell.accountTrigger.getAttribute('aria-label')).toBe('Account menu for simon');
     expect(shell.html).not.toContain('simon');
+    expect(shell.part('.cms-account-link__label').textContent).toBe(ui.en['editor.chrome.softwareNotices']);
+    expect(shell.html).toContain('href="/admin/license.html" class="cms-account-link"');
+    expect(shell.html).not.toContain('cms-legal-link');
   });
 
+  it('keeps no sidebar nav item active on the license page', () => {
+    const shell = shellSandbox('/admin/license.html');
+    expect(shell.html.match(/aria-current="page"/g)).toBeNull();
+  });
   it('puts the open account menu in the drawer Tab trap, and Escape closes it before the drawer', () => {
     const shell = shellSandbox('/admin/');
     shell.menu.fire('click');

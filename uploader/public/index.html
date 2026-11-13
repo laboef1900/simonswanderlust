@@ -36,6 +36,20 @@
           <h2 id="deskPublicationHeading" class="desk-heading"></h2>
           <button id="publicationRefresh" class="btn-secondary btn-sm" type="button"></button>
         </div>
+        <div class="desk-stats" id="deskStats" aria-label="Story counts">
+          <div class="desk-stat">
+            <div class="desk-stat__val" id="deskStatPublished">—</div>
+            <div class="desk-stat__lbl">Published stories</div>
+          </div>
+          <div class="desk-stat">
+            <div class="desk-stat__val" id="deskStatDrafts">—</div>
+            <div class="desk-stat__lbl">Drafts</div>
+          </div>
+          <div class="desk-stat">
+            <div class="desk-stat__val" id="deskStatUnpublished">—</div>
+            <div class="desk-stat__lbl">Unpublished changes</div>
+          </div>
+        </div>
         <p id="publicationNotice" role="status"></p>
         <p id="deskOverview" role="status" hidden></p>
         <ul id="deskOverviewItems" class="desk-exceptions" hidden></ul>
@@ -65,8 +79,10 @@
       <section class="desk-meta" aria-labelledby="deskMetaHeading">
         <h2 id="deskMetaHeading" class="desk-heading"></h2>
         <ul class="desk-meta-list">
-          <li id="deskQueue" aria-live="polite"></li>
-          <li id="deskRelease" aria-live="polite"></li>
+          <li class="desk-meta-row"><span class="desk-meta-label">Language mode</span><span id="deskLanguageMode" class="mono">—</span></li>
+          <li class="desk-meta-row"><span class="desk-meta-label">Photo processing</span><span id="deskQueue" aria-live="polite"></span></li>
+          <li class="desk-meta-row"><span class="desk-meta-label">Live site</span><span id="deskRelease" aria-live="polite"></span></li>
+          <li class="desk-meta-row" id="deskBackupRow" hidden><span class="desk-meta-label">Database backup schedule</span><span id="deskBackupSchedule">—</span></li>
         </ul>
       </section>
     </main>
@@ -257,6 +273,11 @@
         const next = Desk.nextDraft(observedPosts);
         const newer = Desk.unpublished(observedPosts);
         const attention = Desk.attention(observedPosts);
+        const publishedCount = observedPosts.filter((p) => p?.publication?.status === 'published').length;
+        const draftCount = observedPosts.filter((p) => p?.publication?.status === 'draft').length;
+        $('deskStatPublished').textContent = String(publishedCount);
+        $('deskStatDrafts').textContent = String(draftCount);
+        $('deskStatUnpublished').textContent = String(newer.length);
         $('deskUnpubHeading').hidden = !newer.length;
         $('deskAttentionSection').hidden = !isAdmin || (!attention.length && !unavailable);
         if (!next && unavailable) setMessage($('deskNext'), PublicationState.text('unavailable'));
@@ -451,7 +472,12 @@
           const response = await fetch('/settings', { cache: 'no-store' });
           if (!response.ok) return;
           const settings = await response.json();
-          $('deskBackupWarning').hidden = settings?.backupSchedule !== 'off';
+          const schedule = settings?.backupSchedule;
+          if (typeof schedule === 'string' && schedule) {
+            $('deskBackupSchedule').textContent = schedule === 'off' ? 'Off' : schedule;
+            $('deskBackupRow').hidden = false;
+          }
+          $('deskBackupWarning').hidden = schedule !== 'off';
         } catch { /* the rest of the Desk does not depend on it */ }
       }
 
@@ -466,7 +492,13 @@
 
       const openDesk = Desk.resilientLoader(async () => {
         const context = await Auth.ensureAuthed();
-        if (context) await SiteLanguage.get();
+        const lang = context ? await SiteLanguage.get() : null;
+        if (lang) {
+          const modeText = lang.locales.length > 1
+            ? `DE + EN (${lang.primary.toUpperCase()} primary)`
+            : `${lang.primary.toUpperCase()} only`;
+          $('deskLanguageMode').textContent = modeText;
+        }
         return context;
       }, {
         loading() { $('deskError').hidden = true; },
