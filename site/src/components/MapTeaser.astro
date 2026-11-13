@@ -256,10 +256,13 @@ const anchorFor = (at: number, width: number) =>
     stroke: var(--color-navy, #142a42);
     stroke-width: 4px;
     stroke-linejoin: round;
-    transition: fill 150ms ease;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 150ms ease, fill 150ms ease;
   }
   .chart-pin:hover .chart-pin-label,
   .chart-pin:focus-visible .chart-pin-label {
+    opacity: 1;
     fill: var(--color-brand-red-light, #ff5a4e);
     text-decoration: underline;
   }
