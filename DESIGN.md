@@ -1305,8 +1305,8 @@ criterion (2.5.5 is AAA), so the accessibility commitment in `PRODUCT.md` is una
   outside click); the trigger's accessible name stays “Account menu for …”. Admin-only pages appear
   in the sidebar for admins only. Roles and server authorization are unchanged. Publish and
   destructive actions retain their existing red treatment.
-  **Software license and source** remains a 44px-high, underlined secondary link above the
-  account control, not an outlined command button.
+  **Software license and source** sits inside the account menu (`#cmsAccountMenu`, above
+  **Log out**) and opens `/admin/license.html`, styled in the frosted Editorial desk shell.
 - The shell is exactly the viewport and the workspace is its only scroll container:
   masthead, sidebar and the canvas gutter around the workspace never scroll away.
   At the owner's direction (2026-11-13), `.cms-app-shell` uses a neutral-gray
