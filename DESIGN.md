@@ -1138,9 +1138,14 @@ criterion (2.5.5 is AAA), so the accessibility commitment in `PRODUCT.md` is una
   heading above them is uppercase, 13px/700, tracked 0.05em, in the body face. The status
   line under a title ("1 Oct 2026 · RO · Europe · 1 stop", "Missing date") stays sentence
   case.
-- **Inputs, selects and textareas** share one height, `--line-control` border, 6px radius
-  and accent focus ring. Selects draw their own chevron so they match inputs exactly. File
-  inputs use a quiet outlined picker button, not a filled mono one.
+- **Inputs, selects, textareas, file inputs, and checkboxes/radios** follow the **Tinted
+  Paper & Capsules (3B)** treatment across the admin: translucent paper wells (`#f6f8fa` on
+  white/frosted surfaces, `rgb(255 255 255 / 0.76)` inside the tinted Story details rail)
+  with `--radius-lg` top corners, a `1px` perimeter hairline, and a `1.5px` bottom ledger
+  rule that lifts to `--surface` and `--studio-accent` on focus; selects draw their own
+  accent chevron and file inputs use a dashed bottom rule with a capsule picker button.
+  Custom checkboxes (`var(--radius-sm)`) and radios (`50%`) use `--studio-accent` when
+  checked and preserve native rendering under `forced-colors: active`.
 - **Filter menus** (`admin-select.js`, #566; Posts only so far) replace a list filter's
   native popup with an in-label trigger — `Status: All`, caption in muted 500, value in
   ink — at the field height and radius, with the menus' drawn chevron. A filter set away
@@ -1158,17 +1163,19 @@ criterion (2.5.5 is AAA), so the accessibility commitment in `PRODUCT.md` is una
   keep focus visible. Row checkboxes fade in on row hover and stay visible when
   focused, checked, while anything is selected, and wherever there is no hover. Media's
   bulk bar stays in flow.
-- **Buttons** have four roles: the unclassed button is the one navy primary per form or
-  section (Save, Add user, Import, Sign in); `.btn-secondary` is outlined and auxiliary
-  (Test connection, Insert image, Review story, Cancel); `.btn-remove` is outlined red for
-  destructive row actions (a destructive *confirm* in the dialog is filled red);
-  `.btn-primary` / `.btn-publish` / `.btn-primary-publish` are the filled red Publish and
-  Rebuild. `.btn-new` is the accent command link (New post, New journey). Form actions sit
-  in one `.form-actions` row, primary first; dense rows (bulk bars, folder actions,
-  revisions, comment moderation) use the small height. In an editor command bar **Save
-  draft** is the outlined `.commandbar__save` and Publish the one filled action; a page
-  that is already live shows the red **Save & rebuild** instead, because that save is a
-  live-site mutation.
+- **Buttons** use `999px` capsules across all four roles: the unclassed button is the one
+  navy primary per form or section (Save, Add user, Import, Sign in); `.btn-secondary` is
+  outlined and auxiliary (Test connection, Insert image, Review story, Cancel); `.btn-remove`
+  is outlined red for destructive row actions (a destructive *confirm* in the dialog is
+  filled red); `.btn-primary` / `.btn-publish` / `.btn-primary-publish` are the filled red
+  Publish and Rebuild. `.btn-new` is the accent command link (New post, New journey). Command
+  bar actions (Back, Save draft, More actions), row Edit/More triggers, and masthead ghost
+  links share the capsule shape; inline text-link buttons (`.btn-link`, `.provider-action`),
+  navigation/tab items, and menu panel items remain flat. Form actions sit in one
+  `.form-actions` row, primary first; dense rows (bulk bars, folder actions, revisions,
+  comment moderation) use the small height. In an editor command bar **Save draft** is the
+  outlined `.commandbar__save` and Publish the one filled action; a page that is already live
+  shows the red **Save & rebuild** instead, because that save is a live-site mutation.
 - **Red means the live site or a loss.** A confirmation's action button is filled red only
   for a live-site mutation (Publish, Rebuild, a save that rebuilds) or a destructive action;
   every other confirmation (Restore a local draft, Reload saved values, Discard form edits)
@@ -1290,16 +1297,15 @@ criterion (2.5.5 is AAA), so the accessibility commitment in `PRODUCT.md` is una
 - A full-width 3rem masthead (brand on the left; descriptor and View site on the right)
   sits above a 13rem sidebar and a single rounded white workspace. The sidebar holds
   all page navigation (no journal header above it) and, at its foot, the account menu. Its
-  trigger is the avatar alone: a 36px steel-blue (`--studio-accent`) circle with the white
-  initial, inside a 44px hit area aligned to the footer edge; it darkens on hover and gains a
-  canvas-gapped accent ring while open. No name, role or chevron sits in the sidebar, so a long
-  username never wraps there. The panel opens upward with the full name (wrapping, never
-  truncated) and role above a hairline, then **Log out**, closing like every admin menu (Escape,
-  outside click); the trigger's accessible name stays “Account menu for …”. Admin-only pages appear
-  in the sidebar for admins only. Roles and server authorization are unchanged. Publish and
-  destructive actions retain their existing red treatment.
-  **Software license and source** remains a 44px-high, underlined secondary link above the
-  account control, not an outlined command button.
+  trigger is a full-width capsule showing the 32px steel-blue (`--studio-accent`) avatar,
+  single-line ellipsized username, role, and chevron (`44px` hit height). The panel opens
+  upward with **Software license and source** above a hairline and **Log out**, closing like
+  every admin menu (Escape, outside click); the trigger's accessible name stays “Account
+  menu for …”. Admin-only pages appear in the sidebar for admins only. Roles and server
+  authorization are unchanged. Publish and destructive actions retain their existing red
+  treatment.
+  **Software license and source** sits inside the account menu (`#cmsAccountMenu`, above
+  **Log out**) and opens `/admin/license.html`, styled in the frosted Editorial desk shell.
 - The shell is exactly the viewport and the workspace is its only scroll container:
   masthead, sidebar and the canvas gutter around the workspace never scroll away.
   At the owner's direction (2026-11-13), `.cms-app-shell` uses a neutral-gray
@@ -1435,6 +1441,9 @@ criterion (2.5.5 is AAA), so the accessibility commitment in `PRODUCT.md` is una
   **Details** button; the same header toggle closes it, and it traps Tab, closes on
   Escape or the scrim, and restores focus to its opener. The manuscript retains its
   unboxed document surface.
+  Story details uses the shared **Tinted Paper & Capsules (3B)** control vocabulary, tuning
+  its input wells to `rgb(255 255 255 / 0.76)` against the tinted rail (`#f6f8fa` inside
+  the hero/title cards) and keeping `--radius-lg` on multi-line waypoint lookup results.
 - Within each locale, Story details leads with the hero thumbnail and excerpt, followed by
   country and permalink. Key facts fold behind a live row count without removing their values
   from the draft. The optional title image and expedition/route sections remain available.

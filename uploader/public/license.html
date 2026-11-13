@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Software license and source</title>
+    <link rel="stylesheet" href="/admin/admin.css" />
+  </head>
+  <body class="license-page">
+    <header class="cms-page-meta">
+      <h1 id="licenseHeading"></h1>
+      <p id="licenseLede" class="lede"></p>
+    </header>
+
+    <main>
+      <p id="licenseNotice" class="notice-info" role="status" hidden></p>
+
+      <section class="license-section" aria-labelledby="provenanceHeading">
+        <h2 id="provenanceHeading" class="desk-heading">Software &amp; source provenance</h2>
+        <div class="desk-stats">
+          <div class="desk-stat">
+            <div class="desk-stat__val desk-stat__val--mono" id="statLicense">AGPL-3.0-only</div>
+            <div class="desk-stat__lbl">Software license</div>
+          </div>
+          <div class="desk-stat">
+            <div class="desk-stat__val desk-stat__val--mono" id="statRevision">Unversioned</div>
+            <div class="desk-stat__lbl" id="statRevisionLabel">Source revision</div>
+          </div>
+          <div class="desk-stat">
+            <div class="desk-stat__val" id="statGaps">&mdash;</div>
+            <div class="desk-stat__lbl">Package notices for review</div>
+          </div>
+        </div>
+        <p id="sourceStatusCopy" class="license-copy"></p>
+        <p id="sourceCaveatCopy" class="license-copy"></p>
+        <div id="sourceActions" class="license-actions"></div>
+      </section>
+
+      <section class="license-section" aria-labelledby="noticesHeading">
+        <h2 id="noticesHeading" class="desk-heading">License &amp; rights documents</h2>
+        <ul id="rightsList" class="license-doc-list"></ul>
+      </section>
+
+      <section class="license-section" aria-labelledby="thirdPartyHeading">
+        <h2 id="thirdPartyHeading" class="desk-heading">Third-party notices &amp; evidence</h2>
+        <ul id="thirdPartyList" class="license-doc-list"></ul>
+      </section>
+    </main>
+
+    <script src="/admin/editor-image-copy.js"></script>
+    <script src="/admin/admin-ui.js"></script>
+    <script src="/admin/auth.js"></script>
+    <script>
+      (async function () {
+        'use strict';
+        const copy = EditorCopy.en;
+        const $ = (id) => document.getElementById(id);
+        $('licenseHeading').textContent = copy.softwareNotices;
+        $('licenseLede').textContent = copy.softwareSummary;
+        $('sourceCaveatCopy').textContent = copy.sourceCaveat;
+        Auth.setPageTitle(copy.softwareNotices);
+
+        const session = await Auth.ensureAuthed();
+        if (!session) return;
+        Auth.renderHeader(session);
+
+        function addDocRow(list, title, file, metaText, href) {
+          const li = document.createElement('li');
+          li.className = 'license-doc-row';
+          const main = document.createElement('div');
+          main.className = 'license-doc-main';
+          const pTitle = document.createElement('p');
+          pTitle.className = 'license-doc-title';
+          pTitle.textContent = title;
+          const pMeta = document.createElement('p');
+          pMeta.className = 'license-doc-meta';
+          pMeta.textContent = metaText || file;
+          main.append(pTitle, pMeta);
+
+          const link = document.createElement('a');
+          link.className = 'action-link';
+          link.href = href;
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+          link.textContent = 'Open';
+          link.setAttribute('aria-label', 'Open ' + title + ' (opens a new tab)');
+          li.append(main, link);
+          list.appendChild(li);
+        }
+
+        function addActionLink(container, label, href, primary) {
+          const link = document.createElement('a');
+          link.className = 'action-link' + (primary ? ' action-link--primary' : '');
+          link.href = href;
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+          link.textContent = label;
+          container.appendChild(link);
+        }
+
+        const rightsList = $('rightsList');
+        addDocRow(rightsList, copy.licenseText, 'LICENSE.txt', 'LICENSE.txt · GNU AGPL v3 verbatim text', '/admin/legal/LICENSE.txt');
+        addDocRow(rightsList, copy.rightsNotice, 'NOTICE.txt', 'NOTICE.txt · Copyright, content and brand exclusions', '/admin/legal/NOTICE.txt');
+
+        const thirdPartyList = $('thirdPartyList');
+        addDocRow(thirdPartyList, copy.thirdPartyNotices, 'THIRD-PARTY-NOTICES.txt', 'THIRD-PARTY-NOTICES.txt · Collected dependency & vendor notices', '/admin/legal/THIRD-PARTY-NOTICES.txt');
+        addDocRow(thirdPartyList, copy.dependencyInventory, 'third-party-inventory.json', 'third-party-inventory.json · Lockfile package inventory', '/admin/legal/third-party-inventory.json');
+        addDocRow(thirdPartyList, copy.licenseEvidence, 'third-party-evidence.json', 'third-party-evidence.json · Source observations & review bounds', '/admin/legal/third-party-evidence.json');
+        addDocRow(thirdPartyList, copy.imageEvidence, 'third-party-image-evidence.json', 'third-party-image-evidence.json · Container artifact inspection', '/admin/legal/third-party-image-evidence.json');
+        addDocRow(thirdPartyList, copy.noticeGaps, 'notice-gaps.json', 'notice-gaps.json · Packages without auto-collected notice text', '/admin/legal/notice-gaps.json');
+
+        let release = null;
+        let legalOk = false;
+        try {
+          const res = await fetch('/admin/legal/source-release.json', { cache: 'no-store' });
+          if (res.ok) {
+            legalOk = true;
+            release = await res.json();
+          }
+        } catch {
+          legalOk = false;
+        }
+
+        if (!legalOk) {
+          const notice = $('licenseNotice');
+          notice.textContent = 'Static legal notice files are packaged during image build (copy-legal.mjs) and were not found on this dev server.';
+          notice.hidden = false;
+          $('sourceStatusCopy').textContent = copy.sourceUnknown;
+          return;
+        }
+
+        const validRelease = release && typeof release === 'object'
+          && typeof release.repository === 'string'
+          && typeof release.revision === 'string'
+          && /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\/[A-Za-z0-9_.-]{1,100}$/.test(release.repository)
+          && !['.', '..'].includes(release.repository.split('/')[1])
+          && /^[a-f0-9]{40}$/.test(release.revision);
+
+        const actions = $('sourceActions');
+        if (validRelease) {
+          const base = 'https://github.com/' + release.repository;
+          $('statRevision').textContent = release.revision.slice(0, 10);
+          $('statRevisionLabel').textContent = 'Recorded commit (' + release.repository + ')';
+          $('sourceStatusCopy').textContent = copy.sourceRecorded;
+          addActionLink(actions, copy.releaseSourceArchive, base + '/archive/' + release.revision + '.tar.gz', true);
+          addActionLink(actions, copy.releaseSourceTree, base + '/tree/' + release.revision, false);
+        } else {
+          $('statRevision').textContent = 'Local build';
+          $('statRevisionLabel').textContent = 'Source revision (unrecorded)';
+          $('sourceStatusCopy').textContent = copy.sourceUnknown;
+        }
+
+        // Read upstream repository link from generated /admin/legal/en.html so the
+        // repository identifier stays single-sourced in copy-legal.mjs.
+        try {
+          const legalRes = await fetch('/admin/legal/en.html', { cache: 'no-store' });
+          if (legalRes.ok) {
+            const doc = new DOMParser().parseFromString(await legalRes.text(), 'text/html');
+            const upstream = Array.from(doc.querySelectorAll('a[href^="https://"]'))
+              .find((a) => !a.getAttribute('href').includes('/archive/') && !a.getAttribute('href').includes('/tree/'));
+            if (upstream) {
+              addActionLink(actions, copy.upstreamSource, upstream.getAttribute('href'), !validRelease);
+            }
+          }
+        } catch {
+          // Optional enhancement: notice rows remain available above.
+        }
+
+        try {
+          const gapsRes = await fetch('/admin/legal/notice-gaps.json', { cache: 'no-store' });
+          if (gapsRes.ok) {
+            const gaps = await gapsRes.json();
+            const count = Array.isArray(gaps?.packages) ? gaps.packages.length : null;
+            if (count !== null) {
+              $('statGaps').textContent = String(count);
+              const gapMeta = thirdPartyList.lastElementChild?.querySelector('.license-doc-meta');
+              if (gapMeta) gapMeta.textContent = 'notice-gaps.json · ' + AdminFormat.count(count, 'package') + ' listed';
+            }
+          }
+        } catch {
+          // Keep default dash count.
+        }
+      })();
+    </script>
+  </body>
+</html>

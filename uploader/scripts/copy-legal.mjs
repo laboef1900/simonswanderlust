@@ -56,13 +56,76 @@ for (const locale of ['de', 'en']) {
     links.push([`${base}/archive/${source.revision}.tar.gz`, 'releaseSourceArchive']);
     links.push([`${base}/tree/${source.revision}`, 'releaseSourceTree']);
   }
+  const statusBadge = source ? `${escapeHtml(source.repository)} @ ${escapeHtml(source.revision.slice(0, 10))}` : 'AGPL-3.0-only';
   await writeFile(join(out, `${locale}.html`), `<!doctype html>
-<html lang="${locale}"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<html lang="${locale}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${text('softwareNotices')}</title>
-<main><h1>${text('softwareNotices')}</h1><p>${text('softwareSummary')}</p>
+<style>
+  :root {
+    --ink: #202630; --muted: #626974; --navy: #263b51; --accent: #416486;
+    --accent-hover: #2f5273; --accent-soft: #eaf0f6;
+    --sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100dvh; padding: clamp(1.25rem, 4vw, 3rem) 1rem;
+    font-family: var(--sans); font-size: 0.9375rem; line-height: 1.6; color: var(--ink);
+    background-color: #fbfbfd;
+    background-image:
+      radial-gradient(64% 58% at 17% 83%, rgb(196 201 208 / 0.56) 0%, rgb(206 211 217 / 0.24) 46%, transparent 82%),
+      linear-gradient(to top right, #d0d4da 0%, #dbdfe4 33.333%, #eceef1 62%, #f6f7f9 84%, #fbfbfd 100%);
+    background-attachment: fixed;
+    -webkit-font-smoothing: antialiased;
+  }
+  main {
+    max-width: 46rem; margin: 0 auto; padding: clamp(1.5rem, 4vw, 2.5rem);
+    border-radius: 0.75rem;
+    background: rgb(255 255 255 / 0.78);
+    backdrop-filter: blur(16px) saturate(112%); -webkit-backdrop-filter: blur(16px) saturate(112%);
+    border: 1px solid rgb(255 255 255 / 0.72);
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.8), 0 1px 3px rgb(20 42 66 / 7%), 0 12px 28px -8px rgb(20 42 66 / 10%);
+  }
+  .badge {
+    display: inline-block; margin-bottom: 0.75rem; padding: 0.2rem 0.65rem;
+    border-radius: 999px; background: var(--accent-soft); color: var(--accent-hover);
+    font: 600 0.75rem/1.3 var(--mono);
+  }
+  h1 { margin: 0; font-size: clamp(1.375rem, 3vw, 1.75rem); font-weight: 700; letter-spacing: -0.02em; line-height: 1.25; }
+  .lead { margin: 0.625rem 0 0; color: var(--ink); font-size: 0.9375rem; }
+  ul { list-style: none; margin: 1.5rem 0; padding: 0; border-top: 1px solid rgb(38 59 81 / 0.12); }
+  li { border-bottom: 1px solid rgb(38 59 81 / 0.10); }
+  li a {
+    display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+    padding: 0.75rem 0.25rem; color: var(--ink); font-size: 0.875rem; font-weight: 600;
+    text-decoration: none; transition: color 140ms ease;
+  }
+  li a::after {
+    content: 'Open'; flex: none; padding: 0.2rem 0.7rem;
+    border: 1px solid rgb(65 100 134 / 0.34); border-radius: 999px;
+    background: #fff; color: var(--accent-hover); font-size: 0.75rem; font-weight: 600;
+    box-shadow: 0 1px 2px rgb(20 42 66 / 0.05);
+  }
+  li a:hover { color: var(--accent-hover); }
+  li a:hover::after { border-color: var(--accent); background: var(--accent-soft); }
+  li a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 0.375rem; }
+  .note { margin: 0.75rem 0 0; color: var(--muted); font-size: 0.8125rem; line-height: 1.55; }
+</style>
+</head>
+<body>
+<main>
+<span class="badge">${statusBadge}</span>
+<h1>${text('softwareNotices')}</h1>
+<p class="lead">${text('softwareSummary')}</p>
 <ul>${links.map(([href, key]) => `<li><a href="${escapeHtml(href)}">${text(key)}</a></li>`).join('\n')}</ul>
-<p>${text(source ? 'sourceRecorded' : 'sourceUnknown')}</p>
-<p>${text('sourceCaveat')}</p></main></html>\n`);
+<p class="note">${text(source ? 'sourceRecorded' : 'sourceUnknown')}</p>
+<p class="note">${text('sourceCaveat')}</p>
+</main>
+</body>
+</html>\n`);
 }
 
 const noticeName = /^(?:licen[cs]e|copying|notice|copyright|authors)(?:$|[._-])/i;
