@@ -1113,7 +1113,7 @@ and the `<dialog>`s appended to `<body>` share one set:
 | Live-site mutation / destructive | `--red` / `--red-hover` | `#d23b30` / `#ac2a21` |
 | Control height (small) | `--control-h` (`--control-h-sm`) | `2.25rem` (`1.875rem`); both `2.75rem` on coarse pointers, except command bars (below) |
 | Focus ring | `--focus-ring` | `2px solid var(--studio-accent)` |
-| Corner radius | `--radius-sm` / `--control-radius` / `--radius-lg` / `--radius-xl` | `0.25rem` / `0.375rem` / `0.5rem` / `0.75rem` |
+| Corner radius | `--radius-sm` / `--control-radius` / `--radius-lg` / `--radius-xl` | `0.375rem` / `0.5rem` / `0.625rem` / `0.875rem` |
 | Status badge pairs | `--status-ok-*` / `--status-idle-*` / `--status-warn-*` (`-bg`, `-ink`) | Live / Draft / needs-attention pills and chips |
 | Stacking | `--z-raised` … `--z-skip` | one ordered scale; no literal `z-index` outside it |
 
@@ -1143,7 +1143,7 @@ criterion (2.5.5 is AAA), so the accessibility commitment in `PRODUCT.md` is una
   white/frosted surfaces, `rgb(255 255 255 / 0.76)` inside the tinted Story details rail)
   with `--radius-lg` top corners, a `1px` perimeter hairline, and a `1.5px` bottom ledger
   rule that lifts to `--surface` and `--studio-accent` on focus; selects draw their own
-  accent chevron and file inputs use a dashed bottom rule with a capsule picker button.
+  accent chevron and file inputs use a dashed bottom rule with a `--radius-lg` picker button.
   Custom checkboxes (`var(--radius-sm)`) and radios (`50%`) use `--studio-accent` when
   checked and preserve native rendering under `forced-colors: active`.
 - **Filter menus** (`admin-select.js`, #566; Posts only so far) replace a list filter's
@@ -1163,14 +1163,14 @@ criterion (2.5.5 is AAA), so the accessibility commitment in `PRODUCT.md` is una
   keep focus visible. Row checkboxes fade in on row hover and stay visible when
   focused, checked, while anything is selected, and wherever there is no hover. Media's
   bulk bar stays in flow.
-- **Buttons** use `999px` capsules across all four roles: the unclassed button is the one
+- **Buttons** use `--radius-lg` (`0.5rem`) across all four roles: the unclassed button is the one
   navy primary per form or section (Save, Add user, Import, Sign in); `.btn-secondary` is
   outlined and auxiliary (Test connection, Insert image, Review story, Cancel); `.btn-remove`
   is outlined red for destructive row actions (a destructive *confirm* in the dialog is
   filled red); `.btn-primary` / `.btn-publish` / `.btn-primary-publish` are the filled red
   Publish and Rebuild. `.btn-new` is the accent command link (New post, New journey). Command
   bar actions (Back, Save draft, More actions), row Edit/More triggers, and masthead ghost
-  links share the capsule shape; inline text-link buttons (`.btn-link`, `.provider-action`),
+  links share the same `--radius-lg` radius; inline text-link buttons (`.btn-link`, `.provider-action`),
   navigation/tab items, and menu panel items remain flat. Form actions sit in one
   `.form-actions` row, primary first; dense rows (bulk bars, folder actions, revisions,
   comment moderation) use the small height. In an editor command bar **Save draft** is the
@@ -1297,7 +1297,7 @@ criterion (2.5.5 is AAA), so the accessibility commitment in `PRODUCT.md` is una
 - A full-width 3rem masthead (brand on the left; descriptor and View site on the right)
   sits above a 13rem sidebar and a single rounded white workspace. The sidebar holds
   all page navigation (no journal header above it) and, at its foot, the account menu. Its
-  trigger is a full-width capsule showing the 32px steel-blue (`--studio-accent`) avatar,
+  trigger is a full-width `--radius-lg` button showing the 32px steel-blue (`--studio-accent`) avatar,
   single-line ellipsized username, role, and chevron (`44px` hit height). The panel opens
   upward with **Software license and source** above a hairline and **Log out**, closing like
   every admin menu (Escape, outside click); the trigger's accessible name stays “Account

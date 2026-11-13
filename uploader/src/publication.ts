@@ -104,13 +104,20 @@ export function postPublicationCounts(observation: PublicationObservation): NonN
   return counts;
 }
 
+export interface PublicationProjection {
+  read: () => Promise<PublicationObservation | null>;
+  from: (observation: PublicationObservation | null, translationKey: string) => Publication;
+  one: (translationKey: string) => Promise<Publication>;
+  summary: () => Promise<PublicationSummary>;
+}
+
 export function createPublicationProjection(options: {
   posts: Pick<PostStore, 'publicationFacts'>;
   readRelease: () => Promise<ReleaseObservation>;
   media: Pick<MediaStore, 'descriptions'>;
   imageBase: string;
   onUnavailable?: () => void;
-}) {
+}): PublicationProjection {
   const diagnostic = () => { try { options.onUnavailable?.(); } catch { /* Optional state must not fail a committed write. */ } };
   async function read(): Promise<PublicationObservation | null> {
     let release: ReleaseObservation;

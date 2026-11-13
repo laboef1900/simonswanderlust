@@ -38,8 +38,8 @@ import { landPath } from './land-path.js';
 export interface ChartPin {
   x: number;
   y: number;
-  /** Used only for the SVG title/desc text, never rendered as a label. */
   title: string;
+  href?: string;
 }
 export interface ChartGridLine {
   /** Position along the axis, in viewBox units. */
@@ -76,6 +76,7 @@ export interface ChartInput {
   lng: number;
   lat: number;
   title: string;
+  href?: string;
 }
 
 /** viewBox width; height follows from the fitted aspect ratio. */
@@ -172,7 +173,7 @@ export function mapChart(input: ChartInput[]): MapChart | null {
       label: degreeLabel(lat, 'N', 'S'),
       primary: lat === 0,
     })),
-    pins: input.map((p) => ({ x: x(p.lng), y: y(p.lat), title: p.title })),
+    pins: input.map((p) => ({ x: x(p.lng), y: y(p.lat), title: p.title, href: p.href })),
   };
 }
 
@@ -220,4 +221,14 @@ export function degreeLabel(value: number, positive: string, negative: string): 
 
 function round(n: number): number {
   return Math.round(n * 10) / 10;
+}
+
+/** Truncate a trip title to a compact label for the small overview chart. */
+export function shortPinTitle(title: string, maxChars = 20): string {
+  const trimmed = title.trim();
+  if (trimmed.length <= maxChars) return trimmed;
+  const cut = trimmed.slice(0, maxChars - 1);
+  const lastSpace = cut.lastIndexOf(' ');
+  const head = lastSpace >= Math.floor(maxChars / 2) ? cut.slice(0, lastSpace) : cut;
+  return `${head.replace(/[\s,:;–—-]+$/u, '')}…`;
 }

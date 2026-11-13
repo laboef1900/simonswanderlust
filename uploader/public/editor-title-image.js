@@ -12,12 +12,12 @@
     mount.innerHTML = `
       <summary class="editor-card-title" id="${prefix}Heading">
         <span class="editor-image-section__title" data-copy="heading"></span>
-        <span class="editor-image-section__thumb" id="${prefix}Thumb" hidden><img id="${prefix}ThumbImg" alt="" /></span>
+        <span class="editor-image-section__thumb" id="${prefix}Thumb" hidden><img id="${prefix}ThumbImg" alt="" hidden /></span>
       </summary>
       <div class="hero-picker hero-banner-zone">
         <p class="muted" data-copy="help"></p>
         <div class="hero-compact-preview" id="${prefix}Preview" hidden>
-          <img id="${prefix}Img" alt="" />
+          <img id="${prefix}Img" alt="" hidden />
         </div>
         <div class="hero-fields" id="${prefix}Fields" hidden>
           <label for="${prefix}Alt" data-copy="alt"></label>
@@ -69,11 +69,15 @@
       const thumb = el('ThumbImg');
       if (image) {
         const url = PostsFilter.thumbUrl({ heroSrc: image.src, heroWidth: image.width, heroFormat: image.format });
+        img.hidden = false;
+        thumb.hidden = false;
         img.src = url;
         thumb.src = url;
         img.onerror = () => { el('Preview').hidden = true; el('Thumb').hidden = true; };
         img.onload = () => { el('Preview').hidden = false; el('Thumb').hidden = false; };
       } else {
+        img.hidden = true;
+        thumb.hidden = true;
         img.removeAttribute('src');
         thumb.removeAttribute('src');
       }

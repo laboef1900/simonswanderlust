@@ -194,7 +194,7 @@ async function desk(isAdmin: boolean) {
     vm.runInContext(script[1] ? readFileSync('public/' + script[1].slice('/admin/'.length), 'utf8') : script[2]!, context);
   }
   await settle();
-  return { requests, document: dom.document, recover() { failing = false; } };
+  return { requests, document: dom.document, recover() { failing = false; }, refresh() { return vm.runInContext('publicationRefresh.refresh()', context) as Promise<void>; } };
 }
 
 describe('Desk build status authorization and recovery', () => {
@@ -210,9 +210,8 @@ describe('Desk build status authorization and recovery', () => {
     expect(root.hidden).toBe(false);
     expect(root.textContent).toContain(ui.en['admin.build.unavailable']);
     expect(h.document.getElementById('deskNewPost')!.hidden).toBe(false);
-    const retry = h.document.getElementById('publicationRefresh')!;
     h.recover();
-    retry.click(); retry.click();
+    void h.refresh(); void h.refresh();
     await settle();
     expect(h.requests.filter((url) => url === '/rebuild/status')).toHaveLength(2);
     expect(root.textContent).not.toContain('SECRET');

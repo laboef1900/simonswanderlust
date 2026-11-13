@@ -1,200 +1,43 @@
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
-import { constants, statSync } from 'node:fs';
-import { open, readFile, type FileHandle } from 'node:fs/promises';
-import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply, type FastifyRequest, type RouteOptions } from 'fastify';
+import { readFile, stat } from 'node:fs/promises';
+import Fastify, { type FastifyError, type FastifyReply } from 'fastify';
 import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import cookie from '@fastify/cookie';
-import type { DbClient } from './db.js';
-import { encodeVariant, normalizeProcessOptions, probeImage, type ImageProbe } from './pipeline.js';
-import { WIDTHS } from './variants.js';
-import { assertSafeKey } from './storage.js';
-import { deleteMedia, imageUsage, listVariantFiles, VARIANT_FILE_RE, type MediaVersions, type UsageRef } from './media-files.js';
-import {
-  redactForNonAdmin, MediaStoreError, MediaChangedError, assertSafeFolder,
-  type MediaError, type MediaItem, type MediaQuery, type MediaStatus, type MediaStore,
-} from './media-store.js';
-import { canonicalizeConditional } from '../public/media-conditional.js';
-import { BacklogFullError, type EncodeQueue } from './encode-queue.js';
-import type { UploadService } from './upload-service.js';
-import { UPLOAD_UUID_RE } from './upload-receipts.js';
-import type { WorkLock } from './work-lock.js';
-import { diskSpace, insufficientSpace, formatBytes } from './disk.js';
-import type { ReconcileReport } from './media-sync.js';
-import { verifyPassword, type UserStore, UserExistsError, DUMMY_STORED_HASH, MAX_PASSWORD_LENGTH, passwordPolicyViolation, usernamePolicyViolation } from './users.js';
-import type { SessionStore } from './sessions.js';
-import {
-  SESSION_TTL_MS, createAuthn,
-  setSessionCookie, clearSessionCookie, isSecureRequest, SESSION_COOKIE,
-} from './authn.js';
-import { SettingsError, validate as validateSettings, type Settings, type SettingsStore } from './settings.js';
-import { DEFAULT_TRANSLATION_PROMPT } from './translation-prompt.js';
-import { DEFAULT_DRAFTING_PROMPT } from './drafting-prompt.js';
-import { SecretsError, type SecretsStore } from './secrets.js';
-import {
-  isProviderId, isProviderKind, isRemoteKind, newProviderId, providerNameError, providerUrlError, resolveProvider, slotFor,
-  type AiProvider, type AiProviderKind,
-} from './ai-providers.js';
-import { validateDraft, validateForPublish, PostError, type PostStore, type PostPair, type StoredPostPair, type PostUsageRow, type SaveReceipt, assertNotStale, assertPublishTokens, type PublishTokens, type PublishResult, type StopRoutePublishOutcome } from './posts.js';
-import { GpxError } from './gpx-errors.js';
-import { analyzeBodyContent, bodyImageKey } from './publish-gate.js';
-import { auditAltText } from './alt-audit.js';
-import { renderPreviewHtml, renderPagePreviewHtml, previewCsp } from './preview.js';
-import { loadGalleryMetadata } from './gallery-metadata.js';
-import { type PageStore, type PagePair, type PageUpdate, type ImageDims, type StoredPagePair, PageError, isSafePageKey, pagePaths } from './pages.js';
-import { PAGE_KINDS, isPageKind } from '../../site/src/lib/page-kinds.js';
-import { analyzeGallerySource } from '../../site/src/lib/gallery-source.js';
-import { prepareTranslation, validateTranslation, TranslationError } from '../../site/src/lib/article-translation.js';
-import { exportPost, exportAll } from './export.js';
-import type { SiteBuilder } from './build.js';
-import { projectBuildReport } from './build-state.js';
-import { createReleaseManifestReader } from './release-manifest.js';
-import { createPublicationProjection, galleryPending, type DescriptionPending } from './publication.js';
-import { mediaImpact, type MediaImpact } from './media-impact.js';
-import { prepareImport, ImportTooLargeError, ImportInsufficientSpaceError, type ImportDeps, type PreparedImport } from './wp-import.js';
-import { WxrParseError } from './wxr-parse.js';
-import { createImportRunner, memoryImportJobStore, ImportBusyError, type ImportRunner, type ImportJob } from './import-jobs.js';
-import { createRehostResume } from './wp-images.js';
-import { fixedWindowLimiter, rateLimitPreHandler, accountLockoutLimiter, commentLimiters, type RateLimiter, type AccountLimiter } from './rate-limit.js';
-import type { CommentStore } from './comments.js';
-import { commentAuthorityOrigin, commentOrigin, registerPublicComments } from './comments-public.js';
-import { BACKUP_FILE_RE, IMAGES_ARCHIVE_RE, type DbBackup } from './backup.js';
-import { legacyRedirectForRelease } from './redirects.js';
-import { compressionHook } from './compress.js';
-import { CommentError, isCommentStatus, isModerationOffset, withPublicLocaleMetadata, UUID_RE as COMMENT_ID_RE, type CommentAdminStore } from './comments-admin.js';
+import { IdentityError } from '../../site/src/lib/site-identity.js';
 import { ui } from '../../site/src/i18n/ui.js';
-import { createGeocoder, GeocodingError } from './geocoding.js';
-import { createStopRouter, StopRoutingError, type StopRouter } from './stop-routing.js';
-import { routingEndpointUsable, type OriginAllowList } from './routing-origins.js';
-import type { BundledRouting } from './routing-regions.js';
-import { STOP_ROUTE_LIMITS, StopRouteError, validateRouteStops } from '../public/stop-route.js';
-import { renderStopRouteCopy } from './stop-route-copy.js';
-import { registerGpxRoutes } from './gpx-routes.js';
-import type { GpxService } from './gpx-service.js';
-import { renderGpxCopy } from './gpx-copy.js';
-import { ROUTE_ARCHIVE_RE } from './gpx-backup.js';
-import { StorageReadOnlyError } from './storage-owner.js';
-import { IdentityConflictError, type SiteIdentityStore } from './site-identity.js';
-import { IdentityError, neutralIdentity } from '../../site/src/lib/site-identity.js';
-import { OnboardingError, type OnboardingStore } from './onboarding.js';
-import type { TrustPolicy } from './trusted-proxy.js';
-import { LanguageError, validateLanguage, type LanguageConfig, type LanguageStore, type LanguageLocale, type LanguageBlocker } from './language.js';
-import { publicPath } from './public-paths.js';
-import { memoryJourneyStore, type JourneyStore, type StoredJourney } from './journeys.js';
-import { registerJourneyAdmin } from './journeys-admin.js';
-import { NavigationError, type NavigationStore } from './navigation.js';
+import { createAuthn } from './authn.js';
+import { registerAuthRoutes } from './auth-routes.js';
+import { registerBackupAndImportRoutes } from './backup-import-routes.js';
 import { validateCanonicalRoles } from './canonical-origin.js';
-import { registerIdentityAssetRoutes } from './site-identity-routes.js';
+import { commentAuthorityOrigin, commentOrigin, registerPublicComments } from './comments-public.js';
+import { compressionHook } from './compress.js';
+import { diskSpace, formatBytes } from './disk.js';
+import { registerGpxRoutes } from './gpx-routes.js';
+import { renderGpxCopy } from './gpx-copy.js';
+import { VARIANT_FILE_RE } from './media-files.js';
+import { createImportRunner, memoryImportJobStore } from './import-jobs.js';
+import { memoryJourneyStore } from './journeys.js';
+import { registerJourneyAdmin } from './journeys-admin.js';
+import { registerMediaRoutes } from './media-routes.js';
+import { registerPagesAndModerationRoutes } from './pages-moderation-routes.js';
+import { registerPostsRoutes } from './posts-routes.js';
+import { previewCsp } from './preview.js';
+import { createPublicationProjection } from './publication.js';
+import { accountLockoutLimiter, commentLimiters, fixedWindowLimiter, rateLimitPreHandler } from './rate-limit.js';
+import { legacyRedirectForRelease } from './redirects.js';
+import { createReleaseManifestReader } from './release-manifest.js';
+import { escapeRegExp } from './request-guards.js';
+import { createPublishHelpers, type AppServer, type ServerConfig, type ServerContext } from './server-context.js';
+import { registerSettingsRoutes } from './settings-routes.js';
+import { StorageReadOnlyError } from './storage-owner.js';
 
-export interface ServerConfig {
-  trustProxy: TrustPolicy['trust'];
-  storageDir: string;
-  baseUrl: string;
-  users: UserStore;
-  sessions: SessionStore;
-  settings: SettingsStore;
-  secrets: SecretsStore;
-  identityStore?: SiteIdentityStore;
-  onboarding?: OnboardingStore;
-  language?: LanguageStore;
-  /** Observe the real registered table for reserved-root namespace parity. */
-  onRoute?: (route: RouteOptions) => void;
-  posts: PostStore;
-  pages: PageStore;
-  journeys?: JourneyStore;
-  navigation?: NavigationStore;
-  imgHost: string;   // Host header that serves image variants (img subdomain)
-  siteDir: string;   // release root; the blog is served from `${siteDir}/current`
-  mapDir?: string;   // PMTiles/glyph assets; omit to disable /map/
-  builder: SiteBuilder;
-  backupDir: string;
-  dbBackup: DbBackup;
-  dbCheck: () => Promise<void>; // resolves iff the DB answers — probed by GET /health
-  gpx?: GpxService;
-  isWritable?: () => boolean;
-  storageSignal?: AbortSignal;
-  loginLimiter?: RateLimiter;
-  accountLimiter?: AccountLimiter;
-  /** Per-account failure limiter for POST /users/me/password, keyed on the session's user id. */
-  passwordLimiter?: AccountLimiter;
-  /** #513: injectable like `loginLimiter`; defaults to the OSRM router over `settings`. */
-  stopRouter?: StopRouter;
-  /** ROUTING_INTERNAL_ORIGINS (operator env): the only plain-HTTP / private routing origins. Default none. */
-  routingInternalOrigins?: OriginAllowList;
-  /** Bundled per-country OSRM (compose `osrm` + `osrm-fetch`); absent = Settings URLs only. */
-  bundledRouting?: BundledRouting;
-  /** Per-user Calculate limiter (default 20 per 10 minutes). */
-  stopRouteLimiter?: RateLimiter;
-  media: MediaStore;
-  encodeQueue: EncodeQueue;
-  uploads?: UploadService;
-  /**
-   * Disk↔database reconciliation + encode re-seed (`createReconciler`),
-   * triggered by POST /media/rescan. The route MUST NOT call the sync alone —
-   * see the @ai-warning on `createReconciler` (#117).
-   */
-  reconciler?: { run: () => Promise<ReconcileReport> };
-  /**
-   * The ONE process-wide build/encode mutex (issue #95), so the WordPress
-   * importer's encodes never overlap `astro build`. The same instance the
-   * builder and the encode queue were constructed with — a second lock would
-   * silently remove the protection. Optional only so route tests that never
-   * encode need not build one.
-   */
-  workLock?: WorkLock;
-  /**
-   * The WXR pre-flight (parse, validate, cap, free space) that returns the
-   * `run()` the job executes. Injectable for the same reason as `loginLimiter`
-   * and `reconciler`: the real one's pacing and retry behaviour cannot be
-   * observed from a route test, because every failure mode reachable without a
-   * network (the SSRF guard, an unresolvable host) is classified NON-retryable
-   * by design, and the retryable ones cost 15 s each.
-   */
-  prepareImport?: (xml: string, deps: ImportDeps) => Promise<PreparedImport>;
-  /**
-   * The background import runner (issue #92) — owns single-flight and the
-   * `import_jobs` rows. Defaults to a memory-backed one so a route test needs
-   * no database; `main.ts` passes the Postgres-backed instance.
-   */
-  importJobs?: ImportRunner;
-  /**
-   * Admin comment moderation (SPEC-ADM-001). Optional so route tests that do
-   * not exercise comments need none; when absent the routes still enforce
-   * authz first and then answer 503.
-   */
-  commentsAdmin?: CommentAdminStore;
-  /** Public reader comments (SPEC-API-001); absent → GET/POST /comments answer 503 after their checks. */
-  comments?: CommentStore;
-  /** Site-wide comments switch. Defaults to OFF (fail closed): POST answers 409. */
-  commentsEnabled?: () => boolean;
-  /**
-   * Explicit blog-origin override for POST /comments. Invalid values fail closed.
-   * Otherwise use trusted protocol + raw Host, excluding production image hosts.
-   */
-  commentsOrigin?: string;
-  /** Injectable for tests; defaults to fresh `commentLimiters()` maps. */
-  commentIpLimiter?: RateLimiter;
-  commentGlobalLimiter?: RateLimiter;
-}
+export type { AppServer, ServerConfig } from './server-context.js';
 
-
-/** IPv4 loopback block (127.0.0.0/8) — matched after WHATWG normalization, which
- *  canonicalizes shorthands (`127.1` → `127.0.0.1`) and rejects out-of-range octets. */
+/** IPv4 loopback block (127.0.0.0/8) — matched after WHATWG normalization. */
 const LOOPBACK_IPV4_RE = /^127(?:\.\d{1,3}){3}$/;
 
-/**
- * True iff a host *authority* — `localhost:3000`, `127.0.0.1:3000`, `[::1]:3000`,
- * `img.simonswanderlust.com` — names the loopback interface. Parsed with the WHATWG
- * URL parser rather than string matching, so an optional port and bracketed IPv6 are
- * handled correctly; an unparseable authority counts as non-local.
- *
- * Only the exact loopback names qualify. `evil.localhost` does not, even though some
- * resolvers map every `*.localhost` name to 127.0.0.1: this predicate exists solely to
- * detect the one-hostname local-dev setup that makes the image mount shadow the blog
- * mount (see setNotFoundHandler), and giving images their own hostname is precisely the
- * setup that has no such collision.
- */
 function isLoopbackAuthority(authority: string): boolean {
   let hostname: string;
   try {
@@ -205,26 +48,8 @@ function isLoopbackAuthority(authority: string): boolean {
   return hostname === 'localhost' || hostname === '[::1]' || LOOPBACK_IPV4_RE.test(hostname);
 }
 
-export interface AppServer extends FastifyInstance {
-  /** Refuse new mutating handlers and wait for those already admitted. */
-  quiesceMutations(): Promise<void>;
-}
-
 export function buildServer(cfg: ServerConfig): AppServer {
-  // @fastify/static requires an absolute root; tolerate a relative STORAGE_DIR
-  // (e.g. ./data/images from env) by resolving against the process cwd.
   const storageDir = resolve(cfg.storageDir);
-  // @ai-warning: validate the immediate socket address AND stop at hop zero.
-  // Never use `true`, a bare hop count, or a hop-only function: they let an
-  // untrusted peer forge req.ip and req.protocol. A second proxy layer needs
-  // a new spec, not a larger number (#369 dependency/proxy-trust spec).
-  // @ai-note: http.Server#requestTimeout bounds how long the server waits to
-  // fully RECEIVE a request (headers + body) — it does not bound how long a
-  // handler then takes to process it (e.g. encoding an upload). Fastify sets
-  // this to 0 (disabled) by default, itself overriding Node's own 300s
-  // default, so without an explicit value a stalled request would never time
-  // out at this layer. 120s is generous for even a large multipart upload
-  // over a slow connection while still bounding one that stalls outright.
   const app = Fastify({ logger: false, trustProxy: cfg.trustProxy, requestTimeout: 120_000 });
   if (cfg.onRoute) app.addHook('onRoute', cfg.onRoute);
   const { users, sessions } = cfg;
@@ -234,7 +59,6 @@ export function buildServer(cfg: ServerConfig): AppServer {
   let mutationsClosed = false;
   const activeMutations = new Set<Promise<void>>();
   const isWritable = () => !mutationsClosed && cfg.isWritable?.() !== false;
-  const runtime = { signal: cfg.storageSignal, isWritable };
   const isMutation = (method: string) => method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS';
   const readOnly = (reply: FastifyReply) => reply.code(503).header('cache-control', 'no-store')
     .send({ error: 'storage_read_only', message: ui.en['gpx.storageReadOnly'] });
@@ -242,8 +66,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
     mutationsClosed = true;
     await Promise.allSettled(activeMutations);
   };
-  // Track handler completion, not socket completion: an aborted client must
-  // not make a still-running mutation invisible to offline restore admission.
+
   app.addHook('onRoute', (route) => {
     const methods = Array.isArray(route.method) ? route.method : [route.method];
     if (!methods.some(isMutation)) return;
@@ -257,6 +80,7 @@ export function buildServer(cfg: ServerConfig): AppServer {
       finally { activeMutations.delete(completion.promise); completion.resolve(); }
     };
   });
+
   app.addHook('onRequest', async (request, reply) => {
     if (isWritable()) return;
     if (request.routeOptions.url === '/health') {
@@ -265,86 +89,43 @@ export function buildServer(cfg: ServerConfig): AppServer {
     }
     if (isMutation(request.method) && request.routeOptions.url !== '/media/lookup') return readOnly(reply);
   });
+
   const cleanupDeletedRoutes = async (): Promise<boolean> => {
     if (!cfg.gpx) return false;
     try { const result = await cfg.gpx.reconcile(); return result.skipped || result.cleanupPending; }
     catch { return true; }
   };
 
-  // nosniff everywhere; clickjacking/referrer policies on every route that is
-  // not the public blog / image / basemap surface (blog pages keep parity with
-  // the old nginx: no admin headers). The rule is derived from the MATCHED
-  // ROUTE, not from a hand-kept prefix list: that list had drifted in both
-  // directions (#130 — it still named a `/images` that no longer existed and
-  // omitted `/api`, so `/api/cms/stats` shipped without the headers), and the
-  // next admin route under a new prefix would have done the same. The public
-  // surface is exactly the wildcard routes the three static mounts below
-  // register; everything else Fastify matches is admin or API. A request no
-  // route matches (`routeOptions.url` undefined) falls to setNotFoundHandler,
-  // which is public surface too: the blog's 404 page, legacy 301s, the 503
-  // "building" page and, in the one-hostname dev setup, the blog itself.
   const PUBLIC_ROUTES: Record<string, true> = { '/*': true, '/map/*': true };
+  const STATIC_ADMIN_ROUTES: Record<string, true> = { '/admin': true, '/admin/*': true, '/login': true };
   app.addHook('onSend', async (req, reply) => {
     reply.header('X-Content-Type-Options', 'nosniff');
     const url = req.raw.url ?? '';
     const route = req.routeOptions.url;
-    if (route === '/language' || route === '/auth/me' || route === '/onboarding' || route === '/settings' || route === '/settings/navigation' || route?.startsWith('/settings/identity') || route === '/ai-config' || route?.startsWith('/ai-providers') || route?.startsWith('/translation/')
-      || route === '/posts/:tk/publish' || route === '/posts/bulk' || route === '/posts' || route === '/posts/:tk'
-      || route === '/pages/:key' || route === '/upload' || route === '/upload/receipts/:uploadId' || route === '/media/lookup'
-      || route === '/media/folders') reply.header('Cache-Control', 'no-store');
+    if (route !== undefined && !PUBLIC_ROUTES[route] && !STATIC_ADMIN_ROUTES[route] && !reply.hasHeader('cache-control')) {
+      reply.header('Cache-Control', 'no-store');
+    }
     if (route !== undefined && !PUBLIC_ROUTES[route]) {
       reply.header('X-Frame-Options', 'DENY');
       reply.header('Referrer-Policy', 'no-referrer');
     }
-    // Override MIME types for /map/ assets; setHeaders hooks don't fire for 206
-    // responses. Match on the path only (ignore query strings) and skip error
-    // responses so e.g. a 404 body keeps its own Content-Type.
     const path = url.split('?', 1)[0] ?? url;
     if (path.startsWith('/map/') && reply.statusCode < 400) {
       if (path.endsWith('.pmtiles')) reply.header('content-type', 'application/octet-stream');
       else if (path.endsWith('.pbf')) reply.header('content-type', 'application/x-protobuf');
     }
-    // Fingerprinted blog assets get a real cache lifetime; the HTML document
-    // and every other path keep @fastify/send's `public, max-age=0`
-    // (revalidate-always). Astro hashes the content into the filename under
-    // build.assets = '_astro' (Base.CREtK3y4.css), so these bytes are
-    // immutable by construction — while `${siteDir}/current` is a symlink a
-    // publish repoints, which is exactly why the DOCUMENT must not be cached:
-    // it is what points at the new asset names.
-    // Apply the fingerprint-specific policy after static serving; the rest of
-    // the blog mount retains its native revalidation policy.
     if ((path.startsWith('/_astro/') || /^\/_identity\/(?:logo|favicon-32|favicon-192|apple-touch-180)-[a-f0-9]{16}\.png$/.test(path)) && reply.statusCode < 400) {
       reply.header('cache-control', 'public, max-age=31536000, immutable');
     }
   });
 
-  // @ai-warning Registered AFTER the hook above ON PURPOSE: onSend hooks run in
-  // registration order, and the compressor's allow-list judges the FINAL
-  // content-type — including the /map/ overrides that hook assigns, since
-  // @fastify/static's setHeaders never fires for a 206. /map/ is additionally
-  // excluded by prefix so a range read of the basemap stays identity bytes.
   app.addHook('onSend', compressionHook({ skipPrefixes: ['/map/'] }));
-
-  // Per-IP throttle for the unauthenticated auth endpoints (brute-force defense).
   const loginLimiter = cfg.loginLimiter ?? fixedWindowLimiter({ max: 10, windowMs: 900_000 });
-  // @ai-note The /login account budget counts failures from EVERY source and
-  // is deliberately 10x the per-IP budget: one address is cut off at 10 by
-  // limitAuth long before it can lock the account, so locking the admin out
-  // needs a sustained, distributed attack — yet 100 guesses / 15 min is still
-  // no threat to a 12+ character password (NIST SP 800-63B §5.2.2 allows up
-  // to 100). The old max of 5 let anyone lock the admin out with 5 requests
-  // (#109). See docs/superpowers/specs/2026-09-05-login-lockout-design.md.
   const accountLimiter = cfg.accountLimiter ?? accountLockoutLimiter({ max: 100 });
   const passwordLimiter = cfg.passwordLimiter ?? accountLockoutLimiter();
-  // issue #92: memory-backed by default so route tests need no database;
-  // main.ts passes the Postgres-backed runner whose rows survive a restart.
-  const importJobs = cfg.importJobs ?? createImportRunner({ store: memoryImportJobStore(), ...runtime });
+  const importJobs = cfg.importJobs ?? createImportRunner({ store: memoryImportJobStore(), signal: cfg.storageSignal, isWritable });
   const limitAuth = rateLimitPreHandler(loginLimiter);
 
-  // Unexpected errors (DB failures, bugs) must not leak internals to clients:
-  // log the detail server-side, return a generic 500. Intentional 4xx framework
-  // errors (body-limit 413, malformed JSON 400, …) keep their message — those
-  // are Fastify's own sanitized responses, not internal state.
   app.setErrorHandler((err: FastifyError, req, reply) => {
     if (err instanceof StorageReadOnlyError || !isWritable()) return readOnly(reply);
     const status = err.statusCode ?? 500;
@@ -356,74 +137,41 @@ export function buildServer(cfg: ServerConfig): AppServer {
   });
 
   app.register(cookie);
-  // @ai-warning: `files: 1` is a data-integrity guard, not a convenience limit.
-  // POST /upload reads one file into a single `buf`, so a multi-file request
-  // used to buffer every file and silently keep only the last. Bulk upload is
-  // N single-file requests by design.
-  // `parts` also matters: @fastify/multipart's parser never consumes the body,
-  // so Fastify's 1 MiB bodyLimit does NOT apply to multipart — without a cap,
-  // one authenticated request could stream ~25 GB.
   app.register(multipart, {
     limits: { fileSize: 25 * 1024 * 1024, files: 1, parts: 8 },
   });
-  // No global session hook (#129): the blog, image host, basemap and admin
-  // static pages never read a session, so they never query for one. Only
-  // routes that declare one of these preHandlers resolve `req.authUser`.
   app.decorateRequest('authUser', null);
   const { optionalAuth, requireAuth, requireAdmin } = createAuthn(users, sessions);
+
   if (cfg.gpx) registerGpxRoutes(app, { gpx: cfg.gpx, requireAuth });
   registerJourneyAdmin(app, { store: journeys, posts: cfg.posts, language, imageBase: cfg.baseUrl.replace(/\/$/, ''), builder: cfg.builder, requireAuth, requireAdmin });
   app.get('/admin/gpx-copy.js', async (_req, reply) =>
     reply.type('application/javascript; charset=utf-8').header('cache-control', 'no-store').send(renderGpxCopy()));
 
   const here = dirname(fileURLToPath(import.meta.url));
-  // Prefix WITHOUT the trailing slash plus `redirect: true`: @fastify/static
-  // still mounts `/admin/*`, and only then registers GET /admin → 301 /admin/
-  // (query kept). public/ has no subdirectories, so nothing else changes.
   app.register(fastifyStatic, { root: join(here, '..', 'public'), prefix: '/admin', redirect: true });
-  // /upload and the CLI append a content hash to every key (contentHashKey),
-  // so a given variant URL's bytes never change: replacing a photo mints a new
-  // URL and previously published URLs keep serving — which is what makes a
-  // one-year immutable cache correct. Exception: WP-import rehost keys
-  // (wp-images.ts) stay deterministic so re-imports are idempotent, so
-  // re-importing a remote image that changed since the first import is the one
-  // residual path that can rewrite bytes under an immutable-cached URL —
-  // accepted trade-off. Use the native maxAge + immutable options.
+
+  const imgHostPattern = new RegExp(`^${escapeRegExp(cfg.imgHost)}$`, 'i');
   app.register(fastifyStatic, {
     root: storageDir,
     prefix: '/',
     decorateReply: false,
     maxAge: '365d',
     immutable: true,
-    constraints: { host: cfg.imgHost },
-    // Public variants must be readable by the editor on a different origin.
-    // Scope CORS to this file mount, never authenticated APIs or private originals.
+    constraints: { host: imgHostPattern },
     setHeaders: (reply) => { reply.header('Access-Control-Allow-Origin', '*'); },
-    // Only finished variants (`<key>-<width>.<avif|webp|jpeg>`) are web assets.
-    // Untouched full-resolution originals (`<key>-orig.<ext>`) live in
-    // storageDir so the incremental backup tar captures them, but they are a
-    // private DR archive; storage.ts's `.part-<hex>` temps (#118) are
-    // half-written files that may be an original — GPS included. An
-    // allow-list keeps both off the public host (404), where the old
-    // originals-only deny-list would have served a crash leftover.
     allowedPath: (pathName) => VARIANT_FILE_RE.test(pathName),
   });
 
-  // The public blog: static output of the last release. `current` is a symlink
-  // flipped atomically by the builder; paths are joined per request, so a flip
-  // takes effect immediately without re-registering.
   const currentDir = join(resolve(cfg.siteDir), 'current');
   app.register(fastifyStatic, {
     root: currentDir,
     prefix: '/',
     decorateReply: false,
-    redirect: true,          // /foo -> 301 /foo/ (trailingSlash: 'always' contract)
+    redirect: true,
     index: 'index.html',
   });
 
-  // Self-hosted basemap + glyphs (was nginx's /map/ block). PMTiles needs HTTP
-  // range reads; @fastify/send provides them. MIME types are set via onSend hook
-  // (setHeaders doesn't fire for 206 responses). The mime db knows neither .pmtiles nor .pbf.
   if (cfg.mapDir) {
     app.register(fastifyStatic, {
       root: resolve(cfg.mapDir),
@@ -432,1856 +180,60 @@ export function buildServer(cfg: ServerConfig): AppServer {
     });
   }
 
-  // Declared before the upload route, which builds `src` from it.
   const imageBase = cfg.baseUrl.replace(/\/+$/, '');
   cfg.pages.configureImageOrigin(imageBase);
-  // Built once: an unparseable base URL should fail here, at boot, not 500 a
-  // preview request later.
   const previewPolicy = previewCsp(imageBase);
 
-  /** Cap on any `keys[]` batch: an unbounded array is an authenticated
-   *  N-round-trip amplifier against the process that also serves the blog. */
-  const MAX_BULK_KEYS = 100;
-
-  /**
-   * Move a `processing` row that nothing will encode — its enqueue was refused
-   * or its original could not be written — to `s`, resolving whether this
-   * caller's write landed (#348).
-   *
-   * @ai-warning Call only inside the queue's same-key admission boundary.
-   * The active check and awaited CAS must exclude Upload, Retry and recovery
-   * admission until the rollback lands; CAS alone cannot protect an accepted
-   * job that is still processing. The CAS also preserves a settled encode.
-   */
-  const releaseUnqueued = async (key: string, s: MediaStatus, e?: MediaError): Promise<boolean> => {
-    if (cfg.encodeQueue.isActive(key)) return false;
-    return cfg.media.setStatusIfProcessing(key, s, e).catch((err: unknown) => {
-      console.error(`could not roll back status for ${key}:`, err);
-      return false;
-    });
-  };
-
-  /**
-   * Single-file upload. The request returns as soon as the untouched ORIGINAL
-   * is on disk; the AVIF/WebP variants encode in the background queue.
-   *
-   * @ai-warning This used to encode inline, which held the connection for
-   * 40–90 s per frame at concurrency 2 on a VPS — against a reverse proxy
-   * whose default read timeout is 60 s. The response is still complete
-   * immediately because the storage key is a pure function of the content hash
-   * and a metadata-only probe reads orientation-corrected dimensions in
-   * ~0.0002 s (vs ~0.467 s for the re-encode probe it replaced). What callers
-   * lose is that the first selected thumbnail (`${src}-640.webp` for modern,
-   * `${src}-640.jpeg` for JPEG-only) 404s until the encode lands — the media
-   * library shows a processing badge, and `POST /posts/:tk/publish` refuses to
-   * publish a post referencing a photo that is not `ready`.
-   */
-  app.post('/upload', { preHandler: requireAuth }, async (req, reply) => {
-    reply.header('Cache-Control', 'no-store');
-    if (!cfg.uploads) return reply.code(503).send({ error: 'upload receipts are unavailable' });
-    const fields: Record<string, string> = {};
-    let filename = '';
-    let buf: Buffer | undefined;
-    let mimetype = '';
-    for await (const part of req.parts()) {
-      if (part.type === 'file') {
-        mimetype = part.mimetype;
-        filename = String(part.filename ?? '');
-        buf = await part.toBuffer();
-      } else {
-        fields[part.fieldname] = String(part.value);
-      }
-    }
-    const uploadId = fields.uploadId ?? '';
-    const expectedOwnerId = fields.expectedOwnerId ?? '';
-    const generation = fields.retryGeneration ?? '0';
-    if (!UPLOAD_UUID_RE.test(uploadId) || !UPLOAD_UUID_RE.test(expectedOwnerId) || !/^(0|[1-9][0-9]*)$/.test(generation) || !Number.isSafeInteger(Number(generation))) {
-      return reply.code(400).send({ code: 'invalid_upload_identity', error: 'Valid uploadId, expectedOwnerId and retryGeneration are required.' });
-    }
-    if (expectedOwnerId !== req.authUser!.id) return reply.code(403).send({ code: 'owner_changed', error: 'The authenticated account changed.' });
-    if (!buf || !mimetype.startsWith('image/')) return reply.code(400).send({ error: 'expected an image file' });
-    try {
-      const space = await diskSpace(storageDir);
-      const problem = insufficientSpace(space, buf.length);
-      if (problem) return reply.code(507).send({ error: problem });
-    } catch (error) {
-      console.error('could not read free disk space; accepting the upload anyway:', error);
-    }
-    const result = await cfg.uploads.upload({
-      userId: req.authUser!.id, uploadId, retryGeneration: Number(generation), bytes: buf,
-      key: fields.key ?? '', title: fields.title ?? '', alt: fields.alt ?? '', folder: fields.folder ?? '', filename,
-    });
-    return reply.code(result.statusCode).send(result.body);
+  const releaseManifests = createReleaseManifestReader(cfg.siteDir);
+  const publication = createPublicationProjection({
+    posts: cfg.posts, readRelease: () => releaseManifests.read(), media: cfg.media, imageBase,
+    onUnavailable: () => console.warn('Publication projection unavailable'),
   });
 
-  app.get<{ Params: { uploadId: string } }>('/upload/receipts/:uploadId', { preHandler: requireAuth }, async (req, reply) => {
-    reply.header('Cache-Control', 'no-store');
-    if (!UPLOAD_UUID_RE.test(req.params.uploadId)) return reply.code(404).send({ error: 'receipt not found' });
-    if (!cfg.uploads) return reply.code(503).send({ error: 'upload receipts are unavailable' });
-    const receipt = await cfg.uploads.get(req.authUser!.id, req.params.uploadId);
-    if (!receipt) return reply.code(404).send({ error: 'receipt not found' });
-    return reply.send(receipt);
-  });
-
-  // ---- media library ----
-  app.post('/media/lookup', { preHandler: requireAuth, bodyLimit: 32 * 1024 }, async (req, reply) => {
-    reply.header('Cache-Control', 'no-store');
-    const body = req.body;
-    if (!body || typeof body !== 'object' || Array.isArray(body) || !('keys' in body)
-      || !Array.isArray(body.keys) || body.keys.length < 1 || body.keys.length > 100
-      || new Set(body.keys).size !== body.keys.length) return reply.code(400).send({ error: 'expected 1–100 distinct media keys' });
-    const keys: string[] = [];
-    for (const key of body.keys) {
-      if (typeof key !== 'string') return reply.code(400).send({ error: 'invalid media key' });
-      try { assertSafeKey(key); } catch { return reply.code(400).send({ error: 'invalid media key' }); }
-      keys.push(key);
-    }
-    return reply.send({ items: await cfg.media.lookup(keys) });
-  });
-
-  // Everything (posts + pages) that could reference an image URL. Usage is
-  // computed store-agnostically in TS so the memory and pg stores behave alike.
-  // @ai-note: posts come from usageRows() — flat per-locale rows — NOT from
-  // list()+get(): pgPostStore.get() returns null for a stranded single-locale
-  // row (crash between upsertDraft's two locale INSERTs), and that row's image
-  // references must still block deletion. Do not cache across requests (state
-  // lives in backing services).
-  //
-  // @ai-note This loads EVERY post body (both locales) plus every page on each
-  // call, and `imageUsage()` then scans that corpus once per item — so a page
-  // of GET /media costs O(pageSize × corpus). Acceptable at this size and
-  // deliberately not cached, but it is the same cost that made `list()` drop
-  // body_markdown from its SELECT (see PostListRow in posts.ts): once the
-  // corpus is large enough to notice, usage belongs in SQL (an index over the
-  // referenced URLs) rather than a full-corpus scan per request. The delete
-  // routes need it whatever happens; the listing route is the one to move.
-  const usageCorpus = async (): Promise<{ posts: PostUsageRow[]; pages: PagePair[]; journeys: StoredJourney[] }> => {
-    const [postRows, pageKeys, journeyRows] = await Promise.all([cfg.posts.usageRows(), cfg.pages.keys(), journeys.list()]);
-    const pagePairs = await Promise.all(pageKeys.map((k) => cfg.pages.get(k)));
+  const usageCorpus = async () => {
+    const [postRows, pagePairs, journeyRows] = await Promise.all([
+      cfg.posts.usageRows(),
+      cfg.pages.getAll
+        ? cfg.pages.getAll()
+        : cfg.pages.keys().then((pageKeys) => Promise.all(pageKeys.map((k) => cfg.pages.get(k)))),
+      journeys.list(),
+    ]);
     return { posts: postRows, pages: pagePairs, journeys: journeyRows };
   };
 
-  /**
-   * Serialize a media row for the wire, redacting what a non-admin must not see.
-   *
-   * @ai-warning `GET /media` is SESSION-level where the `GET /images` it
-   * replaces was admin-only — the gallery picker needs authors to browse. That
-   * privilege drop is only safe because `exif.lat`/`exif.lng` and `uploadedBy`
-   * are redacted here: handing every author the GPS coordinates of every photo
-   * through a lower gate would undo the Phase 0 privacy fix. Tests assert the
-   * redaction itself, not merely the status code.
-   */
-  const serializeMedia = (item: MediaItem, isAdmin: boolean) => (isAdmin ? item : redactForNonAdmin(item));
-
-  async function mediaDetailProjection(item: MediaItem, isAdmin: boolean) {
-    let impact: MediaImpact = { availability: 'unavailable' };
-    let usedIn: UsageRef[] | undefined;
-    try {
-      const corpus = await usageCorpus();
-      usedIn = imageUsage(item.src, corpus.posts, corpus.pages, corpus.journeys);
-      impact = await mediaImpact(await cfg.posts.mediaImpactCorpus(), item.key, imageBase);
-    } catch { app.log.warn('Media impact unavailable'); }
-    let livePending: DescriptionPending | null = null;
-    if (isAdmin) {
-      try {
-        const observation = await publication.read();
-        const pending = observation ? await galleryPending(observation, cfg.media, imageBase) : null;
-        if (pending) livePending = pending.byKey.get(item.key)
-          ?? { de: { alt: false, caption: false }, en: { alt: false, caption: false } };
-      } catch { app.log.warn('Media pending projection unavailable'); }
-    }
-    return { impact, ...(usedIn ? { usedIn } : {}), ...(isAdmin ? { livePending } : {}) };
-  }
-
-  /**
-   * The variant files that exist for a photo (#570) — the public files, so
-   * authors and admins see the same list.
-   *
-   * @ai-warning Reads the disk, so it is opt-in (`?versions=1`, the details
-   * panel's observation read) and skipped for `processing` rows: the encoding
-   * poll GETs exactly those keys every 3 s, library keys share one directory
-   * per year, and their file set is still in flux. A stored key that fails
-   * `assertSafeKey` (a hand-edited or restored row) and every storage
-   * error other than ENOENT answer `unavailable`; the error embeds the
-   * filesystem path, so only a fixed line is logged (stdout via console —
-   * `app.log` is a no-op, the app runs with `logger: false`).
-   */
-  async function mediaVersions(item: MediaItem): Promise<MediaVersions> {
-    if (item.status === 'processing') return { availability: 'processing' };
-    try {
-      const files = await listVariantFiles(storageDir, item.key);
-      return {
-        availability: 'available',
-        items: files.map((file) => ({ ...file, src: `${item.src}-${file.width}.${file.format}` })),
-      };
-    } catch {
-      console.warn('Media versions unavailable');
-      return { availability: 'unavailable' };
-    }
-  }
-
-  const mediaError = (e: unknown, reply: import('fastify').FastifyReply) => {
-    if (e instanceof MediaStoreError) {
-      const status = e.code === 'not_found' ? 404 : e.code === 'exists' || e.code === 'not_empty' ? 409 : 400;
-      return reply.code(status).send({ error: e.message });
-    }
-    throw e;
+  const publishHelpers = createPublishHelpers(cfg, imageBase);
+  const ctx: ServerContext = {
+    app,
+    cfg,
+    storageDir,
+    imageBase,
+    previewPolicy,
+    language,
+    journeys,
+    publication,
+    routingInternalOrigins,
+    requireAuth,
+    requireAdmin,
+    optionalAuth,
+    limitAuth,
+    accountLimiter,
+    passwordLimiter,
+    importJobs,
+    isWritable,
+    readOnly,
+    cleanupDeletedRoutes,
+    usageCorpus,
+    ...publishHelpers,
   };
 
-  // Paginated, filtered listing plus usage refs for the visible page only.
-  // `altMissing` counts the ready photos in the same view (folder, search, tag)
-  // that still have no alt text, so the Media page can offer "Show only these".
-  app.get('/media', { preHandler: requireAuth }, async (req, reply) => {
-    const q = (req.query ?? {}) as Record<string, string | undefined>;
-    const query: MediaQuery = {
-      ...(q.folder !== undefined ? { folder: q.folder } : {}),
-      recursive: q.recursive === '1' || q.recursive === 'true',
-      ...(q.q !== undefined ? { q: q.q } : {}),
-      ...(q.tag ? { tag: q.tag } : {}),
-      ...(q.status ? { status: q.status as MediaStatus } : {}),
-      // "missing" is the only alt filter; any other value is ignored.
-      ...(q.alt === 'missing' ? { alt: 'missing' as const } : {}),
-      ...(q.sort ? { sort: q.sort as MediaQuery['sort'] } : {}),
-      ...(q.order ? { order: q.order as MediaQuery['order'] } : {}),
-      ...(q.page ? { page: Number(q.page) } : {}),
-      ...(q.pageSize ? { pageSize: Number(q.pageSize) } : {}),
-    };
-    let result;
-    let altMissing = 0;
-    try {
-      result = await cfg.media.list(query);
-      // A status filter other than ready excludes every photo the count describes.
-      if (!query.status || query.status === 'ready') {
-        altMissing = (await cfg.media.list({ ...query, status: 'ready', alt: 'missing', page: 1, pageSize: 1 })).total;
-      }
-    } catch (e) {
-      return mediaError(e, reply);
-    }
-    const corpus = await usageCorpus();
-    const isAdmin = Boolean(req.authUser?.isAdmin);
-    return reply.send({
-      total: result.total,
-      altMissing,
-      items: result.items.map((m) => ({
-        ...serializeMedia(m, isAdmin),
-        usedIn: imageUsage(m.src, corpus.posts, corpus.pages, corpus.journeys),
-      })),
-    });
-  });
+  registerMediaRoutes(ctx);
+  registerSettingsRoutes(ctx);
+  registerAuthRoutes(ctx);
+  registerPostsRoutes(ctx);
+  registerPagesAndModerationRoutes(ctx);
+  registerBackupAndImportRoutes(ctx);
 
-  app.get('/media/folders', { preHandler: requireAuth }, async (_req, reply) =>
-    reply.header('Cache-Control', 'no-store').send(await cfg.media.folders()));
-
-  app.post('/media/folders', { preHandler: requireAuth }, async (req, reply) => {
-    const b = (req.body ?? {}) as { path?: unknown };
-    try {
-      await cfg.media.createFolder(String(b.path ?? ''));
-    } catch (e) {
-      return mediaError(e, reply);
-    }
-    return reply.send({ ok: true, folders: await cfg.media.folders() });
-  });
-
-  // Rename and delete are ADMIN-only: both are bulk-irreversible, and media
-  // has no revision history the way posts do.
-  app.patch('/media/folders', { preHandler: requireAdmin }, async (req, reply) => {
-    const b = (req.body ?? {}) as { from?: unknown; to?: unknown };
-    try {
-      const moved = await cfg.media.renameFolder(String(b.from ?? ''), String(b.to ?? ''));
-      return reply.send({ ok: true, moved, folders: await cfg.media.folders() });
-    } catch (e) {
-      return mediaError(e, reply);
-    }
-  });
-
-  app.delete('/media/folders', { preHandler: requireAdmin }, async (req, reply) => {
-    const b = (req.body ?? {}) as { path?: unknown };
-    try {
-      await cfg.media.deleteFolder(String(b.path ?? ''));
-      return reply.send({ ok: true, folders: await cfg.media.folders() });
-    } catch (e) {
-      return mediaError(e, reply);
-    }
-  });
-
-  app.post('/media/move', { preHandler: requireAuth }, async (req, reply) => {
-    const b = (req.body ?? {}) as { keys?: unknown; folder?: unknown };
-    if (!Array.isArray(b.keys)) return reply.code(400).send({ error: 'keys must be an array' });
-    if (b.keys.length > MAX_BULK_KEYS) return reply.code(400).send({ error: `at most ${MAX_BULK_KEYS} photos per request` });
-    try {
-      const moved = await cfg.media.move(b.keys.map(String), String(b.folder ?? ''));
-      return reply.send({ ok: true, moved });
-    } catch (e) {
-      return mediaError(e, reply);
-    }
-  });
-
-  // Re-queue failed encodes. The original is still on disk, so this is just a
-  // status flip plus an enqueue — re-encoding overwrites the same filenames.
-  //
-  // @ai-warning A failed enqueue MUST roll the status back. Flipping to
-  // `processing` and then hitting a full backlog strands the key: the row says
-  // `processing` with nothing queued, and nothing recovers it — this route
-  // skips `processing` (below), the UI only offers Retry for `failed`, and the
-  // publish gate blocks every post referencing it until the next reconcile
-  // pass (a restart or POST /media/rescan) runs encodeQueue.recover().
-  // The flip has to come FIRST despite that, not after a successful enqueue:
-  // the queue can start the job immediately, and a fast encode would then
-  // write `ready` before our write landed, leaving the row stuck at
-  // `processing` after a perfectly successful encode. The rollback itself goes
-  // through releaseUnqueued, so it can never undo a concurrent `ready`.
-  app.post('/media/retry', { preHandler: requireAuth }, async (req, reply) => {
-    const b = (req.body ?? {}) as { keys?: unknown };
-    const keys = Array.isArray(b.keys) ? b.keys.map(String).slice(0, MAX_BULK_KEYS) : [];
-    let queued = 0;
-    for (const key of keys) {
-      try {
-        const admitted = await cfg.encodeQueue.withAdmission(key, async () => {
-          const item = await cfg.media.get(key);
-          // `missing` is retryable too: its retained original may still exist.
-          if (!item || item.status === 'ready' || item.status === 'processing') return false;
-          await cfg.media.setStatus(key, 'processing');
-          try {
-            cfg.encodeQueue.enqueue(key);
-          } catch (e) {
-            await releaseUnqueued(key, item.status, item.error ?? undefined);
-            throw e;
-          }
-          return true;
-        });
-        if (admitted) queued++;
-      } catch (e) {
-        if (e instanceof BacklogFullError) return reply.code(429).send({ error: e.message, queued });
-        throw e;
-      }
-    }
-    return reply.send({ ok: true, queued });
-  });
-
-  app.post('/media/rescan', { preHandler: requireAdmin }, async (_req, reply) => {
-    if (!cfg.reconciler) return reply.code(503).send({ error: 'reconciliation is not configured' });
-    const report = await cfg.reconciler.run();
-    const receipts = cfg.uploads ? await cfg.uploads.recover() : undefined;
-    return reply.send({ ...report, ...(receipts ? { receipts } : {}) });
-  });
-
-  app.get('/media/queue', { preHandler: requireAuth }, async (_req, reply) =>
-    reply.send(cfg.encodeQueue.stats()));
-
-  // Item routes nest under /media/items/* so a wildcard key (keys contain
-  // slashes: trips/x/hero) can never collide with the static /media/folders.
-  app.get('/media/items/*', { preHandler: requireAuth }, async (req, reply) => {
-    const key = (req.params as { '*': string })['*'];
-    const item = await cfg.media.get(key);
-    if (!item) return reply.code(404).send({ error: 'image not found' });
-    reply.header('Cache-Control', 'no-store');
-    const isAdmin = Boolean(req.authUser?.isAdmin);
-    // Only this GET, and only when asked: PATCH, GET /media and every other
-    // reader of this route (gallery lookups, the bulk AI run, the encoding
-    // poll, recovery reads) keep their cost.
-    const wantsVersions = (req.query as { versions?: unknown } | undefined)?.versions === '1';
-    return reply.send({
-      ...serializeMedia(item, isAdmin),
-      ...await mediaDetailProjection(item, isAdmin),
-      ...(wantsVersions ? { versions: await mediaVersions(item) } : {}),
-    });
-  });
-
-  app.patch('/media/items/*', { preHandler: requireAuth }, async (req, reply) => {
-    reply.header('Cache-Control', 'no-store');
-    const key = (req.params as { '*': string })['*'];
-    let conditional;
-    try { conditional = canonicalizeConditional(req.body); }
-    catch { return reply.code(400).send({ error: 'invalid_media_conditional' }); }
-    try {
-      const saved = await cfg.media.patchConditional(key, conditional);
-      const isAdmin = Boolean(req.authUser?.isAdmin);
-      return reply.send({ ...serializeMedia(saved, isAdmin), conditionalVersion: 1,
-        changedDescriptions: saved.changedDescriptions, ...await mediaDetailProjection(saved, isAdmin) });
-    } catch (e) {
-      if (e instanceof MediaChangedError) {
-        return reply.code(409).send({
-          error: 'media_changed',
-          current: serializeMedia(e.current, Boolean(req.authUser?.isAdmin)),
-        });
-      }
-      return mediaError(e, reply);
-    }
-  });
-
-  // Deletion stays ADMIN-only and still refuses when a post or page references
-  // the photo — in its working copy OR in the published snapshot the blog is
-  // built from (#115: a draft save that swapped the photo out must not make it
-  // deletable while the live site, and every rebuild until a republish, still
-  // renders it; deleteMedia also removes the original, so nothing re-encodes).
-  // @ai-note: usage only sees Postgres content — the last built release may
-  // still reference a deleted image until the next rebuild.
-  app.delete('/media/items/*', { preHandler: requireAdmin }, async (req, reply) => {
-    const key = (req.params as { '*': string })['*'];
-    try {
-      assertSafeKey(key);
-    } catch (e) {
-      return reply.code(400).send({ error: (e as Error).message });
-    }
-    if (!cfg.uploads) return reply.code(503).send({ error: 'upload receipts are unavailable' });
-    return cfg.encodeQueue.withAdmission(key, async () => {
-    const corpus = await usageCorpus();
-    const usedIn = imageUsage(`${imageBase}/${key}`, corpus.posts, corpus.pages, corpus.journeys);
-    if (usedIn.length > 0) {
-      const error = usedIn.some((u) => u.published && !u.working)
-        ? 'image is still part of a published version — republish (or unpublish) that post first'
-        : 'image is referenced by existing content — remove those references first';
-      return reply.code(409).send({ error, usedIn });
-    }
-    // Refuse while the encoder may still write under this key (#116): the
-    // running job holds the original in memory, `storeVariantFiles` recreates
-    // the directory, and the next rescan would backfill the orphaned variants
-    // as a zombie `ready` row with no original. Both signals are needed —
-    // the row says `processing` from upload until the encoder's final write,
-    // and the queue knows about a key the row no longer describes.
-    const item = await cfg.media.get(key);
-    if (item?.status === 'processing' || cfg.encodeQueue.isActive(key)) {
-      return reply.code(409).send({ error: 'photo is still being encoded — wait for it to finish (or fail), then delete it' });
-    }
-    const deleted = await deleteMedia(storageDir, key, runtime);
-    await cfg.uploads!.removeMedia(key, (client) => cfg.media.remove(key, client));
-    if (deleted === 0 && item === null) return reply.code(404).send({ error: 'image not found' });
-    return reply.send({ ok: true, deleted });
-    });
-  });
-
-  // Serialize config reads and writes: JSON settings and Postgres cannot commit
-  // together. Local captions and translation bypass this optional secret path.
-  let settingsTail = Promise.resolve();
-  function settingsOperation<T>(operation: () => Promise<T>): Promise<T> {
-    const result = settingsTail.then(operation);
-    settingsTail = result.then(() => {}, () => {});
-    return result;
-  }
-  function captionConfig(s: Settings, provider: AiProvider) {
-    return {
-      lmModel: s.lmModel, captionPrompt: s.captionPrompt,
-      captionTimeoutMs: s.captionTimeoutMs, captionMaxEdge: s.captionMaxEdge,
-      captionMaxTokens: s.captionMaxTokens,
-      captionProvider: provider.kind, captionBaseUrl: provider.baseUrl,
-    };
-  }
-  /**
-   * Translation (#550) and story drafting (#579) read one assignment each:
-   * the provider (null follows the default), model, timeout and owner prompt.
-   * One table, one helper: the key binding cannot drift between purposes.
-   */
-  const ASSIGNMENTS = {
-    translation: (s: Settings) => ({
-      providerId: s.translationProviderId, model: s.translationModel, timeoutMs: s.translationTimeoutMs, prompt: s.translationPrompt,
-    }),
-    drafting: (s: Settings) => ({
-      providerId: s.draftingProviderId, model: s.draftingModel, timeoutMs: s.draftingTimeoutMs, prompt: s.draftingPrompt,
-    }),
-  } as const;
-  type AssignmentPurpose = keyof typeof ASSIGNMENTS;
-  function assignmentConfig(s: Settings, purpose: AssignmentPurpose) {
-    const assignment = ASSIGNMENTS[purpose](s);
-    const provider = resolveProvider(s, assignment.providerId);
-    return {
-      provider,
-      config: {
-        providerId: provider.id, providerName: provider.name, providerKind: provider.kind,
-        baseUrl: provider.baseUrl, model: assignment.model, timeoutMs: assignment.timeoutMs,
-        prompt: assignment.prompt,
-      },
-    };
-  }
-  /** `{ …config, apiKey }`: only the resolved provider's slot, from the same settings snapshot. */
-  function sendAssignmentConfig(reply: FastifyReply, purpose: AssignmentPurpose) {
-    const local = assignmentConfig(cfg.settings.get(), purpose);
-    if (!isRemoteKind(local.provider.kind)) return reply.send({ ...local.config, apiKey: null });
-    return settingsOperation(async () => {
-      // Re-resolve inside the mutation queue to bind the key and destination
-      // to the same committed provider; unrelated keys are never read.
-      const { provider, config } = assignmentConfig(cfg.settings.get(), purpose);
-      try {
-        const apiKey = isRemoteKind(provider.kind) ? await cfg.secrets.get(slotFor(provider.id)) : null;
-        return reply.send({ ...config, apiKey });
-      } catch (e) {
-        return reply.code(503).send(secretFailure(e));
-      }
-    });
-  }
-  type ProviderView = AiProvider & { hasApiKey: boolean };
-  /**
-   * Key presence per provider via `has` (no decryption, ≤ 20 queries). Local
-   * providers never touch the store; `known` supplies the presence of a slot
-   * this request is about to change. Runs BEFORE any write, so a store failure
-   * leaves both stores untouched.
-   */
-  async function providerViews(providers: readonly AiProvider[], known = new Map<string, boolean>()): Promise<ProviderView[]> {
-    const views: ProviderView[] = [];
-    for (const p of providers) {
-      const hasApiKey = isRemoteKind(p.kind) ? known.get(p.id) ?? await cfg.secrets.has(slotFor(p.id)) : false;
-      views.push({ id: p.id, name: p.name, kind: p.kind, baseUrl: p.baseUrl, hasApiKey });
-    }
-    return views;
-  }
-  /** Explicit shape: never a key, never a ciphertext, never a raw settings object. */
-  function settingsResponse(s: Settings, aiProviders: ProviderView[]) {
-    return {
-      aiProviders, aiDefaultProviderId: s.aiDefaultProviderId,
-      reviewProviderId: s.reviewProviderId, captionProviderId: s.captionProviderId,
-      aiModel: s.aiModel, reviewPrompt: s.reviewPrompt, reviewTimeoutMs: s.reviewTimeoutMs,
-      translationProviderId: s.translationProviderId, translationModel: s.translationModel,
-      translationTimeoutMs: s.translationTimeoutMs,
-      translationPrompt: s.translationPrompt, translationPromptDefault: DEFAULT_TRANSLATION_PROMPT,
-      draftingProviderId: s.draftingProviderId, draftingModel: s.draftingModel,
-      draftingTimeoutMs: s.draftingTimeoutMs,
-      draftingPrompt: s.draftingPrompt, draftingPromptDefault: DEFAULT_DRAFTING_PROMPT,
-      lmModel: s.lmModel, captionPrompt: s.captionPrompt,
-      captionTimeoutMs: s.captionTimeoutMs, captionMaxTokens: s.captionMaxTokens, captionMaxEdge: s.captionMaxEdge,
-      backupSchedule: s.backupSchedule, backupRetention: s.backupRetention,
-      convertJpeg: s.convertJpeg, webpQuality: s.webpQuality, avifQuality: s.avifQuality,
-      importDelayMs: s.importDelayMs, importRetries: s.importRetries,
-      commentsEnabled: s.commentsEnabled,
-      geocodingSearchUrl: s.geocodingSearchUrl,
-      routingCarUrl: s.routingCarUrl, routingBikeUrl: s.routingBikeUrl, routingFootUrl: s.routingFootUrl,
-    };
-  }
-  // No raw database/crypto error reaches the global logger (driver detail can
-  // contain credential material). Unknown failures have the same fixed boundary.
-  function secretFailure(error: unknown) {
-    const safe = error instanceof SecretsError ? error : new SecretsError('ai_secret_store_unavailable');
-    return { error: safe.message, code: safe.code };
-  }
-  /** Validate a candidate; a fixed-message 400 (or sanitized 500) is sent and `null` returned on refusal. */
-  function checkCandidate(candidate: Settings, reply: FastifyReply): Settings | null {
-    try {
-      return validateSettings(candidate);
-    } catch (e) {
-      void reply.code(e instanceof SettingsError ? 400 : 500)
-        .send({ error: e instanceof SettingsError ? e.message : 'Settings could not be read.' });
-      return null;
-    }
-  }
-  type KeyChange = { op: 'keep' } | { op: 'set'; value: string } | { op: 'remove' };
-  /**
-   * Own-property semantics (#214): omitted keeps, `''`/`null` removes, a
-   * non-empty string replaces. A local provider never holds a key, so removal
-   * there is a no-op and a value is refused. A string return is the fixed 400.
-   */
-  function apiKeyChange(b: Record<string, unknown>, kind: AiProviderKind): KeyChange | string {
-    if (!Object.hasOwn(b, 'apiKey')) return { op: 'keep' };
-    const key = b.apiKey;
-    if (key === null || key === '') return isRemoteKind(kind) ? { op: 'remove' } : { op: 'keep' };
-    if (typeof key !== 'string' || /\p{C}/u.test(key)) return 'API key must be a string without control characters, or null.';
-    if (!isRemoteKind(kind)) return 'Local LM Studio providers do not use an API key.';
-    return { op: 'set', value: key };
-  }
-  /**
-   * Secret first, settings second (#214 §6); every check already ran. A
-   * settings failure after a committed secret change is reported as partial —
-   * never as "nothing saved", since the key change is live.
-   */
-  async function commitAiChange(
-    reply: FastifyReply, partial: Partial<Settings>, views: ProviderView[], status: 200 | 201,
-    secret?: { slot: string; change: KeyChange; partialError: string },
-  ) {
-    const keyChange = secret && secret.change.op !== 'keep' ? secret : undefined;
-    if (keyChange) {
-      try {
-        if (keyChange.change.op === 'set') await cfg.secrets.set(keyChange.slot, keyChange.change.value);
-        else await cfg.secrets.delete(keyChange.slot);
-      } catch (e) {
-        return reply.code(503).send(secretFailure(e));
-      }
-    }
-    let next: Settings;
-    try {
-      next = Object.keys(partial).length ? cfg.settings.update(partial) : cfg.settings.get();
-    } catch {
-      return reply.code(500).send(keyChange
-        ? { code: 'settings_partial_failure', error: keyChange.partialError }
-        : { code: 'settings_write_failed', error: 'Settings were not saved. Reload settings before retrying.' });
-    }
-    return reply.code(status).send(settingsResponse(next, views));
-  }
-  /** Ids from a URL are matched against the registry before any slot name is built. */
-  function findProvider(s: Settings, id: unknown): AiProvider | undefined {
-    return isProviderId(id) ? s.aiProviders.find((p) => p.id === id) : undefined;
-  }
-  const KEY_PARTIAL = 'API key change saved, but settings were not saved. Reload settings before retrying.';
-  const PROVIDER_NOT_FOUND = { error: 'AI provider not found.' };
-
-  app.get('/onboarding', { preHandler: requireAdmin }, async () => {
-    if (!cfg.onboarding) throw new Error('Onboarding state unavailable.');
-    return cfg.onboarding.read();
-  });
-  app.post('/onboarding', { preHandler: requireAdmin, bodyLimit: 1024 }, async (req, reply) => {
-    const body = req.body;
-    if (!body || typeof body !== 'object' || Array.isArray(body)
-      || Object.keys(body).length !== 1 || !('action' in body)
-      || (body.action !== 'dismiss' && body.action !== 'resume' && body.action !== 'finish')) {
-      return reply.code(400).send({ error: 'invalid_onboarding_action' });
-    }
-    if (!cfg.onboarding) throw new Error('Onboarding state unavailable.');
-    try { return await cfg.onboarding.act(body.action); }
-    catch (error) {
-      if (error instanceof OnboardingError) return reply.code(409).send({ error: error.code });
-      throw error;
-    }
-  });
-
-  app.get('/language', { preHandler: requireAuth }, async (_req, reply) => reply.send(await language.get()));
-  app.put('/language', { preHandler: requireAdmin }, async (req, reply) => {
-    try {
-      if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)
-        || Object.keys(req.body).some((key) => key !== 'primary' && key !== 'locales')) throw new LanguageError('Choose a supported language mode.');
-      const next = validateLanguage(req.body);
-      let changed = false;
-      const saved = await language.update(next, async (candidate, client) => {
-        changed = true;
-        return cfg.pages.prepareActivation(candidate, client, validatePageImages);
-      });
-      if (!changed) return reply.send(saved);
-      const build = projectBuildReport(await cfg.builder.build('rebuild'));
-      return reply.send({ ...saved, build });
-    } catch (error) {
-      if (error instanceof LanguageError) return reply.code(error.code === 'invalid_language' ? 400 : 409).send({
-        code: error.code, error: error.message, ...(error.blockers ? { blockers: error.blockers } : {}),
-        ...(error.owner ? { owner: error.owner } : {}),
-      });
-      throw error;
-    }
-  });
-  // Navigation is content in the existing Postgres site_nav singleton, not settings.json.
-  app.get('/settings/navigation', { preHandler: requireAdmin }, async (_req, reply) => {
-    reply.header('Cache-Control', 'no-store');
-    if (!cfg.navigation) return reply.code(503).send({ error: 'Navigation unavailable.' });
-    return { ...await cfg.navigation.get(), socialLinks: cfg.identityStore?.get().identity.socialLinks ?? [] };
-  });
-  app.put('/settings/navigation', { preHandler: requireAdmin }, async (req, reply) => {
-    reply.header('Cache-Control', 'no-store');
-    if (!cfg.navigation) return reply.code(503).send({ error: 'Navigation unavailable.' });
-    try {
-      if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) throw new NavigationError('invalid_navigation');
-      const body = req.body as Record<string, unknown>;
-      if (Object.keys(body).some((key) => key !== 'config' && key !== 'updatedAt')) throw new NavigationError('invalid_navigation');
-      const saved = await cfg.navigation.save(body.config, body.updatedAt);
-      // Locks are released. The save is acknowledged with its own build evidence (#297),
-      // so a failed rebuild never reads as a failed save.
-      return { saved, build: projectBuildReport(await cfg.builder.build('rebuild')) };
-    } catch (error) {
-      if (error instanceof NavigationError) return reply.code(error.code === 'conflict' ? 409 : 400).send({ code: error.code, error: error.message });
-      throw error;
-    }
-  });
-  registerIdentityAssetRoutes(app, { store: cfg.identityStore, requireAdmin, workLock: cfg.workLock, storageDir, isWritable });
-  app.get('/settings/identity', { preHandler: requireAdmin }, async (_req, reply) => {
-    if (!cfg.identityStore) return reply.code(503).send({ error: 'Site identity unavailable.' });
-    return { ...cfg.identityStore.get(), assets: cfg.identityStore.getAssetState(), locales: (await language.get()).locales };
-  });
-  app.put('/settings/identity', { preHandler: requireAdmin }, async (req, reply) => {
-    if (!cfg.identityStore) return reply.code(503).send({ error: 'Site identity unavailable.' });
-    try {
-      if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) throw new IdentityError('identity');
-      const body = req.body as Record<string, unknown>;
-      if (Object.keys(body).some((key) => key !== 'revision' && key !== 'identity')) throw new IdentityError('identity');
-      if (typeof body.revision !== 'number' || !Number.isInteger(body.revision) || body.revision < 1) throw new IdentityError('revision');
-      if (!body.identity || typeof body.identity !== 'object' || Array.isArray(body.identity)) throw new IdentityError('identity');
-      validateCanonicalRoles((body.identity as Record<string, unknown>).canonicalOrigin, cfg);
-      const saved = await cfg.identityStore.update(body.revision, body.identity);
-      return { revision: saved.revision, savedAt: saved.savedAt, takesEffect: 'next_build' };
-    } catch (error) {
-      if (error instanceof IdentityError) return reply.code(400).send({ code: error.code, field: error.field, error: error.message });
-      if (error instanceof IdentityConflictError) return reply.code(409).send({ code: error.code });
-      throw error;
-    }
-  });
-
-  app.get('/settings', { preHandler: requireAdmin }, async (_req, reply) => settingsOperation(async () => {
-    const s = cfg.settings.get();
-    let views: ProviderView[];
-    try {
-      views = await providerViews(s.aiProviders);
-    } catch (e) {
-      return reply.code(503).send(secretFailure(e));
-    }
-    return reply.send(settingsResponse(s, views));
-  }));
-
-  app.post('/settings', { preHandler: requireAdmin }, async (req, reply) => settingsOperation(async () => {
-    if (typeof req.body !== 'object' || req.body === null || Array.isArray(req.body)) {
-      return reply.code(400).send({ error: 'Settings must be a JSON object.' });
-    }
-    const b = req.body as Record<string, unknown>;
-    // An old client must not believe it saved a key or a provider list.
-    if (Object.hasOwn(b, 'aiApiKey')) return reply.code(400).send({ error: 'API keys are managed per provider.' });
-    if (Object.hasOwn(b, 'aiProviders')) return reply.code(400).send({ error: 'Providers are managed with /ai-providers.' });
-    const partial: Record<string, unknown> = {};
-    if (b.lmModel !== undefined) partial.lmModel = String(b.lmModel).trim();
-    if (b.captionTimeoutMs !== undefined) partial.captionTimeoutMs = Number(b.captionTimeoutMs);
-    if (b.captionMaxTokens !== undefined) partial.captionMaxTokens = b.captionMaxTokens;
-    if (b.captionMaxEdge !== undefined) partial.captionMaxEdge = Number(b.captionMaxEdge);
-    if (b.captionPrompt !== undefined) partial.captionPrompt = String(b.captionPrompt);
-    if (b.backupSchedule !== undefined) partial.backupSchedule = String(b.backupSchedule);
-    if (b.backupRetention !== undefined) partial.backupRetention = Number(b.backupRetention);
-    if (b.importDelayMs !== undefined) partial.importDelayMs = Number(b.importDelayMs);
-    if (b.importRetries !== undefined) partial.importRetries = Number(b.importRetries);
-    if (b.convertJpeg !== undefined) partial.convertJpeg = b.convertJpeg;
-    // SPEC-FLAG-002: global comments switch. Persisted only; never builds or takes workLock.
-    if (b.commentsEnabled !== undefined) partial.commentsEnabled = b.commentsEnabled;
-    if (b.webpQuality !== undefined) partial.webpQuality = Number(b.webpQuality);
-    if (b.avifQuality !== undefined) partial.avifQuality = Number(b.avifQuality);
-    for (const field of [
-      'aiDefaultProviderId', 'reviewProviderId', 'captionProviderId', 'aiModel', 'reviewPrompt', 'reviewTimeoutMs',
-      'translationProviderId', 'translationModel', 'translationTimeoutMs', 'translationPrompt',
-      'draftingProviderId', 'draftingModel', 'draftingTimeoutMs', 'draftingPrompt',
-    ] as const) {
-      if (Object.hasOwn(b, field)) partial[field] = b[field];
-    }
-    if (Object.hasOwn(b, 'geocodingSearchUrl')) partial.geocodingSearchUrl = b.geocodingSearchUrl;
-    const routingFields = [['routingCarUrl', 'Car'], ['routingBikeUrl', 'Bike'], ['routingFootUrl', 'Foot']] as const;
-    for (const [field] of routingFields) {
-      if (Object.hasOwn(b, field)) partial[field] = b[field];
-    }
-    const next = checkCandidate({ ...cfg.settings.get(), ...partial }, reply);
-    if (!next) return reply;
-    // Only fields this request changes: a stale stored value must not block unrelated saves.
-    for (const [field, label] of routingFields) {
-      if (Object.hasOwn(partial, field) && next[field] !== '' && !routingEndpointUsable(next[field], routingInternalOrigins)) {
-        return reply.code(400).send({ error: `${label} routing URL must use HTTPS unless its exact origin is listed in ROUTING_INTERNAL_ORIGINS.` });
-      }
-    }
-    let views: ProviderView[];
-    try {
-      views = await providerViews(next.aiProviders);
-    } catch (e) {
-      return reply.code(503).send(secretFailure(e));
-    }
-    return commitAiChange(reply, partial, views, 200);
-  }));
-
-  app.post('/ai-providers', { preHandler: requireAdmin }, async (req, reply) => settingsOperation(async () => {
-    if (typeof req.body !== 'object' || req.body === null || Array.isArray(req.body)) {
-      return reply.code(400).send({ error: 'AI provider must be a JSON object.' });
-    }
-    const b = req.body as Record<string, unknown>;
-    if (!isProviderKind(b.kind)) {
-      return reply.code(400).send({ error: 'AI provider kind must be lm-studio, openrouter, deepseek, anthropic, openai, or custom.' });
-    }
-    const name = typeof b.name === 'string' ? b.name.trim() : '';
-    const baseUrl = typeof b.baseUrl === 'string' ? b.baseUrl.trim() : '';
-    const invalid = providerNameError(name) ?? providerUrlError(baseUrl);
-    if (invalid) return reply.code(400).send({ error: invalid });
-    const change = apiKeyChange(b, b.kind);
-    if (typeof change === 'string') return reply.code(400).send({ error: change });
-    const current = cfg.settings.get();
-    const provider: AiProvider = { id: newProviderId(current.aiProviders), name, kind: b.kind, baseUrl };
-    const aiProviders = [...current.aiProviders, provider];
-    if (!checkCandidate({ ...current, aiProviders }, reply)) return reply;
-    let views: ProviderView[];
-    try {
-      views = await providerViews(aiProviders, change.op === 'set' ? new Map([[provider.id, true]]) : undefined);
-    } catch (e) {
-      return reply.code(503).send(secretFailure(e));
-    }
-    // A fresh id has no slot to remove: only a supplied key touches the store.
-    return commitAiChange(reply, { aiProviders }, views, 201, change.op === 'set'
-      ? { slot: slotFor(provider.id), change, partialError: KEY_PARTIAL } : undefined);
-  }));
-
-  app.put('/ai-providers/:id', { preHandler: requireAdmin }, async (req, reply) => settingsOperation(async () => {
-    const current = cfg.settings.get();
-    const existing = findProvider(current, (req.params as Record<string, unknown>).id);
-    if (!existing) return reply.code(404).send(PROVIDER_NOT_FOUND);
-    if (typeof req.body !== 'object' || req.body === null || Array.isArray(req.body)) {
-      return reply.code(400).send({ error: 'AI provider must be a JSON object.' });
-    }
-    const b = req.body as Record<string, unknown>;
-    if (Object.hasOwn(b, 'kind') && b.kind !== existing.kind) {
-      return reply.code(400).send({ error: 'A provider\'s kind cannot change.' });
-    }
-    const name = !Object.hasOwn(b, 'name') ? existing.name : typeof b.name === 'string' ? b.name.trim() : '';
-    const baseUrl = !Object.hasOwn(b, 'baseUrl') ? existing.baseUrl : typeof b.baseUrl === 'string' ? b.baseUrl.trim() : '';
-    const invalid = providerNameError(name) ?? providerUrlError(baseUrl);
-    if (invalid) return reply.code(400).send({ error: invalid });
-    const change = apiKeyChange(b, existing.kind);
-    if (typeof change === 'string') return reply.code(400).send({ error: change });
-    const aiProviders = current.aiProviders.map((p) => (p.id === existing.id ? { ...existing, name, baseUrl } : p));
-    if (!checkCandidate({ ...current, aiProviders }, reply)) return reply;
-    let views: ProviderView[];
-    try {
-      views = await providerViews(aiProviders, change.op === 'keep' ? undefined : new Map([[existing.id, change.op === 'set']]));
-    } catch (e) {
-      return reply.code(503).send(secretFailure(e));
-    }
-    return commitAiChange(reply, { aiProviders }, views, 200, { slot: slotFor(existing.id), change, partialError: KEY_PARTIAL });
-  }));
-
-  app.delete('/ai-providers/:id', { preHandler: requireAdmin }, async (req, reply) => settingsOperation(async () => {
-    const current = cfg.settings.get();
-    const existing = findProvider(current, (req.params as Record<string, unknown>).id);
-    if (!existing) return reply.code(404).send(PROVIDER_NOT_FOUND);
-    if (existing.id === current.aiDefaultProviderId) {
-      return reply.code(409).send({ code: 'provider_is_default', error: 'The default AI provider cannot be deleted. Choose another default first.' });
-    }
-    const useCases: ('review' | 'caption' | 'translation' | 'drafting')[] = [];
-    if (current.reviewProviderId === existing.id) useCases.push('review');
-    if (current.captionProviderId === existing.id) useCases.push('caption');
-    if (current.translationProviderId === existing.id) useCases.push('translation');
-    if (current.draftingProviderId === existing.id) useCases.push('drafting');
-    if (useCases.length) {
-      return reply.code(409).send({ code: 'provider_in_use', error: 'This AI provider is assigned to a use case. Assign another provider first.', useCases });
-    }
-    const aiProviders = current.aiProviders.filter((p) => p.id !== existing.id);
-    if (!checkCandidate({ ...current, aiProviders }, reply)) return reply;
-    let views: ProviderView[];
-    let hadKey: boolean;
-    try {
-      views = await providerViews(aiProviders);
-      // Only an existing row is removed, so a remote provider that never held
-      // a key stays deletable without the master key.
-      hadKey = isRemoteKind(existing.kind) && await cfg.secrets.has(slotFor(existing.id));
-    } catch (e) {
-      return reply.code(503).send(secretFailure(e));
-    }
-    // Slot first, provider second: a partial failure leaves a provider showing
-    // "No key" — the safe direction.
-    return commitAiChange(reply, { aiProviders }, views, 200, hadKey ? {
-      slot: slotFor(existing.id), change: { op: 'remove' },
-      partialError: 'The provider\'s API key was removed, but the provider was not deleted. Reload settings before retrying.',
-    } : undefined);
-  }));
-
-  // Admin-only, for the Settings page's Test action: the admin entered this key.
-  app.get('/ai-providers/:id/credential', { preHandler: requireAdmin }, async (req, reply) => settingsOperation(async () => {
-    const provider = findProvider(cfg.settings.get(), (req.params as Record<string, unknown>).id);
-    if (!provider) return reply.code(404).send(PROVIDER_NOT_FOUND);
-    if (!isRemoteKind(provider.kind)) return reply.send({ apiKey: null });
-    try {
-      return reply.send({ apiKey: await cfg.secrets.get(slotFor(provider.id)) });
-    } catch (e) {
-      return reply.code(503).send(secretFailure(e));
-    }
-  }));
-
-  // @ai-warning A key is only ever returned together with the base URL of the
-  // provider that owns it (spec §4.2); the consumer response shape is pinned.
-  app.get('/ai-config', { preHandler: requireAuth }, async (req, reply) => {
-    const purpose = (req.query as Record<string, unknown>).purpose;
-    if (purpose === 'translation' || purpose === 'drafting') return sendAssignmentConfig(reply, purpose);
-    if (purpose === 'caption') {
-      const current = cfg.settings.get();
-      const local = resolveProvider(current, current.captionProviderId);
-      // Local captions: immediately, outside the queue, never touching the secrets store.
-      if (!isRemoteKind(local.kind)) return reply.send({ ...captionConfig(current, local), captionApiKey: null });
-      return settingsOperation(async () => {
-        // Re-resolve after queued saves; a switch back to local must not decrypt.
-        const s = cfg.settings.get();
-        const provider = resolveProvider(s, s.captionProviderId);
-        try {
-          const captionApiKey = isRemoteKind(provider.kind) ? await cfg.secrets.get(slotFor(provider.id)) : null;
-          return reply.send({ ...captionConfig(s, provider), captionApiKey });
-        } catch (e) {
-          return reply.code(503).send(secretFailure(e));
-        }
-      });
-    }
-    if (purpose !== undefined) return reply.code(400).send({ error: 'Unknown AI configuration purpose.' });
-    return settingsOperation(async () => {
-      const s = cfg.settings.get();
-      const caption = resolveProvider(s, s.captionProviderId);
-      const review = resolveProvider(s, s.reviewProviderId);
-      try {
-        // get() checks encryption availability even when no row exists. A
-        // local review provider cannot hold a key, so it never reaches the store.
-        const aiApiKey = isRemoteKind(review.kind) ? await cfg.secrets.get(slotFor(review.id)) : null;
-        return reply.send({
-          ...captionConfig(s, caption), aiProvider: review.kind, aiBaseUrl: review.baseUrl, aiModel: s.aiModel,
-          reviewPrompt: s.reviewPrompt, reviewTimeoutMs: s.reviewTimeoutMs, hasAiApiKey: aiApiKey !== null, aiApiKey,
-        });
-      } catch (e) {
-        return reply.code(503).send(secretFailure(e));
-      }
-    });
-  });
-
-  // Settings → Images "Compare quality": encode one test photo at a candidate
-  // quality with the REAL variant encoder and send the bytes straight back.
-  // Nothing touches disk, the database or the log (not even the filename),
-  // and the output carries no EXIF at all — not even the allow-list, since it
-  // is never published. The multipart limits are the global ones /upload uses
-  // (25 MiB, one file part: a second file part is a 413).
-  // @ai-note Single-flight per process and under the shared work-lock, like
-  // every other encode: a waiting site build preempts it, and a second preview
-  // is refused rather than queued beside sharp's ~2 GB peak.
-  let previewRunning = false;
-  const PREVIEW_QUALITY_RE = /^\d{1,3}$/;
-  const PREVIEW_MAX_WIDTH = Math.max(...WIDTHS);
-  app.post('/settings/image-preview', { preHandler: requireAdmin }, async (req, reply) => {
-    if (previewRunning) {
-      return reply.code(429).send({ error: 'A preview is already running. Try again in a moment.' });
-    }
-    previewRunning = true;
-    try {
-      let buf: Buffer | undefined;
-      let format = '';
-      let quality = '';
-      for await (const part of req.parts()) {
-        if (part.type === 'file') {
-          if (part.fieldname === 'file') buf = await part.toBuffer();
-          else part.file.resume();
-        } else if (part.fieldname === 'format') {
-          format = String(part.value);
-        } else if (part.fieldname === 'quality') {
-          quality = String(part.value);
-        }
-      }
-      if (format !== 'webp' && format !== 'avif') {
-        return reply.code(400).send({ error: 'Format must be webp or avif.' });
-      }
-      const previewFormat: 'webp' | 'avif' = format;
-      const q = PREVIEW_QUALITY_RE.test(quality) ? Number(quality) : NaN;
-      if (!Number.isInteger(q) || q < 1 || q > 100) {
-        return reply.code(400).send({ error: 'Quality must be a whole number from 1 to 100.' });
-      }
-      if (!buf) return reply.code(400).send({ error: 'Choose an image to preview.' });
-      const input = buf;
-      let original: ImageProbe;
-      try {
-        original = await probeImage(input);
-      } catch {
-        return reply.code(400).send({ error: 'Could not read that image.' });
-      }
-      if (!original.width || !original.height) {
-        return reply.code(400).send({ error: 'Could not read that image.' });
-      }
-      const width = Math.min(original.width, PREVIEW_MAX_WIDTH);
-      const profile = normalizeProcessOptions(previewFormat === 'webp' ? { webpQuality: q } : { avifQuality: q });
-      // No keepExif argument: the preview output has no EXIF block.
-      const encode = () => encodeVariant(input, width, previewFormat, profile);
-      let data: Buffer;
-      let encoded: ImageProbe;
-      try {
-        data = cfg.workLock ? await cfg.workLock.runShared(encode) : await encode();
-        encoded = await probeImage(data);
-      } catch {
-        return reply.code(400).send({ error: 'Could not read that image.' });
-      }
-      return reply
-        .type(previewFormat === 'webp' ? 'image/webp' : 'image/avif')
-        .header('Cache-Control', 'no-store')
-        .header('X-Preview-Width', String(encoded.width))
-        .header('X-Preview-Height', String(encoded.height))
-        .header('X-Original-Width', String(original.width))
-        .header('X-Original-Height', String(original.height))
-        .send(data);
-    } finally {
-      previewRunning = false;
-    }
-  });
-
-  app.get('/login', (_req, reply) => reply.sendFile('login.html'));
-
-  app.get('/auth/status', { preHandler: optionalAuth }, async (req) => {
-    if (req.authUser) {
-      return { authenticated: true, username: req.authUser.username, isAdmin: req.authUser.isAdmin, needsSetup: false };
-    }
-    return { authenticated: false, needsSetup: (await users.count()) === 0 };
-  });
-
-  app.get('/auth/me', { preHandler: requireAuth }, async (req) => {
-    const user = req.authUser!;
-    return { authenticated: true, userId: user.id, username: user.username, isAdmin: user.isAdmin, needsSetup: false };
-  });
-
-  // Serialize setup so the count()-then-create() check is atomic across
-  // concurrent requests (closes the first-admin TOCTOU). Per-app instance.
-  let setupChain: Promise<unknown> = Promise.resolve();
-  const withSetupLock = <T>(fn: () => Promise<T>): Promise<T> => {
-    const run = setupChain.then(fn, fn);
-    setupChain = run.then(() => undefined, () => undefined);
-    return run;
-  };
-
-  app.post('/setup', { preHandler: limitAuth }, async (req, reply) => withSetupLock(async () => {
-    if ((await users.count()) > 0) return reply.code(409).send({ error: 'setup already complete' });
-    const b = (req.body ?? {}) as { username?: unknown; password?: unknown };
-    const username = String(b.username ?? '').trim();
-    const password = String(b.password ?? '');
-    if (!username || !password) return reply.code(400).send({ error: 'username and password are required' });
-    const violation = usernamePolicyViolation(username) ?? passwordPolicyViolation(password);
-    if (violation) return reply.code(400).send({ error: violation });
-    const user = await users.create({ username, password, isAdmin: true });
-    const token = await sessions.create(user.id, SESSION_TTL_MS);
-    setSessionCookie(reply, token, isSecureRequest(req));
-    return reply.send({ username: user.username, isAdmin: user.isAdmin });
-  }));
-
-  app.post('/login', { preHandler: limitAuth }, async (req, reply) => {
-    const b = (req.body ?? {}) as { username?: unknown; password?: unknown };
-    const username = String(b.username ?? '').trim();
-    const password = String(b.password ?? '');
-    // Looked up whatever its length: accounts created before #109 capped new
-    // usernames at 64 may be longer, and must keep signing in. The limiter
-    // hashes over-long keys, so the length costs the map nothing.
-    const user = await users.findByUsername(username);
-    // A locked account is refused BEFORE scrypt runs, so a client that already
-    // tripped the lockout cannot keep driving ~16 MiB / tens-of-ms hashes on
-    // the container that also serves the blog (#108). The lock only exists
-    // for usernames that have failed before, so this early return does not
-    // leak whether an unknown username exists.
-    if (accountLimiter.isLocked(username)) {
-      return reply.code(429).send({ error: 'account is temporarily locked due to excessive failed login attempts' });
-    }
-    // Constant-time execution: when username is missing, execute verifyPassword with DUMMY_STORED_HASH
-    // so response timing does not leak whether a username exists (CWE-208 mitigation).
-    const storedHash = user ? user.passwordHash : DUMMY_STORED_HASH;
-    const isValid = verifyPassword(password, storedHash);
-
-    if (!user || !isValid) {
-      accountLimiter.recordFailure(username);
-      return reply.code(401).send({ error: 'invalid username or password' });
-    }
-
-    accountLimiter.recordSuccess(username);
-    const token = await sessions.create(user.id, SESSION_TTL_MS);
-    setSessionCookie(reply, token, isSecureRequest(req));
-    return reply.send({ username: user.username, isAdmin: user.isAdmin });
-  });
-
-  app.post('/logout', { preHandler: requireAuth }, async (req, reply) => {
-    const token = req.cookies?.[SESSION_COOKIE];
-    if (token) await sessions.destroy(token);
-    clearSessionCookie(reply);
-    return reply.send({ ok: true });
-  });
-
-  app.get('/users', { preHandler: requireAdmin }, async () => {
-    const list = await users.list();
-    return list.map((u) => ({ id: u.id, username: u.username, isAdmin: u.isAdmin, createdAt: u.createdAt }));
-  });
-
-  app.post('/users', { preHandler: requireAdmin }, async (req, reply) => {
-    const b = (req.body ?? {}) as { username?: unknown; password?: unknown; isAdmin?: unknown };
-    const username = String(b.username ?? '').trim();
-    const password = String(b.password ?? '');
-    const isAdmin = Boolean(b.isAdmin);
-    if (!username || !password) return reply.code(400).send({ error: 'username and password are required' });
-    const violation = usernamePolicyViolation(username) ?? passwordPolicyViolation(password);
-    if (violation) return reply.code(400).send({ error: violation });
-    try {
-      const user = await users.create({ username, password, isAdmin });
-      return reply.send({ id: user.id, username: user.username, isAdmin: user.isAdmin, createdAt: user.createdAt });
-    } catch (e) {
-      if (e instanceof UserExistsError) return reply.code(409).send({ error: 'username already exists' });
-      throw e;
-    }
-  });
-
-  app.delete('/users/:id', { preHandler: requireAdmin }, async (req, reply) => {
-    const id = (req.params as { id: string }).id;
-    if (req.authUser && req.authUser.id === id) return reply.code(409).send({ error: 'you cannot delete your own account' });
-    const outcome = await users.remove(id);
-    if (outcome === 'not_found') return reply.code(404).send({ error: 'user not found' });
-    if (outcome === 'last_admin') return reply.code(409).send({ error: 'cannot remove the last admin' });
-    await sessions.destroyAllForUser(id);
-    return reply.send({ ok: true });
-  });
-
-  // Self-service password change (any authenticated user, own account only).
-  // Rate-limited like the other password-verifying endpoints (per-IP limitAuth)
-  // AND per account via passwordLimiter, keyed on the session's user id: a
-  // hijacked session must not be able to brute-force the current password,
-  // and the per-IP bucket alone is no bound on a client with many addresses.
-  app.post('/users/me/password', { preHandler: [limitAuth, requireAuth] }, async (req, reply) => {
-    const b = (req.body ?? {}) as { currentPassword?: unknown; newPassword?: unknown };
-    const currentPassword = String(b.currentPassword ?? '');
-    const newPassword = String(b.newPassword ?? '');
-    if (!currentPassword || !newPassword) {
-      return reply.code(400).send({ error: 'current and new password are required' });
-    }
-    const violation = passwordPolicyViolation(newPassword);
-    if (violation) return reply.code(400).send({ error: `new ${violation}` });
-    if (currentPassword.length > MAX_PASSWORD_LENGTH) return reply.code(400).send({ error: 'current password is incorrect' });
-    const user = req.authUser ? await users.findById(req.authUser.id) : null;
-    if (!user) return reply.code(401).send({ error: 'unauthorized' });
-    if (passwordLimiter.isLocked(user.id)) {
-      return reply.code(429).send({ error: 'too many failed attempts, please wait and try again' });
-    }
-    // @ai-note: a wrong current password is a 400, NOT a 401 — the admin-page
-    // fetch handlers redirect to /login on 401, which would boot the user mid-form.
-    if (!verifyPassword(currentPassword, user.passwordHash)) {
-      passwordLimiter.recordFailure(user.id);
-      return reply.code(400).send({ error: 'current password is incorrect' });
-    }
-    passwordLimiter.recordSuccess(user.id);
-    await users.setPassword(user.id, newPassword);
-    await sessions.destroyAllForUser(user.id);
-    // destroyAllForUser also killed the caller's own session — mint a fresh one
-    // (mirrors /login) so changing the password doesn't log its author out.
-    const token = await sessions.create(user.id, SESSION_TTL_MS);
-    setSessionCookie(reply, token, isSecureRequest(req));
-    return reply.send({ ok: true });
-  });
-
-  const { posts } = cfg;
-  const releaseManifests = createReleaseManifestReader(cfg.siteDir);
-  const publication = createPublicationProjection({
-    posts, readRelease: () => releaseManifests.read(), media: cfg.media, imageBase,
-    onUnavailable: () => app.log.warn('Publication projection unavailable'),
-  });
-  const geocode = createGeocoder({
-    endpoint: () => cfg.settings.get().geocodingSearchUrl,
-    canonicalOrigin: () => cfg.identityStore?.get().identity.canonicalOrigin ?? null,
-  });
-  app.post('/geocode', { preHandler: requireAuth, bodyLimit: 2048 }, async (req, reply) => {
-    reply.header('Cache-Control', 'no-store');
-    const query = req.body && typeof req.body === 'object' && 'query' in req.body ? req.body.query : undefined;
-    try {
-      return reply.send({ results: await geocode(query) });
-    } catch (error) {
-      if (!(error instanceof GeocodingError)) throw error;
-      if (error.status === 429) reply.header('Retry-After', '2');
-      return reply.code(error.status).send({ code: error.code });
-    }
-  });
-
-  // #513 stop routing: authoring-time only, server-side, authenticated authors.
-  // Draft coordinates leave the server only here, only to the admin-configured
-  // endpoints, only through safeFetch (see stop-routing.ts). URLs never reach authors.
-  const bundledRouting = cfg.bundledRouting;
-  const stopRouter = cfg.stopRouter ?? createStopRouter({
-    endpoints: () => {
-      const s = cfg.settings.get();
-      return { car: s.routingCarUrl, bike: s.routingBikeUrl, foot: s.routingFootUrl };
-    },
-    regionEndpoints: (countryCode) => bundledRouting?.endpoints(countryCode) ?? {},
-    canonicalOrigin: () => cfg.identityStore?.get().identity.canonicalOrigin ?? null,
-    internalOrigins: routingInternalOrigins,
-  });
-  const stopRouteLimiter = cfg.stopRouteLimiter ?? fixedWindowLimiter({ max: 20, windowMs: 600_000 });
-  // The story's country selects its bundled region; authors see its state, never a URL.
-  const routingContext = async (tk: string) => {
-    const pair = await posts.get(tk);
-    if (!pair) return null;
-    const countryCode = pair.shared.countryCode;
-    // Opening or calculating a story makes sure its country is on the wanted list.
-    void bundledRouting?.sync();
-    return { context: { countryCode }, bundled: bundledRouting ? { bundled: bundledRouting.view(countryCode) } : {} };
-  };
-  app.get<{ Params: { tk: string } }>('/posts/:tk/stop-route', { preHandler: requireAuth }, async (req, reply) => {
-    reply.header('Cache-Control', 'no-store');
-    try {
-      const story = await routingContext(req.params.tk);
-      if (!story) return reply.code(404).send({ code: 'not_found' });
-      return reply.send({ profiles: stopRouter.profiles(story.context), route: await posts.getStopRoute(req.params.tk), ...story.bundled });
-    } catch (e) {
-      if (e instanceof PostError && e.code === 'not_found') return reply.code(404).send({ code: 'not_found' });
-      throw e;
-    }
-  });
-  app.post<{ Params: { tk: string } }>('/posts/:tk/stop-route', { preHandler: requireAuth, bodyLimit: 16384 }, async (req, reply) => {
-    reply.header('Cache-Control', 'no-store');
-    const tk = req.params.tk;
-    const body: unknown = req.body;
-    const input = body !== null && typeof body === 'object' && 'stops' in body ? body.stops : undefined;
-    let stops;
-    try { stops = validateRouteStops(input); }
-    catch (e) {
-      if (e instanceof StopRouteError) return reply.code(400).send({ code: e.code, ...(e.index !== undefined ? { index: e.index } : {}) });
-      throw e;
-    }
-    if (stops.length < 2) return reply.code(400).send({ code: 'stop_route_too_few' });
-    if (stops.length > STOP_ROUTE_LIMITS.stops) return reply.code(400).send({ code: 'stop_route_too_many', max: STOP_ROUTE_LIMITS.stops });
-    if (!isWritable()) return readOnly(reply);
-    // Existence first: an unknown story must never trigger an outbound request.
-    let story;
-    try { story = await routingContext(tk); }
-    catch (e) {
-      if (e instanceof PostError && e.code === 'not_found') return reply.code(404).send({ code: 'not_found' });
-      throw e;
-    }
-    if (!story) return reply.code(404).send({ code: 'not_found' });
-    const { context, bundled } = story;
-    const refuse = (e: StopRoutingError) => {
-      if (e.status === 429) reply.header('Retry-After', '5');
-      return reply.code(e.status).send({ code: e.code, ...(e.profiles ? { profiles: e.profiles } : {}), ...bundled });
-    };
-    // Refusals that start nothing (unavailable profile, calculation in flight)
-    // never spend one of the author's calculations.
-    const refused = stopRouter.refusal(stops, context);
-    if (refused) return refuse(refused);
-    if (!stopRouteLimiter.check(req.authUser!.id)) {
-      return reply.code(429).header('Retry-After', '600').send({ code: 'stop_route_rate_limited' });
-    }
-    let route;
-    try { route = await stopRouter.calculate(stops, context); }
-    catch (e) {
-      if (!(e instanceof StopRoutingError)) throw e;
-      return refuse(e);
-    }
-    try { await posts.saveStopRoute(tk, route); }
-    catch (e) {
-      if (e instanceof PostError && e.code === 'not_found') return reply.code(404).send({ code: 'not_found' });
-      if (e instanceof PostError && e.code === 'storage_read_only') return readOnly(reply);
-      throw e;
-    }
-    return reply.send({ profiles: stopRouter.profiles(context), route, ...bundled });
-  });
-
-  // Unsaved source analysis only: inherit the same JSON body ceiling as /posts.
-  app.post('/gallery/analyze', {
-    onRequest: async (_req, reply) => { reply.header('Cache-Control', 'no-store'); },
-    preHandler: requireAuth,
-  }, async (req, reply) => {
-    const body = req.body;
-    if (!body || typeof body !== 'object' || Array.isArray(body)
-      || !('bodyMarkdown' in body) || typeof body.bodyMarkdown !== 'string') {
-      return reply.code(400).send({ error: 'bodyMarkdown must be a string' });
-    }
-    try {
-      return reply.send(await analyzeGallerySource(body.bodyMarkdown));
-    } catch {
-      // Parser diagnostics may contain source. Keep them out of the global
-      // error logger while preserving its sanitized unexpected-error response.
-      throw new Error('Gallery source analysis failed');
-    }
-  });
-
-  // Pure analysis of the unsaved snapshot; neither endpoint reads Media,
-  // contacts a provider, nor writes drafts. Never log parser/source diagnostics.
-  function translationFailure(error: unknown, reply: FastifyReply) {
-    if (error instanceof TranslationError) {
-      const code = error.code;
-      const status = code === 'translation_input_limit' ? 413
-        : code === 'translation_unsupported_source' || code === 'translation_structure_mismatch' ? 422 : 400;
-      return reply.code(status).send({ code, error: code });
-    }
-    return reply.code(500).send({ code: 'translation_failed', error: 'Article translation analysis failed.' });
-  }
-  for (const action of ['prepare', 'validate'] as const) {
-    app.post('/translation/' + action, {
-      bodyLimit: 2 * 1024 * 1024,
-      onRequest: async (_req, reply) => { reply.header('Cache-Control', 'no-store'); },
-      preHandler: requireAuth,
-      errorHandler(error, _req, reply) {
-        const status = (error as FastifyError).statusCode;
-        const code = status === 413 ? 'translation_input_limit' : 'translation_invalid_input';
-        if (status === 400 || status === 413 || status === 415) return reply.code(status).send({ code, error: code });
-        return translationFailure(error, reply);
-      },
-    }, async (req, reply) => {
-      try {
-        if (action === 'prepare') return reply.send(await prepareTranslation(req.body));
-        if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
-          return reply.code(400).send({ code: 'translation_invalid_input', error: 'translation_invalid_input' });
-        }
-        const { output, ...input } = req.body as Record<string, unknown>;
-        return reply.send(await validateTranslation(input, output));
-      } catch (error) {
-        return translationFailure(error, reply);
-      }
-    });
-  }
-
-  app.get('/admin/waypoint-copy.js', async (_req, reply) => {
-    const copy = Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [
-      locale, Object.fromEntries(Object.entries(strings)
-        .filter(([key]) => key.startsWith('editor.waypoint.'))
-        .map(([key, value]) => [key.slice('editor.waypoint.'.length), value])),
-    ]));
-    return reply.type('application/javascript').send(`window.WaypointCopy = ${JSON.stringify(copy)};`);
-  });
-
-  // #513 editor + Settings copy, from the same bilingual dictionary. No secrets.
-  app.get('/admin/stop-route-copy.js', async (_req, reply) => reply.type('application/javascript').send(renderStopRouteCopy()));
-
-  // Static editor copy shares the site's bilingual dictionary, not a second
-  // hand-maintained translation file. Like /admin/*.js, this contains no secrets.
-  app.get('/admin/editor-image-copy.js', async (_req, reply) => {
-    const copy = Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [
-      locale,
-      Object.fromEntries(Object.entries(strings)
-        .filter(([key]) => key.startsWith('editor.titleImage.'))
-        .map(([key, value]) => [key.slice('editor.titleImage.'.length), value])),
-    ]));
-    const galleryCopy = Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [
-      locale, Object.fromEntries(Object.entries(strings)
-        .filter(([key]) => key.startsWith('editor.gallery.'))
-        .map(([key, value]) => [key.slice('editor.gallery.'.length), value])),
-    ]));
-    const editorCopy = Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [
-      locale, { siteTitleFallback: strings['site.titleFallback'], ...Object.fromEntries(Object.entries(strings)
-        .filter(([key]) => key.startsWith('editor.chrome.'))
-        .map(([key, value]) => [key.slice('editor.chrome.'.length), value])) },
-    ]));
-    const buildCopy = Object.fromEntries(Object.entries(ui).map(([locale, strings]) => [
-      locale, Object.fromEntries(Object.entries(strings)
-        .filter(([key]) => key.startsWith('admin.build.'))
-        .map(([key, value]) => [key.slice('admin.build.'.length), value])),
-    ]));
-    const { siteName, studioDescriptor, canonicalOrigin } = cfg.identityStore?.get().identity ?? neutralIdentity();
-    reply.header('Cache-Control', 'no-store');
-    return reply.type('application/javascript').send(
-      `window.EditorImageCopy = ${JSON.stringify(copy)};\n` +
-      `window.EditorGalleryCopy = ${JSON.stringify(galleryCopy)};\n` +
-      `window.EditorCopy = ${JSON.stringify(editorCopy)};\n` +
-      `window.BuildCopy = ${JSON.stringify(buildCopy)};\n` +
-      `window.SiteIdentity = ${JSON.stringify({ siteName, studioDescriptor, canonicalOrigin })};\n` +
-      `window.EditorGalleryImageOrigin = ${JSON.stringify(new URL(cfg.baseUrl).origin)};`,
-    );
-  });
-
-  /**
-   * Turn an image URL from a post back into its storage key, or null when the
-   * URL is not one of ours. Strips the image base and any hand-pasted variant
-   * suffix (`-1280.webp` from the browser's "Copy image address").
-   */
-  function srcToKey(src: string, baseUrl: string): string | null {
-    if (typeof src !== 'string' || src === '') return null;
-    const prefix = `${baseUrl}/`;
-    let u: URL;
-    let base: URL;
-    try { u = new URL(src); base = new URL(baseUrl); } catch { return null; }
-    // Origin equality, never a prefix match — same rule as the gallery
-    // allow-list (see site/src/lib/body-images.ts).
-    if (u.origin !== base.origin || !src.startsWith(prefix)) return null;
-    return src.slice(prefix.length).replace(/-\d+\.(?:avif|webp|jpeg)$/, '');
-  }
-
-  /** Render once per locale; metadata alone is never a publication reference. */
-  async function publicationBody(pair: StoredPostPair, mode: LanguageConfig): Promise<{ foreign: string[]; keys: string[] }> {
-    const foreign = new Set<string>();
-    const keys = new Set<string>();
-    for (const locale of mode.locales.filter((locale) => !pair[locale].omitted)) {
-      const l = pair[locale];
-      const body = await analyzeBodyContent(l.bodyMarkdown, l.images, imageBase, locale);
-      if (body.hasH1) {
-        throw new PostError(`${locale}: body must not contain an H1; the story hero provides the page H1`);
-      }
-      for (const src of body.foreign) foreign.add(src);
-      const storyUrl = new URL(publicPath(mode, locale, 'story', l.slug), imageBase).href;
-      for (const src of body.sources) {
-        const key = bodyImageKey(src, imageBase, storyUrl);
-        if (key !== null) keys.add(key);
-      }
-      for (const image of [l.heroImage, l.titleImage]) {
-        if (!image) continue;
-        const key = srcToKey(image.src, imageBase);
-        if (key !== null) keys.add(key);
-      }
-      if (l.titleImage && srcToKey(l.titleImage.src, imageBase) === null) foreign.add(l.titleImage.src);
-    }
-    return { foreign: [...foreign], keys: [...keys] };
-  }
-
-  /**
-   * The publish gate: refuse to publish a post whose photos are still encoding.
-   *
-   * @ai-warning Deliberately NOT in `validateForPublish`, which is a
-   * synchronous, pure `(pair) => void` with no store access and no knowledge of
-   * `cfg.baseUrl`; making it async would ripple through every posts.test.ts
-   * case for no benefit. This is also the ONLY real check on the encode
-   * queue's `status` invariant — without it a post publishes, `astro build`
-   * succeeds, and the live site shows broken <img> elements, because the URL is
-   * already in the body and the original is already on disk.
-   *
-   * URLs with NO media row do not block: WordPress-imported and legacy files
-   * predate the library and exist on disk perfectly well.
-   */
-  async function notReadyPhotos(pair: StoredPostPair, keys: string[], mode: LanguageConfig, client?: DbClient): Promise<string[]> {
-    if (keys.length === 0) return [];
-    const notReady = await cfg.media.notReadyKeys(keys, client);
-    // Title images are new library selections, not pre-library legacy heroes.
-    // Unknown keys must not slip through notReadyKeys' legacy exception.
-    for (const locale of mode.locales.filter((locale) => !pair[locale].omitted)) {
-      const image = pair[locale].titleImage;
-      if (!image) continue;
-      const key = srcToKey(image.src, imageBase);
-      if (key !== null && !(await cfg.media.get(key, client))) notReady.add(key);
-    }
-    return [...notReady];
-  }
-
-
-  const FOREIGN_EXAMPLES = 5;
-  function foreignImagesMessage(n: number): string {
-    return `${n} image(s) in the body or title banner are not hosted here — replace them with library photos or re-host imported body images, then publish again`;
-  }
-
-  async function pageImageFailure(body: string, images: Record<string, ImageDims>, mode: LanguageConfig, locale: LanguageLocale, client?: DbClient): Promise<string | null> {
-    const analyzed = await analyzeBodyContent(body, images, imageBase, locale);
-    if (analyzed.foreign.length) return foreignImagesMessage(analyzed.foreign.length);
-    const url = new URL(publicPath(mode, locale, 'about'), imageBase).href;
-    const keys = analyzed.sources.map((src) => bodyImageKey(src, imageBase, url)).filter((key): key is string => key !== null);
-    const notReady = await cfg.media.notReadyKeys(keys, client);
-    return notReady.size ? `${notReady.size} photo(s) are not ready to publish.` : null;
-  }
-  async function validatePageImages(pair: StoredPagePair, mode: LanguageConfig, client?: DbClient): Promise<void> {
-    // Retain the existing About readiness check; #288 adds no new readiness policy.
-    if (pair.key !== 'about') return;
-    for (const locale of mode.locales) {
-      const reason = await pageImageFailure(pair[locale].bodyMarkdown, pair[locale].images, mode, locale, client);
-      if (reason) throw new PageError(reason, 'images_not_ready', undefined, locale);
-    }
-  }
-  class PublicationImageError extends PostError {
-    constructor(readonly foreign: string[], readonly notReady: string[]) {
-      super(foreign.length ? foreignImagesMessage(foreign.length)
-        : `${notReady.length} photo(s) are still processing or failed to encode — wait for them to finish, then publish again`,
-      foreign.length ? 'foreign_images' : 'images_not_ready');
-    }
-  }
-  /**
-   * Body analysis renders once per locale on the reviewed pair, before any
-   * mutation (#375). Under the language lock only media readiness is re-read:
-   * the publish tokens already prove the locked pair is the analyzed one.
-   */
-  function publicationReadiness(keys: string[]) {
-    return async (pair: StoredPostPair, mode: LanguageConfig, client?: DbClient): Promise<void> => {
-      const notReady = await notReadyPhotos(pair, keys, mode, client);
-      if (notReady.length) throw new PublicationImageError([], notReady);
-    };
-  }
-  function foreignImagesReply(reply: FastifyReply, foreign: string[]) {
-    return reply.code(409).send({
-      error: foreignImagesMessage(foreign.length), code: 'foreign_images',
-      foreignImages: foreign.slice(0, FOREIGN_EXAMPLES), foreignImageCount: foreign.length,
-    });
-  }
-
-  app.get('/posts', { preHandler: requireAuth }, async (_req, reply) => {
-    reply.header('Cache-Control', 'no-store');
-    const observation = await publication.read();
-    const rows = await posts.list();
-    return rows.map((row) => ({ ...row, publication: publication.from(observation, row.translationKey) }));
-  });
-
-  app.get('/posts/:tk', { preHandler: requireAuth }, async (req, reply) => {
-    reply.header('Cache-Control', 'no-store');
-    const observation = await publication.read();
-    const read = await posts.getForSave((req.params as { tk: string }).tk, req.authUser!.id);
-    if (!read) return reply.code(404).send({ error: 'post not found' });
-    return reply.send({ ...read.content, publication: publication.from(observation, read.content.translationKey),
-      ownerUserId: req.authUser!.id, lastSaveId: read.lastSaveId });
-  });
-
-  /**
-   * The alt-text audit (see src/alt-audit.ts): the photos of this post that
-   * reach a reader undescribed. Author-level, like every other read here.
-   *
-   * @ai-warning Advisory ONLY. Nothing in this route, and nothing that reads
-   * it, may refuse a publish — the imported corpus is in exactly this state.
-   * The reply is the audit's own explicit shape, never a stored row.
-   */
-  app.get('/posts/:tk/alt-audit', { preHandler: requireAuth }, async (req, reply) => {
-    const pair = await posts.get((req.params as { tk: string }).tk);
-    if (!pair) return reply.code(404).send({ error: 'post not found' });
-    const audit = await auditAltText(pair, await loadGalleryMetadata(pair, cfg.media, imageBase), (await language.get()).locales);
-    return reply.send({ count: audit.count, images: audit.images });
-  });
-
-  // Server-side preview of a draft (or published) post, rendered through the
-  // same markdown pipeline the site build uses (see src/preview.ts). Drafts
-  // are author territory, so requireAuth — publishing stays admin-only. The
-  // reply carries a deny-by-default CSP (#124): author markup renders here on
-  // the admin origin, so nothing but images and the page's own styles may load.
-  // Galleries show the CURRENT library descriptions, exactly as the next site
-  // build will; a media-store failure is a sanitized 500, never stale text.
-  app.get('/posts/:tk/preview', { preHandler: requireAuth }, async (req, reply) => {
-    const q = (req.query ?? {}) as { locale?: unknown };
-    const mode = await language.get();
-    const locale = q.locale === undefined ? mode.primary : String(q.locale);
-    if ((locale !== 'de' && locale !== 'en') || !mode.locales.includes(locale)) {
-      return reply.code(400).send({ error: "locale must be 'de' or 'en'" });
-    }
-    const pair = await posts.get((req.params as { tk: string }).tk);
-    if (!pair) return reply.code(404).send({ error: 'post not found' });
-    const galleryMetadata = await loadGalleryMetadata(pair, cfg.media, imageBase);
-    return reply
-      .type('text/html; charset=utf-8')
-      .header('cache-control', 'no-store')
-      .header('content-security-policy', previewPolicy)
-      .send(await renderPreviewHtml(pair, locale, imageBase, galleryMetadata[locale]));
-  });
-
-  const SAVE_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-  function saveReceipt(req: FastifyRequest, reply: FastifyReply): { saveId: string; ownerUserId: string } | null {
-    reply.header('Cache-Control', 'no-store');
-    const body = req.body;
-    if (!body || typeof body !== 'object' || Array.isArray(body)) {
-      reply.code(400).send({ code: 'invalid_save', error: 'A save object is required.' });
-      return null;
-    }
-    const fields = body as Record<string, unknown>;
-    for (const field of ['saveId', 'expectedOwnerId'] as const) {
-      if (typeof fields[field] !== 'string' || !SAVE_UUID_RE.test(fields[field])) {
-        reply.code(400).send({ code: `invalid_${field}`, error: `${field} must be a canonical UUID.` });
-        return null;
-      }
-    }
-    if (fields.expectedOwnerId !== req.authUser!.id) {
-      reply.code(403).send({ code: 'owner_changed', error: 'The authenticated account changed. Local work must stay with its original owner.' });
-      return null;
-    }
-    return { saveId: fields.saveId as string, ownerUserId: req.authUser!.id };
-  }
-  const upsert = async (req: FastifyRequest, reply: FastifyReply, tk: string) => {
-    const receipt = saveReceipt(req, reply);
-    if (!receipt) return reply;
-    try {
-      // Shape first (issue #120): a non-object body, a missing `de`, a
-      // non-string title etc. are 400s naming the field, never a TypeError or
-      // a Postgres 22P02/23502 surfacing as a sanitized 500.
-      const raw = req.body ?? {};
-      const mode = await language.get();
-      validateDraft(raw, mode);
-      // `updatedAt` is the optimistic-concurrency echo (the value the editor
-      // loaded), not part of the pair itself — strip it before storing. It is
-      // optional: callers without it (new posts, WP importer) skip the check.
-      // `confirmSlugChange` is the author's explicit consent to rename a draft
-      // slug (issue #122) — likewise stripped.
-      const { updatedAt, confirmSlugChange, saveId: _saveId, expectedOwnerId: _expectedOwnerId, ...body } = raw as PostPair & {
-        updatedAt?: unknown; confirmSlugChange?: boolean; saveId: string; expectedOwnerId: string;
-      };
-      const createOnly = tk === '';
-      if (createOnly && !Object.hasOwn(body, 'translationKey')) return reply.code(400).send({ code: 'translation_key_required', error: 'translationKey is required.' });
-      if (createOnly && (typeof body.translationKey !== 'string' || !SAVE_UUID_RE.test(body.translationKey))) {
-        return reply.code(400).send({ code: 'invalid_translation_key', error: 'translationKey must be a canonical UUID.' });
-      }
-      const pair: PostPair = { ...body, translationKey: createOnly ? body.translationKey : tk };
-      const existing = createOnly ? null : await posts.get(tk);
-      if (!createOnly && !existing) return reply.code(404).send({ error: 'post not found' });
-      let baseUpdatedAt: Date | undefined;
-      if (updatedAt !== undefined && updatedAt !== null) {
-        baseUpdatedAt = new Date(String(updatedAt));
-        if (Number.isNaN(baseUpdatedAt.getTime())) return reply.code(400).send({ error: 'invalid updatedAt' });
-      }
-      // Staleness first: a second tab saving after another tab's confirmed
-      // rename must get 'conflict' (which the editor can recover from), not a
-      // consent error for a slug change it never made.
-      if (existing) assertNotStale(existing.updatedAt, baseUpdatedAt);
-      // @ai-warning Golden Rule 2. A draft's slug may be the live WordPress URL
-      // (the importer creates drafts under the real slugs), so renaming one is
-      // never implicit: an existing non-empty slug only changes when the client
-      // says it meant to. Filling an unset ('') slug needs no consent; published
-      // posts are still refused outright by the store (slug_locked).
-      if (existing && !confirmSlugChange) {
-        for (const locale of mode.locales) {
-          if (existing[locale].publishedAt) continue;
-          const from = existing[locale].slug;
-          const to = pair[locale].slug ?? '';
-          if (from !== '' && to !== from) {
-            return reply.code(409).send({
-              error: `changing the ${locale.toUpperCase()} slug from "${from}" to "${to}" changes the post's URL — confirm the change to save`,
-              code: 'slug_change_unconfirmed',
-            });
-          }
-        }
-      }
-      const saved = await posts.upsertDraft(pair, baseUpdatedAt ?? existing?.updatedAt, { createOnly, receipt, baseLanguageUpdatedAt: mode.updatedAt });
-      // Stops or the country may have changed: refresh the bundled routing regions (never awaited).
-      void bundledRouting?.sync();
-      return reply.send({ ...saved, publication: await publication.one(saved.translationKey),
-        ownerUserId: receipt.ownerUserId, saveId: receipt.saveId });
-    } catch (e) {
-      if (e instanceof PostError) {
-        if (e.code === 'storage_read_only') return readOnly(reply);
-        // `code` lets the editor tell a stale-tab 409 ('conflict' → offer a
-        // reload) apart from duplicate_slug/slug_locked 409s.
-        const status = e.code === 'not_found' ? 404
-          : ['already_exists', 'duplicate_slug', 'slug_locked', 'conflict', 'locale_published', 'reserved_slug'].includes(e.code ?? '') ? 409 : 400;
-        return reply.code(status).send({ error: e.message, ...(e.code ? { code: e.code } : {}), ...(e.owner ? { owner: e.owner } : {}) });
-      }
-      throw e;
-    }
-  };
-  app.post('/posts', { preHandler: requireAuth }, (req, reply) => upsert(req, reply, ''));
-  app.put('/posts/:tk', { preHandler: requireAuth }, (req, reply) => upsert(req, reply, (req.params as { tk: string }).tk));
-
-  // Revision history — read-only for any authed user (same trust boundary as
-  // GET /posts/:tk); restoring goes through the normal PUT save, so slug-lock
-  // and validation still apply and the clobbered state is itself snapshotted.
-  app.get('/posts/:tk/revisions', { preHandler: requireAuth }, async (req, reply) => {
-    const tk = (req.params as { tk: string }).tk;
-    if (!(await posts.get(tk))) return reply.code(404).send({ error: 'post not found' });
-    return reply.send(await posts.listRevisions(tk));
-  });
-
-  app.get('/posts/:tk/revisions/:id', { preHandler: requireAuth }, async (req, reply) => {
-    const { tk, id } = req.params as { tk: string; id: string };
-    // Same rule as the list route (#137): a deleted post's snapshots are not
-    // readable even if a store still holds them.
-    if (!(await posts.get(tk))) return reply.code(404).send({ error: 'post not found' });
-    const rev = await posts.getRevision(tk, id);
-    if (!rev) return reply.code(404).send({ error: 'revision not found' });
-    return reply.send(rev);
-  });
-
-  app.get('/api/categories', { preHandler: requireAuth }, async () => {
-    if (posts.listCategories) return posts.listCategories();
-    return [];
-  });
-
-  app.get('/api/tags', { preHandler: requireAuth }, async () => {
-    if (posts.listTags) return posts.listTags();
-    return [];
-  });
-
-  app.get('/api/cms/stats', { preHandler: requireAuth }, async () => {
-    const postStats = posts.getCmsStats ? await posts.getCmsStats() : { totalPosts: 0, draftPosts: 0, publishedPosts: 0, totalCategories: 0, totalTags: 0 };
-    // `total` is the store's count over the whole library; `items.length` was
-    // the page size (#130 — the dashboard read "50" for 665 photos).
-    const { total } = await cfg.media.list({ pageSize: 1 });
-    return { ...postStats, mediaCount: total };
-  });
-
-  // @ai-warning: publishing pushes content to the PUBLIC static site, so it is
-  // admin-only. Authors may create/edit drafts (requireAuth) but not publish.
-  app.post<{ Params: { tk: string } }>('/posts/:tk/publish', { preHandler: requireAdmin, bodyLimit: 4096 }, async (req, reply) => {
-    reply.header('Cache-Control', 'no-store');
-    const body = req.body;
-    if (!body || typeof body !== 'object' || Array.isArray(body)
-      || Object.keys(body).length !== 3
-      || !('baseUpdatedAt' in body) || !('baseRouteVersion' in body) || !('baseLanguageUpdatedAt' in body)
-      || typeof body.baseLanguageUpdatedAt !== 'string'
-      || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(body.baseLanguageUpdatedAt)
-      || !Number.isFinite(Date.parse(body.baseLanguageUpdatedAt))
-      || new Date(body.baseLanguageUpdatedAt).toISOString() !== body.baseLanguageUpdatedAt
-      || typeof body.baseUpdatedAt !== 'string'
-      || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(body.baseUpdatedAt)
-      || !Number.isFinite(Date.parse(body.baseUpdatedAt))
-      || new Date(body.baseUpdatedAt).toISOString() !== body.baseUpdatedAt
-      || !(body.baseRouteVersion === null || typeof body.baseRouteVersion === 'string'
-        && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.baseRouteVersion))) {
-      return reply.code(400).send({ error: 'invalid publish tokens', code: 'invalid_publish_tokens' });
-    }
-    const tokens: PublishTokens = { baseUpdatedAt: new Date(body.baseUpdatedAt), baseRouteVersion: body.baseRouteVersion, baseLanguageUpdatedAt: new Date(body.baseLanguageUpdatedAt) };
-    const tk = req.params.tk;
-    const state = await posts.getPublishState(tk);
-    if (!state) return reply.code(404).send({ error: 'post not found' });
-    const { pair } = state;
-    let analysis: { foreign: string[]; keys: string[] };
-    try {
-      assertPublishTokens(state, tokens);
-      validateForPublish(pair, state.language);
-      analysis = await publicationBody(pair, state.language);
-    } catch (e) {
-      if (e instanceof PostError) return reply.code(e.code === 'conflict' ? 409 : 400).send({ error: e.message, code: e.code });
-      throw e;
-    }
-    if (analysis.foreign.length > 0) return foreignImagesReply(reply, analysis.foreign);
-    // Analyze BEFORE publishing: the audit judges the library text the live
-    // page will show. A failed read or source analysis must refuse before any
-    // mutation; successfully computed warnings remain advisory.
-    const galleryMetadata = await loadGalleryMetadata(pair, cfg.media, imageBase);
-    const audit = await auditAltText(pair, galleryMetadata, state.language.locales);
-    let committed: PublishResult;
-    try { committed = await posts.publish(tk, tokens, publicationReadiness(analysis.keys)); }
-    catch (e) {
-      if (e instanceof PublicationImageError) return reply.code(409).send({
-        error: e.message, code: e.code,
-        ...(e.foreign.length ? { foreignImages: e.foreign.slice(0, FOREIGN_EXAMPLES), foreignImageCount: e.foreign.length } : { notReady: e.notReady }),
-      });
-      if (e instanceof GpxError) return reply.code(e.statusCode).send({ error: e.code, code: e.code, ...(e.counts ? { counts: e.counts } : {}) });
-      if (e instanceof PostError) return reply.code(e.code === 'storage_read_only' ? 503 : e.code === 'not_found' ? 404 : 409).send({ error: e.message, code: e.code });
-      throw e;
-    }
-    const build = projectBuildReport(await cfg.builder.build('publish'));
-    // Best-effort: a failed MDX backup must not undo a publish that is already
-    // live, but it must not be silent either (#145) — a bare-dev BACKUP_DIR
-    // pointing at /data used to fail every publish's export without a trace.
-    await posts.getPublishedTrack(tk)
-      .then((track) => exportPost(pair, cfg.backupDir, track))
-      .catch((e) => console.error(`MDX backup for ${tk} failed:`, e));
-    // updatedAt: publish bumps the stored timestamp, so the editor must re-sync
-    // its concurrency echo or its very next Save would falsely 409.
-    // altAudit rides along so the editor can name the photos that went live
-    // undescribed (src/alt-audit.ts) without a second round trip. It is
-    // reported AFTER the publish succeeded, on purpose: it never gates one.
-    return reply.send({
-      published: true,
-      build,
-      updatedAt: committed.updatedAt,
-      stopRoute: committed.stopRoute,
-      publication: await publication.one(tk),
-      altAudit: { count: audit.count, images: audit.images },
-    });
-  });
-
-  // Bulk publish / unpublish / delete from the posts list. Admin-only for the
-  // same reason the single-post routes are: every action here changes what the
-  // public site serves.
-  //
-  // Three things this deliberately does NOT do:
-  //  • It does not abort on the first failure. `posts.get()` returns null for a
-  //    stranded single-locale pair that `list()` still shows, so a perfectly
-  //    ordinary selection can contain a key that cannot be acted on — report it
-  //    per post and carry on.
-  //  • It does not rebuild per post. `createSiteBuilder` already coalesces
-  //    concurrent builds one-deep, so N calls would be correct but would
-  //    serialise N full Astro builds; mutate first, then build once.
-  //  • It does not skip the MDX backup. The single-post publish route runs
-  //    `exportPost` best-effort afterwards; omitting it here would silently
-  //    leave bulk-published posts without a backup.
-  //
-  // @ai-warning This request is UNBOUNDED IN WALL-CLOCK TIME, and nothing in
-  // this process bounds it: Fastify's `requestTimeout` only caps how long the
-  // server waits to RECEIVE a request, not how long a handler may run. A
-  // 100-key publish is 100 × (validate + publish + get + exportPost) plus one
-  // full Astro build, all before the first byte of the response. The only real
-  // ceiling is the reverse proxy's read timeout — which is exactly what issue
-  // #72 is about, and the reason MAX_BULK_KEYS exists at all. If that ever
-  // starts timing out in practice, the fix is to return the per-post results
-  // before triggering the build (the client already polls nothing, so it would
-  // need a follow-up call), NOT to raise the proxy timeout.
-  const BULK_ACTIONS = ['publish', 'unpublish', 'delete'] as const;
-  type BulkAction = (typeof BULK_ACTIONS)[number];
-
-  app.post('/posts/bulk', { preHandler: requireAdmin }, async (req, reply) => {
-    reply.header('Cache-Control', 'no-store');
-    const b = (req.body ?? {}) as { action?: unknown; keys?: unknown; baseLanguageUpdatedAt?: unknown };
-    const action = String(b.action ?? '') as BulkAction;
-    if (!BULK_ACTIONS.includes(action)) {
-      return reply.code(400).send({ error: `action must be one of ${BULK_ACTIONS.join(', ')}` });
-    }
-    if (action === 'publish' && (typeof b.baseLanguageUpdatedAt !== 'string'
-      || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(b.baseLanguageUpdatedAt)
-      || !Number.isFinite(Date.parse(b.baseLanguageUpdatedAt))
-      || new Date(b.baseLanguageUpdatedAt).toISOString() !== b.baseLanguageUpdatedAt)) return reply.code(400).send({ code: 'invalid_publish_tokens', error: 'invalid language token' });
-    if (!Array.isArray(b.keys)) return reply.code(400).send({ error: 'keys must be an array' });
-    if (b.keys.length > MAX_BULK_KEYS) {
-      return reply.code(400).send({ error: `at most ${MAX_BULK_KEYS} posts per request` });
-    }
-    // Dedupe: a repeated key would otherwise be processed (and reported) twice.
-    const keys = [...new Set(b.keys.map((k) => String(k)))].filter((k) => k !== '');
-    if (keys.length === 0) return reply.code(400).send({ error: 'keys must not be empty' });
-
-    const results: { key: string; ok: boolean; updatedAt?: Date; previousUpdatedAt?: Date; stopRoute?: StopRoutePublishOutcome; error?: string; code?: string; counts?: GpxError['counts'] }[] = [];
-    // Whether anything that was actually LIVE changed — a bulk delete of drafts
-    // only needs no rebuild, mirroring DELETE /posts/:tk's `wasPublished` rule.
-    let liveChanged = false;
-    let cleanupPending = false;
-    for (const tk of keys) {
-      try {
-        const state = action === 'publish' ? await posts.getPublishState(tk) : null;
-        const pair = action === 'publish' ? state?.pair : await posts.get(tk);
-        if (!pair) throw new PostError('post not found');
-        let committed: { updatedAt: Date; previousUpdatedAt?: Date; stopRoute?: StopRoutePublishOutcome } | undefined;
-        if (action === 'publish') {
-          validateForPublish(pair, state!.language);
-          const analysis = await publicationBody(pair, state!.language);
-          if (analysis.foreign.length > 0) throw new PostError(foreignImagesMessage(analysis.foreign.length));
-          committed = await posts.publish(tk, { baseUpdatedAt: pair.updatedAt, baseRouteVersion: state!.routeVersion,
-            baseLanguageUpdatedAt: new Date(String(b.baseLanguageUpdatedAt)) }, publicationReadiness(analysis.keys));
-          liveChanged = true;
-          await posts.getPublishedTrack(tk)
-            .then((track) => exportPost(pair, cfg.backupDir, track))
-            .catch((e) => console.error(`MDX backup for ${tk} failed:`, e));
-        } else if (action === 'unpublish') {
-          if (pair.status !== 'published') throw new PostError('post is not published');
-          committed = await posts.unpublish(tk);
-          liveChanged = true;
-        } else {
-          if (pair.status === 'published') liveChanged = true;
-          await posts.remove(tk);
-          cleanupPending = await cleanupDeletedRoutes() || cleanupPending;
-        }
-        results.push({ key: tk, ok: true, ...committed });
-      } catch (e) {
-        // Never leak an internal error to the client (global-handler contract):
-        // PostError messages are ours and safe; anything else is logged and
-        // reported generically.
-        if (e instanceof GpxError) {
-          results.push({ key: tk, ok: false, error: e.code, code: e.code, ...(e.counts ? { counts: e.counts } : {}) });
-        } else if (e instanceof PostError) {
-          results.push({ key: tk, ok: false, error: e.message });
-        } else {
-          console.error(`bulk ${action} failed for ${tk}:`, e);
-          results.push({ key: tk, ok: false, error: 'internal error' });
-        }
-      }
-    }
-    const succeeded = results.filter((r) => r.ok).length;
-    const build = liveChanged ? projectBuildReport(await cfg.builder.build('bulk')) : undefined;
-    const observation = await publication.read();
-    const projectedResults = results.map((result) => ({ ...result, publication: publication.from(observation, result.key) }));
-    return reply.send({ action, succeeded, failed: results.length - succeeded, results: projectedResults, ...(build ? { build } : {}), ...(cleanupPending ? { cleanupPending: true } : {}) });
-  });
-
-  // @ai-warning: the emergency brake — flips a published pair back to draft and
-  // rebuilds so the live site drops it. Same trust boundary as publish: admin-only.
-  app.post('/posts/:tk/unpublish', { preHandler: requireAdmin }, async (req, reply) => {
-    reply.header('Cache-Control', 'no-store');
-    const tk = (req.params as { tk: string }).tk;
-    const pair = await posts.get(tk);
-    if (!pair) return reply.code(404).send({ error: 'post not found' });
-    if (pair.status !== 'published') return reply.code(409).send({ error: 'post is not published' });
-    let committed: { previousUpdatedAt: Date; updatedAt: Date };
-    try {
-      committed = await posts.unpublish(tk);
-    } catch (e) {
-      if (e instanceof PostError) {
-        if (e.code === 'storage_read_only') return readOnly(reply);
-        return reply.code(404).send({ error: e.message });
-      }
-      throw e;
-    }
-    const build = projectBuildReport(await cfg.builder.build('unpublish'));
-    // Both tokens belong to this transaction, not a later writer during the build.
-    return reply.send({
-      unpublished: true, build,
-      previousUpdatedAt: committed.previousUpdatedAt, updatedAt: committed.updatedAt,
-      publication: await publication.one(tk),
-    });
-  });
-
-  // Hard delete (both locale rows), freeing the slugs for reuse. MDX backups in
-  // /data/backup and uploaded images are intentionally left in place (recovery
-  // path). Rebuild only when the post is currently published.
-  // @ai-warning: "draft" does not guarantee the post is absent from the live
-  // site — if a prior unpublish's rebuild failed (e.g. "a build is already
-  // running"), the deployed release may still contain it until the next
-  // successful build. The unpublish response surfaces that failure to the
-  // admin; build queueing (issue #36) is the proper fix.
-  app.delete('/posts/:tk', { preHandler: requireAdmin }, async (req, reply) => {
-    reply.header('Cache-Control', 'no-store');
-    const tk = (req.params as { tk: string }).tk;
-    const pair = await posts.get(tk);
-    if (!pair) return reply.code(404).send({ error: 'post not found' });
-    const wasPublished = pair.status === 'published';
-    try {
-      await posts.remove(tk);
-    } catch (e) {
-      if (e instanceof PostError) return reply.code(e.code === 'storage_read_only' ? 503 : 404).send({ error: e.message });
-      throw e;
-    }
-    const cleanupPending = await cleanupDeletedRoutes();
-    if (wasPublished) {
-      const build = projectBuildReport(await cfg.builder.build('delete'));
-      return reply.send({ deleted: true, build, publication: await publication.one(tk), ...(cleanupPending ? { cleanupPending: true } : {}) });
-    }
-    return reply.send({ deleted: true, publication: await publication.one(tk), ...(cleanupPending ? { cleanupPending: true } : {}) });
-  });
-
-  // Liveness + DB probe: the compose healthcheck polls this every 10s, so no
-  // per-poll logging. Blog serving stays DB-independent (static files from the
-  // current release), so a down Postgres flips the container unhealthy without
-  // taking the blog offline.
-  // `optionalAuth` (#129): the route is public — the compose healthcheck polls
-  // it without a session — but it reads `req.authUser` for the admin-only disk
-  // report below, and since #129 only a declared preHandler resolves it.
   app.get('/health', { preHandler: optionalAuth }, async (req, reply) => {
-    // @ai-warning: free space and `release` are REPORTED, never a health
-    // verdict (#73, #110). A low-space warning that flipped the container
-    // unhealthy would trigger a restart loop, which makes a full disk strictly
-    // worse; a missing release is normal on a fresh volume and is healed by a
-    // publish, not a restart. The probe is best-effort for the same reason: an
-    // unreadable statfs must not 503.
-    //
-    // `disk` is admin-only (#132): the route itself is public because the
-    // compose healthcheck polls it without a session, but watching `/data`
-    // fill up is reconnaissance for timing a disk-exhaustion attempt on
-    // `/upload`, so anonymous and author callers get the verdict only.
     let disk: { free: number; total: number; freeLabel: string } | undefined;
     if (req.authUser?.isAdmin) {
       try {
@@ -2298,15 +250,13 @@ export function buildServer(cfg: ServerConfig): AppServer {
     }
   });
 
-  // --- Public reader comments (SPEC-API-001) --------------------------------
-  // @ai-warning No session preHandler on purpose (#129): see comments-public.ts.
-  // The limiter maps are the comment route's own, never `loginLimiter`.
+  const imgHostServesBlog = isLoopbackAuthority(cfg.imgHost);
+  const imgHostLower = cfg.imgHost.toLowerCase();
+
   {
     const fresh = commentLimiters();
     const imageOrigin = new URL(cfg.baseUrl).origin;
     const imageAuthority = new URL(imageOrigin).host;
-    // Preserve alternate-scheme exclusions, including an explicitly configured
-    // default port, without excluding unrelated ports on the same hostname.
     const servingImageAuthorities = ['http', 'https'].map((protocol) => {
       const origin = commentAuthorityOrigin(protocol, cfg.imgHost);
       return origin === null ? null : new URL(origin).host;
@@ -2327,8 +277,6 @@ export function buildServer(cfg: ServerConfig): AppServer {
         const origin = commentAuthorityOrigin(req.protocol, req.headers.host);
         if (origin === null) return null;
         if (servingImageAuthorities.some((authority) => authority === null)) return null;
-        // Normalize every authority under the actual request protocol. A default
-        // port in either image setting must not evade the image-host exclusion.
         const servesImages = servingImageAuthorities.some((authority) =>
           commentAuthorityOrigin(req.protocol, authority) === origin);
         if (commentAuthorityOrigin(req.protocol, imageAuthority) === origin || servesImages) {
@@ -2336,417 +284,46 @@ export function buildServer(cfg: ServerConfig): AppServer {
         }
         return origin;
       },
-      // Falls back to the persisted global switch (default false = fail closed).
       commentsEnabled: cfg.commentsEnabled ?? (() => cfg.settings.get().commentsEnabled === true),
       ipLimiter: cfg.commentIpLimiter ?? fresh.ip,
       globalLimiter: cfg.commentGlobalLimiter ?? fresh.global,
     });
   }
 
-  // --- Admin comment moderation (SPEC-ADM-001) ------------------------------
-  // @ai-warning Every route here is requireAdmin (401 anonymous, 403 author)
-  // and the preHandler runs BEFORE any id validation, so an unauthenticated
-  // caller never learns whether an id is well-formed. Ids that are not UUIDs
-  // are a 400 (never reach Postgres as a 22P02). Responses carry reader email:
-  // admin only, and admin UI paints every field with textContent.
-  const commentsAdmin = cfg.commentsAdmin;
-  const commentId = (req: { params: unknown }, reply: FastifyReply): string | null => {
-    const id = (req.params as { id?: string }).id ?? '';
-    if (!COMMENT_ID_RE.test(id)) { void reply.code(400).send({ error: 'invalid comment id' }); return null; }
-    return id;
-  };
-  const noStore = (reply: FastifyReply) => { void reply.code(503).send({ error: 'comments are not available' }); };
-
-  app.get('/moderation/comments', { preHandler: requireAdmin }, async (req, reply) => {
-    reply.header('cache-control', 'no-store');
-    const query = req.query as { status?: unknown; offset?: unknown };
-    const status = query.status ?? 'pending';
-    if (!isCommentStatus(status)) return reply.code(400).send({ error: 'status must be pending or approved' });
-    const rawOffset = query.offset ?? '0';
-    if (typeof rawOffset !== 'string' || !/^[0-9]+$/.test(rawOffset) || !isModerationOffset(Number(rawOffset))) {
-      return reply.code(400).send({ error: 'invalid pagination' });
-    }
-    if (!commentsAdmin) return noStore(reply);
-    const page = await commentsAdmin.list(status, Number(rawOffset));
-    return reply.send({ ...page, comments: await withPublicLocaleMetadata(page.comments, posts) });
-  });
-
-  app.post('/moderation/comments/:id/status', { preHandler: requireAdmin }, async (req, reply) => {
-    const id = commentId(req, reply);
-    if (!id) return reply;
-    const status = ((req.body ?? {}) as { status?: unknown }).status;
-    if (!isCommentStatus(status)) return reply.code(400).send({ error: 'status must be pending or approved' });
-    if (!commentsAdmin) return noStore(reply);
-    if (!(await commentsAdmin.setStatus(id, status))) return reply.code(404).send({ error: 'comment not found' });
-    return reply.send({ id, status });
-  });
-
-  app.delete('/moderation/comments/:id', { preHandler: requireAdmin }, async (req, reply) => {
-    const id = commentId(req, reply);
-    if (!id) return reply;
-    if (!commentsAdmin) return noStore(reply);
-    if (!(await commentsAdmin.remove(id))) return reply.code(404).send({ error: 'comment not found' });
-    return reply.send({ deleted: true });
-  });
-
-  app.post('/moderation/comments/:id/reply', { preHandler: requireAdmin }, async (req, reply) => {
-    const id = commentId(req, reply);
-    if (!id) return reply;
-    if (!commentsAdmin) return noStore(reply);
-    const body = ((req.body ?? {}) as { body?: unknown }).body;
-    try {
-      const created = await commentsAdmin.replyAsAuthor(id, cfg.identityStore?.get().identity.authorName || 'Author', body);
-      if (!created) return reply.code(404).send({ error: 'comment not found' });
-      return reply.code(201).send(created);
-    } catch (e) {
-      if (e instanceof CommentError) return reply.code(400).send({ error: e.message });
-      throw e;
-    }
-  });
-
-  // Replaces the old secret-gated POST /build on the builder container.
-  app.post('/rebuild', { preHandler: requireAdmin }, async () => projectBuildReport(await cfg.builder.build('rebuild')));
-
-  app.get('/rebuild/status', { preHandler: requireAdmin }, async (_req, reply) => {
-    reply.header('Cache-Control', 'no-store');
-    return reply.send(await cfg.builder.status());
-  });
-
-  app.get('/publication/summary', { preHandler: requireAdmin }, async (_req, reply) =>
-    reply.header('Cache-Control', 'no-store').send(await publication.summary()));
-
-  interface PageRoute { Params: { key: string } }
-  interface PagePreviewRoute extends PageRoute { Querystring: { locale?: string } }
-  interface PageRevisionRoute { Params: { key: string; id: string } }
-  function pageFailure(error: unknown, reply: FastifyReply) {
-    if (!(error instanceof PageError)) throw error;
-    const status = error.code === 'not_found' ? 404 : error.code === 'unknown_page_kind' || error.code === 'invalid_page' ? 400 : 409;
-    return reply.code(status).send({ error: error.message, code: error.code,
-      ...(error.owner ? { owner: error.owner } : {}), ...(error.locale ? { locale: error.locale } : {}),
-      ...(error.foreignImages ? { foreignImageCount: error.foreignImages.length, foreignImages: error.foreignImages.slice(0, 5) } : {}) });
-  }
-  function pageToken(value: unknown): Date | undefined {
-    if (value === undefined || value === null) return undefined;
-    if (typeof value !== 'string' || !Number.isFinite(new Date(value).getTime())) throw new PageError('Invalid updatedAt.');
-    return new Date(value);
-  }
-  function pageMutationToken(body: unknown): Date | undefined {
-    if (body === undefined || body === null) return undefined;
-    if (typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some((key) => key !== 'updatedAt')) throw new PageError('Invalid page action payload.');
-    return pageToken('updatedAt' in body ? body.updatedAt : undefined);
-  }
-  // #297: a committed page mutation answers 200 with its projected build attempt
-  // (null when the change affects no published output), never a 5xx "persisted" envelope.
-  async function pageRebuild(reply: FastifyReply, saved: unknown, rebuild: boolean, extra: Record<string, unknown> = {}) {
-    const build = rebuild ? projectBuildReport(await cfg.builder.build('page')) : null;
-    return reply.send({ saved, build, ...extra });
-  }
-  app.get('/pages', { preHandler: requireAuth }, async (_req, reply) => {
-    const mode = await language.get();
-    const keys = [...new Set([...Object.keys(PAGE_KINDS), ...await cfg.pages.keys()])];
-    const pages = await Promise.all(keys.map(async (key) => {
-      const pair = await cfg.pages.get(key);
-      return { key, known: isPageKind(key), exists: pair.updatedAt !== null, status: pair.status, updatedAt: pair.updatedAt,
-        deletable: key !== 'about', defaults: isPageKind(key) ? PAGE_KINDS[key].slugs : null,
-        paths: pagePaths(pair, mode), locales: Object.fromEntries((['de', 'en'] as const).map((locale) =>
-          [locale, { title: pair[locale].title, slug: pair[locale].slug ?? '', publishedAt: pair[locale].publishedAt ?? null }])) };
-    }));
-    return reply.header('cache-control', 'no-store').send({ pages, language: mode });
-  });
-  app.get<PageRoute>('/pages/:key', { preHandler: requireAuth }, async (req, reply) => {
-    const key = req.params.key;
-    if (!isSafePageKey(key)) return reply.code(400).send({ error: 'Invalid page key.' });
-    const read = await cfg.pages.getForSave(key, req.authUser!.id);
-    return reply.header('cache-control', 'no-store').send({ ...read.content, ownerUserId: read.ownerUserId, lastSaveId: read.lastSaveId });
-  });
-  app.put<PageRoute>('/pages/:key', { preHandler: requireAdmin }, async (req, reply) => {
-    const receipt = saveReceipt(req, reply);
-    if (!receipt) return reply;
-    try {
-      const key = req.params.key;
-      if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) throw new PageError('Invalid page payload.');
-      const body = req.body as Record<string, unknown>;
-      if (Object.keys(body).some((key) => !['de', 'en', 'updatedAt', 'prepareLocale', 'saveId', 'expectedOwnerId'].includes(key))) throw new PageError('Invalid page fields.');
-      const pair: PageUpdate = { key };
-      for (const locale of ['de', 'en'] as const) if (body[locale] !== undefined) {
-        const value = body[locale];
-        if (!value || typeof value !== 'object' || Array.isArray(value)) throw new PageError(`Invalid ${locale} fields.`);
-        const row = value as Record<string, unknown>;
-        if (typeof row.title !== 'string' || typeof row.bodyMarkdown !== 'string' || (row.slug !== undefined && typeof row.slug !== 'string')) throw new PageError(`Invalid ${locale} content.`);
-        pair[locale] = { locale, title: row.title, bodyMarkdown: row.bodyMarkdown,
-          ...(row.slug !== undefined ? { slug: row.slug as string } : {}), images: (row.images ?? {}) as Record<string, ImageDims> };
-      }
-      if (body.prepareLocale !== undefined && body.prepareLocale !== 'de' && body.prepareLocale !== 'en') throw new PageError('Invalid preparation locale.');
-      if (body.prepareLocale !== undefined && !Object.hasOwn(body, 'updatedAt')) throw new PageError('Preparation requires the loaded updatedAt token.');
-      const { galleryWarnings, ...saved } = await cfg.pages.save(pair, pageToken(body.updatedAt), {
-        prepareLocale: body.prepareLocale, receipt, expectAbsent: body.updatedAt === null, validate: validatePageImages,
-      });
-      // The writer-only receipt (#305) and this save's transient diagnostics ride beside it.
-      return pageRebuild(reply, saved, saved.status === 'published', {
-        galleryWarnings, ...(receipt ? { ownerUserId: receipt.ownerUserId, saveId: receipt.saveId } : {}),
-      });
-    } catch (error) { return pageFailure(error, reply); }
-  });
-  for (const action of ['publish', 'unpublish'] as const) {
-    app.post<PageRoute>(`/pages/:key/${action}`, { preHandler: requireAdmin }, async (req, reply) => {
-      try {
-        const key = req.params.key;
-        const token = pageMutationToken(req.body);
-        const saved = action === 'publish'
-          ? await cfg.pages.publish(key, token, { validate: validatePageImages })
-          : await cfg.pages.unpublish(key, token);
-        return pageRebuild(reply, saved, true);
-      } catch (error) { return pageFailure(error, reply); }
-    });
-  }
-  app.get<PageRoute>('/pages/:key/deletion', { preHandler: requireAdmin }, async (req, reply) => {
-    try { return reply.send(await cfg.pages.removalInfo(req.params.key)); }
-    catch (error) { return pageFailure(error, reply); }
-  });
-  app.delete<PageRoute>('/pages/:key', { preHandler: requireAdmin }, async (req, reply) => {
-    try {
-      const removed = await cfg.pages.remove(req.params.key, pageMutationToken(req.body));
-      return pageRebuild(reply, removed, removed.published);
-    } catch (error) { return pageFailure(error, reply); }
-  });
-  app.get<PagePreviewRoute>('/pages/:key/preview', { preHandler: requireAuth }, async (req, reply) => {
-    const key = req.params.key;
-    const locale = req.query.locale;
-    if (locale !== 'de' && locale !== 'en') return reply.code(400).send({ error: 'Choose a preview locale.' });
-    const pair = await cfg.pages.get(key);
-    if (!pair.updatedAt || !isPageKind(key)) return reply.code(404).send({ error: 'Page not found.' });
-    const metadata = await loadGalleryMetadata(pair, cfg.media, imageBase);
-    return reply.type('text/html; charset=utf-8').header('cache-control', 'no-store').header('content-security-policy', previewPolicy)
-      .send(await renderPagePreviewHtml(pair, locale, imageBase, metadata[locale]));
-  });
-  app.get<PageRoute>('/pages/:key/revisions', { preHandler: requireAuth }, async (req, reply) => {
-    const key = req.params.key;
-    if (!(await cfg.pages.get(key)).updatedAt) return reply.code(404).send({ error: 'Page not found.' });
-    return reply.send(await cfg.pages.listRevisions(key));
-  });
-  app.get<PageRevisionRoute>('/pages/:key/revisions/:id', { preHandler: requireAuth }, async (req, reply) => {
-    const { key, id } = req.params;
-    const rev = await cfg.pages.getRevision(key, id);
-    if (!rev) return reply.code(404).send({ error: 'revision not found' });
-    return reply.send(rev);
-  });
-
-  app.get('/backups', { preHandler: requireAdmin }, async () => ({
-    state: cfg.dbBackup.state(),
-    running: cfg.dbBackup.running(),
-    files: cfg.dbBackup.list(),
-    imageArchives: cfg.dbBackup.listImageArchives(),
-    routeArchives: cfg.dbBackup.listRouteArchives(),
-    routeCleanup: cfg.gpx?.orphanCleanup(),
-  }));
-
-  // One run at a time (#113): while a backup is in flight, `runNow()` would
-  // hand back the PREVIOUS run's state as if this click had done nothing.
-  app.post('/backups', { preHandler: requireAdmin }, async (_req, reply) => {
-    if (cfg.dbBackup.running()) return reply.code(409).send({ error: 'a backup is already running' });
-    return cfg.dbBackup.runNow();
-  });
-
-  // Only named recovery artifacts may be downloaded, always admin-only.
-  // Private route archives deliberately retain original coordinates/timestamps.
-  app.get<{ Params: { name: string } }>('/backups/:name', { preHandler: requireAdmin }, async (req, reply) => {
-    reply.header('cache-control', 'no-store');
-    const name = req.params.name;
-    const isDump = BACKUP_FILE_RE.test(name);
-    if (!isDump && !IMAGES_ARCHIVE_RE.test(name) && !ROUTE_ARCHIVE_RE.test(name)) {
-      return reply.code(400).send({ error: 'invalid backup filename' });
-    }
-    let handle: FileHandle | undefined;
-    try {
-      handle = await open(join(cfg.dbBackup.dir, name), constants.O_RDONLY | constants.O_NOFOLLOW);
-      const stat = await handle.stat();
-      if (!stat.isFile() || stat.nlink !== 1) {
-        await handle.close();
-        return reply.code(404).send({ error: 'backup not found' });
-      }
-    } catch (error) {
-      await handle?.close().catch(() => {});
-      if (error instanceof Error && 'code' in error && (error.code === 'ENOENT' || error.code === 'ELOOP')) {
-        return reply.code(404).send({ error: 'backup not found' });
-      }
-      throw error;
-    }
-    reply.header('content-type', isDump ? 'application/gzip' : 'application/x-tar');
-    reply.header('content-disposition', `attachment; filename="${name}"`);
-    return reply.send(handle.createReadStream());
-  });
-
-  app.post('/export', { preHandler: requireAuth }, async (_req, reply) => {
-    const list = await posts.list();
-    const pairs = (await Promise.all(list.map((s) => posts.get(s.translationKey)))).filter((p): p is StoredPostPair => p !== null);
-    const files = await exportAll(pairs, cfg.backupDir, (tk) => posts.getPublishedTrack(tk));
-    return reply.send({ ok: true, count: files.length });
-  });
-
-  // Admin-only (issue #97): an import creates/overwrites drafts, writes gigabytes
-  // under /data and makes hundreds of outbound fetches to a host chosen by the
-  // export — the same trust boundary as /rebuild, /settings and /backups, whose
-  // importDelayMs/importRetries knobs govern this run.
-  //
-  // issue #92: the multi-minute part runs OFF the request path. Everything that
-  // can refuse the export (not WXR, no groups, over the image cap, no space, an
-  // import already running) still happens here and keeps its status code; on
-  // success the answer is a 202 with the job id and import.html polls
-  // GET /import/status.
-  //
-  // @ai-warning ONE import at a time, as before. Resumability (issue #85)
-  // makes "run the import again" the documented recovery path, so concurrent
-  // runs are a real scenario: two of them would each see a mostly-empty
-  // resume index and re-fetch everything, hit the source host at twice the
-  // configured rate — the pacing gate is per-run state — race
-  // storeVariantFiles' non-atomic writes and run two sharp pipelines in one
-  // mem_limit'd container. The runner owns that rule (`start` throws
-  // ImportBusyError); the per-image ENCODES inside the run take `cfg.workLock`
-  // as shared holders (issue #95), so a Publish preempts the import at the
-  // next photo boundary rather than the run holding the lock for its duration.
-  app.post('/import', { preHandler: requireAdmin }, async (req, reply) => {
-    if (importJobs.current()) {
-      return reply.code(409).send({ error: 'an import is already running; wait for it to finish' });
-    }
-    let xml = '';
-    let overwriteDrafts = false;
-    for await (const part of req.parts()) {
-      if (part.type === 'file') xml = (await part.toBuffer()).toString('utf8');
-      // Opt-in rebuild of existing drafts from the export (issue #126); the
-      // default re-run merges and keeps the author's edits.
-      else if (part.fieldname === 'overwriteDrafts') overwriteDrafts = String(part.value) === 'true';
-    }
-    if (!xml.includes('<rss') || !xml.includes('wordpress.org/export')) {
-      return reply.code(400).send({ error: 'not a WordPress export (.xml) file' });
-    }
-    const {
-      importDelayMs, importRetries, convertJpeg, webpQuality, avifQuality,
-    } = cfg.settings.get();
-    let prepared: PreparedImport;
-    try {
-      prepared = await (cfg.prepareImport ?? prepareImport)(xml, {
-        postStore: cfg.posts, storageDir: cfg.storageDir, baseUrl: cfg.baseUrl,
-        language: await language.get(),
-        delayMs: importDelayMs,
-        retries: importRetries,
-        encoding: { convertJpeg, webpQuality, avifQuality },
-        // A FRESH disk walk per import, which is why this is built here rather
-        // than injected once at boot like `settings` or `dbBackup`.
-        resume: await createRehostResume({ storageDir: cfg.storageDir, baseUrl: cfg.baseUrl }),
-        // issue #94: the same precondition /upload has, judged on the photos
-        // this run will fetch (see prepareImport) rather than a known byte count.
-        diskSpace: () => diskSpace(cfg.storageDir),
-        // issue #95: encodes under the shared mutex, so they never overlap a build.
-        lock: cfg.workLock,
-        log: (msg) => console.log(msg),
-        overwriteDrafts,
-        ...runtime,
-      });
-    } catch (e) {
-      // issue #143: a truncated download or otherwise malformed file passes
-      // the sniff above but not the parser — the author's mistake, a 400; the
-      // parser's offset and context go to the log, not the client.
-      if (e instanceof WxrParseError) {
-        console.log(`import: ${e.message}: ${e.detail}`);
-        return reply.code(400).send({ error: e.message });
-      }
-      // issue #96: an export whose distinct-image count exceeds the cap is
-      // rejected BEFORE any fetch — a 400 naming the count, not a 500.
-      if (e instanceof ImportTooLargeError) return reply.code(400).send({ error: e.message });
-      // issue #94: the volume cannot hold what this run would fetch — 507 like
-      // /upload; the numbers went to stdout from prepareImport, the client gets
-      // the sanitized message.
-      if (e instanceof ImportInsufficientSpaceError) return reply.code(507).send({ error: e.message });
-      throw e;
-    }
-    // 400 only when there are no reportable units: Polylang groups plus individual
-    // untranslated DE/EN posts (#387). All-published or all-rejected exports are
-    // jobs with honest summaries — a generic 400 would hide each refusal's reason.
-    if (prepared.groups === 0) {
-      return reply.code(400).send({ error: 'no importable posts found in export' });
-    }
-    let job: ImportJob;
-    try {
-      job = await importJobs.start({ startedBy: req.authUser?.username ?? '', planned: prepared.planned, run: prepared.run });
-    } catch (e) {
-      // Two pre-flights raced; the loser's prepared import is dropped unrun.
-      if (e instanceof ImportBusyError) return reply.code(409).send({ error: e.message });
-      throw e;
-    }
-    return reply.code(202).send({ id: job.id, status: job.status, planned: job.progress });
-  });
-
-  // The running job's live counters, else the most recent job — including one
-  // the previous process left `interrupted`, so the page can say "run it
-  // again" instead of silently showing nothing. Same trust boundary as the
-  // import itself; the summary is exactly what the old 200 carried.
-  app.get('/import/status', { preHandler: requireAdmin }, async () => ({ job: await importJobs.latest() }));
-
-  // @ai-note: the image host doubles as a blog host so that LOCAL DEV works, and
-  // ONLY for local dev. uploader/.env.example tells you to set IMG_HOST=localhost:3000
-  // for a bare local run; the image mount's host constraint then matches every request
-  // on the only host that exists, shadowing the blog mount. Measured with that config:
-  // without the arm below `/` and `/rumaenien/` 404 (`/admin/` and image variants serve
-  // either way); with it they serve.
-  // @ai-warning: this must never engage in production. With IMG_HOST=img.simonswanderlust.com
-  // an ungated arm publishes a second, fully crawlable copy of the blog on the image
-  // subdomain (duplicate content, split SEO). The gate is computed once here from the
-  // *configured* imgHost and never from the request's Host header, so a spoofed Host
-  // cannot talk a production deployment into the local branch; when it is off, the image
-  // host plain-404s non-image paths exactly as it did before the arm existed (513bf5f).
-  const imgHostServesBlog = isLoopbackAuthority(cfg.imgHost);
-
-  // 404/503 for the blog; plain 404 for the img host and non-GET methods.
-  app.setNotFoundHandler((req, reply) => {
-    const host = req.headers.host ?? '';
+  app.setNotFoundHandler(async (req, reply) => {
+    const host = (req.headers.host ?? '').toLowerCase();
     if (req.method !== 'GET' && req.method !== 'HEAD') return reply.code(404).send({ error: 'not found' });
-    if (host === cfg.imgHost) {
+    if (host === imgHostLower) {
       if (!imgHostServesBlog) return reply.code(404).send('Not found');
-      // Delegated to @fastify/static's reply.sendFile (decorated by the /admin/
-      // mount, which does not set decorateReply:false) instead of a hand-rolled
-      // readFile: that buys the full mime database, ETag/Last-Modified, range
-      // requests and @fastify/send's own root-containment check. No options are
-      // passed, so the bytes are served with exactly the same headers as the
-      // blog mount above serves them on the main host — in particular NOT the
-      // image mount's immutable 365d, which would be wrong here: release HTML
-      // changes under a stable URL on every publish.
       const rawUrl = req.raw.url ?? '';
       const qIndex = rawUrl.indexOf('?');
       const urlPath = qIndex === -1 ? rawUrl : rawUrl.slice(0, qIndex);
       const relPath = (urlPath.endsWith('/') ? join(urlPath, 'index.html') : urlPath).replace(/^\//, '');
-      const stat = relPath ? statSync(join(currentDir, relPath), { throwIfNoEntry: false }) : undefined;
-      if (stat?.isFile()) {
-        // sendFile owns completion. Avoid another thenable waiter around the
-        // already-awaited static → not-found → static streaming chain.
-        reply.sendFile(relPath, currentDir);
-        return;
+      const entryStat = relPath ? await stat(join(currentDir, relPath)).catch(() => undefined) : undefined;
+      if (entryStat?.isFile()) {
+        return reply.sendFile(relPath, currentDir);
       }
-      // A directory without its trailing slash: mirror the blog mount's
-      // `redirect: true` (301) rather than reading the directory and blowing up.
-      if (stat?.isDirectory()) {
+      if (entryStat?.isDirectory()) {
         const query = qIndex === -1 ? '' : rawUrl.slice(qIndex);
         return reply.code(301).header('location', `${urlPath}/${query}`).send();
       }
       return reply.code(404).send('Not found');
     }
-    // Legacy WordPress URLs (feeds, category archives) 301 to their new homes
-    // before any 404/503 — see redirects.ts (issue #35). Static files always
-    // win: this handler only runs after @fastify/static misses. Explicit
-    // code+header instead of reply.redirect() (its signature changed in v5).
-    return legacyRedirectForRelease(req.raw.url ?? '', currentDir).then((target) => {
-      if (target) return reply.code(301).header('location', target).send();
-      if (!cfg.builder.hasRelease()) {
-        return reply
-          .code(503)
-          .header('retry-after', '30')
-          .type('text/html')
-          .send('<!doctype html><meta charset="utf-8"><title>Building…</title><h1>Site is building</h1><p>The first build is in progress — try again in a moment.</p>');
-      }
-      return readFile(join(currentDir, '404.html'), 'utf8').then(
-        (html) => reply.code(404).type('text/html').send(html),
-        () => reply.code(404).send('Not found'),
-      );
-    });
+    const target = await legacyRedirectForRelease(req.raw.url ?? '', currentDir);
+    if (target) return reply.code(301).header('location', target).send();
+    if (!cfg.builder.hasRelease()) {
+      return reply
+        .code(503)
+        .header('retry-after', '30')
+        .type('text/html')
+        .send('<!doctype html><meta charset="utf-8"><title>Building…</title><h1>Site is building</h1><p>The first build is in progress — try again in a moment.</p>');
+    }
+    try {
+      const html = await readFile(join(currentDir, '404.html'), 'utf8');
+      return reply.code(404).type('text/html').send(html);
+    } catch {
+      return reply.code(404).send('Not found');
+    }
   });
 
   return Object.assign(app, { quiesceMutations });

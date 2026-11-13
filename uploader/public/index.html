@@ -34,8 +34,9 @@
       <section class="desk-publication" aria-labelledby="deskPublicationHeading">
         <div class="desk-section-header">
           <h2 id="deskPublicationHeading" class="desk-heading"></h2>
-          <button id="publicationRefresh" class="btn-secondary btn-sm" type="button"></button>
+          <button class="btn-primary btn-sm" type="button" id="deskRebuild" hidden></button>
         </div>
+        <p id="deskRebuildOutcome" role="status"></p>
         <div class="desk-stats" id="deskStats" aria-label="Story counts">
           <div class="desk-stat">
             <div class="desk-stat__val" id="deskStatPublished">—</div>
@@ -50,6 +51,16 @@
             <div class="desk-stat__lbl">Unpublished changes</div>
           </div>
         </div>
+        <div class="desk-stats desk-stats--details" id="deskDetailStats" aria-label="Publication details" hidden>
+          <div class="desk-stat" id="deskBuildCard" hidden>
+            <div class="desk-stat__lbl">Build status</div>
+            <div class="desk-stat__val desk-stat__val--text" id="deskBuild" role="status" hidden>—</div>
+          </div>
+          <div class="desk-stat" id="deskSummaryCard" hidden>
+            <div class="desk-stat__lbl">Live summary</div>
+            <div class="desk-stat__val desk-stat__val--text" id="deskPublicationSummary" role="status" hidden>—</div>
+          </div>
+        </div>
         <p id="publicationNotice" role="status"></p>
         <p id="deskOverview" role="status" hidden></p>
         <ul id="deskOverviewItems" class="desk-exceptions" hidden></ul>
@@ -62,18 +73,6 @@
           <h3 id="deskAttentionHeading" class="desk-subheading"></h3>
           <div id="deskAttention" aria-live="polite"></div>
         </section>
-        <details id="deskPublicationDetails" class="desk-details" hidden>
-          <summary id="deskDetailsLabel"></summary>
-          <div class="desk-details-body">
-            <p id="deskBuild" role="status" hidden></p>
-            <p id="deskPublicationSummary" role="status" hidden></p>
-            <div id="deskRebuildLink" hidden>
-              <p id="deskRebuildHelp" class="muted"></p>
-              <button class="btn-primary" type="button" id="deskRebuild"></button>
-              <p id="deskRebuildOutcome" role="status"></p>
-            </div>
-          </div>
-        </details>
       </section>
 
       <section class="desk-meta" aria-labelledby="deskMetaHeading">
@@ -81,7 +80,6 @@
         <ul class="desk-meta-list">
           <li class="desk-meta-row"><span class="desk-meta-label">Language mode</span><span id="deskLanguageMode" class="mono">—</span></li>
           <li class="desk-meta-row"><span class="desk-meta-label">Photo processing</span><span id="deskQueue" aria-live="polite"></span></li>
-          <li class="desk-meta-row"><span class="desk-meta-label">Live site</span><span id="deskRelease" aria-live="polite"></span></li>
           <li class="desk-meta-row" id="deskBackupRow" hidden><span class="desk-meta-label">Database backup schedule</span><span id="deskBackupSchedule">—</span></li>
         </ul>
       </section>
@@ -108,18 +106,14 @@
       let observedBuild = null;
       $('deskUnpubHeading').textContent = PublicationState.text('heading');
       $('deskAttentionHeading').textContent = PublicationState.text('attention');
-      $('publicationRefresh').textContent = PublicationState.text('refresh');
       $('deskRebuild').textContent = PublicationState.text('rebuild');
       $('deskIntro').textContent = copy.deskIntro;
       $('deskNewPost').textContent = copy.deskNewPost;
       $('deskNextHeading').textContent = copy.deskRecentDraft;
       $('deskPublicationHeading').textContent = copy.deskPublication;
-      $('deskDetailsLabel').textContent = copy.deskDetails;
       $('deskMetaHeading').textContent = copy.deskSite;
       $('deskBackupCopy').textContent = copy.deskBackupOff;
       $('deskBackupSettings').textContent = copy.deskBackupSettings;
-      $('deskRebuildHelp').textContent = copy.deskRebuildHelp;
-      $('publicationRefresh').setAttribute('aria-label', PublicationState.text('refreshLabel'));
 
       function say(msg) { $('deskStatus').textContent = msg; }
 
@@ -295,7 +289,7 @@
           const nextFocus = links.find((link) => link.href === identity.href && link.className === identity.className)
             || links.find((link) => link.href === identity.href);
           // Keep an unchanged section steady; reveal cross-section or missing-link fallbacks.
-          (nextFocus || $('publicationRefresh')).focus({ preventScroll: !!nextFocus && focusRoot.contains(nextFocus) });
+          (nextFocus || (isAdmin ? $('deskRebuild') : $('deskNewPost'))).focus({ preventScroll: !!nextFocus && focusRoot.contains(nextFocus) });
         }
       }
 
@@ -341,21 +335,6 @@
         }
       }
 
-      function renderRelease(release) {
-        const root = $('deskRelease');
-        root.textContent = '';
-        if (release) {
-          const a = el('a', 'action-link');
-          a.href = '/';
-          a.target = '_blank';
-          a.rel = 'noopener';
-          a.textContent = copy.deskLiveSite;
-          root.appendChild(a);
-        } else {
-          root.textContent = authenticatedContext.isAdmin ? copy.deskNoReleaseAdmin : copy.deskNoReleaseAuthor;
-        }
-      }
-
       const publicationRefresh = PublicationRefresh.create({
         async read(signal, publish) {
           const observed = { posts: null, summary: null, status: null };
@@ -397,7 +376,6 @@
         },
         unauthorized: redirectToLogin,
       });
-      $('publicationRefresh').addEventListener('click', () => publicationRefresh.refresh());
       $('deskRebuild').addEventListener('click', async () => {
         if (!isAdmin || $('deskRebuild').disabled) return;
         if (!await AdminConfirm.ask({
@@ -444,26 +422,6 @@
         },
       );
 
-      const loadRelease = Desk.resilientLoader(
-        async () => {
-          return Desk.releaseFromResponse(await fetch('/health'));
-        },
-        {
-          loading() { setMessage($('deskRelease'), 'Loading live site status…'); },
-          ready(release) { if (!redirecting) renderRelease(release); },
-          unavailable() {
-            if (!redirecting) {
-              showUnavailable(
-                $('deskRelease'),
-                'Live site status is unavailable right now.',
-                'Retry live site status',
-                loadRelease,
-              );
-            }
-          },
-        },
-      );
-
       function loadPosts() { return publicationRefresh.refresh(); }
 
       // Advisory only: a missing or failed read leaves the warning hidden.
@@ -486,7 +444,7 @@
         $('deskError').textContent = '';
         say('Loading desk…');
         publicationRefresh.start();
-        await Promise.all([loadPosts(), loadQueue(), loadRelease()]);
+        await Promise.all([loadPosts(), loadQueue()]);
         if (!redirecting) say('');
       }
 
@@ -508,11 +466,13 @@
           isAdmin = context.isAdmin === true;
           Auth.renderHeader(context);
           $('deskNewPost').hidden = false;
+          $('deskDetailStats').hidden = !isAdmin;
+          $('deskBuildCard').hidden = !isAdmin;
+          $('deskSummaryCard').hidden = !isAdmin;
           $('deskBuild').hidden = !isAdmin;
           $('deskOverview').hidden = !isAdmin;
-          $('deskPublicationDetails').hidden = !isAdmin;
           $('deskPublicationSummary').hidden = !isAdmin;
-          $('deskRebuildLink').hidden = !isAdmin;
+          $('deskRebuild').hidden = !isAdmin;
           if (isAdmin) void loadBackupWarning();
           Onboarding.init({
             root: $('onboardingChecklist'),

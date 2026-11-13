@@ -283,11 +283,11 @@
             <details class="editor-inspector-group editor-image-section" id="deHeroDetails">
               <summary class="editor-card-title" id="deHeroLabel">
                 <span class="editor-image-section__title">Hero image (DE)</span>
-                <span class="editor-image-section__thumb" id="deHeroThumb" hidden><img id="deHeroThumbImg" alt="" /></span>
+                <span class="editor-image-section__thumb" id="deHeroThumb" hidden><img id="deHeroThumbImg" alt="" hidden /></span>
               </summary>
               <div class="hero-picker hero-banner-zone">
                 <div class="hero-compact-preview" id="deHeroPreview" hidden>
-                  <img id="deHeroPreviewImg" alt="" />
+                  <img id="deHeroPreviewImg" alt="" hidden />
                 </div>
                 <label for="deHeroAlt">Hero alt text (DE)</label>
                 <input id="deHeroAlt" type="text" maxlength="1000" placeholder="Describe the hero image in German" />
@@ -299,7 +299,7 @@
                 <details class="editor-disclosure hero-focus" id="deHeroFocus" hidden>
                   <summary>Adjust framing</summary>
                   <div class="hero-focus-frame" id="deHeroFocusFrame">
-                    <img id="deHeroFocusImg" alt="" />
+                    <img id="deHeroFocusImg" alt="" hidden />
                     <span class="hero-focus-crop" id="deHeroFocusCrop" aria-hidden="true"></span>
                     <span class="hero-focus-dot" id="deHeroFocusDot" aria-hidden="true"></span>
                   </div>
@@ -351,11 +351,11 @@
             <details class="editor-inspector-group editor-image-section" id="enHeroDetails">
               <summary class="editor-card-title" id="enHeroLabel">
                 <span class="editor-image-section__title">Hero image (EN)</span>
-                <span class="editor-image-section__thumb" id="enHeroThumb" hidden><img id="enHeroThumbImg" alt="" /></span>
+                <span class="editor-image-section__thumb" id="enHeroThumb" hidden><img id="enHeroThumbImg" alt="" hidden /></span>
               </summary>
               <div class="hero-picker hero-banner-zone">
                 <div class="hero-compact-preview" id="enHeroPreview" hidden>
-                  <img id="enHeroPreviewImg" alt="" />
+                  <img id="enHeroPreviewImg" alt="" hidden />
                 </div>
                 <label for="enHeroAlt">Hero alt text (EN)</label>
                 <input id="enHeroAlt" type="text" maxlength="1000" placeholder="Describe the hero image in English" />
@@ -367,7 +367,7 @@
                 <details class="editor-disclosure hero-focus" id="enHeroFocus" hidden>
                   <summary>Adjust framing</summary>
                   <div class="hero-focus-frame" id="enHeroFocusFrame">
-                    <img id="enHeroFocusImg" alt="" />
+                    <img id="enHeroFocusImg" alt="" hidden />
                     <span class="hero-focus-crop" id="enHeroFocusCrop" aria-hidden="true"></span>
                     <span class="hero-focus-dot" id="enHeroFocusDot" aria-hidden="true"></span>
                   </div>
@@ -1677,6 +1677,9 @@
             wrap.hidden = true;
             preview.hidden = true;
             thumb.hidden = true;
+            img.hidden = true;
+            previewImg.hidden = true;
+            thumbImg.hidden = true;
             img.removeAttribute('src');
             previewImg.removeAttribute('src');
             thumbImg.removeAttribute('src');
@@ -1689,6 +1692,9 @@
           previewImg.onerror = hideBroken;
           thumbImg.onerror = hideBroken;
           img.onload = function () { paint(locale); };
+          img.hidden = false;
+          previewImg.hidden = false;
+          thumbImg.hidden = false;
           if (img.getAttribute('src') !== url) img.src = url;
           if (previewImg.getAttribute('src') !== url) previewImg.src = url;
           if (thumbImg.getAttribute('src') !== url) thumbImg.src = url;

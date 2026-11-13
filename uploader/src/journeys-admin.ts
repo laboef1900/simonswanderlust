@@ -4,19 +4,18 @@ import type { PostStore } from './posts.js';
 import type { LanguageStore } from './language.js';
 import type { SiteBuilder } from './build.js';
 import { projectBuildReport, type BuildTrigger } from './build-state.js';
+import { isPlainObject, isStrictIsoUtc } from './request-guards.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const conflicts: Record<string, true> = { conflict: true, duplicate_slug: true, slug_locked: true, slug_change_unconfirmed: true, story_in_other_journey: true, locale_published: true, journey_hero_not_ready: true };
 interface Options { store: JourneyStore; posts: PostStore; language: LanguageStore; imageBase: string; builder: SiteBuilder; requireAuth: preHandlerHookHandler; requireAdmin: preHandlerHookHandler }
 function object(value: unknown, keys: readonly string[]): Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !keys.includes(key))) throw new JourneyError('invalid_journey');
-  return value as Record<string, unknown>;
+  if (!isPlainObject(value) || Object.keys(value).some(key => !keys.includes(key))) throw new JourneyError('invalid_journey');
+  return value;
 }
 function token(value: unknown): Date {
-  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) throw new JourneyError('invalid_journey');
-  const date = new Date(value);
-  if (!Number.isFinite(date.getTime()) || date.toISOString() !== value) throw new JourneyError('invalid_journey');
-  return date;
+  if (!isStrictIsoUtc(value)) throw new JourneyError('invalid_journey');
+  return new Date(value);
 }
 
 /** Registered on the ordinary app: ownership admission and tracked writes apply unchanged. */

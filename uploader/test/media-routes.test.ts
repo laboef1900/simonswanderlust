@@ -386,3 +386,50 @@ describe('DELETE /media/items/* key guard', () => {
     } finally { await b.app.close(); }
   });
 });
+
+describe('backend hardening and query optimization regressions', () => {
+  it('POST /media/retry validates keys array, rejects > 100 keys, and deduplicates', async () => {
+    const b = await build();
+    try {
+      const badType = await b.app.inject({ method: 'POST', url: '/media/retry', cookies: b.cookie, payload: { keys: 'not-an-array' } });
+      expect(badType.statusCode).toBe(400);
+      expect(badType.headers['cache-control']).toBe('no-store');
+
+      const tooMany = await b.app.inject({
+        method: 'POST', url: '/media/retry', cookies: b.cookie,
+        payload: { keys: Array.from({ length: 101 }, (_, i) => `trips/x/${i}`) },
+      });
+      expect(tooMany.statusCode).toBe(400);
+
+      await photo(b.media, 'trips/x/failed', { status: 'failed' });
+      await b.media.setStatus('trips/x/failed', 'failed', 'encode_failed');
+      const deduped = await b.app.inject({
+        method: 'POST', url: '/media/retry', cookies: b.cookie,
+        payload: { keys: ['trips/x/failed', 'trips/x/failed', ''] },
+      });
+      expect(deduped.statusCode).toBe(200);
+      expect(deduped.json()).toEqual({ ok: true, queued: 1 });
+    } finally { await b.app.close(); }
+  });
+
+  it('sets Cache-Control: no-store on authenticated API reads and 401/403 refusals', async () => {
+    const b = await build();
+    try {
+      for (const [url, cookies] of [
+        ['/auth/status', undefined],
+        ['/users', undefined],
+        ['/users', b.author],
+        ['/media', undefined],
+        ['/media', b.author],
+        ['/media/queue', b.author],
+        ['/backups', b.author],
+        ['/import/status', b.author],
+        ['/admin/waypoint-copy.js', undefined],
+        ['/admin/stop-route-copy.js', undefined],
+      ] as const) {
+        const res = await b.app.inject({ method: 'GET', url, cookies });
+        expect(res.headers['cache-control'], url).toBe('no-store');
+      }
+    } finally { await b.app.close(); }
+  });
+});
