@@ -36,8 +36,8 @@
     status: '',
     alt: '',             // '' or 'missing' (photos with no alt text in either language)
     altMissing: 0,       // ready photos in this view without alt text, from the last listing
-    sort: 'uploaded',
-    order: 'desc',
+    sort: 'title',
+    order: 'asc',
     page: 1,
     pageSize: 60,
     items: [],
@@ -618,14 +618,11 @@
     if (!item) {
       delete panel.dataset.key;
       help.innerHTML = '';
-      help.appendChild(el('p', 'media-detail__empty', 'Select a photo to see it larger and edit its title, alt text and caption.'));
       var hints = el('ul', 'media-detail__hints muted');
       [
         'Shift-click selects a range.',
         (isMac() ? '⌘' : 'Ctrl') + '-click adds or removes one photo.',
         (isMac() ? '⌘' : 'Ctrl') + '+A selects every photo on this page.',
-        copy.mediaOpenDetailsShortcut,
-        copy.mediaViewerShortcut,
       ].forEach(function (hint) { hints.appendChild(el('li', null, hint)); });
       help.appendChild(hints);
       if (selectionChanged) detailRefresh.endAction();
@@ -1589,8 +1586,6 @@
       state.page = 1;
       reload();
     });
-    $('fSort').addEventListener('change', function () { state.sort = $('fSort').value; reload(); });
-    $('fOrder').addEventListener('change', function () { state.order = $('fOrder').value; reload(); });
     $('fRecursive').addEventListener('change', function () {
       state.recursive = $('fRecursive').checked;
       reload();

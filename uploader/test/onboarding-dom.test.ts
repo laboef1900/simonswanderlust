@@ -371,7 +371,7 @@ async function deskPage(options: {
     if (!node) throw new Error('Missing Desk element: ' + selector);
     return node;
   };
-  return { document, location, requests, get, flush: nextTurn };
+  return { document, location, requests, get, flush: nextTurn, refresh() { return vm.runInContext('publicationRefresh.refresh()', context) as Promise<void>; } };
 }
 
 describe('Actual Desk authenticated onboarding activation', () => {
@@ -444,12 +444,12 @@ describe('Actual Desk authenticated onboarding activation', () => {
     const h = await deskPage({ isAdmin: false });
     expect(h.get('#onboardingChecklist').hidden).toBe(true);
     expect(h.get('#onboardingOpener').hidden).toBe(true);
-    expect(h.requests.map((request) => request.url).sort()).toEqual(['/auth/me', '/health', '/language', '/media/queue', '/posts']);
+    expect(h.requests.map((request) => request.url).sort()).toEqual(['/auth/me', '/language', '/media/queue', '/posts']);
     expect(h.get('#deskNewPost').href).toBe('/admin/editor.html');
-    expect(h.get('#deskPublicationDetails').hidden).toBe(true);
+    expect(h.get('#deskDetailStats').hidden).toBe(true);
     expect(h.get('#deskOverview').hidden).toBe(true);
     expect(h.get('#deskBackupWarning').hidden).toBe(true);
-    expect(h.get('#deskRebuildLink').hidden).toBe(true);
+    expect(h.get('#deskRebuild').hidden).toBe(true);
     expect(h.document.querySelector('a[href="/admin/settings.html"]')).toBeNull();
     expect(h.location.href).toBe('');
   });
@@ -464,7 +464,7 @@ describe('Actual Desk authenticated onboarding activation', () => {
     expect(h.get('#deskNewPost').href).toBe('/admin/editor.html');
     expect(h.get('#deskNext').querySelector('a.btn-new')?.href).toBe('/admin/editor.html?tk=draft-one');
     unavailable = true;
-    h.get('#publicationRefresh').click();
+    await h.refresh();
     await h.flush();
     expect(h.get('#deskNext').querySelector('a')).toBeNull();
     expect(h.get('#deskNewPost').hidden).toBe(false);
@@ -481,25 +481,22 @@ describe('Actual Desk authenticated onboarding activation', () => {
         posts: { notLive: 0, olderVersionLive: 0, unexpectedLocaleLive: 0, unpublishedStillLive: 0, deletedStillLive: 2 },
         galleryDescriptions: { photos: 0, stories: 0 },
       }) });
-    const details = h.get('#deskPublicationDetails');
-    expect(details.hidden).toBe(false);
-    expect(details.hasAttribute('open')).toBe(false);
+    expect(h.get('#deskDetailStats').hidden).toBe(false);
+    expect(h.get('#deskBuildCard').hidden).toBe(false);
+    expect(h.get('#deskSummaryCard').hidden).toBe(false);
     expect(h.get('#deskOverview').getAttribute('data-state')).toBe('attention');
     expect(h.get('#deskOverviewItems').hidden).toBe(false);
     expect(h.get('#deskOverviewItems').textContent).toMatch(/Deleted.*2/);
     expect(h.get('#deskAttentionSection').hidden).toBe(true);
-    details.setAttribute('open', '');
     failing = true;
-    h.get('#publicationRefresh').click();
+    await h.refresh();
     await h.flush();
-    expect(details.hasAttribute('open')).toBe(true);
     expect(h.get('#deskOverview').getAttribute('data-state')).toBe('unavailable');
     expect(h.get('#deskOverviewItems').hidden).toBe(true);
     expect(h.get('#deskOverviewItems').textContent).toBe('');
     failing = false;
-    h.get('#publicationRefresh').click();
+    await h.refresh();
     await h.flush();
-    expect(details.hasAttribute('open')).toBe(true);
     expect(h.get('#deskOverview').getAttribute('data-state')).toBe('attention');
     expect(h.get('#deskOverviewItems').hidden).toBe(false);
     expect(h.requests.every((request) => request.method === 'GET')).toBe(true);
@@ -510,7 +507,6 @@ describe('Actual Desk authenticated onboarding activation', () => {
       record: 'ok', running: null, live: null,
       last: { result: 'failed', startedAt: '2026-11-06T10:00:00Z', finishedAt: '2026-11-06T10:01:00Z', failure: { code: 'build_failed' } },
     }) });
-    expect(h.get('#deskPublicationDetails').hasAttribute('open')).toBe(false);
     expect(h.get('#deskBuildAlert').hidden).toBe(false);
     expect(h.get('#deskBuildAlert').querySelector('a')?.href).toBe('/admin/settings.html#site');
   });

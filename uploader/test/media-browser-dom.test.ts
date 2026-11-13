@@ -810,12 +810,6 @@ describe('media-browser upload completion', () => {
     page.el('fRecursive').checked = false;
     page.el('fRecursive').dispatch('change');
     await settle();
-    page.el('fSort').value = 'title';
-    page.el('fSort').dispatch('change');
-    await settle();
-    page.el('fOrder').value = 'asc';
-    page.el('fOrder').dispatch('change');
-    await settle();
     page.el('nextPage').dispatch('click');
     const query = page.listRequests[0]!.url;
     await settle();
@@ -1302,7 +1296,7 @@ describe('media-browser pagination', () => {
     expect(page.listRequests).toHaveLength(0);
 
     // A subsequent reload must start at page one, not the removed page.
-    page.el('fOrder').dispatch('change');
+    page.el('fStatus').dispatch('change');
     await page.flush();
     await answer(page, 1, [item('new-photo')], 1);
     expect(keys(page)).toEqual(['new-photo']);
@@ -1338,8 +1332,7 @@ describe('media-browser pagination', () => {
 
   it.each([false, true])('does not let a superseded load correct a newer view (correction started: %s)', async (correcting) => {
     const page = await lastPage(121);
-    page.el('fOrder').dispatch('change');
-    await page.flush();
+    await deleteFirst(page);
     if (correcting) await answer(page, 3, [], 120);
     const stale = page.listRequests.shift()!;
 
@@ -3552,17 +3545,9 @@ describe('media-browser fullscreen viewer (#570)', () => {
     expect(page.activeElement()).toBe(tiles(page)[1]);
   });
 
-  it('lists the F shortcut with the other hints while no photo is selected', async () => {
-    const page = loadPage();
-    await showLibrary(page, [item('a')]);
-    expect(page.el('mediaSelectionHelp').querySelectorAll('li').map((hint) => hint.textContent))
-      .toContain('F opens the focused photo fullscreen.');
-  });
-
   it('takes every label from the dictionary of the page language', async () => {
     const page = loadPage({ locale: 'de' });
     await showLibrary(page, [{ ...item('a'), exif: { ...NO_EXIF, focalLength: 4.3, focalLength35mm: 24 } }, item('b')]);
-    expect(page.el('mediaSelectionHelp').textContent).toContain(ui.de['editor.chrome.mediaViewerShortcut']);
     tiles(page)[0]!.click();
     await page.flush();
     expect(page.el('dViewer').textContent).toBe(ui.de['editor.chrome.mediaViewFullscreen']);
