@@ -77,7 +77,7 @@ const HERO_SIZES = '(max-width: 639px) 100vw, max(100vw, min(120vh, 1080px), 720
         move type off the plate onto the photograph. Below `sm` the panel
         sits in flow under the photo on the canvas page, so it stays opaque.
       */}
-      <div class="max-w-2xl bg-canvas sm:rounded-sm sm:bg-canvas/85 sm:p-6 sm:shadow-2xl">
+      <div class="max-w-2xl bg-canvas sm:rounded-xl sm:bg-canvas/85 sm:p-6 sm:shadow-2xl">
         {/*
           Visually hidden, not removed: it is the page's only <h1> (see the
           @ai-note above). The wordmark in the header already names the site.
@@ -94,7 +94,7 @@ const HERO_SIZES = '(max-width: 639px) 100vw, max(100vw, min(120vh, 1080px), 720
         <a
           href={pathOf(trip)}
           aria-labelledby={titleId}
-          class="group/entry block rounded-sm focus-visible:outline-brand-red"
+          class="group/entry block rounded-lg focus-visible:outline-brand-red"
         >
           <p class="flex flex-wrap items-center gap-x-2 font-mono text-xs font-semibold tracking-log uppercase">
             {number !== undefined && <span class="text-brand-red">{entryLabel(number)}</span>}
