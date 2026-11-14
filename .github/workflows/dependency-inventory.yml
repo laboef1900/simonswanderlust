@@ -1,4 +1,4 @@
-name: dependency inventory update
+name: Dependabot dependency inventory patch
 on:
   pull_request:
     paths: ['site/package-lock.json', 'uploader/package-lock.json']
