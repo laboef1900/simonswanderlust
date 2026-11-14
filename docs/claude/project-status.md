@@ -4,6 +4,14 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Implemented locally (2026-11-14): Dependabot #597 Vitest compatibility.**
+  Pinned the site's Vitest runner and V8 coverage provider together at 5.1.0 to
+  satisfy their exact peer requirements, then regenerated the lockfile and license
+  inventory. Reviewed the [Vitest 5 migration guide](https://vitest.dev/guide/migration):
+  Node 26 and the installed Vite satisfy its prerequisites; existing hoisted mocks
+  are top-level and no removed runner entrypoints are used. No compatibility
+  suppression or application behavior change. Remote CI remains required; no push.
+
 - **Implemented locally (2026-11-13): GitHub automation and test quality.** Read-only workflow
   permissions, immutable action pins, PR-only cancellation and bounded jobs; stable-main/green-CI
   release eligibility, native candidate ownership/restore + legal checks and digest-only promotion.
