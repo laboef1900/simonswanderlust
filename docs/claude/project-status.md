@@ -4,6 +4,13 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Implemented (PR #593, 2026-11-14): Dependabot CI repair.** Regenerated the
+  third-party inventory for Astro 7.4.12. Reviewed
+  [upstream patch notes](https://github.com/withastro/astro/releases/tag/astro%407.4.12)
+  and the installed dependency graph; no application API migration is required.
+  Static output and the published-route contract remain unchanged. Updated remote CI
+  and release-platform qualification are still required; fixes are pushed, not deployed.
+
 - **Implemented (PR #594, 2026-11-14): Dependabot CI repair.** Regenerated the
   third-party inventory and moved the existing esbuild lifecycle approval to 0.28.2.
   Reviewed the coordinated Tiptap 3.33.1 stack, Astro/MDX/Satteri compatibility,
