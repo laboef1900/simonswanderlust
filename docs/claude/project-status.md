@@ -4,6 +4,15 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Implemented locally (2026-11-14): Dependabot #595 entities 9 compatibility.**
+  Replaced the removed table-based streaming decoder with `HtmlEntityDecoder`, as
+  required by the [entities 9 release](https://github.com/fb55/entities/releases/tag/v9.0.0).
+  Legacy text decoding, consumed source offsets and fail-closed gallery mapping are
+  unchanged. Extended the existing translation/gallery regression with astral numeric
+  and two-codepoint named entities. Regenerated the third-party inventory.
+  ESM-only entities 9 supports the project's Node 26 runtime; synchronous decoding
+  APIs remain supported. Updated remote CI remains required; no push or deployment.
+
 - **Implemented locally (2026-11-13): GitHub automation and test quality.** Read-only workflow
   permissions, immutable action pins, PR-only cancellation and bounded jobs; stable-main/green-CI
   release eligibility, native candidate ownership/restore + legal checks and digest-only promotion.

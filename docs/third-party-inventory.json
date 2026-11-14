@@ -14,9 +14,9 @@
   "lockfiles": {
     "site": {
       "path": "site/package-lock.json",
-      "sha256": "4d043c091c0341d601013b71fd184bb3515473ff0166c9337eba7dbb431bd756",
+      "sha256": "46dc846d223a0d2df3a75e96cb5124f7130882b3ffaf9eef7e044981d710e645",
       "lockfileVersion": 3,
-      "entries": 501
+      "entries": 502
     },
     "uploader": {
       "path": "uploader/package-lock.json",
@@ -3726,10 +3726,10 @@
       "tree": "site",
       "path": "node_modules/entities",
       "name": "entities",
-      "version": "6.0.1",
+      "version": "9.0.0",
       "license": "BSD-2-Clause",
-      "resolved": "https://registry.npmjs.org/entities/-/entities-6.0.1.tgz",
-      "integrity": "sha512-aN97NXWF6AWBTahfVOIrB/NShkzi5H7F9r1s9mD3cDj4Ko5f2qhhVoYMibXF7GlLveb/D2ioWay8lxI97Ven3g==",
+      "resolved": "https://registry.npmjs.org/entities/-/entities-9.0.0.tgz",
+      "integrity": "sha512-oJFNDJg3kTPwAD1cNn2+WmUq4wFoo09npc3Ydf1D7ED4smRiWrsKnaLxykrTWgyGEcusc87P5dxlAleol9kpkg==",
       "dev": false,
       "optional": false,
       "obligationIds": [
@@ -5219,6 +5219,21 @@
       "optional": false,
       "obligationIds": [
         "MIT"
+      ],
+      "obligationStatus": "summary-only; distribution-evidence-required"
+    },
+    {
+      "tree": "site",
+      "path": "node_modules/parse5/node_modules/entities",
+      "name": "entities",
+      "version": "6.0.1",
+      "license": "BSD-2-Clause",
+      "resolved": "https://registry.npmjs.org/entities/-/entities-6.0.1.tgz",
+      "integrity": "sha512-aN97NXWF6AWBTahfVOIrB/NShkzi5H7F9r1s9mD3cDj4Ko5f2qhhVoYMibXF7GlLveb/D2ioWay8lxI97Ven3g==",
+      "dev": false,
+      "optional": false,
+      "obligationIds": [
+        "BSD-2-Clause"
       ],
       "obligationStatus": "summary-only; distribution-evidence-required"
     },
