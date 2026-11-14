@@ -4,6 +4,13 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Implemented locally (2026-11-14): Dependabot #600 CI repair.** Regenerated the
+  third-party inventory for entities 9. The uploader uses `decodeHTMLStrict`, whose
+  synchronous API is unchanged in the [9.0.0 release](https://github.com/fb55/entities/releases/tag/v9.0.0).
+  ESM-only packaging and Node >=20.19 are compatible with this ESM/Node 26 app.
+  The separate site decoder migration belongs to #595; no shim or downgrade is
+  needed here. Updated remote CI remains required; no push or deployment.
+
 - **Implemented locally (2026-11-13): GitHub automation and test quality.** Read-only workflow
   permissions, immutable action pins, PR-only cancellation and bounded jobs; stable-main/green-CI
   release eligibility, native candidate ownership/restore + legal checks and digest-only promotion.
