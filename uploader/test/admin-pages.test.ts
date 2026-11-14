@@ -28,6 +28,7 @@ interface Guard {
   wasDismissed(stash: Stash | null): boolean;
   setResource(resource: string): void;
   redirectToLogin(): void;
+  discard(): void;
 }
 interface DraftGuardApi {
   safeNextPath(raw: string | null): string;
@@ -256,6 +257,18 @@ describe('DraftGuard.createDraftGuard', () => {
     expect(sb.pendingTimers()).toBe(0);
     sb.flushTimers();
     expect(guard.tryRestore()).toBeNull();
+  });
+
+  it('discard clears dirty, removes local stash, and disarms beforeunload', () => {
+    const sb = makeSandbox();
+    const guard = sb.api.createDraftGuard({ resource: KEY, collect: () => ({ c: 3 }) });
+    guard.markDirty();
+    guard.stashNow();
+    expect(guard.tryRestore()).not.toBeNull();
+    guard.discard();
+    expect(guard.isDirty()).toBe(false);
+    expect(guard.tryRestore()).toBeNull();
+    expect(sb.fireBeforeUnload().defaultPrevented).toBe(false);
   });
 
   it('dismissRestore keeps the stash but disarms the warning (a misclicked Cancel loses nothing)', () => {

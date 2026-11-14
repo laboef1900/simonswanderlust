@@ -124,6 +124,98 @@ window.DraftGuard = (function () {
       redirecting = true; cancelTimer();
       location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search);
     }
+    function discard() {
+      dirty = false; redirecting = true; cancelTimer();
+      try { removeExact(own); removeExact(adopted); } catch (_) { /* best effort */ }
+      own = null; adopted = null;
+      opts.onChange?.(dirty);
+    }
+    function askLeave(hasSave) {
+      if (typeof document === 'undefined' || typeof document.createElement !== 'function') {
+        return Promise.resolve('cancel');
+      }
+      let dlg = document.getElementById('draftLeaveDialog');
+      if (!dlg) {
+        dlg = document.createElement('dialog');
+        if (!dlg || typeof dlg.showModal !== 'function') return Promise.resolve('cancel');
+        dlg.id = 'draftLeaveDialog';
+        dlg.className = 'admin-modal';
+        dlg.setAttribute('aria-labelledby', 'draftLeaveTitle');
+        dlg.setAttribute('aria-describedby', 'draftLeaveBody');
+        dlg.innerHTML =
+          '<form method="dialog" id="draftLeaveForm">' +
+            '<h2 id="draftLeaveTitle" class="card-heading"></h2>' +
+            '<p id="draftLeaveBody" class="help admin-modal__body"></p>' +
+            '<div class="admin-modal__foot">' +
+              '<button type="submit" value="cancel" class="btn-secondary" id="draftLeaveCancel"></button>' +
+              '<button type="submit" value="discard" class="btn-remove" id="draftLeaveDiscard"></button>' +
+              '<button type="submit" value="save" id="draftLeaveSave"></button>' +
+            '</div>' +
+          '</form>';
+        document.body.appendChild(dlg);
+      }
+      if (typeof dlg.showModal !== 'function') return Promise.resolve('cancel');
+      const de = document.documentElement?.lang === 'de';
+      dlg.querySelector('#draftLeaveTitle').textContent = de ? 'Ungespeicherte Änderungen' : 'Unsaved changes';
+      dlg.querySelector('#draftLeaveBody').textContent = de
+        ? 'Es gibt ungespeicherte Änderungen. Möchtest du sie vor dem Verlassen speichern oder verwerfen?'
+        : 'You have unsaved changes. Save them before leaving, or discard them?';
+      dlg.querySelector('#draftLeaveCancel').textContent = de ? 'Abbrechen' : 'Cancel';
+      dlg.querySelector('#draftLeaveDiscard').textContent = de ? 'Nicht speichern' : 'Don’t save';
+      const saveBtn = dlg.querySelector('#draftLeaveSave');
+      saveBtn.textContent = de ? 'Entwurf speichern' : 'Save draft';
+      saveBtn.hidden = !hasSave;
+      const opener = document.activeElement;
+      return new Promise((resolve) => {
+        let settled = false;
+        const finish = (choice) => {
+          if (settled) return;
+          settled = true;
+          dlg.removeEventListener('close', onClose);
+          dlg.removeEventListener('cancel', onCancel);
+          if (opener && typeof opener.focus === 'function') opener.focus();
+          resolve(choice);
+        };
+        const onClose = () => finish(dlg.returnValue || 'cancel');
+        const onCancel = (ev) => { ev.preventDefault(); dlg.returnValue = 'cancel'; dlg.close(); };
+        dlg.addEventListener('close', onClose);
+        dlg.addEventListener('cancel', onCancel);
+        dlg.returnValue = 'cancel';
+        dlg.showModal();
+        dlg.querySelector('#draftLeaveCancel').focus();
+      });
+    }
+    if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+      document.addEventListener('click', (event) => {
+        if (!dirty || redirecting || event.defaultPrevented) return;
+        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        const link = event.target?.closest?.('a[href]');
+        if (!link || link.hasAttribute('download')) return;
+        const target = link.getAttribute('target');
+        if (target && target !== '_self') return;
+        const rawHref = link.getAttribute('href') || '';
+        if (!rawHref || rawHref.startsWith('#') || rawHref.startsWith('javascript:')) return;
+        const probe = document.createElement('dialog');
+        if (!probe || typeof probe.showModal !== 'function') return;
+        event.preventDefault();
+        const dest = link.href;
+        const hasSave = typeof opts.onSave === 'function';
+        void askLeave(hasSave).then(async (choice) => {
+          if (choice === 'discard') {
+            discard();
+            location.href = dest;
+          } else if (choice === 'save' && hasSave) {
+            try {
+              const ok = await opts.onSave();
+              if (ok !== false && !dirty) {
+                redirecting = true;
+                location.href = dest;
+              }
+            } catch (_) { /* keep user on page to see save error */ }
+          }
+        });
+      });
+    }
     window.addEventListener('beforeunload', (e) => {
       if (!dirty || redirecting) return;
       stashNow(); e.preventDefault(); e.returnValue = '';
@@ -138,7 +230,7 @@ window.DraftGuard = (function () {
     return { initialize, ownerId: () => owner, markDirty, markClean, snapshot: () => generation,
       restoreGeneration: (value) => { generation = value; dirty = true; },
       isDirty: () => dirty, stashNow, tryRestore, adopt, dismissRestore, wasDismissed,
-      setResource, freshContext, redirectToLogin };
+      setResource, freshContext, redirectToLogin, discard };
   }
   return { safeNextPath, createDraftGuard };
 })();
