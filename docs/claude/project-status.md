@@ -4,6 +4,13 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Implemented locally (2026-11-14): Dependabot #593 CI repair.** Regenerated the
+  third-party inventory for Astro 7.4.12. Reviewed
+  [upstream patch notes](https://github.com/withastro/astro/releases/tag/astro%407.4.12)
+  and the installed dependency graph; no application API migration is required.
+  Static output and the published-route contract remain unchanged. Updated remote CI
+  and release-platform qualification are still required; nothing was pushed or deployed.
+
 - **Implemented locally (2026-11-13): GitHub automation and test quality.** Read-only workflow
   permissions, immutable action pins, PR-only cancellation and bounded jobs; stable-main/green-CI
   release eligibility, native candidate ownership/restore + legal checks and digest-only promotion.
