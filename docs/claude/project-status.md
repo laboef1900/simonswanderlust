@@ -4,6 +4,14 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Implemented (PR #596, 2026-11-14): Dependabot Vitest compatibility.**
+  Pinned the site's Vitest runner and V8 coverage provider together at 5.1.0 to
+  satisfy their exact peer requirements, then regenerated the lockfile and license
+  inventory. Reviewed the [Vitest 5 migration guide](https://vitest.dev/guide/migration):
+  Node 26 and the installed Vite satisfy its prerequisites; existing hoisted mocks
+  are top-level and no removed runner entrypoints are used. No compatibility
+  suppression or application behavior change. Fixes are pushed; remote CI remains required.
+
 - **Implemented (PR #600, 2026-11-14): Dependabot CI repair.** Regenerated the
   third-party inventory for entities 9. The uploader uses `decodeHTMLStrict`, whose
   synchronous API is unchanged in the [9.0.0 release](https://github.com/fb55/entities/releases/tag/v9.0.0).
