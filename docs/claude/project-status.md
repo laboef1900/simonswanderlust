@@ -4,13 +4,46 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
-- **Implemented (PR #597, 2026-11-14): Dependabot Vitest compatibility.**
+- **Implemented (PRs #596 and #597, 2026-11-14): Dependabot Vitest compatibility.**
   Pinned the site's Vitest runner and V8 coverage provider together at 5.1.0 to
   satisfy their exact peer requirements, then regenerated the lockfile and license
   inventory. Reviewed the [Vitest 5 migration guide](https://vitest.dev/guide/migration):
   Node 26 and the installed Vite satisfy its prerequisites; existing hoisted mocks
   are top-level and no removed runner entrypoints are used. No compatibility
   suppression or application behavior change. Fixes are pushed; remote CI remains required.
+
+- **Implemented (PR #600, 2026-11-14): Dependabot CI repair.** Regenerated the
+  third-party inventory for entities 9. The uploader uses `decodeHTMLStrict`, whose
+  synchronous API is unchanged in the [9.0.0 release](https://github.com/fb55/entities/releases/tag/v9.0.0).
+  ESM-only packaging and Node >=20.19 are compatible with this ESM/Node 26 app.
+  The separate site decoder migration belongs to #595; no shim or downgrade is
+  needed here. Updated remote CI remains required; fixes are pushed, not deployed.
+
+- **Implemented (PR #595, 2026-11-14): Dependabot entities 9 compatibility.**
+  Replaced the removed table-based streaming decoder with `HtmlEntityDecoder`, as
+  required by the [entities 9 release](https://github.com/fb55/entities/releases/tag/v9.0.0).
+  Legacy text decoding, consumed source offsets and fail-closed gallery mapping are
+  unchanged. Extended the existing translation/gallery regression with astral numeric
+  and two-codepoint named entities. Regenerated the third-party inventory.
+  ESM-only entities 9 supports the project's Node 26 runtime; synchronous decoding
+  APIs remain supported. Updated remote CI remains required; fixes are pushed, not deployed.
+
+- **Implemented (PR #593, 2026-11-14): Dependabot CI repair.** Regenerated the
+  third-party inventory for Astro 7.4.12. Reviewed
+  [upstream patch notes](https://github.com/withastro/astro/releases/tag/astro%407.4.12)
+  and the installed dependency graph; no application API migration is required.
+  Static output and the published-route contract remain unchanged. Updated remote CI
+  and release-platform qualification are still required; fixes are pushed, not deployed.
+
+- **Implemented (PR #594, 2026-11-14): Dependabot CI repair.** Regenerated the
+  third-party inventory and moved the existing esbuild lifecycle approval to 0.28.2.
+  Reviewed the coordinated Tiptap 3.33.1 stack, Astro/MDX/Satteri compatibility,
+  Fastify 5 plugin compatibility and Node 26 engine requirements.
+  [Satteri's JavaScript API remains unchanged](https://github.com/bruits/satteri/releases/tag/satteri-v0.11.1);
+  [MapLibre 6.13](https://github.com/maplibre/maplibre-gl-js/releases/tag/v6.13.0)
+  retains the copied shared-module file for compatibility while making the worker
+  self-contained. Existing map imports/copy paths remain supported through 6.17.
+  Updated remote CI and release-platform qualification remain required; no deployment.
 
 - **Implemented locally (2026-11-14): Descriptive GitHub workflow names.** Workflow
   labels now describe tests/type/browser checks, test coverage reports, Dependabot
