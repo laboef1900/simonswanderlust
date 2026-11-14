@@ -4,6 +4,16 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Implemented locally (2026-11-14): Dependabot #594 CI repair.** Regenerated the
+  third-party inventory and moved the existing esbuild lifecycle approval to 0.28.2.
+  Reviewed the coordinated Tiptap 3.33.1 stack, Astro/MDX/Satteri compatibility,
+  Fastify 5 plugin compatibility and Node 26 engine requirements.
+  [Satteri's JavaScript API remains unchanged](https://github.com/bruits/satteri/releases/tag/satteri-v0.11.1);
+  [MapLibre 6.13](https://github.com/maplibre/maplibre-gl-js/releases/tag/v6.13.0)
+  retains the copied shared-module file for compatibility while making the worker
+  self-contained. Existing map imports/copy paths remain supported through 6.17.
+  Updated remote CI and release-platform qualification remain required; no deployment.
+
 - **Implemented locally (2026-11-13): GitHub automation and test quality.** Read-only workflow
   permissions, immutable action pins, PR-only cancellation and bounded jobs; stable-main/green-CI
   release eligibility, native candidate ownership/restore + legal checks and digest-only promotion.
