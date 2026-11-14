@@ -1,4 +1,4 @@
-name: release
+name: Build, qualify and publish release
 
 # Stable tags promote only the exact native images that passed qualification.
 # Candidate tags are staging references, never deployment/version tags.

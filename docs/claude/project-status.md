@@ -4,7 +4,7 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
-- **Implemented locally (2026-11-14): Dependabot #594 CI repair.** Regenerated the
+- **Implemented (PR #594, 2026-11-14): Dependabot CI repair.** Regenerated the
   third-party inventory and moved the existing esbuild lifecycle approval to 0.28.2.
   Reviewed the coordinated Tiptap 3.33.1 stack, Astro/MDX/Satteri compatibility,
   Fastify 5 plugin compatibility and Node 26 engine requirements.
@@ -13,6 +13,19 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
   retains the copied shared-module file for compatibility while making the worker
   self-contained. Existing map imports/copy paths remain supported through 6.17.
   Updated remote CI and release-platform qualification remain required; no deployment.
+
+- **Implemented locally (2026-11-14): Descriptive GitHub workflow names.** Workflow
+  labels now describe tests/type/browser checks, test coverage reports, Dependabot
+  dependency inventory patches, release build/qualification/publication, and
+  security scans/dependency review. Filenames, triggers, jobs and required check
+  names are unchanged. GitHub's managed `Dependabot Updates` entry is unchanged.
+
+- **Completed (2026-11-14): Retired GitHub workflow cleanup.** With explicit owner
+  approval overriding the earlier history-retention decision, deleted all 11 runs
+  of `issue-292-native-rehearsal` and `issue-304-native-qualification`, including
+  their logs/artifacts. GitHub's workflow listing no longer contains either
+  registration. CI, coverage, dependency inventory, release, security and
+  Dependabot Updates remain active and unchanged.
 
 - **Implemented locally (2026-11-13): GitHub automation and test quality.** Read-only workflow
   permissions, immutable action pins, PR-only cancellation and bounded jobs; stable-main/green-CI
