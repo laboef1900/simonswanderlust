@@ -4,6 +4,15 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Implemented (PR #598, 2026-11-14): Dependabot Vitest compatibility.**
+  Pinned the uploader's Vitest runner and V8 coverage provider together at 5.1.0 to
+  satisfy their exact peer requirements, then regenerated the lockfile and license
+  inventory. Reviewed the [Vitest 5 migration guide](https://vitest.dev/guide/migration):
+  Node 26 satisfies the runtime requirement; inline unit/integration projects retain
+  their discovery boundaries and serialized integration files. Existing hoisted
+  mocks are top-level. No test guardrails were disabled. Remote CI remains required;
+  fixes are pushed, not deployed.
+
 - **Implemented (PRs #596 and #597, 2026-11-14): Dependabot Vitest compatibility.**
   Pinned the site's Vitest runner and V8 coverage provider together at 5.1.0 to
   satisfy their exact peer requirements, then regenerated the lockfile and license

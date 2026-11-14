@@ -59,7 +59,7 @@
   },
   "devDependencies": {
     "@playwright/test": "1.65.0",
-    "@vitest/coverage-v8": "4.1.12",
+    "@vitest/coverage-v8": "5.1.0",
     "@types/node": "^26.6.6",
     "@types/pg": "^8.23.1",
     "@types/turndown": "^5.0.6",
@@ -67,7 +67,7 @@
     "happy-dom": "^21.0.4",
     "form-data": "^4.0.6",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.12"
+    "vitest": "5.1.0"
   },
   "allowScripts": {
     "esbuild@0.28.2": true,
