@@ -4,6 +4,15 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Implemented (PR #595, 2026-11-14): Dependabot entities 9 compatibility.**
+  Replaced the removed table-based streaming decoder with `HtmlEntityDecoder`, as
+  required by the [entities 9 release](https://github.com/fb55/entities/releases/tag/v9.0.0).
+  Legacy text decoding, consumed source offsets and fail-closed gallery mapping are
+  unchanged. Extended the existing translation/gallery regression with astral numeric
+  and two-codepoint named entities. Regenerated the third-party inventory.
+  ESM-only entities 9 supports the project's Node 26 runtime; synchronous decoding
+  APIs remain supported. Updated remote CI remains required; fixes are pushed, not deployed.
+
 - **Implemented (PR #593, 2026-11-14): Dependabot CI repair.** Regenerated the
   third-party inventory for Astro 7.4.12. Reviewed
   [upstream patch notes](https://github.com/withastro/astro/releases/tag/astro%407.4.12)

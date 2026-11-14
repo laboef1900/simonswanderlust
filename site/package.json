@@ -26,7 +26,7 @@
     "@shikijs/themes": "^4.5.0",
     "@tailwindcss/vite": "^4.3.5",
     "astro": "^7.4.12",
-    "entities": "6.0.1",
+    "entities": "9.0.0",
     "hastscript": "^9.0.3",
     "maplibre-gl": "6.17.0",
     "pg": "^8.23.1",
