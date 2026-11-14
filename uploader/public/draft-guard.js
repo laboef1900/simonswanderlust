@@ -194,7 +194,8 @@ window.DraftGuard = (function () {
         const target = link.getAttribute('target');
         if (target && target !== '_self') return;
         const rawHref = link.getAttribute('href') || '';
-        if (!rawHref || rawHref.startsWith('#') || rawHref.startsWith('javascript:')) return;
+        if (!rawHref || rawHref.startsWith('#')) return;
+        if (link.protocol !== 'http:' && link.protocol !== 'https:') return;
         const probe = document.createElement('dialog');
         if (!probe || typeof probe.showModal !== 'function') return;
         event.preventDefault();

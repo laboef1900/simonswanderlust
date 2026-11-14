@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { GALLERY_MODES } from '../../site/src/lib/gallery-layout.js';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { Window } from 'happy-dom';
 
 // draft-guard.js is a plain browser IIFE (window.DraftGuard). Run it inside a
 // vm sandbox with stubbed window/localStorage/location/timers so its behavior
@@ -34,6 +35,39 @@ interface DraftGuardApi {
   safeNextPath(raw: string | null): string;
   createDraftGuard(opts: { resource: string; collect: () => unknown; debounceMs?: number }): Guard;
 }
+
+describe('DraftGuard link protocols', () => {
+  it.each([
+    ['javascript:alert(1)', false],
+    ['JaVaScRiPt:alert(1)', false],
+    ['data:text/html,hello', false],
+    ['vbscript:msgbox(1)', false],
+    ['mailto:author@example.com', false],
+    ['/admin/posts.html', true],
+    ['https://example.com/', true],
+    ['http://example.com/', true],
+  ])('only intercepts web navigation: %s', (href, intercepted) => {
+    const dom = new Window({ url: 'https://studio.example/admin/editor.html' });
+    const windowStub: { addEventListener: () => void; DraftGuard?: DraftGuardApi } = {
+      addEventListener: () => {},
+    };
+    vm.runInNewContext(guardSrc, {
+      window: windowStub, document: dom.document, crypto: webcrypto,
+      setTimeout: () => 1, clearTimeout: () => {},
+    });
+    const guard = windowStub.DraftGuard!.createDraftGuard({ resource: 'new', collect: () => ({}) });
+    guard.markDirty();
+    const link = dom.document.createElement('a');
+    link.href = href;
+    dom.document.body.appendChild(link);
+    const event = new dom.MouseEvent('click', { bubbles: true, cancelable: true, button: 0 });
+    link.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(intercepted);
+    expect(dom.document.querySelector('dialog[open]') !== null).toBe(intercepted);
+    expect(guard.isDirty()).toBe(true);
+    dom.close();
+  });
+});
 interface StubEvent {
   defaultPrevented: boolean;
   returnValue: string | undefined;
