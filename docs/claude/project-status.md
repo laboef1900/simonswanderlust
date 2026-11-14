@@ -4,12 +4,25 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
-- **Implemented locally (2026-11-14): Dependabot #593 CI repair.** Regenerated the
+- **Implemented (PR #593, 2026-11-14): Dependabot CI repair.** Regenerated the
   third-party inventory for Astro 7.4.12. Reviewed
   [upstream patch notes](https://github.com/withastro/astro/releases/tag/astro%407.4.12)
   and the installed dependency graph; no application API migration is required.
   Static output and the published-route contract remain unchanged. Updated remote CI
-  and release-platform qualification are still required; nothing was pushed or deployed.
+  and release-platform qualification are still required; fixes are pushed, not deployed.
+
+- **Implemented locally (2026-11-14): Descriptive GitHub workflow names.** Workflow
+  labels now describe tests/type/browser checks, test coverage reports, Dependabot
+  dependency inventory patches, release build/qualification/publication, and
+  security scans/dependency review. Filenames, triggers, jobs and required check
+  names are unchanged. GitHub's managed `Dependabot Updates` entry is unchanged.
+
+- **Completed (2026-11-14): Retired GitHub workflow cleanup.** With explicit owner
+  approval overriding the earlier history-retention decision, deleted all 11 runs
+  of `issue-292-native-rehearsal` and `issue-304-native-qualification`, including
+  their logs/artifacts. GitHub's workflow listing no longer contains either
+  registration. CI, coverage, dependency inventory, release, security and
+  Dependabot Updates remain active and unchanged.
 
 - **Implemented locally (2026-11-13): GitHub automation and test quality.** Read-only workflow
   permissions, immutable action pins, PR-only cancellation and bounded jobs; stable-main/green-CI
