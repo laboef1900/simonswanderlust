@@ -1,4 +1,4 @@
-name: security
+name: Security scans and dependency review
 on:
   pull_request:
   push:

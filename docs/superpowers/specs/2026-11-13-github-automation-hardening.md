@@ -8,6 +8,13 @@ The owner approved stable version tags pointing at the current main revision wit
 
 The owner separately approved changing the repository default workflow token permissions to read-only and disabling the obsolete issue-292/issue-304 workflow registrations while preserving their history.
 
+On 2026-11-14, the owner explicitly superseded that history-retention decision:
+delete all 11 historical runs of those two retired workflows, including their logs
+and artifacts. This permanently removes qualification evidence; the owner accepted
+that loss. Scope is limited to issue-292/issue-304; current CI, release, security,
+coverage and dependency automation remain unchanged. This is a one-time cleanup
+authorization, not a continuing retention-policy change.
+
 ## Invariants and trust boundaries
 
 - PR CI has read-only repository access, no persisted checkout credential, no registry credentials, bounded jobs, and cancels superseded PR runs only.
@@ -58,7 +65,7 @@ Managed SQL recovery tests also require PostgreSQL 18 `pg_dump` and `psql` on `P
   percentage threshold is treated as proof of quality. To inspect locally, run
   `npm run test:coverage -- --coverage.reporter=text-summary --coverage.reporter=json-summary`
   in either tree.
-- Dependabot's `dependency inventory update` run uploads `dependency-inventory-patch`. Review
+- Dependabot's `Dependabot dependency inventory patch` run uploads `dependency-inventory-patch`. Review
   and apply it to the update branch, or regenerate with
   `node uploader/scripts/generate-third-party-inventory.mjs`. Review unknown licenses/evidence;
   do not regenerate inside the normal freshness test to make stale checked-in data pass.
