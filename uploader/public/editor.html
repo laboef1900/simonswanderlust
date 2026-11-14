@@ -912,6 +912,7 @@
         resource: initialTk ? 'post:' + initialTk : 'new',
         recovery: () => writeRecovery?.exportState(),
         collect: () => recoveryDraft || collectDraft(),
+        onSave: () => doSaveDraft(),
         onChange: (dirty) => {
           articleTranslation?.changed(translationGalleryChange);
           storyDraft?.changed();
