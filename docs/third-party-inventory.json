@@ -20,9 +20,9 @@
     },
     "uploader": {
       "path": "uploader/package-lock.json",
-      "sha256": "082de143ee04971753ead71b90fac476f7e9a583e1285396dd60200759bcb239",
+      "sha256": "3cb107b33a0fd6e38cc46bb491e777b77276137bb1f83ba48d64ca9286e62d91",
       "lockfileVersion": 3,
-      "entries": 375
+      "entries": 376
     }
   },
   "packages": [
@@ -10422,10 +10422,10 @@
       "tree": "uploader",
       "path": "node_modules/entities",
       "name": "entities",
-      "version": "7.0.1",
+      "version": "9.0.0",
       "license": "BSD-2-Clause",
-      "resolved": "https://registry.npmjs.org/entities/-/entities-7.0.1.tgz",
-      "integrity": "sha512-TWrgLOFUQTH994YUyl1yT4uyavY5nNB5muff+RtWaqNVCAK408b5ZnnbNAUEWLTCpum9w6arT70i1XdQ4UeOPA==",
+      "resolved": "https://registry.npmjs.org/entities/-/entities-9.0.0.tgz",
+      "integrity": "sha512-oJFNDJg3kTPwAD1cNn2+WmUq4wFoo09npc3Ydf1D7ED4smRiWrsKnaLxykrTWgyGEcusc87P5dxlAleol9kpkg==",
       "dev": false,
       "optional": false,
       "obligationIds": [
@@ -10956,6 +10956,21 @@
       "optional": false,
       "obligationIds": [
         "MIT"
+      ],
+      "obligationStatus": "summary-only; distribution-evidence-required"
+    },
+    {
+      "tree": "uploader",
+      "path": "node_modules/happy-dom/node_modules/entities",
+      "name": "entities",
+      "version": "7.0.1",
+      "license": "BSD-2-Clause",
+      "resolved": "https://registry.npmjs.org/entities/-/entities-7.0.1.tgz",
+      "integrity": "sha512-TWrgLOFUQTH994YUyl1yT4uyavY5nNB5muff+RtWaqNVCAK408b5ZnnbNAUEWLTCpum9w6arT70i1XdQ4UeOPA==",
+      "dev": true,
+      "optional": false,
+      "obligationIds": [
+        "BSD-2-Clause"
       ],
       "obligationStatus": "summary-only; distribution-evidence-required"
     },

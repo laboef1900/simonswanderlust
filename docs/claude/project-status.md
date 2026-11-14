@@ -4,6 +4,13 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
+- **Implemented (PR #600, 2026-11-14): Dependabot CI repair.** Regenerated the
+  third-party inventory for entities 9. The uploader uses `decodeHTMLStrict`, whose
+  synchronous API is unchanged in the [9.0.0 release](https://github.com/fb55/entities/releases/tag/v9.0.0).
+  ESM-only packaging and Node >=20.19 are compatible with this ESM/Node 26 app.
+  The separate site decoder migration belongs to #595; no shim or downgrade is
+  needed here. Updated remote CI remains required; fixes are pushed, not deployed.
+
 - **Implemented (PR #595, 2026-11-14): Dependabot entities 9 compatibility.**
   Replaced the removed table-based streaming decoder with `HtmlEntityDecoder`, as
   required by the [entities 9 release](https://github.com/fb55/entities/releases/tag/v9.0.0).

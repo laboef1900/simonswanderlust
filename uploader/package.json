@@ -40,7 +40,7 @@
     "@tiptap/pm": "3.33.1",
     "@tiptap/starter-kit": "3.33.1",
     "easymde": "^2.21.0",
-    "entities": "7.0.1",
+    "entities": "9.0.0",
     "esbuild": "0.28.2",
     "exif-reader": "^2.0.3",
     "fast-xml-parser": "^5.12.1",
