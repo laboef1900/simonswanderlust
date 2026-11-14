@@ -1,4 +1,4 @@
-name: coverage
+name: Test coverage reports
 on:
   schedule:
     - cron: '43 5 * * 1'
