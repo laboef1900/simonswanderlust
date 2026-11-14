@@ -130,7 +130,7 @@ describe('article translation protected source compiler', () => {
   it('preserves raw HTML gallery wrappers, entities, nested galleries, unknown directives and repeated photo occurrences', async () => {
     const body = [
       'Vorher', '', '<pre>literal before',
-      `<pre id="keep"><code class="language-gallery">#layout: column\n#unknown: exact\n<b>${first}</b> | caption-override=&quot;Erste &amp;amp; zweite&quot;\n${first} | caption-override=&quot;Andere&quot;</code></pre>`,
+      `<pre id="keep"><code class="language-gallery">#layout: column\n#unknown: exact\n<b>${first}</b> | caption-override=&quot;Erste &amp;amp; zweite &#x1F5FA; &NotEqualTilde;&quot;\n${first} | caption-override=&quot;Andere&quot;</code></pre>`,
       'literal after</pre>', '',
       `> - <pre data-extra="unchanged"><code class="language-gallery">${second} | caption-override=&quot;Dritte&quot;</code></pre>`, '', 'Nachher',
     ].join('\n');
@@ -144,7 +144,7 @@ describe('article translation protected source compiler', () => {
     const analysis = await analyzeGallerySource(result.bodyMarkdown);
     const lines = analysis.blocks.filter((block) => block.isGallery).flatMap((block) => block.lines).filter((line) => !line.text.startsWith('#'));
     expect(lines.map((line) => parsePhotoLine(line.text))).toMatchObject([
-      { src: first, captionOverride: 'Translated Erste & zweite' },
+      { src: first, captionOverride: 'Translated Erste & zweite 🗺 ≂̸' },
       { src: first, captionOverride: 'Translated Andere' },
       { src: second, captionOverride: 'Translated Dritte' },
     ]);

@@ -2,7 +2,7 @@ import { markdownToHast, type Position } from 'satteri';
 import { unified } from 'unified';
 import rehypeStringify from 'rehype-stringify';
 import { visit, SKIP } from 'unist-util-visit';
-import { EntityDecoder, DecodingMode, htmlDecodeTree } from 'entities/decode';
+import { HtmlEntityDecoder, DecodingMode } from 'entities/decode';
 import type { Element, Root } from 'hast';
 import { MARKDOWN_FEATURES } from './markdown-features.js';
 import { galleryCode, sanitizedBodyTree, textOf } from './gallery-identity.js';
@@ -326,7 +326,7 @@ function fenceBlock(node: SourceNode, source: string, start: number, end: number
 function decodedUnits(value: string, sourceAt: (offset: number) => Unit): Unit[] {
   const result: Unit[] = [];
   let decoded = '';
-  const decoder = new EntityDecoder(htmlDecodeTree, (point) => { decoded += String.fromCodePoint(point); });
+  const decoder = new HtmlEntityDecoder((point) => { decoded += String.fromCodePoint(point); });
   for (let i = 0; i < value.length;) {
     let count = 1;
     decoded = value[i] ?? '';
