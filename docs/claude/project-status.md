@@ -4,12 +4,25 @@ Moved verbatim from `CLAUDE.md`. Paths are relative to the repository root. Add 
 
 ## Project Status and Remaining Phases
 
-- **Implemented locally (2026-11-14): Dependabot #600 CI repair.** Regenerated the
+- **Implemented (PR #600, 2026-11-14): Dependabot CI repair.** Regenerated the
   third-party inventory for entities 9. The uploader uses `decodeHTMLStrict`, whose
   synchronous API is unchanged in the [9.0.0 release](https://github.com/fb55/entities/releases/tag/v9.0.0).
   ESM-only packaging and Node >=20.19 are compatible with this ESM/Node 26 app.
   The separate site decoder migration belongs to #595; no shim or downgrade is
-  needed here. Updated remote CI remains required; no push or deployment.
+  needed here. Updated remote CI remains required; fixes are pushed, not deployed.
+
+- **Implemented locally (2026-11-14): Descriptive GitHub workflow names.** Workflow
+  labels now describe tests/type/browser checks, test coverage reports, Dependabot
+  dependency inventory patches, release build/qualification/publication, and
+  security scans/dependency review. Filenames, triggers, jobs and required check
+  names are unchanged. GitHub's managed `Dependabot Updates` entry is unchanged.
+
+- **Completed (2026-11-14): Retired GitHub workflow cleanup.** With explicit owner
+  approval overriding the earlier history-retention decision, deleted all 11 runs
+  of `issue-292-native-rehearsal` and `issue-304-native-qualification`, including
+  their logs/artifacts. GitHub's workflow listing no longer contains either
+  registration. CI, coverage, dependency inventory, release, security and
+  Dependabot Updates remain active and unchanged.
 
 - **Implemented locally (2026-11-13): GitHub automation and test quality.** Read-only workflow
   permissions, immutable action pins, PR-only cancellation and bounded jobs; stable-main/green-CI
