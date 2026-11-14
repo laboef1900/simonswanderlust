@@ -2993,7 +2993,7 @@ body.page-editor .page-manuscript .EasyMDEContainer .CodeMirror-lines { margin-i
 /* Settings are one flat document per tab beside a quiet vertical index, not
    competing cards. */
 body.settings-page .cms-content { max-width: 68rem; }
-body.settings-page .cms-topbar { position: static; }
+body.settings-page .cms-topbar { position: static; max-width: 68rem; }
 .settings-title-tab { color: var(--muted); font-weight: 450; }
 body.settings-page .settings-layout {
   display: grid;
